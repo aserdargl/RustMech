@@ -830,3 +830,12 @@ dosyalarındadır. Proje git deposundadır; kullanıcı sonuçları (`HumanResul
 `results/`), `dist*/`, `build/`, ikililer ve kök günlükleri `.gitignore` ile dışarıda
 tutulur. Eski kök günlükleri `build/logs/2026-11-kok-arsivi/` altına taşındı;
 `RustMech.log` çalışma günlüğü olarak kökte kalır.
+
+### Test grupları
+
+`python tools/run_tests.py core` ekran gerektirmeyen testleri (Qt offscreen), `gui`
+ise VTK/OpenGL penceresi açan testleri gerçek masaüstü oturumunda çalıştırır;
+`--python` ile yorumlayıcı seçilir. Her dosya ayrı süreçte ve süre sınırıyla koşar,
+tümü başarılıysa çıkış kodu 0'dır. `RUSTMECH_OFFLINE=1` varsayılandır (loopback SSH
+testi atlanır). Yeni bir pencere testi offscreen modda VTK pixel-format hatasıyla
+düşerse `tools/run_tests.py` içindeki `GUI` listesine eklenmelidir.
