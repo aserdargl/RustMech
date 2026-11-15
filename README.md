@@ -820,3 +820,13 @@ The import window remembers its size, position and maximized state.
 This import workflow applies to mechanical compression; flow and thermal analyses
 continue to require generated structures.
 
+
+## Bağımlılıklar ve sürüm kontrolü
+
+`requirements-base.txt`, çalışan geliştirme ortamındaki (Python 3.14.10) temel paket
+sürümlerini kaydeder; temiz ortamda kurulum henüz denenmedi. İsteğe bağlı gruplar
+`requirements-truba.txt`, `requirements-tet10.txt` ve `requirements-mapdl.txt`
+dosyalarındadır. Proje git deposundadır; kullanıcı sonuçları (`HumanResults/`,
+`results/`), `dist*/`, `build/`, ikililer ve kök günlükleri `.gitignore` ile dışarıda
+tutulur. Eski kök günlükleri `build/logs/2026-11-kok-arsivi/` altına taşındı;
+`RustMech.log` çalışma günlüğü olarak kökte kalır.
