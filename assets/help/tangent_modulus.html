@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><title>Tangent modulus help</title></head>
+<body>
+<h3>Estimate tangent modulus from a datasheet</h3>
+<p><b>E, yield strength, tensile strength and fracture elongation do not uniquely
+determine hardening.</b> The calculator provides a rough starting value for
+sensitivity studies, not a measured material property.</p>
+<p>Enter all stresses in the displayed unit. Enter elongation as a percentage:
+<b>20 means 20%, not 0.20.</b> Inputs should describe the solid base material,
+with matching temperature, build direction and processing condition; do not use
+the apparent stress–strain response of a porous lattice as the base material.</p>
+<h3>Approximation used</h3>
+<p>e<sub>f</sub> = fracture elongation / 100<br>
+e<sub>y</sub> ≈ yield strength / E<br>
+E<sub>t, estimate</sub> = (tensile strength − yield strength) / (e<sub>f</sub> − e<sub>y</sub>)</p>
+<p>This constructs an artificial straight line from yield to tensile strength
+at fracture elongation. These last two values generally belong to different
+points of the test. It is an <b>engineering secant proxy</b>, adopted as an
+approximation to the application's true-stress/total-logarithmic-strain slope.</p>
+<p>Fracture elongation usually exceeds uniform elongation at maximum load, so
+substituting it tends to reduce the engineering hardening slope. This is not a
+guaranteed lower bound for the actual true-strain modulus. A 0.2% proof strength
+is also only an approximation to the model's initial yield.</p>
+<h3>Example</h3>
+<p>E = 200000 MPa, yield = 250 MPa, tensile strength = 400 MPa,
+fracture elongation = 20%:<br>
+E<sub>t, estimate</sub> = 150 / (0.20 − 0.00125) ≈ <b>754.717 MPa</b>.</p>
+<h3>What the solver needs</h3>
+<p>RustMech's E<sub>t</sub> is the post-yield slope of true stress versus
+total logarithmic strain. It must satisfy 0 ≤ E<sub>t</sub> &lt; E.
+The solver adapter converts it to the plastic hardening modulus
+H = E E<sub>t</sub> / (E − E<sub>t</sub>); do not enter H in the E<sub>t</sub> field.</p>
+<p>Do not use fracture elongation to convert UTS to true stress. The usual
+engineering-to-true conversion applies only before necking. With measured
+uniform elongation or a full tensile curve, fit the relevant pre-necking true
+stress–strain range or use the True stress–strain (MISO) model instead.</p>
+<p>Bilinear isotropic hardening does not predict fracture or cap stress at UTS.
+For compression, validate the tensile-based estimate against compression data.
+Compare several plausible E<sub>t</sub> values to see whether the result depends
+strongly on this uncertain input.</p>
+<p><a href="https://ansyshelp.ansys.com/public/Views/Secured/corp/v252/en/ans_mat/amp8sq21dldm.html">ANSYS: rate-independent plasticity</a><br>
+<a href="https://innovationspace.ansys.com/courses/wp-content/uploads/sites/5/2024/01/Engg-Stress-Strain-Data-beyond-Sample-Necking.pdf">ANSYS: engineering-to-true conversion and necking</a></p>
+</body></html>

@@ -1,0 +1,3191 @@
+"""RustMech: smooth geometry, solid mesh preview and nonlinear MAPDL.
+
+Units: mm, N, MPa. --offline-test never launches ANSYS.
+Fixed bottom platen and displacement- or force-driven top platen with configurable contact. Selected material + NLGEOM. Integrated work is external compression work,
+not a separately calculated plastic dissipation or energy absorption measure.
+"""
+from __future__ import annotations
+
+import os
+
+os.environ["QT_API"] = "pyside6"
+
+import argparse
+import csv
+import json
+import sys
+import traceback
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import asdict, dataclass, replace
+from datetime import datetime
+from pathlib import Path
+from queue import Empty, SimpleQueue
+from threading import Event
+
+import numpy as np
+import pyvista as pv
+from studio_style import CompactComboBox
+from PySide6.QtCore import QSize, QTimer, Qt
+from PySide6.QtGui import QActionGroup
+from PySide6.QtWidgets import (
+    QAbstractSpinBox,
+    QApplication,
+    QCheckBox,
+    QComboBox,
+    QDialog,
+    QFormLayout,
+    QFrame,
+    QGridLayout,
+    QHBoxLayout,
+    QLayout,
+    QLabel,
+    QMenu,
+    QMessageBox,
+    QProgressBar,
+    QPushButton,
+    QScrollArea,
+    QSizePolicy,
+    QSpinBox,
+    QSplitter,
+    QStyle,
+    QTabBar,
+    QTabWidget,
+    QToolButton,
+    QVBoxLayout,
+    QWidget,
+)
+
+from analysis_process import AnalysisProcess, run_single_analysis, run_resume_analysis
+from studio_style import ActionFlowLayout, CompactDoubleSpinBox, CONTROL_HEIGHT, STUDIO_STYLESHEET, SidebarGroupBox, configure_form, field_label
+from sidebar_splitter import SidebarSplitter
+from setup_help import GEOMETRY_HELP
+from truba_connection import TrubaConnectionDialog
+from kratos_settings import KratosSettingsPanel
+from solver_profiles import SolverProfileStore, profile_values
+from doe_studio import DoEStudioWidget
+from preview_viewport import MESH_PREVIEW_ACTOR, create_preview_viewport
+from doe_preview import DoEBoundaryPreview
+from mesh_preview_worker import run_mesh_preview, shutdown_mesh_preview
+from model import (
+    ANALYSIS_FIELDS,
+    CONTACT_FORMULATIONS,
+    CONTACT_NUMERICAL_FIELDS,
+    LOADING_MODES,
+    PLATEN_CONTACT_MODES,
+    FEMesh,
+    GEOMETRY_FIELDS,
+    MESH_TYPES,
+    MIN_MESH_INPUT_MM,
+    ROOT,
+    PLATEN_MARGIN_RATIO,
+    SELF_CONTACT_MODES,
+    SOLVER_BACKENDS,
+    TETRAHEDRAL_MESH_TYPES,
+    Settings,
+    load_settings,
+    loading_target_reached,
+    require_settings,
+    save_settings,
+    validate_geometry,
+    validate_settings,
+    write_json,
+)
+from solver_api import (
+    AnalysisRequest,
+    MAPDL_CAPABILITIES,
+    SOLVER_REGISTRY,
+    SolverBackend,
+    SolverCapabilities,
+    create_solver_backend,
+    get_solver_capabilities,
+)
+from rust_mesh import build_hex_grid as build_hex_grid, tet_metrics
+from mesh_engine import Preview as Preview, build_preview, generate_volume_mesh, gyroid_field as gyroid_field, make_surface, preview_key
+from material_editor import MaterialEditor
+from structure_library import (
+    ALL_STRUCTURES_BY_FAMILY,
+    STRUCTURE_FAMILIES,
+    TPMS_MORPHOLOGIES,
+    describe_structure,
+    resolve_family_and_name,
+)
+
+PREVIEW_DELAY_MS = 300
+QUALITY_METRICS = ("scaled_jacobian", "max_edge_ratio", "volume")
+MESH_TYPE_LABELS = {
+    "HEX20": "Voxel hexahedral (HEX20)",
+    "TET10": "Netgen tetrahedral (TET10)",
+    "TET4": "Netgen tetrahedral (TET4)",
+}
+MODEL_NOTES = {
+    "units": "mm, N, MPa; work in J (N mm / 1000)",
+    "geometry": "Sheet gyroid: abs(sin X cos Y + sin Y cos Z + sin Z cos X) <= t",
+    "smooth_surface": "Sample-calibrated reference isosurface, capped at cube faces",
+    "fe_geometry": "Voxel HEX8/HEX20 or surface-conforming TET4/TET10 of the largest connected solid",
+    "removed_fragments": "Other face-connected voxel components excluded; no volume backfill; shown red in Studio",
+    "fe_ties": "Equal field values resolved by stable grid index order",
+    "boundary_conditions": "Bottom rigid platen fixed; top rigid platen moves only in Z",
+    "material": "Selected isotropic linear, bilinear or multilinear material; see settings.json",
+    "material_curve_units": "Cauchy true stress / MPa versus plastic logarithmic strain for user curves",
+    "nonlinearity": "Large displacement, selected material, rigid platen contact and optional self-contact",
+    "work": "External compression work; not separately computed plastic energy absorption",
+    "mesh_quality": "Element shape checks do not establish geometry or solution convergence",
+}
+
+def mesh_quality(grid: pv.UnstructuredGrid) -> tuple[pv.UnstructuredGrid, dict]:
+    cell_type = grid.celltypes[0]
+    is_quadratic = cell_type in (pv.CellType.QUADRATIC_TETRA, pv.CellType.QUADRATIC_HEXAHEDRON)
+    is_tetrahedral = cell_type in (pv.CellType.TETRA, pv.CellType.QUADRATIC_TETRA)
+    linear = grid.linear_copy() if is_quadratic else grid
+    if is_tetrahedral:
+        measured = linear.cell_quality(["scaled_jacobian", "volume"], null_value=np.nan)
+        _, measured.cell_data["max_edge_ratio"] = tet_metrics(grid)
+    else:
+        measured = linear.cell_quality(list(QUALITY_METRICS), null_value=np.nan)
+    quality = grid.copy(deep=False) if is_quadratic else measured
+    if is_quadratic:
+        quality.cell_data.update(measured.cell_data)
+    sj, ratio, volume = (
+        np.asarray(quality.cell_data[name]) for name in QUALITY_METRICS
+    )
+    valid = (
+        np.isfinite(sj)
+        & np.isfinite(ratio)
+        & np.isfinite(volume)
+        & (sj > 0)
+        & (ratio >= 0.9999999999)
+        & (volume > 0)
+    )
+    quality.cell_data["quality_valid"] = valid.astype(np.uint8)
+    report = {
+        "nodes": grid.n_points,
+        "elements": grid.n_cells,
+        "invalid_or_unmeasurable": int(np.count_nonzero(~valid)),
+    }
+    for name in QUALITY_METRICS:
+        values = np.asarray(quality.cell_data[name])
+        finite = values[np.isfinite(values)]
+        report[name + "_range"] = (
+            [float(finite.min()), float(finite.max())] if finite.size else None
+        )
+    return quality, report
+
+
+def make_compression_platens(
+    size: float, top_displacement_z: float = 0.0, xy_bounds=None
+) -> tuple[pv.PolyData, pv.PolyData]:
+    """Create bottom floor platen (Z <= 0) and top compression platen (Z >= size + u_z)."""
+    margin = PLATEN_MARGIN_RATIO * float(size)
+    thickness = max(0.08 * float(size), 0.25)
+    x_min, x_max = -margin, float(size) + margin
+    y_min, y_max = -margin, float(size) + margin
+    if xy_bounds is not None:
+        x_min, x_max, y_min, y_max = xy_bounds
+        x_min, x_max = x_min-margin, x_max+margin
+        y_min, y_max = y_min-margin, y_max+margin
+    bottom_platen = (
+        pv.Box(bounds=(x_min, x_max, y_min, y_max, -thickness, 0.0))
+        .triangulate()
+        .compute_normals(auto_orient_normals=True, split_vertices=True)
+    )
+    z_top_base = float(size) + float(top_displacement_z)
+    top_platen = (
+        pv.Box(
+            bounds=(
+                x_min,
+                x_max,
+                y_min,
+                y_max,
+                z_top_base,
+                z_top_base + thickness,
+            )
+        )
+        .triangulate()
+        .compute_normals(auto_orient_normals=True, split_vertices=True)
+    )
+    return bottom_platen, top_platen
+
+
+def save_image(
+    mesh,
+    filename: Path,
+    scalars: str | None = None,
+    edges: bool = False,
+    platens: tuple[pv.PolyData, pv.PolyData] | None = None,
+) -> None:
+    plotter = pv.Plotter(off_screen=True, window_size=(1200, 900))
+    try:
+        plotter.set_background("#f5f5f5")
+        options = (
+            {"scalars": scalars, "cmap": "viridis"}
+            if scalars
+            else {"color": "#94b9d4"}
+        )
+        if scalars == "scaled_jacobian":
+            options.update(
+                clim=(0, 1), scalar_bar_args={"title": "Scaled Jacobian"}
+            )
+        plotter.add_mesh(
+            mesh, show_edges=edges, edge_color="#334455", **options
+        )
+        if platens is not None:
+            bottom_platen, top_platen = platens
+            plotter.add_mesh(
+                bottom_platen,
+                color="#475569",
+                opacity=0.88,
+                show_edges=True,
+                edge_color="#1e293b",
+            )
+            plotter.add_mesh(
+                top_platen,
+                color="#64748b",
+                opacity=0.88,
+                show_edges=True,
+                edge_color="#1e293b",
+            )
+        plotter.add_axes()
+        plotter.view_isometric()
+        plotter.reset_camera()
+        plotter.camera.zoom(0.9)
+        plotter.screenshot(str(filename))
+    finally:
+        plotter.close()
+
+
+@dataclass(frozen=True)
+class RunPaths:
+    human: Path
+    raw: Path
+
+    @classmethod
+    def create(cls, offline: bool = False) -> RunPaths:
+        stamp = datetime.now().astimezone().strftime("%Y%m%d_%H%M%S_%f")
+        tag = ("OfflineCheck_" if offline else "Run_") + stamp
+        paths = cls(ROOT / "HumanResults" / tag, ROOT / "results" / tag)
+        for path in [
+            paths.raw,
+            *(
+                paths.human / name
+                for name in (
+                    "01_Geometry",
+                    "02_MeshQuality",
+                    "03_Results",
+                    "04_Graphs",
+                )
+            ),
+        ]:
+            path.mkdir(parents=True, exist_ok=False)
+        return paths
+
+
+def export_geometry(
+    settings: Settings, mesh: FEMesh, paths: RunPaths, images: bool = True
+) -> dict:
+    surface = make_surface(settings)
+    if surface.n_open_edges or not surface.is_manifold:
+        raise ValueError(
+            "Smooth surface is not closed; adjust surface resolution."
+        )
+    geometry = paths.human / "01_Geometry"
+    target = paths.human / "02_MeshQuality"
+    surface.save(geometry / "gyroid.stl")
+    from standard_tests import fixture_surfaces, profile_report
+    bottom_platen, top_platen = (fixture_surfaces(settings) if settings.test_profile != 'custom' else
+        make_compression_platens(settings.size, 0.0, surface.bounds[:4] if settings.imported_geometry_path else None))
+    bottom_platen.save(geometry / "bottom_platen.stl")
+    top_platen.save(geometry / "top_platen.stl")
+    quality, report = mesh_quality(mesh.grid)
+    report.update(
+        {
+            "structure_family": settings.structure_family,
+            "structure_name": settings.structure_name,
+            "tpms_morphology": settings.tpms_morphology,
+            "structure_description": describe_structure(settings),
+            "requested_spacing_mm": settings.mesh_resolution,
+            "mesh_type": settings.mesh_type,
+            "local_target_spacing_mm": settings.local_mesh_size if mesh.subdivisions is None else None,
+            "actual_spacing_mm": mesh.spacing if mesh.subdivisions is not None else None,
+            "subdivisions": mesh.subdivisions,
+            "actual_solid_fraction_percent": mesh.fraction,
+            "face_connected_components": mesh.components,
+            "original_face_connected_components": mesh.original_components,
+            "candidate_elements": mesh.candidate_elements,
+            "removed_elements": mesh.removed_grid.n_cells,
+            "removed_volume_mm3": float(mesh.removed_grid.volume) if mesh.removed_grid.n_cells else 0.,
+            "solve_errors": mesh.solve_errors,
+            "smooth_volume_fraction_percent": 100
+            * surface.volume
+            / (np.prod(np.asarray(surface.bounds).reshape(3, 2)[:, 1] - np.asarray(surface.bounds).reshape(3, 2)[:, 0]) if settings.imported_geometry_path or settings.test_profile != 'custom' else settings.size**3),
+        }
+    )
+    quality.save(target / "mesh.vtu")
+    if mesh.removed_grid.n_cells:
+        mesh.removed_grid.save(target / "removed_fragments.vtu")
+    write_json(target / "quality_summary.json", report)
+    with (target / "quality_report.csv").open(
+        "w", newline="", encoding="utf-8"
+    ) as stream:
+        writer = csv.writer(stream)
+        writer.writerow(["Element", *QUALITY_METRICS, "Valid"])
+        writer.writerows(
+            zip(
+                quality.cell_data["ansys_elem_num"],
+                *(quality.cell_data[name] for name in QUALITY_METRICS),
+                quality.cell_data["quality_valid"],
+            )
+        )
+    write_json(paths.human / "settings.json", asdict(settings))
+    notes = {**MODEL_NOTES, "geometry": describe_structure(settings), 'test_profile': profile_report(settings)}
+    if settings.test_profile != 'custom':
+        notes.update(work='External actuator work; not separately computed plastic dissipation',
+                     boundary_conditions='See test_profile for generated specimen and fixtures')
+        write_json(geometry / 'test_profile.json', profile_report(settings))
+    write_json(paths.human / "model_notes.json", notes)
+    if images:
+        save_image(
+            surface,
+            geometry / "geometry.png",
+            platens=(bottom_platen, top_platen),
+        )
+        save_image(
+            quality.extract_surface(algorithm="dataset_surface"),
+            target / "mesh_quality.png",
+            "scaled_jacobian",
+            edges=True,
+            platens=(bottom_platen, top_platen),
+        )
+    if report["invalid_or_unmeasurable"]:
+        raise ValueError("Invalid FE cell quality; see quality_report.csv.")
+    return report
+
+
+def extract_curve(result) -> tuple[np.ndarray, dict]:
+    times = np.asarray(result.time_values, dtype=float)
+    if (
+        result.nsets < 1
+        or len(times) != result.nsets
+        or not np.all(np.isfinite(times))
+    ):
+        raise ValueError("No valid saved solution history.")
+    from standard_tests import load_sign
+    settings=getattr(result,'settings',None)
+    sign=load_sign(settings) if isinstance(settings,Settings) else -1.
+    rows = [[0.0, 0.0, 0.0, 0.0, 0.0]]
+    for index, time in enumerate(times):
+        top_uz = result.top_platen_displacement(index)
+        bottom, top = result.platen_reactions(index)
+        rows.append([float(time), sign*top_uz, sign*top, bottom, top + bottom])
+    history = np.asarray(rows)
+    if np.any(np.diff(history[:, 0]) <= 0) or np.any(
+        np.diff(history[:, 1]) <= 0
+    ):
+        raise ValueError(
+            "Saved actuator travel history is not strictly increasing."
+        )
+    if np.any(history[:, 2] < -1e-6):
+        raise ValueError(
+            "Reaction sign is inconsistent with the selected loading direction."
+        )
+    scale = np.maximum(
+        np.maximum(np.abs(history[:, 2]), np.abs(history[:, 3])), 1e-9
+    )
+    mismatch = np.abs(history[:, 4]) / scale
+    report = {
+        "maximum_relative_force_imbalance": float(mismatch.max()),
+        "force_source": getattr(result, "force_source", "negative UZ reaction at the top platen pilot node"),
+        "force_balance_warning": bool(
+            np.any((mismatch > 0.01) & (scale > 1e-5))
+        ),
+    }
+    return history, report
+
+
+def _lateral_poisson_at_step(
+    u: np.ndarray, pts: np.ndarray, top_uz: float
+) -> tuple[float, float, float]:
+    """Compute effective lateral Poisson ratios (nu_xz, nu_yz, nu_avg) from nodal displacements."""
+    z_coords = pts[:, 2]
+    z_min, z_max = float(z_coords.min()), float(z_coords.max())
+    height = max(z_max - z_min, 1e-9)
+    axial_comp_strain = -top_uz / height
+    if abs(axial_comp_strain) < 1e-12:
+        return 0.0, 0.0, 0.0
+
+    # Evaluate lateral strain in the interior of the specimen away from the platen interfaces
+    free_mask = z_coords > (z_min + 0.15 * height)
+    if np.count_nonzero(free_mask) < 8:
+        free_mask = np.ones(len(z_coords), dtype=bool)
+
+    ratios = []
+    for axis_idx in (0, 1):
+        coord = pts[free_mask, axis_idx]
+        disp = u[free_mask, axis_idx]
+        c_centered = coord - float(np.mean(coord))
+        denom = float(np.dot(c_centered, c_centered))
+        if denom > 1e-12:
+            lat_strain = float(np.dot(c_centered, disp - float(np.mean(disp))) / denom)
+            ratios.append(lat_strain / axial_comp_strain)
+        else:
+            ratios.append(0.0)
+    nu_xz, nu_yz = ratios[0], ratios[1]
+    return float(nu_xz), float(nu_yz), float(0.5 * (nu_xz + nu_yz))
+
+
+def export_field_results(
+    result, mesh: FEMesh, folder: Path, images: bool = True
+) -> dict:
+    index = result.nsets - 1
+    ids = mesh.grid.point_data["ansys_node_num"]
+    u = result.displacement(index, ids)
+    stress = result.equivalent_stress(index, ids)
+    pts = np.asarray(mesh.grid.points, dtype=float)
+    top_uz = result.top_platen_displacement(index)
+    u_elastic = result.displacement(0, ids) if index else u
+    nu_xz_el, nu_yz_el, nu_eff_el = _lateral_poisson_at_step(
+        u_elastic, pts, result.top_platen_displacement(0)
+    )
+    nu_xz_fin, nu_yz_fin, nu_eff_fin = _lateral_poisson_at_step(u, pts, top_uz)
+
+    grid = mesh.grid.copy(deep=True)
+    grid.point_data["Displacement_mm"] = u
+    grid.point_data["Displacement_Magnitude_mm"] = np.linalg.norm(u, axis=1)
+    grid.point_data["Von_Mises_MPa"] = stress
+    if getattr(result,'has_self_contact',False):
+        grid.point_data['Self_Contact_Pressure_MPa']=result.contact_pressure(index,ids)
+        grid.point_data['Self_Contact_Shear_MPa']=result.contact_pressure(index,ids,tangential=True)
+    grid.save(folder / "results_undeformed.vtu")
+    deformed = grid.copy(deep=True)
+    deformed.points += u
+    deformed.save(folder / "deformed_shape.vtu")
+    cube_size = float(mesh.grid.bounds[5])
+    settings=getattr(result,'settings',None)
+    from standard_tests import fixture_surfaces, kind
+    standard=isinstance(settings,Settings) and settings.test_profile != 'custom'
+    bottom_platen, top_platen_def = (fixture_surfaces(settings,top_uz) if standard else
+        make_compression_platens(cube_size, top_uz, mesh.grid.bounds[:4]))
+    if standard and kind(settings) != 'compression':
+        nu_xz_el=nu_yz_el=nu_eff_el=nu_eff_fin=None
+    bottom_platen.save(folder / "bottom_platen.stl")
+    top_platen_def.save(folder / "top_platen_deformed.stl")
+    if images:
+        surface = deformed.extract_surface(algorithm="dataset_surface")
+        save_image(
+            surface,
+            folder / "displacement.png",
+            "Displacement_Magnitude_mm",
+            platens=(bottom_platen, top_platen_def),
+        )
+        save_image(
+            surface,
+            folder / "von_mises.png",
+            "Von_Mises_MPa",
+            platens=(bottom_platen, top_platen_def),
+        )
+    report = {
+        "result_index": index,
+        "saved_time": float(result.time_values[index]),
+        "maximum_displacement_mm": float(np.linalg.norm(u, axis=1).max()),
+        "maximum_von_mises_MPa": float(stress.max()),
+        "effective_poisson_ratio": nu_eff_el,
+        "effective_poisson_ratio_xz": nu_xz_el,
+        "effective_poisson_ratio_yz": nu_yz_el,
+        "final_poisson_ratio": nu_eff_fin,
+        "deformation_scale": 1.0,
+        "stress_definition": result.stress_definition,
+    }
+    if getattr(result,'has_self_contact',False):
+        report['self_contact']=result.steps[index]['self_contact']
+    write_json(folder / "summary.json", report)
+    return report
+
+
+def export_graphs(
+    history: np.ndarray,
+    settings: Settings,
+    folder: Path,
+    mesh: FEMesh | None = None,
+    images: bool = True,
+    result=None,
+) -> dict:
+    from standard_tests import kind, export_standard_graphs
+    if kind(settings) != 'compression':
+        return export_standard_graphs(history,settings,folder,mesh,images,result)
+    x, force = history[:, 1], history[:, 2]
+    work = np.r_[
+        0.0, np.cumsum((force[1:] + force[:-1]) * np.diff(x) / 2000)
+    ]
+    area_mm2 = float(settings.size**2)
+    nominal_vol_mm3 = float(settings.size**3)
+    if settings.imported_geometry_path:
+        bounds = (mesh.grid.bounds if mesh is not None else make_surface(settings).bounds)
+        area_mm2 = float((bounds[1]-bounds[0]) * (bounds[3]-bounds[2]))
+        nominal_vol_mm3 = area_mm2 * settings.size
+    rel_density = (
+        float(mesh.fraction) / 100.0
+        if mesh is not None
+        else float(settings.solid_fraction) / 100.0
+    )
+    solid_vol_mm3 = nominal_vol_mm3 * max(rel_density, 1e-6)
+    # 1 g/cm^3 = 1e-3 g/mm^3
+    mass_g = float(getattr(settings, "material_density", 7.85)) * solid_vol_mm3 * 1e-3
+    ea_j = float(work[-1])
+    sea_j_per_g = ea_j / max(mass_g, 1e-9)
+    vol_ea_j_per_cm3 = ea_j / max(nominal_vol_mm3 * 1e-3, 1e-9)
+
+    strain = x / max(float(settings.size), 1e-9)
+    nominal_stress_mpa = force / max(area_mm2, 1e-9)
+    if len(strain) >= 2 and (strain[1] - strain[0]) > 1e-12:
+        effective_modulus_mpa = float(
+            (nominal_stress_mpa[1] - nominal_stress_mpa[0]) / (strain[1] - strain[0])
+        )
+    else:
+        effective_modulus_mpa = 0.0
+
+    with (folder / "force_displacement.csv").open(
+        "w", newline="", encoding="utf-8"
+    ) as stream:
+        writer = csv.writer(stream)
+        writer.writerow(
+            [
+                "Time",
+                "Compression_mm",
+                "Compression_Force_N",
+                "Bottom_RFZ_N",
+                "Force_Imbalance_N",
+                "External_Work_J",
+            ]
+        )
+        writer.writerows(np.column_stack((history, work)))
+
+    # Save standardized 100-point stress-strain curve for Deep Learning
+    if len(strain) >= 2 and strain[-1] > 0:
+        std_strain = np.linspace(0.0, float(strain[-1]), 100)
+        std_stress = np.interp(std_strain, strain, nominal_stress_mpa)
+        with (folder / "standardized_stress_strain.csv").open(
+            "w", newline="", encoding="utf-8"
+        ) as stream:
+            writer = csv.writer(stream)
+            writer.writerow(["Compressive_Strain", "Nominal_Stress_MPa"])
+            writer.writerows(np.column_stack((std_strain, std_stress)))
+
+    if images:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+
+        for y, label, filename in (
+            (force, "Compression force (N)", "force_displacement.png"),
+            (work, "External compression work (J)", "compression_work.png"),
+        ):
+            figure, axis = plt.subplots(figsize=(8, 5))
+            axis.plot(x, y, linewidth=2, color="#247fa6")
+            axis.set(xlabel="Compression (mm)", ylabel=label)
+            axis.grid(alpha=0.25)
+            figure.tight_layout()
+            figure.savefig(folder / filename, dpi=200)
+            plt.close(figure)
+    return {
+        "maximum_force_N": float(force.max()),
+        "external_compression_work_J": ea_j,
+        "energy_absorption_J": ea_j,
+        "specific_energy_absorption_J_g": float(sea_j_per_g),
+        "volumetric_energy_absorption_J_cm3": float(vol_ea_j_per_cm3),
+        "specimen_mass_g": float(mass_g),
+        "effective_young_modulus_MPa": float(effective_modulus_mpa),
+        "reached_compression_mm": float(x[-1]),
+        "final_force_N": float(force[-1]),
+        "loading_mode": settings.loading_mode,
+        "completed": loading_target_reached(settings, x[-1], force[-1], history[-1, 0]),
+    }
+
+
+def run_analysis(
+    settings: Settings,
+    mesh: FEMesh,
+    backend: SolverBackend,
+    images: bool = True,
+) -> Path:
+    require_settings(settings)
+    errors = backend.capabilities.validate(settings) + mesh.solve_errors
+    if errors:
+        raise ValueError("\n".join(errors))
+    paths = RunPaths.create()
+    report = {
+        "status": "preparing",
+        "licensed_solve_executed": False,
+        "solver": backend.capabilities.identifier,
+        "settings": asdict(settings),
+    }
+    from standard_tests import profile_report
+    report['test_profile']=profile_report(settings)
+    status = paths.human / "summary.json"
+    print(f"Results: {paths.human}", flush=True)
+    try:
+        write_json(status, report)
+        report["mesh"] = export_geometry(settings, mesh, paths, images=images)
+        report["status"] = "solving"
+        write_json(status, report)
+        print(
+            f"Using the existing FE mesh: {mesh.grid.n_points} nodes, "
+            f"{mesh.grid.n_cells} elements; no specimen remeshing.\n"
+            f"Starting {backend.capabilities.display_name}...",
+            flush=True,
+        )
+        execution = backend.solve(AnalysisRequest(settings, mesh, paths.raw))
+        report["solve_attempted"] = execution.solve_attempted
+        report["licensed_solve_executed"] = execution.solve_attempted and backend.capabilities.identifier == "ansys_mapdl"
+        report["solver_diagnostics"] = execution.diagnostics
+        if execution.error:
+            report["solver_error"] = execution.error
+        if execution.results is None:
+            raise RuntimeError(
+                execution.error or "Solver did not return results."
+            )
+        result = execution.results
+        history, report["reactions"] = extract_curve(result)
+        report["graphs"] = export_graphs(
+            history, settings, paths.human / "04_Graphs", mesh=mesh, images=images, result=result
+        )
+        report["fields"] = export_field_results(
+            result, mesh, paths.human / "03_Results", images=images
+        )
+        if execution.error or not report["graphs"]["completed"]:
+            report["status"] = "partial_solution"
+        elif report["reactions"]["force_balance_warning"]:
+            report["status"] = "completed_with_force_balance_warning"
+        else:
+            report["status"] = "completed"
+        write_json(status, report)
+        print(
+            f"Analysis status: {report['status']}\nResults: {paths.human}",
+            flush=True,
+        )
+        if report["status"] == "partial_solution":
+            raise RuntimeError(
+                "Analysis stopped before clean completion; partial results are labelled."
+            )
+        return paths.human
+    except Exception as exc:
+        if report["status"] != "partial_solution":
+            report["status"] = "failed"
+        report["error"] = str(exc)
+        write_json(status, report)
+        (paths.human / "error.txt").write_text(
+            traceback.format_exc(), encoding="utf-8"
+        )
+        raise
+
+
+def resume_kratos_analysis(record_path,remote_auth=None,job_marker=None):
+    from kratos_backend import KratosBackend
+    from model import settings_from_dict
+    record=json.loads(Path(record_path).read_text(encoding="utf-8"))
+    local=Path(record["local_directory"])
+    payload=json.loads((local/"input.json").read_text(encoding="utf-8"))
+    settings=settings_from_dict(payload["settings"])
+    grid=pv.read(local/"submitted_mesh.vtu")
+    meta=payload["mesh_metadata"]
+    ids=np.asarray(grid.point_data["ansys_node_num"])
+    z=np.asarray(grid.points)[:,2]
+    mesh=FEMesh(grid,float(meta["spacing"]),meta["subdivisions"],float(meta["fraction"]),int(meta["components"]),
+                ids[np.isclose(z,z.min(),rtol=0,atol=max(settings.size*1e-9,1e-12))],
+                ids[np.isclose(z,z.max(),rtol=0,atol=max(settings.size*1e-9,1e-12))],
+                pv.UnstructuredGrid(),int(meta["original_components"]),int(meta["candidate_elements"]))
+    class ResumedBackend(KratosBackend):
+        def solve(self,request):
+            return self.resume(AnalysisRequest(request.settings,request.mesh,local))
+    return run_analysis(settings,mesh,ResumedBackend(remote_auth,job_marker))
+
+
+def run_batch_experiment(
+    settings: Settings,
+    mesh: FEMesh,
+    backend_factory=None,
+) -> dict:
+    if backend_factory is None:
+        backend_factory = lambda: create_solver_backend(settings.solver_backend)
+    human_path = run_analysis(settings, mesh, backend_factory(), images=False)
+    summary_data = json.loads(
+        (human_path / "summary.json").read_text(encoding="utf-8")
+    )
+    summary_data["run_folder"] = str(human_path)
+    return summary_data
+
+
+class NoWheelSpinBox(QSpinBox):
+    """Spinbox that ignores mouse wheel scrolling."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+
+    def wheelEvent(self, event) -> None:
+        event.ignore()
+
+
+class NoWheelDoubleSpinBox(CompactDoubleSpinBox):
+    """Double spinbox that ignores mouse wheel scrolling."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+
+    def wheelEvent(self, event) -> None:
+        event.ignore()
+
+
+class NumericInputBox(NoWheelDoubleSpinBox):
+    """Validated numeric text entry without mouse or keyboard stepping."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
+        self.setProperty("plainNumericInput", True)
+
+    def stepEnabled(self):
+        return QAbstractSpinBox.StepEnabledFlag.StepNone
+
+    def stepBy(self, steps):
+        pass
+
+
+class NoWheelComboBox(CompactComboBox):
+    """ComboBox that ignores mouse wheel scrolling."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+
+    def wheelEvent(self, event) -> None:
+        event.ignore()
+
+
+class RustMechDialog(QDialog):
+    """Compact settings editor with debounced, nonblocking exact FE preview."""
+
+    def __init__(
+        self,
+        settings: Settings,
+        preview_builder=build_preview,
+        solver_capabilities: SolverCapabilities = MAPDL_CAPABILITIES,
+        solver_profile_store=None,
+    ):
+        app_inst = QApplication.instance()
+        if app_inst is not None:
+            from window_state import install_window_state
+            install_window_state(app_inst)
+            from ui_copy import install_copy_support
+            install_copy_support(app_inst)
+            from ui_input import install_settings_wheel_guard
+            install_settings_wheel_guard(app_inst)
+            from PySide6.QtGui import QColor, QPalette
+
+            app_inst.setStyle("Fusion")
+            pal = QPalette()
+            pal.setColor(QPalette.ColorRole.Window, QColor("#f3f3f3"))
+            pal.setColor(QPalette.ColorRole.WindowText, QColor("#202020"))
+            pal.setColor(QPalette.ColorRole.Base, QColor("#ffffff"))
+            pal.setColor(QPalette.ColorRole.AlternateBase, QColor("#fafafa"))
+            pal.setColor(QPalette.ColorRole.ToolTipBase, QColor("#ffffff"))
+            pal.setColor(QPalette.ColorRole.ToolTipText, QColor("#202020"))
+            pal.setColor(QPalette.ColorRole.Text, QColor("#202020"))
+            pal.setColor(QPalette.ColorRole.Button, QColor("#fafafa"))
+            pal.setColor(QPalette.ColorRole.ButtonText, QColor("#202020"))
+            pal.setColor(QPalette.ColorRole.BrightText, QColor("#ffffff"))
+            pal.setColor(QPalette.ColorRole.Highlight, QColor("#0067c0"))
+            pal.setColor(QPalette.ColorRole.HighlightedText, QColor("#ffffff"))
+            pal.setColor(QPalette.ColorRole.Mid, QColor("#d6d6d6"))
+            pal.setColor(QPalette.ColorRole.Dark, QColor("#969696"))
+            pal.setColor(QPalette.ColorRole.Light, QColor("#ffffff"))
+            app_inst.setPalette(pal)
+        super().__init__()
+        self.analysis_job = None
+        self.analysis_poll = QTimer(self)
+        self.analysis_poll.setInterval(100)
+        self.analysis_poll.timeout.connect(self._poll_analysis)
+        self.accepted_settings = None
+        self.preview = None
+        self.controls = {}
+        self.solver_profile_store = solver_profile_store if solver_profile_store is not None else SolverProfileStore()
+        self._persist_solver_profiles = solver_profile_store is not None
+        self._solver_profiles = {}
+        self._active_solver_id = settings.solver_backend
+        self._switching_solver = False
+        self._solver_profiles_ready = False
+        self.builder = preview_builder
+        self._custom_capabilities = (
+            solver_capabilities
+            if solver_capabilities.identifier not in SOLVER_REGISTRY
+            else None
+        )
+        self.solver_capabilities = (
+            self._custom_capabilities
+            or get_solver_capabilities(settings.solver_backend)
+        )
+        self._active_solver_id = self.solver_capabilities.identifier
+        self.active_geometry = settings
+        self._custom_experiment = settings if settings.test_profile == 'custom' else Settings()
+        self.imported_geometry_path = settings.imported_geometry_path
+        self.imported_geometry_name = settings.imported_geometry_name
+        self.imported_geometry_height = settings.size if settings.imported_geometry_path else None
+        self.executor = ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="gyroid-preview"
+        )
+        self.future = None
+        self.mesh_cancelled = Event()
+        self.mesh_progress_updates = SimpleQueue()
+        self.worker_key = None
+        self.failed_key = None
+        self.disposed = False
+
+        self.setWindowTitle(
+            "RustMech | Nonlinear Compression",
+        )
+        self.setWindowFlags(
+            self.windowFlags()
+            | Qt.WindowType.WindowMinimizeButtonHint
+            | Qt.WindowType.WindowMaximizeButtonHint
+        )
+        self.setSizeGripEnabled(True)
+        self.resize(1440, 960)
+        self.setMinimumHeight(600)
+        self.setObjectName("rustMechWindow")
+        self.setStyleSheet(STUDIO_STYLESHEET)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        self.workspace_tabs = QTabWidget()
+        self.workspace_tabs.setObjectName("workspaceTabs")
+        # Hidden DoE pages must not impose their preferred height on the model view.
+        self.workspace_tabs.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Ignored)
+        model_workspace = QWidget()
+        model_layout = QVBoxLayout(model_workspace)
+        model_layout.setContentsMargins(4, 2, 4, 0)
+        model_layout.setSpacing(2)
+
+        self.main_splitter = SidebarSplitter()
+        self.main_splitter.setOpaqueResize(True)
+        self.main_splitter.setHandleWidth(3)
+
+        # --- LEFT SIDEBAR PANEL ---
+        panel = QFrame()
+        panel.setObjectName("sidebarPanel")
+        panel.setMinimumWidth(230)
+        panel.setSizePolicy(
+            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Expanding
+        )
+        left = QVBoxLayout(panel)
+        left.setContentsMargins(5, 0, 5, 4)
+        left.setSpacing(2)
+
+        brand_card = QFrame()
+        brand_card.setObjectName("brandHeader")
+        brand_layout = QHBoxLayout(brand_card)
+        brand_layout.setContentsMargins(10, 4, 10, 4)
+        brand_layout.setSpacing(12)
+        eyebrow = QLabel("RustMech")
+        eyebrow.setObjectName("brandEyebrow")
+        title = QLabel("Nonlinear Compression")
+        self.brand_title_label = title
+        title.setObjectName("brandTitle")
+        self.brand_subtitle_lbl = QLabel(self.solver_capabilities.display_name)
+        self.brand_subtitle_lbl.setObjectName("brandSubtitle")
+        unit_badge = QLabel("Units: mm  N  MPa")
+        unit_badge.setObjectName("unitBadge")
+        brand_layout.addWidget(eyebrow)
+        brand_layout.addWidget(title)
+        brand_layout.addStretch()
+        brand_layout.addWidget(self.brand_subtitle_lbl)
+        self.truba_dialog = TrubaConnectionDialog(self)
+        self.truba_button = QPushButton("TRUBA")
+        self.truba_button.setObjectName("secondaryActionBtn")
+        self.truba_button.setToolTip("Connect to TRUBA with your own username and password")
+        self.truba_button.clicked.connect(self.truba_dialog.show)
+        self.truba_dialog.connection_changed.connect(self._update_truba_button)
+        brand_layout.addWidget(self.truba_button)
+        brand_layout.addWidget(unit_badge)
+        layout.addWidget(brand_card)
+
+        self.setup_tabs = QTabWidget()
+        self.setup_tabs.setObjectName("setupTabs")
+        self.setup_tabs.setUsesScrollButtons(True)
+        self.setup_tabs.setTabBarAutoHide(True)
+        left.addWidget(self.setup_tabs, 1)
+        geometry_fields = self._add_setup_page("&Setup")
+        analysis_fields = geometry_fields
+
+        from standard_tests import PROFILES, ARCHITECTURES
+        test_form = self.add_group(geometry_fields, 'Standard test', settings,
+            [('core_fraction', 'Porous centre length', 10, 100, 5, 1)])
+        self.controls['core_fraction'].setSuffix(' %')
+        self.test_profile_combo = NoWheelComboBox()
+        self.test_profile_combo.setObjectName('standardTestCombo')
+        self.test_profile_combo.addItem('Özel deney / Custom experiment', 'custom')
+        for identifier, p in PROFILES.items():self.test_profile_combo.addItem(p.label, identifier)
+        self.test_profile_combo.setCurrentIndex(max(0,self.test_profile_combo.findData(settings.test_profile)))
+        self.architecture_combo = NoWheelComboBox()
+        for identifier, label in ARCHITECTURES.items():self.architecture_combo.addItem(label,identifier)
+        self.architecture_combo.setCurrentIndex(max(0,self.architecture_combo.findData(settings.specimen_architecture)))
+        self.standard_hint = QLabel()
+        self.standard_hint.setWordWrap(True)
+        self.standard_hint.setObjectName('mutedHintLabel')
+        test_form.insertRow(0,field_label('Test profile',self.test_profile_combo),self.test_profile_combo)
+        test_form.insertRow(1,field_label('Specimen interior',self.architecture_combo),self.architecture_combo)
+        test_form.addRow(self.standard_hint)
+        self._test_form = test_form
+
+        geometry_form = self.add_group(
+            geometry_fields,
+            "Structure / Dimensions",
+            settings,
+            [
+                ("random_seed", "Random seed", 1, 999999, 1, None),
+                ("size", "Cube size", 1, 100, 0.5, 3),
+                ("cell_size", "Period / pore scale", 0.1, 100, 0.5, 3),
+                ("solid_fraction", "Solid fraction", 1, 99, 1, 2),
+            ],
+        )
+        mesh_form = self.add_group(
+            geometry_fields, "Mesh", settings,
+            [
+                ("mesh_resolution", "Global mesh size", MIN_MESH_INPUT_MM, 5, 0.05, 3),
+                ("local_mesh_size", "Local mesh size", MIN_MESH_INPUT_MM, 5, 0.001, 3),
+            ],
+        )
+        for name in ("size", "cell_size", "mesh_resolution", "local_mesh_size"):
+            self.controls[name].setSuffix(" mm")
+        self.controls["solid_fraction"].setSuffix(" %")
+
+        # Insert Family, Structure, and Morphology selectors at the top of Geometry
+        self.family_combo = NoWheelComboBox()
+        for fam_key, fam_label in STRUCTURE_FAMILIES.items():
+            self.family_combo.addItem(fam_label, fam_key)
+        resolved_fam, resolved_name = resolve_family_and_name(
+            settings.structure_family, settings.structure_name
+        )
+        self.family_combo.setCurrentIndex(
+            max(0, self.family_combo.findData(resolved_fam))
+        )
+
+        self.structure_combo = NoWheelComboBox()
+
+        self.morphology_combo = NoWheelComboBox()
+        for morph_key, morph_label in TPMS_MORPHOLOGIES.items():
+            self.morphology_combo.addItem(morph_label, morph_key)
+        self.morphology_combo.setCurrentIndex(
+            max(0, self.morphology_combo.findData(settings.tpms_morphology))
+        )
+
+        self._populate_structure_items(resolved_fam, resolved_name)
+
+        self.structure_hint_label = QLabel()
+        self.structure_hint_label.setObjectName("mutedHintLabel")
+        self.structure_hint_label.setWordWrap(True)
+
+        fam_lbl = field_label(
+            "Structure family", self.family_combo, tooltip=GEOMETRY_HELP["structure_family"]
+        )
+        struct_lbl = field_label(
+            "Structure type", self.structure_combo, tooltip=GEOMETRY_HELP["structure_name"]
+        )
+        morph_lbl = field_label(
+            "Morphology", self.morphology_combo, tooltip=GEOMETRY_HELP["tpms_morphology"]
+        )
+
+        geometry_form.insertRow(0, fam_lbl, self.family_combo)
+        geometry_form.insertRow(1, struct_lbl, self.structure_combo)
+        geometry_form.insertRow(2, morph_lbl, self.morphology_combo)
+        geometry_form.insertRow(3, self.structure_hint_label)
+        geometry_form.setRowVisible(self.structure_hint_label, False)
+        self.structure_apply_button = QPushButton("Apply")
+        self.structure_apply_button.setObjectName("structureApplyBtn")
+        self.structure_apply_button.setAutoDefault(False)
+        self.structure_apply_button.setDefault(False)
+        self.structure_apply_button.setFixedWidth(
+            max(56, self.structure_apply_button.fontMetrics().horizontalAdvance("Apply") + 16)
+        )
+        self.structure_apply_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.structure_apply_button.setToolTip(
+            "Apply the selected structure and geometry settings to the 3D preview."
+        )
+        self.structure_apply_button.clicked.connect(self.apply_geometry)
+        structure_actions = QWidget()
+        structure_action_row = QHBoxLayout(structure_actions)
+        structure_action_row.setContentsMargins(0, 0, 0, 0)
+        structure_action_row.setSpacing(0)
+        structure_action_row.addStretch()
+        structure_action_row.addWidget(self.structure_apply_button)
+        geometry_form.addRow(structure_actions)
+        self.import_geometry_button = QPushButton('Import geometry…')
+        self.import_geometry_button.setAutoDefault(False)
+        self.import_geometry_button.clicked.connect(self.import_geometry)
+        geometry_form.addRow(self.import_geometry_button)
+        self.clear_import_button = QPushButton('Use generated structure')
+        self.clear_import_button.setAutoDefault(False)
+        self.clear_import_button.clicked.connect(self.clear_imported_geometry)
+        geometry_form.addRow(self.clear_import_button)
+        self.import_geometry_label = QLabel(self.imported_geometry_name or 'No imported geometry')
+        self.import_geometry_label.setWordWrap(True)
+        self.import_geometry_label.setObjectName('mutedHintLabel')
+        geometry_form.addRow(self.import_geometry_label)
+        if self.imported_geometry_path:
+            self.controls['size'].setRange(min(.000001, settings.size), max(100, settings.size))
+            self.controls['size'].setValue(settings.size)
+        self.controls['size'].setEnabled(not bool(self.imported_geometry_path))
+        self._sync_import_controls()
+        self.mesh_type_combo = NoWheelComboBox()
+        for mesh_type in MESH_TYPES:
+            self.mesh_type_combo.addItem(mesh_type, mesh_type)
+            self.mesh_type_combo.setItemData(
+                self.mesh_type_combo.count() - 1,
+                MESH_TYPE_LABELS.get(mesh_type, mesh_type), Qt.ItemDataRole.ToolTipRole,
+            )
+        self.mesh_type_combo.setCurrentIndex(
+            max(0, self.mesh_type_combo.findData(settings.mesh_type))
+        )
+        mesh_form.addRow(
+            field_label("Element type", self.mesh_type_combo, tooltip=GEOMETRY_HELP["mesh_type"]),
+            self.mesh_type_combo,
+        )
+        self.tetra_strategy_combo = NoWheelComboBox()
+        for label, value in (("Auto (TPMS cells / Netgen)", "auto"),
+                             ("Netgen", "netgen"), ("Periodic cells", "periodic")):
+            self.tetra_strategy_combo.addItem(label, value)
+        self.tetra_strategy_combo.setCurrentIndex(
+            max(0, self.tetra_strategy_combo.findData(settings.tetra_strategy)))
+        mesh_form.addRow(field_label("Meshing method", self.tetra_strategy_combo,
+                                tooltip=GEOMETRY_HELP["tetra_strategy"]), self.tetra_strategy_combo)
+        self.mesh_apply_button = QPushButton("Apply")
+        self.mesh_apply_button.setObjectName("meshApplyBtn")
+        self.mesh_apply_button.setAutoDefault(False)
+        self.mesh_apply_button.setDefault(False)
+        self.mesh_apply_button.setFixedWidth(self.structure_apply_button.width())
+        self.mesh_apply_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.mesh_apply_button.setToolTip("Apply current settings and build the FE mesh.")
+        self.mesh_apply_button.clicked.connect(self.apply_geometry)
+        mesh_actions = QWidget()
+        mesh_action_row = QHBoxLayout(mesh_actions)
+        mesh_action_row.setContentsMargins(0, 0, 0, 0)
+        mesh_action_row.setSpacing(0)
+        mesh_action_row.addStretch()
+        mesh_action_row.addWidget(self.mesh_apply_button)
+        mesh_form.addRow(mesh_actions)
+        self.tetra_strategy_combo.currentIndexChanged.connect(self.geometry_changed)
+        self.mesh_type_combo.currentIndexChanged.connect(self._sync_mesh_type)
+        self._sync_mesh_type()
+        self._geometry_form = geometry_form
+        self._morph_label_widget = morph_lbl
+
+        self.family_combo.currentIndexChanged.connect(self._on_family_changed)
+        self.structure_combo.currentIndexChanged.connect(self._on_structure_selection_changed)
+        self.morphology_combo.currentIndexChanged.connect(self._on_structure_selection_changed)
+        self._sync_structure_ui_visibility()
+
+        self.material_editor = MaterialEditor(settings)
+        self.controls.update(self.material_editor.controls)
+        geometry_fields.addWidget(self.material_editor)
+
+        self.geometry_apply_button = QPushButton("Update preview")
+        self.geometry_apply_button.setObjectName("geometryApplyBtn")
+        self.geometry_apply_button.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_BrowserReload))
+        self.geometry_apply_button.setIconSize(QSize(16, 16))
+        self.geometry_apply_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.geometry_apply_button.setToolTip(
+            "Apply geometry settings and refresh the 3D preview."
+        )
+        self.geometry_apply_button.clicked.connect(self.apply_geometry)
+        geometry_actions = QWidget()
+        action_row = ActionFlowLayout(geometry_actions)
+        action_row.addWidget(self.geometry_apply_button)
+        convergence_button = QPushButton("Mesh Convergence")
+        convergence_button.setObjectName("secondaryActionBtn")
+        convergence_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        convergence_button.clicked.connect(self.open_mesh_convergence)
+        action_row.addWidget(convergence_button)
+        self.add_to_doe_button = QPushButton("Add to DoE")
+        self.add_to_doe_button.setObjectName("experimentActionBtn")
+        self.add_to_doe_button.setEnabled(False)
+        self.add_to_doe_button.setToolTip("Add a snapshot of the current 3D model and setup.")
+        self.add_to_doe_button.clicked.connect(self._add_current_design)
+        action_row.addWidget(self.add_to_doe_button)
+        geometry_fields.addWidget(geometry_actions)
+
+        contact_form = self.add_group(
+            analysis_fields,
+            "Contact and friction",
+            settings,
+            [
+                (
+                    "bottom_platen_friction_coeff",
+                    "Bottom platen friction μ",
+                    0.0,
+                    2.0,
+                    0.05,
+                    3,
+                ),
+                (
+                    "top_platen_friction_coeff",
+                    "Top platen friction μ",
+                    0.0,
+                    2.0,
+                    0.05,
+                    3,
+                ),
+                ("self_friction_coeff", "Self-friction μ_self", 0.0, 2.0, 0.05, 3),
+                ("platen_penetration_tolerance_factor", "Platen penetration tol.", 1e-6, .5, .0001, 6),
+                (
+                    "normal_contact_stiffness_factor",
+                    "Normal stiffness (FKN)",
+                    0.01,
+                    10.0,
+                    0.1,
+                    3,
+                ),
+                (
+                    "penetration_tolerance_factor",
+                    "Penetration tol. (FTOLN)",
+                    0.001,
+                    0.5,
+                    0.01,
+                    3,
+                ),
+                (
+                    "contact_damping_factor",
+                    "Contact damping (FDMN)",
+                    0.0,
+                    1.0,
+                    0.005,
+                    4,
+                ),
+            ],
+        )
+        self._contact_form = contact_form
+        self.platen_contact_combos = {}
+        for side, title in (("bottom", "Bottom contact"), ("top", "Top contact")):
+            combo = NoWheelComboBox()
+            for key, label in PLATEN_CONTACT_MODES.items():
+                combo.addItem(label, key)
+            combo.setCurrentIndex(max(0, combo.findData(getattr(settings, f"{side}_platen_contact"))))
+            self.platen_contact_combos[side] = combo
+            contact_form.addRow(field_label(title, combo), combo)
+            combo.currentIndexChanged.connect(self._on_contact_changed)
+
+        self.self_contact_combo = NoWheelComboBox()
+        for sc_key, sc_label in SELF_CONTACT_MODES.items():
+            self.self_contact_combo.addItem(sc_label, sc_key)
+        self.self_contact_combo.setCurrentIndex(
+            max(0, self.self_contact_combo.findData(settings.self_contact_mode))
+        )
+        self_contact_lbl = field_label("Internal self-contact", self.self_contact_combo)
+
+        self.contact_formulation_combo = NoWheelComboBox()
+        for cf_key, cf_label in CONTACT_FORMULATIONS.items():
+            self.contact_formulation_combo.addItem(cf_label, cf_key)
+        self.contact_formulation_combo.setCurrentIndex(
+            max(
+                0,
+                self.contact_formulation_combo.findData(
+                    settings.contact_formulation
+                ),
+            )
+        )
+        cf_lbl = field_label("Contact algorithm", self.contact_formulation_combo)
+
+        self.contact_hint_label = QLabel()
+        self.contact_hint_label.setObjectName("mutedHintLabel")
+        self.contact_hint_label.setWordWrap(True)
+
+        contact_form.insertRow(2, self_contact_lbl, self.self_contact_combo)
+        contact_form.insertRow(4, cf_lbl, self.contact_formulation_combo)
+        contact_form.addRow(self.contact_hint_label)
+
+        self.automatic_contact = QCheckBox("Automatic defaults")
+        defaults = Settings()
+        auto_contact = settings.automatic_contact_parameters
+        if auto_contact is None:
+            auto_contact = (all(getattr(settings, name) == getattr(defaults, name)
+                                for name in CONTACT_NUMERICAL_FIELDS)
+                            and settings.contact_formulation == defaults.contact_formulation)
+        self.automatic_contact.setChecked(auto_contact)
+        self.automatic_contact.setToolTip(
+            "Use the application's recommended numerical contact parameters. "
+            "Clear to edit the algorithm, stiffness, penetration tolerances and damping. "
+            "Contact types and friction coefficients remain your physical inputs.")
+        contact_form.insertRow(0, field_label("Numerical settings", self.automatic_contact), self.automatic_contact)
+        self._manual_contact_values = None
+        self.automatic_contact.toggled.connect(self._automatic_contact_changed)
+
+        self.self_contact_combo.currentIndexChanged.connect(
+            self._on_contact_changed
+        )
+        self.contact_formulation_combo.currentIndexChanged.connect(
+            self._on_contact_changed
+        )
+
+        solver_form = self.add_group(
+            analysis_fields,
+            "Solver and loading",
+            settings,
+            [
+                ("compression", "Compression / mm", 0.001, 99, 0.1, 3),
+                ("applied_force", "Compression force / N", 1e-9, 1e12, 10, 3),
+                (
+                    "cores",
+                    "CPU cores",
+                    1,
+                    self.solver_capabilities.max_cores,
+                    1,
+                    None,
+                ),
+            ],
+        )
+        substeps_row = QWidget()
+        self._substeps_row = substeps_row
+        substeps_layout = ActionFlowLayout(substeps_row)
+        substeps_layout.setAlignment(Qt.AlignmentFlag.AlignRight)
+        substeps_layout.setContentsMargins(0, 0, 0, 0)
+        substeps_layout.setSpacing(4)
+        self.substeps_status = QLabel("Automatic")
+        self.substeps_status.setToolTip("The solver adapts the load increment to convergence.")
+        substeps_layout.addWidget(self.substeps_status)
+        self.substeps_advanced_button = QPushButton("Advanced")
+        self.substeps_advanced_button.setObjectName("secondaryActionBtn")
+        self.substeps_advanced_button.setCheckable(True)
+        self.substeps_advanced_button.setToolTip("Initial substeps and automatic stepping limits")
+        substeps_layout.addWidget(self.substeps_advanced_button)
+        solver_form.addRow(field_label("Substeps", substeps_row), substeps_row)
+
+        self.substeps_advanced = QWidget()
+        advanced_form = QFormLayout(self.substeps_advanced)
+        advanced_form.setContentsMargins(0, 0, 0, 0)
+        configure_form(advanced_form)
+        minimum, maximum = settings.substep_limits
+        for key, label, value, hint in (
+            ("substeps", "Initial substeps", settings.substeps,
+             "Initial load increment = total load / initial substeps."),
+            ("minimum_substeps", "Minimum substeps", minimum,
+             "Limits the largest load increment: total load / minimum substeps."),
+            ("maximum_substeps", "Maximum substeps", maximum,
+             "Limits the smallest load increment: total load / maximum substeps."),
+        ):
+            control = NoWheelSpinBox()
+            control.setRange(1, max(100_000_000, value))
+            control.setValue(value)
+            control.setKeyboardTracking(False)
+            self.controls[key] = control
+            advanced_form.addRow(field_label(label, control, tooltip=hint), control)
+        self.substeps_advanced.hide()
+        self.substeps_advanced_button.toggled.connect(self.substeps_advanced.setVisible)
+        solver_form.addRow(self.substeps_advanced)
+
+        # Keep all specimen conditions together, immediately below the mesh.
+        mesh_index = geometry_fields.indexOf(mesh_form.parentWidget().parentWidget())
+        geometry_fields.insertWidget(mesh_index + 1, solver_form.parentWidget().parentWidget())
+        geometry_fields.insertWidget(geometry_fields.indexOf(self.material_editor) + 1,
+                                     contact_form.parentWidget().parentWidget())
+        self._loading_form = solver_form
+        self._solver_group = solver_form.parentWidget().parentWidget()
+        self.kratos_panel = KratosSettingsPanel(settings)
+        geometry_fields.insertWidget(geometry_fields.indexOf(self._solver_group) + 1, self.kratos_panel)
+        self.kratos_panel.hide()
+        self.loading_mode_combo = NoWheelComboBox()
+        for key, label in LOADING_MODES.items():
+            self.loading_mode_combo.addItem(label, key)
+        self.loading_mode_combo.setCurrentIndex(max(0, self.loading_mode_combo.findData(settings.loading_mode)))
+        solver_form.insertRow(0, field_label("Loading control", self.loading_mode_combo), self.loading_mode_combo)
+        self.loading_hint_label = QLabel()
+        self.loading_hint_label.setObjectName("mutedHintLabel")
+        self.loading_hint_label.setWordWrap(True)
+        solver_form.addRow(self.loading_hint_label)
+        self.loading_mode_combo.currentIndexChanged.connect(self._on_loading_changed)
+        self._sync_loading_ui()
+
+        self.solver_combo = NoWheelComboBox()
+        for solver_key, solver_label in SOLVER_BACKENDS.items():
+            self.solver_combo.addItem(solver_label, solver_key)
+            if solver_key == "openfoam":
+                self.solver_combo.model().item(self.solver_combo.count() - 1).setEnabled(False)
+        if self._custom_capabilities is not None:
+            self.solver_combo.addItem(
+                self._custom_capabilities.display_name,
+                self._custom_capabilities.identifier,
+            )
+            self.solver_combo.setCurrentIndex(
+                max(
+                    0,
+                    self.solver_combo.findData(
+                        self._custom_capabilities.identifier
+                    ),
+                )
+            )
+        else:
+            self.solver_combo.setCurrentIndex(
+                max(0, self.solver_combo.findData(settings.solver_backend))
+            )
+
+        self.solver_hint_label = QLabel()
+        self.solver_hint_label.setObjectName("mutedHintLabel")
+        self.solver_hint_label.setWordWrap(True)
+
+        solver_lbl = field_label("Solver engine", self.solver_combo)
+        solver_form.insertRow(0, solver_lbl, self.solver_combo)
+        solver_form.insertRow(1, self.solver_hint_label)
+
+        self.solver_combo.currentIndexChanged.connect(self._on_solver_changed)
+        self._sync_solver_ui()
+        self.automatic_cores = QCheckBox("Auto")
+        auto_cores = settings.automatic_cores
+        if auto_cores is None:
+            auto_cores = settings.cores == self.solver_capabilities.default_cores
+        self.automatic_cores.setChecked(auto_cores)
+        self.automatic_cores.setToolTip("Use the selected solver's default CPU count within its license limit.")
+        cores = self.controls["cores"]
+        core_row, _ = solver_form.getWidgetPosition(cores)
+        solver_form.removeWidget(cores)
+        core_field = QWidget()
+        core_layout = QHBoxLayout(core_field)
+        core_layout.setContentsMargins(0, 0, 0, 0)
+        core_layout.setSpacing(4)
+        core_layout.addWidget(cores)
+        core_layout.addWidget(self.automatic_cores)
+        core_layout.addStretch(1)
+        solver_form.setWidget(core_row, QFormLayout.ItemRole.FieldRole, core_field)
+        self._manual_cores = settings.cores
+        self.automatic_cores.toggled.connect(self._automatic_cores_changed)
+        self._automatic_cores_changed()
+        self._automatic_contact_changed()
+        self._sync_contact_ui()
+
+        note = QLabel(
+            "• Bottom platen at Z = 0 · Top platen at Z = L (−Z compression)\n"
+            "• Rigid platen contact with separate Coulomb friction coefficients\n"
+            "• Configurable 3D Cell-Wall Self-Contact & Internal Friction (μ_self)\n"
+            "• Large displacement (NLGEOM) · voxel HEX8/HEX20 or surface-conforming TET4/TET10"
+        )
+        note.setObjectName("physicsNoteCard")
+        self.physics_note = note
+        note.setWordWrap(True)
+        analysis_fields.addWidget(note)
+        analysis_fields.addStretch()
+
+        self._add_planned_method_pages()
+        self.setup_tabs.tabBar().hide()
+
+        self.main_splitter.addWidget(panel)
+        self.main_splitter.setCollapsible(0, True)
+
+        preview_tab = QWidget()
+        preview_tab.setSizePolicy(
+            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Expanding
+        )
+        right = QVBoxLayout(preview_tab)
+        right.setContentsMargins(2, 0, 0, 0)
+        right.setSpacing(2)
+
+        # One navigation row for workspaces, display modes and camera controls.
+        toolbar_frame = QFrame()
+        toolbar_frame.setObjectName("viewportToolbar")
+        toolbar_frame.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+        toolbar = QGridLayout(toolbar_frame)
+        toolbar.setContentsMargins(0, 1, 0, 1)
+        toolbar.setHorizontalSpacing(6)
+        toolbar.setColumnStretch(0, 1)
+        toolbar.setColumnStretch(2, 1)
+        navigation_controls = QWidget()
+        navigation = QHBoxLayout(navigation_controls)
+        navigation.setContentsMargins(0, 0, 0, 0)
+        navigation.setSpacing(2)
+        toolbar.addWidget(navigation_controls, 0, 0, Qt.AlignmentFlag.AlignLeft)
+        view_controls = QWidget()
+        view_toolbar = QHBoxLayout(view_controls)
+        view_toolbar.setContentsMargins(0, 0, 0, 0)
+        view_toolbar.setSpacing(2)
+        toolbar.addWidget(view_controls, 0, 2, Qt.AlignmentFlag.AlignRight)
+
+        self.sidebar_toggle = QToolButton()
+        self.sidebar_toggle.setObjectName("headerMenu")
+        self.sidebar_toggle.setText("Settings")
+        self.sidebar_toggle.setAccessibleName("Select settings method")
+        self.sidebar_toggle.setToolTip("Select a method to open its settings")
+        self.sidebar_toggle.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.methods_menu = QMenu(self.sidebar_toggle)
+        self.method_actions = QActionGroup(self.methods_menu)
+        self.method_actions.setExclusive(True)
+        for index, name in enumerate(self.method_names):
+            action = self.methods_menu.addAction(name)
+            action.setCheckable(True)
+            action.setData(index)
+            action.setChecked(index == 0)
+            self.method_actions.addAction(action)
+            action.triggered.connect(lambda checked=False, page=index: self._select_settings_method(page))
+        self.sidebar_toggle.setMenu(self.methods_menu)
+        self.setup_tabs.currentChanged.connect(self._sync_settings_method)
+        navigation.addWidget(self.sidebar_toggle)
+
+        # Keep the indexed navigation model for existing integrations; expose
+        # workspace selection through one compact menu instead of four tabs.
+        self.workspace_navigation = QTabBar(toolbar_frame)
+        self.workspace_navigation.setObjectName("workspaceNavigation")
+        self.workspace_navigation.setExpanding(False)
+        self.workspace_navigation.setDrawBase(False)
+        workspace_names = ("Mechanic", "Experiments (DoE)", "Flow CFD", "Thermal CHT")
+        for name in workspace_names:
+            self.workspace_navigation.addTab(name)
+        self.workspace_navigation.currentChanged.connect(self.workspace_tabs.setCurrentIndex)
+        self.workspace_tabs.currentChanged.connect(self.workspace_navigation.setCurrentIndex)
+        self.workspace_navigation.hide()
+        self.workspace_button = QToolButton()
+        self.workspace_button.setObjectName("headerMenu")
+        self.workspace_button.setText(workspace_names[0])
+        self.workspace_button.setAccessibleName("Select workspace")
+        self.workspace_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.workspace_menu = QMenu(self.workspace_button)
+        self.workspace_actions = QActionGroup(self.workspace_menu)
+        self.workspace_actions.setExclusive(True)
+        for index, name in enumerate(workspace_names):
+            action = self.workspace_menu.addAction(name)
+            action.setCheckable(True)
+            action.setData(index)
+            action.setChecked(index == 0)
+            self.workspace_actions.addAction(action)
+            action.triggered.connect(lambda checked=False, page=index: self.workspace_tabs.setCurrentIndex(page))
+        self.workspace_button.setMenu(self.workspace_menu)
+        navigation.addWidget(self.workspace_button)
+
+        self.display_mode_group = QFrame()
+        self.display_mode_group.setObjectName("displayModeGroup")
+        mode_layout = QHBoxLayout(self.display_mode_group)
+        mode_layout.setContentsMargins(3, 2, 3, 2)
+        mode_layout.setSpacing(0)
+        toolbar.addWidget(self.display_mode_group, 0, 1, Qt.AlignmentFlag.AlignCenter)
+
+        self.mode = NoWheelComboBox(toolbar_frame)
+        self.mode.setAccessibleName("3D display mode")
+        self.mode.addItems(
+            ["Smooth geometry", "FE mesh", "Smooth + FE overlay"]
+        )
+        self.mode.setCurrentIndex(1)
+        self.mode.currentIndexChanged.connect(self.render_preview)
+        # Retain the mode model for existing render/preview integrations.
+        self.mode.hide()
+        self.display_mode_tabs = QTabBar()
+        self.display_mode_tabs.setObjectName("displayModeTabs")
+        self.display_mode_tabs.setAccessibleName("3D display mode")
+        self.display_mode_tabs.setExpanding(False)
+        self.display_mode_tabs.setDrawBase(False)
+        self.display_mode_tabs.setElideMode(Qt.TextElideMode.ElideNone)
+        mode_layout.addWidget(self.display_mode_tabs)
+        for index, text in enumerate(("Geometry", "FE Mesh", "Overlay")):
+            self.display_mode_tabs.addTab(text)
+            self.display_mode_tabs.setTabToolTip(index, self.mode.itemText(index))
+        self.display_mode_tabs.setCurrentIndex(self.mode.currentIndex())
+        self.display_mode_tabs.tabBarClicked.connect(lambda _: self.workspace_tabs.setCurrentIndex(0))
+        self.display_mode_tabs.currentChanged.connect(self.mode.setCurrentIndex)
+        self.mode.currentIndexChanged.connect(self.display_mode_tabs.setCurrentIndex)
+
+        self.show_platens_cb = QCheckBox("Show platens")
+        self.show_platens_cb.setObjectName("legendPlatenPill")
+        self.show_platens_cb.setChecked(True)
+        self.show_platens_cb.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.show_platens_cb.toggled.connect(self.render_preview)
+        view_toolbar.addWidget(self.show_platens_cb)
+
+        # Keep warnings together with the status messages at the bottom.
+        self.fragment_status = QLabel()
+        self.fragment_status.setObjectName("fragmentWarning")
+        self.fragment_status.setWordWrap(True)
+        self.fragment_status.setVisible(False)
+
+        self.preview_splitter = QSplitter(Qt.Orientation.Vertical)
+        self.preview_splitter.setChildrenCollapsible(True)
+        self.preview_splitter.setOpaqueResize(True)
+        self.preview_splitter.setHandleWidth(5)
+
+        # 3D Interactive Viewport Container
+        viewport_container = QFrame()
+        viewport_container.setObjectName("viewportContainer")
+        viewport_container.setMinimumSize(120, 80)
+        viewport_container.setSizePolicy(
+            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored
+        )
+        viewport_layout = QHBoxLayout(viewport_container)
+        viewport_layout.setContentsMargins(0, 0, 0, 0)
+        viewport_layout.setSpacing(2)
+
+        camera_controls = QToolButton()
+        camera_controls.setText("View")
+        camera_controls.setObjectName("cameraMenu")
+        camera_controls.setEnabled(True)
+        camera_controls.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        camera_controls.setToolTip("Camera orientation, projection and reset")
+        camera_menu = QMenu(camera_controls)
+        for label, preset, tooltip in (
+            ("Iso", "iso", "Isometric view"),
+            ("XY", "xy", "View the XY plane from +Z"),
+            ("−XY", "-xy", "View the XY plane from −Z"),
+            ("XZ", "xz", "View the XZ plane from −Y"),
+            ("−XZ", "-xz", "View the XZ plane from +Y"),
+            ("YZ", "yz", "View the YZ plane from +X"),
+            ("−YZ", "-yz", "View the YZ plane from −X"),
+        ):
+            preset_action = camera_menu.addAction(label)
+            preset_action.setToolTip(tooltip)
+            preset_action.triggered.connect(
+                lambda checked=False, view=preset: self._set_camera_preset(view)
+            )
+        camera_menu.addSeparator()
+        projection_group = QActionGroup(camera_menu)
+        projection_group.setExclusive(True)
+        self.orthographic_button = camera_menu.addAction("Orthographic")
+        self.orthographic_button.setCheckable(True)
+        self.orthographic_button.setChecked(True)
+        projection_group.addAction(self.orthographic_button)
+        self.perspective_button = camera_menu.addAction("Perspective")
+        self.perspective_button.setCheckable(True)
+        projection_group.addAction(self.perspective_button)
+        self.perspective_button.setToolTip("Toggle perspective projection (OFF: orthographic view)")
+        self.perspective_button.toggled.connect(self._set_perspective)
+        camera_menu.addAction("Reset view", self.reset_view)
+        camera_controls.setMenu(camera_menu)
+        view_toolbar.addWidget(camera_controls)
+
+        self.plotter = create_preview_viewport(self, simplify_mesh_during_drag=True)
+        self.plotter.on_orientation_selected = lambda: self.orthographic_button.setChecked(True)
+        self.plotter.enable_parallel_projection()
+        self.plotter.interactor.setMinimumSize(100, 70)
+        self.plotter.interactor.setSizePolicy(
+            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored
+        )
+        viewport_layout.addWidget(self.plotter.interactor, 1)
+        self.preview_splitter.addWidget(viewport_container)
+
+        bottom_telemetry_panel = QWidget()
+        bottom_telemetry_layout = QVBoxLayout(bottom_telemetry_panel)
+        bottom_telemetry_layout.setContentsMargins(0, 2, 2, 0)
+        bottom_telemetry_layout.setSpacing(0)
+
+        # Live KPI Metric Row
+        kpi_row = QHBoxLayout()
+        kpi_row.setSpacing(0)
+        self._kpi_labels: dict[str, QLabel] = {}
+        for key, title, initial in (
+            ("elements", "Elements", "—"),
+            ("nodes", "Nodes", "—"),
+            ("fraction", "Solid fraction", "—"),
+            ("spacing", "Voxel spacing", "—"),
+        ):
+            card = QFrame()
+            card.setObjectName("kpiCard")
+            card_layout = QHBoxLayout(card)
+            card_layout.setContentsMargins(4, 3, 4, 3)
+            card_layout.setSpacing(4)
+            t_lbl = QLabel(title)
+            t_lbl.setObjectName("kpiTitle")
+            t_lbl.setWordWrap(False)
+            v_lbl = QLabel(initial)
+            v_lbl.setObjectName("kpiValue")
+            card.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Preferred)
+            card_layout.addWidget(t_lbl)
+            card_layout.addWidget(v_lbl)
+            kpi_row.addWidget(card, 0, Qt.AlignmentFlag.AlignLeft)
+            self._kpi_labels[key] = v_lbl
+        bottom_telemetry_layout.addLayout(kpi_row)
+
+        # Detailed Telemetry Readout Card
+        telemetry_card = QFrame()
+        telemetry_card.setObjectName("telemetryCard")
+        telemetry_layout = QVBoxLayout(telemetry_card)
+        telemetry_layout.setContentsMargins(12, 8, 12, 8)
+        telemetry_layout.setSpacing(4)
+
+        self.stats = QLabel("Preparing exact FE preview...")
+        self.stats.setObjectName("statsReadout")
+        self.stats.setWordWrap(True)
+        telemetry_layout.addWidget(self.stats)
+        # Full diagnostics remain available on demand instead of occupying the canvas.
+        self.telemetry_details = telemetry_card
+        telemetry_card.hide()
+        bottom_telemetry_layout.addWidget(telemetry_card)
+        details_action = camera_menu.addAction("Mesh diagnostics")
+        details_action.setCheckable(True)
+        details_action.toggled.connect(telemetry_card.setVisible)
+        self._kpi_labels["spacing"].parentWidget().hide()
+
+        cancel = QPushButton("Cancel")
+        cancel.setObjectName("cancelBtn")
+        cancel.setCursor(Qt.CursorShape.PointingHandCursor)
+        cancel.clicked.connect(self.reject)
+
+        self.apply_button = QPushButton("Run analysis")
+        self.apply_button.setObjectName("primaryLaunchBtn")
+        self.apply_button.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaPlay))
+        self.apply_button.setIconSize(QSize(16, 16))
+        self.apply_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.apply_button.setEnabled(False)
+        self.apply_button.setAutoDefault(False)
+        self.apply_button.setToolTip("Save settings and start the selected solver.")
+        self.apply_button.clicked.connect(self.apply)
+
+        self.force_stop_button = QPushButton("Forced Stop")
+        self.force_stop_button.setObjectName("forcedStopBtn")
+        self.force_stop_button.setAutoDefault(False)
+        self.force_stop_button.setEnabled(False)
+        self.force_stop_button.setToolTip("Cancel the active analysis and forcibly terminate its process tree.")
+        self.force_stop_button.clicked.connect(self.force_stop_analysis)
+
+        # Status and analysis actions
+        self.status_banner = QFrame()
+        self.status_banner.setObjectName("statusBanner")
+        status_layout = QHBoxLayout(self.status_banner)
+        status_layout.setContentsMargins(6, 3, 6, 3)
+        status_layout.setSpacing(4)
+
+        self.status_badge = QLabel("● INITIALIZING")
+        self.status_badge.setObjectName("statusBadge")
+        status_layout.addStretch()
+
+        self.status = QLabel("Generating geometry in background...")
+        self.status.setWordWrap(True)
+        readout = QWidget()
+        readout_layout = QVBoxLayout(readout)
+        readout_layout.setContentsMargins(6, 0, 0, 0)
+        readout_layout.setSpacing(2)
+        status_readout = QHBoxLayout()
+        status_readout.setSpacing(4)
+        status_readout.addWidget(self.status_badge)
+        status_readout.addWidget(self.status, 1)
+        readout_layout.addLayout(status_readout)
+        readout_layout.addWidget(self.fragment_status)
+        readout.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        kpi_row.addWidget(readout, 1)
+        self.status.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        status_layout.addWidget(cancel)
+        status_layout.addWidget(self.apply_button)
+        status_layout.addWidget(self.force_stop_button)
+        self.mesh_progress = QProgressBar()
+        self.mesh_progress.setObjectName("meshProgress")
+        self.mesh_progress.setAccessibleName("FE mesh generation progress")
+        self.mesh_progress.setRange(0, 0)
+        self.mesh_progress.setTextVisible(False)
+        self.mesh_progress.setFixedHeight(8)
+        self.mesh_progress.hide()
+        self.cancel_mesh_button = QPushButton("Cancel meshing")
+        self.cancel_mesh_button.setObjectName("secondaryActionBtn")
+        self.cancel_mesh_button.clicked.connect(self.cancel_meshing)
+        self.cancel_mesh_button.hide()
+        progress_layout = QHBoxLayout()
+        progress_layout.addWidget(self.mesh_progress, 1)
+        progress_layout.addWidget(self.cancel_mesh_button)
+        model_layout.addLayout(progress_layout)
+
+        bottom_telemetry_layout.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
+        self.preview_splitter.addWidget(bottom_telemetry_panel)
+        self.preview_splitter.setStretchFactor(0, 1)
+        self.preview_splitter.setStretchFactor(1, 0)
+        self.preview_splitter.setSizes([800, 32])
+        right.addWidget(self.preview_splitter, 1)
+
+        self.doe_studio = DoEStudioWidget(
+            settings_provider=self.collect,
+            mesh_generator=generate_volume_mesh,
+            batch_solver_runner=run_batch_experiment,
+            parent=self,
+        )
+        self.doe_studio.setObjectName("doeWorkspace")
+        self.doe_studio.setMinimumSize(220, 140)
+        self.doe_studio.setSizePolicy(
+            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored
+        )
+        self.doe_studio.preview_requested.connect(self.load_from_doe_row)
+        self.doe_studio.boundary_preview_requested.connect(self._show_doe_bounds)
+        self.doe_studio.model_requested.connect(self._show_geometry_workspace)
+
+        self.main_splitter.addWidget(preview_tab)
+        self.main_splitter.setStretchFactor(0, 0)
+        self.main_splitter.setStretchFactor(1, 1)
+        self.main_splitter.setSizes([300, 1116])
+        model_layout.insertWidget(0, self.main_splitter, 1)
+        self.workspace_tabs.addTab(model_workspace, "Mechanic")
+        self.workspace_tabs.addTab(self.doe_studio, "&Experiments (DoE)")
+        from flow_workspace import FlowWorkspace
+        self.flow_workspace = FlowWorkspace(self.collect, self, preferences=self.solver_profile_store.settings,viewport_factory=create_preview_viewport)
+        self.workspace_tabs.addTab(self.flow_workspace, "&Flow (CFD)")
+        from thermal_workspace import ThermalWorkspace
+        self.thermal_workspace = ThermalWorkspace(self.collect, self, preferences=self.solver_profile_store.settings,viewport_factory=create_preview_viewport)
+        self.workspace_tabs.addTab(self.thermal_workspace, "&Thermal (CHT)")
+        def sync_workspace_context(index):
+            self.workspace_button.setText(workspace_names[index])
+            self.workspace_actions.actions()[index].setChecked(True)
+            flow_active = index in (2,3)
+            self.brand_title_label.setText("Transient Heat Transfer" if index==3 else "Isothermal Flow" if flow_active else "Nonlinear Compression")
+            unit_badge.setText("Units: mm  °C  s  Pa" if index==3 else "Units: mm  m/s  Pa" if flow_active else "Units: mm  N  MPa")
+            remote = getattr(self,"remote_controller",None)
+            self.brand_subtitle_lbl.setText("TRUBA · remote compute" if remote is not None and remote.requested else "OpenFOAM · WSL" if flow_active else self.solver_capabilities.display_name)
+            self.sidebar_toggle.setVisible(not flow_active)
+            self.display_mode_tabs.setVisible(not flow_active)
+            self.display_mode_group.setVisible(not flow_active)
+            self.show_platens_cb.setVisible(not flow_active)
+            camera_controls.setVisible(not flow_active)
+        self.workspace_tabs.currentChanged.connect(sync_workspace_context)
+        self.workspace_tabs.tabBar().hide()
+        layout.addWidget(toolbar_frame)
+        layout.addWidget(self.workspace_tabs, 1)
+        model_layout.addWidget(self.status_banner)
+
+        for button_type in (QPushButton, QToolButton):
+            for button in self.findChildren(button_type):
+                if not button.objectName():
+                    button.setObjectName("secondaryActionBtn")
+                if isinstance(button, QPushButton) and button.window() is self:
+                    # Enter commits the active field; it must not invoke an
+                    # unrelated dialog action (Qt otherwise selects TRUBA).
+                    button.setAutoDefault(False)
+                    button.setDefault(False)
+        for control_type in (QAbstractSpinBox, QComboBox):
+            for control in self.findChildren(control_type):
+                control.setFixedHeight(CONTROL_HEIGHT)
+                if isinstance(control, QAbstractSpinBox):
+                    control.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+                    control.setAccelerated(True)
+                    control.lineEdit().setTextMargins(0, 0, 0, 0)
+                    control.setProperty("stepperFamily", "DatenburgStepper")
+
+        self.ensurePolished()
+        self.sidebar_toggle.setFixedWidth(
+            max(self.sidebar_toggle.fontMetrics().horizontalAdvance(name)
+                for name in self.method_names) + 32)
+        self.workspace_tabs.setMinimumSize(0, 0)
+        preview_tab.setMinimumWidth(
+            120 + right.contentsMargins().left() + right.contentsMargins().right()
+        )
+        self.setMinimumWidth(max(900, self.minimumSizeHint().width()))
+
+        self.debounce = QTimer(self)
+        self.debounce.setSingleShot(True)
+        self.debounce.timeout.connect(self.start_preview)
+
+        self.poll = QTimer(self)
+        self.poll.setInterval(80)
+        self.poll.timeout.connect(self.poll_preview)
+        self.poll.start()
+
+        for name, control in self.controls.items():
+            if name in GEOMETRY_FIELDS:
+                control.valueChanged.connect(self.geometry_changed)
+            else:
+                control.valueChanged.connect(self.refresh_validity)
+                if name == "compression":
+                    control.valueChanged.connect(self.render_preview)
+                if name in (
+                    "bottom_platen_friction_coeff",
+                    "top_platen_friction_coeff",
+                    "self_friction_coeff",
+                ):
+                    control.valueChanged.connect(self._sync_contact_ui)
+
+        self.finished.connect(self.dispose)
+        self.material_editor.changed.connect(self.refresh_validity)
+        self.kratos_panel.changed.connect(self.refresh_validity)
+        self.kratos_panel.recover_requested.connect(self.retrieve_truba_job)
+        self.kratos_panel.view_results_requested.connect(self.show_kratos_results)
+        self._kratos_result_dialog=None
+        self._latest_kratos_results=self.solver_profile_store.settings.value("kratos/latestResultFolder","") if self._persist_solver_profiles else ""
+        self.kratos_panel.view_results_button.setEnabled(bool(self._latest_kratos_results and Path(self._latest_kratos_results).is_dir()))
+        self._solver_profiles_ready = True
+        self._sync_solver_ui()
+        self._sync_contact_ui()
+        from remote_controller import RemoteController
+        self.remote_controller = RemoteController(self,self.solver_profile_store.settings)
+        self.flow_workspace.remote_controller = self.remote_controller
+        self.thermal_workspace.remote_controller = self.remote_controller
+        self.doe_studio.remote_controller = self.remote_controller
+        self.remote_controller.mode_changed.connect(self._remote_mode_changed)
+        self.remote_controller.changed.connect(self._remote_state_changed)
+        self.test_profile_combo.currentIndexChanged.connect(self._test_profile_changed)
+        self.architecture_combo.currentIndexChanged.connect(self._architecture_changed)
+        self.controls['core_fraction'].valueChanged.connect(self._architecture_changed)
+        self._sync_test_profile_ui()
+        QTimer.singleShot(0, self.start_preview)
+
+    def _test_profile_changed(self, *_):
+        from standard_tests import apply_profile
+        identifier = self.test_profile_combo.currentData()
+        current = replace(self.collect(),test_profile=self.active_geometry.test_profile,
+            size=self.controls['size'].value(),
+            bottom_platen_contact=self.platen_contact_combos['bottom'].currentData(),
+            top_platen_contact=self.platen_contact_combos['top'].currentData())
+        self._switching_solver = True
+        try:
+            if self.active_geometry.test_profile == 'custom' and identifier != 'custom':
+                self._custom_experiment = replace(current, test_profile='custom', size=self.controls['size'].value())
+            selected = (replace(current, **{name:getattr(self._custom_experiment,name) for name in
+                         (*GEOMETRY_FIELDS,'compression','loading_mode','applied_force','bottom_platen_contact','top_platen_contact','self_contact_mode')})
+                        if identifier == 'custom' else apply_profile(current,identifier))
+            if selected.test_profile=='iso178_preferred' and selected.solver_backend=='kratos':
+                selected=replace(selected,mesh_type='HEX8')
+            self.imported_geometry_path = selected.imported_geometry_path
+            self.imported_geometry_name = selected.imported_geometry_name
+            self.imported_geometry_height = selected.size if selected.imported_geometry_path else None
+            self.import_geometry_label.setText(selected.imported_geometry_name or 'No imported geometry')
+            for name in ('size','mesh_resolution','local_mesh_size','cell_size','solid_fraction','random_seed','core_fraction','compression'):
+                if name=='size':self.controls[name].setMaximum(max(100,selected.size))
+                self.controls[name].setValue(getattr(selected,name))
+            for combo,value in ((self.architecture_combo,selected.specimen_architecture),
+                (self.mesh_type_combo,selected.mesh_type),(self.tetra_strategy_combo,selected.tetra_strategy),
+                (self.loading_mode_combo,selected.loading_mode),
+                (self.self_contact_combo,selected.self_contact_mode),
+                (self.family_combo,selected.structure_family),
+                (self.morphology_combo,selected.tpms_morphology),
+                *((combo,getattr(selected,f'{side}_platen_contact')) for side,combo in self.platen_contact_combos.items())):
+                combo.blockSignals(True)
+                combo.setCurrentIndex(max(0,combo.findData(value)))
+                combo.blockSignals(False)
+            self._populate_structure_items(selected.structure_family,selected.structure_name)
+            self._sync_import_controls()
+        finally:
+            self._switching_solver = False
+        self._sync_test_profile_ui()
+        self._sync_contact_ui()
+        self.apply_geometry()
+
+    def _architecture_changed(self, *_):
+        if self._switching_solver:return
+        self._sync_test_profile_ui()
+        self.apply_geometry()
+
+    def _sync_test_profile_ui(self):
+        from standard_tests import profile, kind
+        settings=self.collect()
+        p=profile(settings)
+        active=p is not None
+        self.test_profile_combo.setToolTip(p.label if active else 'Özel deney / Custom experiment')
+        self._test_form.setRowVisible(self.architecture_combo,active)
+        self._test_form.setRowVisible(self.controls['core_fraction'],active and settings.specimen_architecture=='porous_centre')
+        self.controls['size'].setEnabled(not active and not bool(self.imported_geometry_path))
+        self.import_geometry_button.setEnabled(not active)
+        self.clear_import_button.setEnabled(not active)
+        for identifier in ('solid','porous_centre','porous_all'):
+            item=self.architecture_combo.model().item(self.architecture_combo.findData(identifier))
+            item.setEnabled(not active or (identifier=='porous_all' if p.kind=='compression' else identifier!='porous_all'))
+        porous=not active or settings.specimen_architecture!='solid'
+        for widget in (self.family_combo,self.structure_combo,self.morphology_combo,
+                *(self.controls[name] for name in ('cell_size','solid_fraction','random_seed'))):
+            widget.setEnabled(porous and not bool(self.imported_geometry_path))
+        if active:
+            dims=' × '.join(f'{v:g}' for v in p.dimensions)
+            detail=(f'Gauge: {p.gauge_length:g} mm; solid grips.' if p.kind=='tension' else
+                    f'Span: {p.span:g} mm; solid support and loading bands.' if p.kind=='flexure' else 'Porous cellular metal; nominal cube profile.')
+            self.standard_hint.setText(f'{dims} mm. {detail}\nNominal virtual-test profile; conformity not certified.'+
+                ('\nPorous centre: architected research specimen.' if settings.specimen_architecture=='porous_centre' else ''))
+            if p.kind=='flexure' and settings.solver_backend=='kratos':
+                self.standard_hint.setText(self.standard_hint.text()+'\nKratos: HEX8 pin/roller support lines; no roller indentation or lift-off.')
+        else:self.standard_hint.setText('Free geometry and existing compression setup.')
+        for combo in self.platen_contact_combos.values():combo.setEnabled(not active)
+        self._sync_loading_ui()
+        label=self._geometry_form.labelForField(self.controls['size'])
+        if label is not None:label.setText('Specimen height' if active else 'Cube size')
+        if self.workspace_tabs.currentIndex()==0:
+            self.brand_title_label.setText('Nonlinear Compression' if not active else f'Standard {kind(settings).title()}')
+            self.setWindowTitle('RustMech | '+self.brand_title_label.text())
+
+    def _remote_mode_changed(self,enabled):
+        if enabled:
+            self._local_solver_before_remote = self.solver_combo.currentData()
+            if self._persist_solver_profiles: self.solver_profile_store.set_active(self._local_solver_before_remote)
+        elif getattr(self,"_local_solver_before_remote",None) is not None:
+            self.solver_combo.setCurrentIndex(self.solver_combo.findData(self._local_solver_before_remote))
+        self._restart_preview_for_mode = self.future is not None
+        self.mesh_cancelled.set()
+        self.debounce.stop()
+        self.preview = None
+        self.failed_key = None
+        if not enabled and self.future is None:
+            QTimer.singleShot(0,self.start_preview)
+
+    def _remote_state_changed(self):
+        controller = self.remote_controller
+        controller.apply_solver_combo(self.solver_combo)
+        self._sync_solver_ui()
+        self.flow_workspace.update_execution_availability()
+        self.thermal_workspace.update_execution_availability()
+        self.refresh_validity()
+        if controller.requested:
+            self.brand_subtitle_lbl.setText("TRUBA · remote compute")
+            if controller.ready and self.future is None and self.preview is None:
+                QTimer.singleShot(0,self.start_preview)
+        else:
+            self.brand_subtitle_lbl.setText("OpenFOAM · WSL" if self.workspace_tabs.currentIndex() in (2,3) else self.solver_capabilities.display_name)
+
+    def _update_truba_button(self, connected: bool) -> None:
+        self.truba_button.setText("Connected" if connected else "TRUBA")
+        self.truba_button.setProperty("trubaConnected", connected)
+        self.truba_button.style().unpolish(self.truba_button)
+        self.truba_button.style().polish(self.truba_button)
+
+    def _add_setup_page(self, title: str) -> QVBoxLayout:
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        # Reserve the scrollbar gutter even when sections fit vertically.
+        # Collapsing sections must not widen controls or reflow their labels.
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        fields = QWidget()
+        fields.setObjectName("scrollFields")
+        layout = QVBoxLayout(fields)
+        layout.setContentsMargins(0, 1, 1, 1)
+        layout.setSpacing(3)
+        scroll.setWidget(fields)
+        self.setup_tabs.addTab(scroll, title)
+        return layout
+
+    def _add_planned_method_pages(self) -> None:
+        self.method_names = ["Nonlinear Compression"]
+        methods = (
+            ("Voxel", "Geometry-trimmed voxel mesh", "Clip boundary voxels against the reference geometry. Cut-cell element types, small cells and ANSYS compatibility require validation."),
+            ("FFT", "FFT Homogenization", "Effective stiffness from periodic unit-cell tests."),
+            ("MPM", "Material Point Method", "Large-deformation platen compression and impact."),
+            ("Peridynamics", "Peridynamics", "Crack initiation and propagation in mechanical tests."),
+        )
+        for tab, name, description in methods:
+            self.method_names.append(name)
+            fields = self._add_setup_page(tab)
+            self.setup_tabs.setTabToolTip(self.setup_tabs.count() - 1, name)
+            heading = QLabel(name)
+            heading.setObjectName("sectionSubheader")
+            heading.setWordWrap(True)
+            hint = QLabel(f"Planned\n{description}")
+            hint.setObjectName("mutedHintLabel")
+            hint.setWordWrap(True)
+            fields.addWidget(heading)
+            fields.addWidget(hint)
+            fields.addStretch()
+
+    def _select_settings_method(self, index: int) -> None:
+        self.workspace_tabs.setCurrentIndex(0)
+        self.setup_tabs.setCurrentIndex(index)
+        self._sync_settings_method(index)
+        sizes = self.main_splitter.sizes()
+        if sizes and sizes[0] == 0:
+            self.main_splitter.toggle_sidebar()
+
+    def _sync_settings_method(self, index: int) -> None:
+        self.sidebar_toggle.setText(self.method_names[index])
+        for action in self.method_actions.actions():
+            action.setChecked(action.data() == index)
+
+    def _update_status_visuals(
+        self, state: str, badge_text: str, pending_geom: bool = False
+    ) -> None:
+        self.status_banner.setProperty("state", state)
+        self.status_badge.setProperty("state", state)
+        self.status_badge.setText(badge_text)
+        self.geometry_apply_button.setProperty(
+            "pending", "true" if pending_geom else "false"
+        )
+        self.structure_apply_button.setProperty(
+            "pending", "true" if pending_geom else "false"
+        )
+        self.mesh_apply_button.setProperty(
+            "pending", "true" if pending_geom else "false"
+        )
+        for widget in (
+            self.status_banner,
+            self.status_badge,
+            self.geometry_apply_button,
+            self.structure_apply_button,
+            self.mesh_apply_button,
+        ):
+            widget.style().unpolish(widget)
+            widget.style().polish(widget)
+
+    def _set_perspective(self, enabled: bool) -> None:
+        if self.disposed:
+            return
+        if hasattr(self.plotter, "_camera_transition"):
+            self.plotter._camera_transition.stop()
+        if enabled:
+            self.plotter.disable_parallel_projection()
+        else:
+            self.plotter.enable_parallel_projection()
+        self.perspective_button.setText("Perspective")
+        self.plotter.render()
+
+    def _set_camera_preset(self, plane: str) -> None:
+        if hasattr(self.plotter, "_camera_transition"):
+            self.plotter._camera_transition.stop()
+        if self.disposed:
+            return
+        negative = plane.startswith("-")
+        plane = plane.lstrip("-")
+        if plane == "xy":
+            self.plotter.view_xy(negative=negative)
+        elif plane == "xz":
+            self.plotter.view_xz(negative=negative)
+        elif plane == "yz":
+            self.plotter.view_yz(negative=negative)
+        elif plane == "iso":
+            self.plotter.view_isometric()
+        else:
+            return
+        self.orthographic_button.setChecked(True)
+        self.plotter.enable_parallel_projection()
+        self.plotter.reset_camera()
+        self.plotter.render()
+
+    def add_group(
+        self, layout, title: str, settings: Settings, specs
+    ) -> QFormLayout:
+        group = SidebarGroupBox(title)
+        group.setObjectName("studioGroupCard")
+        form = QFormLayout(group.content)
+        form.setContentsMargins(1, 4, 1, 3)
+        configure_form(form)
+        for name, label, low, high, step, decimals in specs:
+            control = (
+                NumericInputBox()
+                if name in ("size", "cell_size", "solid_fraction", "mesh_resolution", "local_mesh_size")
+                else NoWheelSpinBox() if decimals is None else NoWheelDoubleSpinBox()
+            )
+            if name == "cores":
+                control.setRange(low, high)
+            else:
+                control.setRange(
+                    min(low, getattr(settings, name)),
+                    max(high, getattr(settings, name)),
+                )
+            control.setSingleStep(step)
+            control.setValue(getattr(settings, name))
+            control.setKeyboardTracking(False)
+            self.controls[name] = control
+            row_lbl = field_label(label, control, tooltip=GEOMETRY_HELP.get(name, ""))
+            form.addRow(row_lbl, control)
+        layout.addWidget(group)
+        return form
+
+    def _populate_structure_items(
+        self, family_key: str, selected_name: str = ""
+    ) -> None:
+        self.structure_combo.blockSignals(True)
+        self.structure_combo.clear()
+        items = ALL_STRUCTURES_BY_FAMILY.get(family_key, ALL_STRUCTURES_BY_FAMILY["tpms"])
+        for item in items:
+            self.structure_combo.addItem(item, item)
+        idx = self.structure_combo.findData(selected_name)
+        self.structure_combo.setCurrentIndex(max(0, idx))
+        self.structure_combo.blockSignals(False)
+
+    def _on_family_changed(self, *_) -> None:
+        family_key = str(self.family_combo.currentData() or "tpms")
+        self._populate_structure_items(family_key)
+        self._sync_structure_ui_visibility()
+        self.geometry_changed()
+
+    def _on_structure_selection_changed(self, *_) -> None:
+        self._sync_structure_ui_visibility()
+        self.geometry_changed()
+
+    def _sync_structure_ui_visibility(self) -> None:
+        family_key = str(self.family_combo.currentData() or "tpms")
+        is_porous = family_key == "porous"
+        is_lattice = family_key == "lattice"
+        if "random_seed" in self.controls:
+            self._geometry_form.setRowVisible(self.controls["random_seed"], is_porous)
+        self._geometry_form.setRowVisible(self.morphology_combo, not is_lattice)
+        if is_lattice:
+            self.morphology_combo.blockSignals(True)
+            self.morphology_combo.setCurrentIndex(
+                max(0, self.morphology_combo.findData("sheet"))
+            )
+            self.morphology_combo.blockSignals(False)
+        self.structure_hint_label.setText(
+            describe_structure(
+                Settings(
+                    structure_family=family_key,
+                    structure_name=str(self.structure_combo.currentData() or "Gyroid"),
+                    tpms_morphology=str(self.morphology_combo.currentData() or "sheet"),
+                    random_seed=int(self.controls["random_seed"].value())
+                    if "random_seed" in self.controls
+                    else 42,
+                )
+            )
+        )
+        self.structure_combo.setToolTip(self.structure_hint_label.text())
+
+    def _on_solver_changed(self, *_) -> None:
+        if self._switching_solver:
+            return
+        solver_id = str(self.solver_combo.currentData() or "ansys_mapdl")
+        current = self.collect()
+        self._solver_profiles[self._active_solver_id] = profile_values(
+            replace(current, solver_backend=self._active_solver_id))
+        if self._persist_solver_profiles:
+            self.solver_profile_store.save(self._active_solver_id, self._solver_profiles[self._active_solver_id])
+        if (
+            self._custom_capabilities is not None
+            and solver_id == self._custom_capabilities.identifier
+        ):
+            self.solver_capabilities = self._custom_capabilities
+        else:
+            self.solver_capabilities = get_solver_capabilities(solver_id)
+        self._active_solver_id = solver_id
+        if self._persist_solver_profiles and not (getattr(self,"remote_controller",None) is not None and self.remote_controller.requested):
+            self.solver_profile_store.set_active(solver_id)
+        self._switching_solver = True
+        try:
+            selected = self.solver_profile_store.load(solver_id, current)
+            if solver_id in self._solver_profiles:
+                selected = replace(selected, **self._solver_profiles[solver_id])
+            self._apply_solver_profile(selected)
+        finally:
+            self._switching_solver = False
+        self._sync_solver_ui()
+        self._sync_contact_ui()
+        self._sync_loading_ui()
+        self._sync_mesh_type()
+        self._sync_test_profile_ui()
+        self.refresh_validity()
+
+    def _apply_solver_profile(self, settings):
+        combos = (
+            (self.mesh_type_combo, settings.mesh_type),
+            (self.tetra_strategy_combo, settings.tetra_strategy),
+            (self.loading_mode_combo, settings.loading_mode),
+            (self.self_contact_combo, settings.self_contact_mode),
+            (self.contact_formulation_combo, settings.contact_formulation),
+            *((combo, getattr(settings, f"{side}_platen_contact"))
+              for side, combo in self.platen_contact_combos.items()),
+        )
+        widgets = list(self.controls.values()) + [combo for combo, _ in combos] + [self.automatic_contact, self.automatic_cores]
+        blocked = [(widget, widget.blockSignals(True)) for widget in widgets]
+        try:
+            self.controls["cores"].setRange(1, self.solver_capabilities.max_cores)
+            for name in profile_values(settings):
+                if name in self.controls and getattr(settings, name) is not None:
+                    self.controls[name].setValue(getattr(settings, name))
+            minimum, maximum = settings.substep_limits
+            self.controls["minimum_substeps"].setValue(minimum)
+            self.controls["maximum_substeps"].setValue(maximum)
+            for combo, value in combos:
+                combo.setCurrentIndex(max(0, combo.findData(value)))
+            automatic = settings.automatic_contact_parameters
+            self.automatic_contact.setChecked(True if automatic is None else automatic)
+            automatic = settings.automatic_cores
+            self.automatic_cores.setChecked(settings.cores == self.solver_capabilities.default_cores if automatic is None else automatic)
+            self._manual_cores = settings.cores
+            self._manual_contact_values = None
+            self.controls["cores"].setEnabled(not self.automatic_cores.isChecked())
+            self.kratos_panel.apply_settings(settings)
+        finally:
+            for widget, previous in blocked:
+                widget.blockSignals(previous)
+
+    def _sync_solver_ui(self) -> None:
+        cap = self.solver_capabilities
+        self.brand_subtitle_lbl.setText(cap.display_name)
+        if "cores" in self.controls:
+            cores_spin = self.controls["cores"]
+            cores_spin.blockSignals(True)
+            cores_spin.setRange(1, cap.max_cores)
+            if cores_spin.value() > cap.max_cores:
+                cores_spin.setValue(cap.default_cores)
+            cores_spin.blockSignals(False)
+            cores_spin.setToolTip(cap.core_limit_description)
+        hint_text = cap.ui_hint or cap.core_limit_description
+        if not cap.implemented and cap.unavailable_reason:
+            hint_text = f"{hint_text}\n{cap.unavailable_reason}"
+        self.solver_hint_label.setText(hint_text)
+        kratos = cap.identifier == "kratos"
+        self.kratos_panel.setVisible(kratos)
+        for index in range(self.mesh_type_combo.count()):
+            mesh_type = self.mesh_type_combo.itemData(index)
+            remote = getattr(self,"remote_controller",None)
+            available = mesh_type in cap.supported_mesh_types
+            if kratos and self.test_profile_combo.currentData()=='iso178_preferred':available=mesh_type=='HEX8'
+            if remote is not None and remote.requested:
+                available = remote.ready and mesh_type in remote.capabilities.get("mesh_types",[])
+                self.mesh_type_combo.setItemData(index,
+                    "Remote mesh preview is supported; Kratos solves HEX8/TET4 only."
+                    if available and mesh_type not in cap.supported_mesh_types else "",
+                    Qt.ItemDataRole.ToolTipRole)
+            if kratos and self.test_profile_combo.currentData()=='iso178_preferred' and mesh_type!='HEX8':available=False
+            self.mesh_type_combo.model().item(index).setEnabled(available)
+        for combo in self.platen_contact_combos.values():
+            for index in range(combo.count()):
+                tension=self.test_profile_combo.currentData()=='astm_e8_subsize'
+                combo.model().item(index).setEnabled(not kratos or combo.itemData(index) in (("bonded",) if tension else ("frictional", "frictionless")))
+        for index in range(self.self_contact_combo.count()):
+            self.self_contact_combo.model().item(index).setEnabled(not kratos or self.self_contact_combo.itemData(index) in ('disabled','frictionless','frictional'))
+        self.substeps_status.setText("Automatic")
+        if hasattr(self, "_loading_form"):
+            self._loading_form.labelForField(self._substeps_row).setText("Load stepping" if kratos else "Substeps")
+        for name, prefix in (("substeps", "Initial"), ("minimum_substeps", "Minimum"), ("maximum_substeps", "Maximum")):
+            field = self.controls[name]
+            field.parentWidget().layout().labelForField(field).setText(f"{prefix} {'increments' if kratos else 'substeps'}")
+        material_index = self.material_editor.model.findData("multilinear_isotropic")
+        self.material_editor.model.setItemText(material_index, "Tabulated isotropic hardening" if kratos else "True stress–strain (MISO)")
+        self._solver_group.setTitle("Kratos · loading" if kratos else "Solver and loading")
+        if hasattr(self, "physics_note"):
+            self.physics_note.setText(
+                "Kratos · nonlinear static structural mechanics\n"
+                "Shared specimen material and geometry · solver-specific mesh and numerical settings\n"
+                "Frictional / frictionless platens · HEX8 / TET4 · HEX8 penalty self-contact"
+                if kratos else
+                "• Bottom platen at Z = 0 · Top platen at Z = L (−Z compression)\n"
+                "• Rigid platen contact with separate Coulomb friction coefficients\n"
+                "• Configurable 3D Cell-Wall Self-Contact & Internal Friction (μ_self)\n"
+                "• Large displacement (NLGEOM) · voxel HEX8/HEX20 or surface-conforming TET4/TET10")
+        if hasattr(self, "automatic_cores") and self.automatic_cores.isChecked():
+            self.controls["cores"].setValue(self._automatic_core_count())
+
+    def _automatic_core_count(self):
+        count = self.solver_capabilities.default_cores
+        remote = getattr(self, "remote_controller", None)
+        if remote is not None and remote.requested:
+            try:
+                count = min(count, remote.context().cores)
+            except (ValueError, RuntimeError):
+                pass  # Configuration validation explains the unavailable allocation.
+        return count
+
+    def _on_contact_changed(self, *_) -> None:
+        if self.solver_capabilities.identifier=='kratos' and self.self_contact_combo.currentData()!='disabled':
+            method=self.kratos_panel.fields['kratos_contact_method']
+            method.setCurrentIndex(method.findData('penalty'))
+        self._sync_contact_ui()
+        self.refresh_validity()
+
+    def _sync_contact_ui(self) -> None:
+        kratos = self.solver_capabilities.identifier == "kratos"
+        sc_mode = str(self.self_contact_combo.currentData() or "frictional")
+        needs_self_mu = sc_mode == "frictional"
+        kinematic=hasattr(self,'test_profile_combo') and self.test_profile_combo.currentData() in ('astm_e8_subsize','iso178_preferred')
+        fixed=kratos and (sc_mode!='disabled' or kinematic)
+        if hasattr(self,'substeps_advanced'):
+            self.substeps_status.setText('Fixed increments' if fixed else 'Automatic')
+            self.substeps_status.setToolTip('Kinematic test fixtures and self-contact use the prescribed number of increments; increase increments if convergence fails.' if fixed else 'The solver adapts the load increment to convergence.')
+            form=self.substeps_advanced.layout()
+            form.labelForField(self.controls['substeps']).setText('Increments' if fixed else 'Initial increments' if kratos else 'Initial substeps')
+            for key in ('minimum_substeps','maximum_substeps'):form.setRowVisible(self.controls[key],not fixed)
+        if hasattr(self,'kratos_panel'):
+            method=self.kratos_panel.fields['kratos_contact_method']
+            method.model().item(method.findData('alm')).setEnabled(not kratos or sc_mode=='disabled')
+
+        if "self_friction_coeff" in self.controls:
+            self._contact_form.setRowVisible(
+                self.controls["self_friction_coeff"], needs_self_mu
+            )
+        for side, combo in self.platen_contact_combos.items():
+            self.controls[f"{side}_platen_friction_coeff"].setEnabled(combo.currentData() == "frictional")
+        for key in (
+            "normal_contact_stiffness_factor",
+            "penetration_tolerance_factor",
+            "contact_damping_factor",
+        ):
+            if key in self.controls:
+                self._contact_form.setRowVisible(
+                    self.controls[key], not kratos and not self.automatic_contact.isChecked()
+                )
+        self._contact_form.setRowVisible(self.controls["platen_penetration_tolerance_factor"],
+                                         not kratos and not self.automatic_contact.isChecked())
+        self._contact_form.setRowVisible(self.contact_formulation_combo,
+                                         not kratos and not self.automatic_contact.isChecked())
+        self._contact_form.setRowVisible(self.automatic_contact, not kratos)
+
+        mu_s = (
+            float(self.controls["self_friction_coeff"].value())
+            if "self_friction_coeff" in self.controls
+            else 0.15
+        )
+        self_desc = SELF_CONTACT_MODES.get(sc_mode, sc_mode)
+        if needs_self_mu:
+            self_desc += f" (μ_self = {mu_s:.2f}" + (", mortar contact)" if kratos else ", CONTA174/TARGE170)")
+        self.contact_hint_label.setText(
+            "Rigid platens: bottom fixed, top prescribed in −Z. "
+            "Set either friction coefficient to 0 for frictionless contact.\n"
+            f"Internal walls: {self_desc}"
+        )
+        if hasattr(self,'test_profile_combo') and self.test_profile_combo.currentData() != 'custom':
+            from standard_tests import PROFILES
+            p=PROFILES[self.test_profile_combo.currentData()]
+            self.contact_hint_label.setText(('Bonded end grips; upper grip moves in +Z.' if p.kind=='tension' else
+                'Two fixed cylindrical supports; central loading nose moves in −Z.' if p.kind=='flexure' else
+                'Fixed bottom platen; top platen moves in −Z.')+f'\nInternal walls: {self_desc}')
+            if kratos and p.kind=='flexure':
+                self.contact_hint_label.setText('Idealized support/loading lines (HEX8). Contact method applies to self-contact.\n'+self_desc)
+
+    def _on_loading_changed(self, *_):
+        self._sync_loading_ui()
+        self.refresh_validity()
+
+    def _sync_loading_ui(self):
+        force = self.loading_mode_combo.currentData() == "force"
+        self._loading_form.setRowVisible(self.controls["compression"], not force)
+        self._loading_form.setRowVisible(self.controls["applied_force"], force)
+        self.loading_hint_label.setText(
+            "Top platen force in −Z; displacement is calculated. Force control may stop at buckling."
+            if force else "Top platen displacement in −Z; reaction force is calculated (N).")
+        active=hasattr(self,'test_profile_combo') and self.test_profile_combo.currentData() != 'custom'
+        if active:
+            from standard_tests import kind
+            from standard_tests import PROFILES
+            experiment=PROFILES[self.test_profile_combo.currentData()].kind
+            direction='+Z' if experiment=='tension' else '−Z'
+            self.loading_hint_label.setText(f'{experiment.title()}: actuator {"force" if force else "travel"} in {direction}. Geometry and fixtures are automatic.')
+        label=self._loading_form.labelForField(self.controls['compression'])
+        if label is not None:label.setText('Actuator travel' if active else 'Compression')
+
+    def _automatic_contact_changed(self, *_):
+        automatic = self.automatic_contact.isChecked()
+        if automatic:
+            if self._manual_contact_values is None:
+                self._manual_contact_values = (
+                    {key: self.controls[key].value() for key in CONTACT_NUMERICAL_FIELDS},
+                    self.contact_formulation_combo.currentData())
+            defaults = Settings()
+            values = {key: getattr(defaults, key) for key in CONTACT_NUMERICAL_FIELDS}
+            algorithm = defaults.contact_formulation
+        elif self._manual_contact_values is not None:
+            values, algorithm = self._manual_contact_values
+            self._manual_contact_values = None
+        else:
+            self._sync_contact_ui()
+            return
+        for key, value in values.items():
+            self.controls[key].setValue(value)
+        self.contact_formulation_combo.setCurrentIndex(self.contact_formulation_combo.findData(algorithm))
+        self._sync_contact_ui()
+        if hasattr(self, "apply_button"):
+            self.refresh_validity()
+
+    def _automatic_cores_changed(self, *_):
+        control = self.controls["cores"]
+        if self.automatic_cores.isChecked():
+            self._manual_cores = control.value()
+            control.setValue(self._automatic_core_count())
+        else:
+            control.setValue(self._manual_cores)
+        control.setEnabled(not self.automatic_cores.isChecked())
+        if hasattr(self, "apply_button"):
+            self.refresh_validity()
+
+    def open_mesh_convergence(self) -> None:
+        """Open a mesh study using the current design and analysis settings."""
+        from mesh_convergence import MeshConvergenceDialog
+
+        dialog = MeshConvergenceDialog(
+            self.collect(), generate_volume_mesh, run_batch_experiment, parent=self,
+        )
+        try:
+            dialog.exec()
+            if dialog.selected_settings is not None:
+                for name in ("mesh_resolution", "local_mesh_size"):
+                    control = self.controls[name]
+                    value = getattr(dialog.selected_settings, name)
+                    control.setRange(min(control.minimum(), value), max(control.maximum(), value))
+                    control.setValue(value)
+                selected = dialog.selected_settings
+                for name in ANALYSIS_FIELDS:
+                    if name in self.controls:
+                        self.controls[name].setValue(getattr(selected, name))
+                for combo, value in (
+                    (self.loading_mode_combo, selected.loading_mode),
+                    (self.solver_combo, selected.solver_backend),
+                    (self.self_contact_combo, selected.self_contact_mode),
+                    (self.contact_formulation_combo, selected.contact_formulation),
+                    *((combo, getattr(selected, f"{side}_platen_contact"))
+                      for side, combo in self.platen_contact_combos.items()),
+                ):
+                    combo.setCurrentIndex(max(0, combo.findData(value)))
+                self.geometry_changed()
+        finally:
+            dialog.study.dispose()
+            dialog.deleteLater()
+
+    def collect(self) -> Settings:
+        settings=Settings(
+            test_profile=self.test_profile_combo.currentData(),
+            specimen_architecture=self.architecture_combo.currentData(),
+            imported_geometry_path=self.imported_geometry_path,
+            imported_geometry_name=self.imported_geometry_name,
+            automatic_contact_parameters=self.automatic_contact.isChecked(),
+            automatic_cores=self.automatic_cores.isChecked(),
+            loading_mode=self.loading_mode_combo.currentData(),
+            bottom_platen_contact=self.platen_contact_combos["bottom"].currentData(),
+            top_platen_contact=self.platen_contact_combos["top"].currentData(),
+            structure_family=str(self.family_combo.currentData() or "tpms"),
+            structure_name=str(self.structure_combo.currentData() or "Gyroid"),
+            tpms_morphology=str(self.morphology_combo.currentData() or "sheet"),
+            solver_backend=str(self.solver_combo.currentData() or "ansys_mapdl"),
+            self_contact_mode=str(
+                self.self_contact_combo.currentData() or "frictional"
+            ),
+            contact_formulation=str(
+                self.contact_formulation_combo.currentData()
+                or "augmented_lagrange"
+            ),
+            mesh_type=self.mesh_type_combo.currentData(),
+            tetra_strategy=self.tetra_strategy_combo.currentData(),
+            **{name: control.value() for name, control in self.controls.items()
+               if name not in self.material_editor.controls},
+            **self.material_editor.numeric_values(),
+            **self.material_editor.extra_values(),
+            **self.kratos_panel.values(),
+        )
+        if self.imported_geometry_path:
+            settings = replace(settings, size=self.imported_geometry_height)
+        if settings.test_profile != 'custom':
+            from standard_tests import profile
+            p=profile(settings)
+            settings=replace(settings,size=p.dimensions[2],
+                bottom_platen_contact='bonded' if p.kind=='tension' else 'frictionless',
+                top_platen_contact='bonded' if p.kind=='tension' else 'frictionless')
+        if settings.solver_backend=='kratos' and (settings.self_contact_mode!='disabled' or settings.test_profile in ('astm_e8_subsize','iso178_preferred')):
+            return replace(settings,minimum_substeps=None,maximum_substeps=None)
+        return settings
+
+    def import_geometry(self):
+        from geometry_import_dialog import choose_geometry
+        try:
+            result = choose_geometry(self)
+            if result is None:
+                return
+            path, height, name = result
+            self.imported_geometry_path = path
+            self.imported_geometry_name = name
+            self.imported_geometry_height = height
+            self.import_geometry_label.setText(name + ' | support / compression faces selected')
+            size_control = self.controls['size']
+            size_control.setRange(min(size_control.minimum(), height), max(size_control.maximum(), height))
+            size_control.setValue(height)
+            size_control.setEnabled(False)
+            self._sync_import_controls()
+            self.mesh_type_combo.setCurrentIndex(self.mesh_type_combo.findData('TET4'))
+            self.tetra_strategy_combo.setCurrentIndex(self.tetra_strategy_combo.findData('netgen'))
+            self.apply_geometry()
+        except Exception as error:
+            QMessageBox.warning(self, 'Geometry import', str(error))
+
+    def clear_imported_geometry(self):
+        self.imported_geometry_path = ''
+        self.imported_geometry_name = ''
+        self.imported_geometry_height = None
+        self.import_geometry_label.setText('No imported geometry')
+        self.controls['size'].setEnabled(True)
+        self._sync_import_controls()
+        self.apply_geometry()
+
+    def _sync_import_controls(self):
+        generated = not bool(self.imported_geometry_path)
+        for widget in (self.family_combo, self.structure_combo, self.morphology_combo,
+                       *(self.controls[name] for name in ('size', 'cell_size', 'solid_fraction', 'random_seed'))):
+            widget.setEnabled(generated)
+
+    def _sync_mesh_type(self) -> None:
+        local_size = self.controls["local_mesh_size"]
+        form = local_size.parentWidget().layout()
+        form.setRowVisible(local_size, self.mesh_type_combo.currentData() in TETRAHEDRAL_MESH_TYPES)
+        form.setRowVisible(self.tetra_strategy_combo, self.mesh_type_combo.currentData() in TETRAHEDRAL_MESH_TYPES)
+        if hasattr(self, "geometry_apply_button"):
+            self.geometry_changed()
+
+    def preview_settings(self) -> Settings:
+        geometry = {
+            name: getattr(self.active_geometry, name)
+            for name in GEOMETRY_FIELDS
+        }
+        return replace(self.collect(), **geometry)
+
+    def has_pending_geometry(self) -> bool:
+        return any(
+            getattr(self.collect(), name)
+            != getattr(self.active_geometry, name)
+            for name in GEOMETRY_FIELDS
+        )
+
+    def geometry_changed(self, *_) -> None:
+        self.refresh_validity()
+
+    def apply_geometry(self, *_) -> None:
+        settings = self.collect()
+        errors = validate_geometry(settings)
+        if errors:
+            self.status.setText("\n".join(errors))
+            self._update_status_visuals("error", "● VALIDATION ERROR", True)
+            return
+        self.active_geometry = settings
+        self.failed_key = None
+        self.debounce.stop()
+        self.apply_button.setEnabled(False)
+        self.add_to_doe_button.setEnabled(False)
+        self.start_preview()
+
+    def refresh_validity(self, *_) -> None:
+        if self._switching_solver:
+            return
+        settings = self.collect()
+        errors = validate_settings(
+            settings
+        ) + self.solver_capabilities.validate(settings)
+        controller = getattr(self,"remote_controller",None)
+        remote_error = None
+        if controller is not None and controller.requested:
+            try: controller.require(settings.solver_backend,settings)
+            except (ValueError,RuntimeError) as error: errors.append(str(error))
+            try: controller.require("mesh",settings)
+            except (ValueError,RuntimeError) as error: remote_error = str(error)
+        self.geometry_apply_button.setEnabled(not validate_geometry(settings))
+        self.structure_apply_button.setEnabled(self.geometry_apply_button.isEnabled())
+        self.mesh_apply_button.setEnabled(self.geometry_apply_button.isEnabled())
+        if remote_error:
+            for button in (self.geometry_apply_button,self.structure_apply_button,self.mesh_apply_button): button.setEnabled(False)
+        current = (
+            self.preview
+            and self.preview.key == preview_key(self.collect())
+        )
+        mesh_errors = self.preview.mesh.solve_errors if current else []
+        pending = self.has_pending_geometry()
+        self.add_to_doe_button.setEnabled(bool(current and not pending))
+        self.apply_button.setEnabled(
+            self.analysis_job is None and
+            bool(current and not pending and not errors and not mesh_errors)
+        )
+        if self.analysis_job is not None:
+            self.status.setText("Analysis running...")
+            self._update_status_visuals("busy", "● ANALYSING", False)
+            return
+        if errors or mesh_errors:
+            self.status.setText("\n".join(errors + mesh_errors))
+            badge_label = (
+                "● SOLVER INACTIVE"
+                if not self.solver_capabilities.implemented
+                and not validate_settings(settings)
+                and not mesh_errors
+                else "● VALIDATION ERROR"
+            )
+            state_kind = (
+                "pending"
+                if badge_label == "● SOLVER INACTIVE"
+                else "error"
+            )
+            self._update_status_visuals(state_kind, badge_label, pending)
+            return
+        if pending:
+            self.status.setText(
+                "Geometry or mesh settings have changed. Click Apply to update the preview."
+            )
+            self._update_status_visuals("pending", "● PENDING APPLY", True)
+            return
+        if current:
+            self.status.setText(
+                f"Run analysis reuses this FE mesh and starts {self.solver_capabilities.display_name}."
+            )
+            self._update_status_visuals("ready", "● READY TO SOLVE", False)
+
+    def schedule_preview(self, *_) -> None:
+        self.failed_key = None
+        self.apply_button.setEnabled(False)
+        self.add_to_doe_button.setEnabled(False)
+        self.status.setText("Settings changed — updating exact FE preview...")
+        self._update_status_visuals(
+            "working", "● UPDATING PREVIEW", self.has_pending_geometry()
+        )
+        self.debounce.start(PREVIEW_DELAY_MS)
+
+    def start_preview(self) -> None:
+        if self.disposed:
+            return
+        settings = self.preview_settings()
+        controller = getattr(self,"remote_controller",None)
+        if controller is not None and controller.requested:
+            try: controller.require("mesh",settings)
+            except (RuntimeError,ValueError) as error:
+                self.status.setText(str(error))
+                return
+        errors = validate_geometry(settings)
+        if errors:
+            self.status.setText("\n".join(errors))
+            self.apply_button.setEnabled(False)
+            self._update_status_visuals(
+                "error", "● GEOMETRY ERROR", self.has_pending_geometry()
+            )
+            return
+        key = preview_key(settings)
+        if self.future is not None or key == self.failed_key:
+            return
+        if self.preview and self.preview.key == key:
+            self.refresh_validity()
+            return
+        self.worker_key = key
+        self.status.setText(
+            "Building exact FE mesh in background; you can rotate the current view."
+        )
+        self._update_status_visuals(
+            "working", "● BUILDING FE MESH", self.has_pending_geometry()
+        )
+        self.mesh_progress_updates = SimpleQueue()
+        self.mesh_cancelled = Event()
+        self.mesh_progress.show()
+        self._preview_is_remote = bool(controller is not None and controller.requested)
+        if controller is not None and controller.requested:
+            from truba_remote import run_remote_preview
+            context,auth = controller.require("mesh",settings)
+            self.cancel_mesh_button.setEnabled(True)
+            self.cancel_mesh_button.show()
+            self.future = self.executor.submit(run_remote_preview,settings,context,auth,
+                                               self.mesh_progress_updates.put,self.mesh_cancelled)
+        elif self.builder is build_preview:
+            self.cancel_mesh_button.setEnabled(True)
+            self.cancel_mesh_button.show()
+            self.future = self.executor.submit(
+                run_mesh_preview, settings, self.preview, self.mesh_progress_updates.put,
+                self.mesh_cancelled,
+            )
+        else:
+            self.future = self.executor.submit(self.builder, settings, self.preview)
+
+    def cancel_meshing(self) -> None:
+        if self.future is None:
+            return
+        self.mesh_cancelled.set()
+        self.debounce.stop()
+        self.cancel_mesh_button.setEnabled(False)
+        self.status.setText("Cancelling mesh generation…")
+
+    def _show_mesh_stage(self) -> None:
+        stage = None
+        try:
+            while True:
+                stage = self.mesh_progress_updates.get_nowait()
+        except Empty:
+            if stage and not self.mesh_cancelled.is_set():
+                self.status.setText(stage)
+
+    def poll_preview(self) -> None:
+        if self.future is None:
+            return
+        if not self.future.done():
+            self._show_mesh_stage()
+            return
+        future, self.future = self.future, None
+        key = preview_key(self.preview_settings())
+        self.mesh_progress.hide()
+        self.cancel_mesh_button.hide()
+        if self.mesh_cancelled.is_set():
+            controller = getattr(self,"remote_controller",None)
+            if getattr(self,"_preview_is_remote",False):
+                from concurrent.futures import CancelledError
+                try: future.result()
+                except CancelledError: pass
+                except Exception as error:
+                    self.status.setText(f"Remote mesh operation stopped without a confirmed cancellation: {error}. Retrieve the saved job record.")
+                    self.failed_key = key
+                    return
+            self.failed_key = key
+            self.refresh_validity()
+            self.status.setText("Mesh generation cancelled. Select Update preview to retry.")
+            self._update_status_visuals("pending", "● MESH CANCELLED", self.has_pending_geometry())
+            controller = getattr(self,"remote_controller",None)
+            if controller is not None and getattr(self,"_restart_preview_for_mode",False) and (not controller.requested or controller.ready):
+                self._restart_preview_for_mode = False
+                self.failed_key = None
+                QTimer.singleShot(0,self.start_preview)
+            return
+        try:
+            preview = future.result()
+            if preview.key == key:
+                first = self.preview is None
+                self.preview = preview
+                self.render_preview(reset=first)
+                self.refresh_validity()
+        except Exception as exc:
+            if self.worker_key == key:
+                self.failed_key = key
+                self.status.setText(f"Preview error: {exc}")
+                self.apply_button.setEnabled(False)
+                self._update_status_visuals(
+                    "error", "● PREVIEW ERROR", self.has_pending_geometry()
+                )
+        if self.worker_key != key and not self.debounce.isActive():
+            self.start_preview()
+
+    def render_preview(self, *_, reset: bool = False) -> None:
+        if not self.preview or self.disposed:
+            return
+        camera = self.plotter.camera_position
+        self.plotter.clear()
+        self.plotter.enable_lightkit()
+        self.plotter.set_background("#f0f0f0", top="#ffffff")
+        mode = self.mode.currentIndex()
+        if mode in (0, 2):
+            self.plotter.add_mesh(
+                self.preview.surface,
+                color="#4ea8de",
+                smooth_shading=True,
+                ambient=0.22,
+                specular=0.25,
+                specular_power=20,
+                opacity=0.35 if mode == 2 else 1,
+            )
+        if mode in (1, 2):
+            self.plotter.add_mesh(
+                self.preview.mesh.grid,
+                color="#60a5fa",
+                show_edges=True,
+                edge_color="#334155",
+                line_width=1,
+                smooth_shading=False,
+                name=MESH_PREVIEW_ACTOR,
+            )
+        removed = self.preview.mesh.removed_grid
+        if self.preview_settings().imported_geometry_path and mode in (0, 2):
+            faces = self.preview.surface.cell_data.get('compression_face')
+            if faces is not None:
+                for role, color in ((1, '#22c55e'), (2, '#f97316')):
+                    selected = np.flatnonzero(faces == role)
+                    if len(selected):
+                        actor = self.plotter.add_mesh(self.preview.surface.extract_cells(selected), color=color,
+                                                     name=f'compression_face_{role}', pickable=False, lighting=False)
+                        actor.mapper.SetResolveCoincidentTopologyToPolygonOffset()
+                        actor.mapper.SetRelativeCoincidentTopologyPolygonOffsetParameters(-2, -2)
+        if removed.n_cells:
+            self.plotter.add_mesh(
+                removed,
+                color="#dc2626",
+                show_edges=True,
+                edge_color="#7f1d1d",
+                name="excluded_fragments",
+            )
+        if self.show_platens_cb.isChecked():
+            cube_sz = float(self.preview_settings().size)
+            from standard_tests import fixture_surfaces
+            bottom_platen, top_platen = (fixture_surfaces(self.preview_settings()) if self.preview_settings().test_profile != 'custom' else
+                make_compression_platens(cube_sz, 0.0, self.preview.surface.bounds[:4] if self.preview_settings().imported_geometry_path else None))
+            self.plotter.add_mesh(
+                bottom_platen,
+                color="#475569",
+                opacity=1.0,
+                smooth_shading=False,
+                show_edges=True,
+                edge_color="#1e293b",
+                name="bottom_platen",
+            )
+            self.plotter.add_mesh(
+                top_platen,
+                color="#64748b",
+                opacity=1.0,
+                smooth_shading=False,
+                show_edges=True,
+                edge_color="#1e293b",
+                name="top_platen",
+            )
+        self.fragment_status.setVisible(bool(removed.n_cells))
+        self.fragment_status.setText(
+            f"Excluded: {removed.n_cells} disconnected elements will be removed. "
+            "Red pieces are excluded from the ANSYS mesh."
+        )
+        self.plotter.add_axes(color="#0f172a", interactive=False)
+        self.plotter.show_bounds(
+            xtitle="X / mm",
+            ytitle="Y / mm",
+            ztitle="Z / mm",
+            location="outer",
+            ticks="outside",
+            use_2d=True,
+            n_xlabels=3,
+            n_ylabels=3,
+            n_zlabels=3,
+            font_size=10,
+            color="#1e293b",
+        )
+        if reset:
+            self.reset_view()
+        else:
+            self.plotter.camera_position = camera
+            self.plotter.reset_camera_clipping_range()
+            self.plotter.render()
+
+        mesh = self.preview.mesh
+        self._kpi_labels["elements"].setText(f"{mesh.grid.n_cells:,}")
+        self._kpi_labels["nodes"].setText(f"{mesh.grid.n_points:,}")
+        self._kpi_labels["fraction"].setText(f"{mesh.fraction:.2f}%")
+        settings = self.preview_settings()
+        spacing = (
+            f"{mesh.spacing:.4g} mm ({mesh.subdivisions}³)"
+            if mesh.subdivisions is not None
+            else f"{settings.local_mesh_size:.4g}–{mesh.spacing:.4g} mm targets"
+        )
+        self._kpi_labels["spacing"].setText(spacing)
+        fragments = ""
+        if mesh.subdivisions is not None:
+            removed = mesh.removed_grid.n_cells
+            fragments = (
+                f"\nRED = removed fragments: {removed:,} elements, "
+                f"{removed * mesh.spacing**3:.6g} mm³ — excluded from analysis."
+            )
+        self.stats.setText(
+            f"FE size {spacing} | "
+            f"{mesh.grid.n_cells:,} {settings.mesh_type} | {mesh.grid.n_points:,} nodes\n"
+            f"Solid {mesh.fraction:.6f}% | Face-connected components {mesh.components} | "
+            f"Preview and solver use this same FE mesh.{fragments}"
+        )
+
+    def _show_geometry_workspace(self) -> None:
+        self.workspace_tabs.setCurrentIndex(0)
+        self.setup_tabs.setCurrentIndex(0)
+
+    def _add_current_design(self) -> None:
+        self.refresh_validity()
+        if self.add_to_doe_button.isEnabled():
+            self.doe_studio.add_design(self.collect())
+            self.workspace_tabs.setCurrentIndex(1)
+
+    def _show_doe_bounds(self, label: str, cases: dict[str, Settings]) -> None:
+        surface_builder = make_surface
+        cancelled = None
+        if self.remote_controller.requested:
+            try:
+                from functools import partial
+                from truba_remote import run_remote_surface
+                context,auth = self.remote_controller.require("mesh")
+                cancelled = Event()
+                surface_builder = partial(run_remote_surface,context=context,auth=auth,cancelled=cancelled)
+            except (ValueError,RuntimeError) as error:
+                self.status.setText(str(error))
+                return
+        dialog = DoEBoundaryPreview(label, cases, surface_builder, self)
+        if cancelled is not None: dialog.finished.connect(lambda *_:cancelled.set())
+        dialog.setStyleSheet(STUDIO_STYLESHEET)
+        dialog.exec()
+        dialog.deleteLater()
+
+    def load_from_doe_row(self, row_settings: Settings) -> None:
+        for combo,value in ((self.test_profile_combo,row_settings.test_profile),(self.architecture_combo,row_settings.specimen_architecture)):
+            combo.blockSignals(True)
+            combo.setCurrentIndex(max(0,combo.findData(value)))
+            combo.blockSignals(False)
+        self.controls['core_fraction'].blockSignals(True)
+        self.controls['core_fraction'].setValue(row_settings.core_fraction)
+        self.controls['core_fraction'].blockSignals(False)
+        self.imported_geometry_path = row_settings.imported_geometry_path
+        self.imported_geometry_name = row_settings.imported_geometry_name
+        self.imported_geometry_height = row_settings.size if row_settings.imported_geometry_path else None
+        self.import_geometry_label.setText(self.imported_geometry_name or 'No imported geometry')
+        self._sync_import_controls()
+        self.family_combo.blockSignals(True)
+        self.family_combo.setCurrentIndex(
+            max(0, self.family_combo.findData(row_settings.structure_family))
+        )
+        self.family_combo.blockSignals(False)
+        self._populate_structure_items(
+            row_settings.structure_family, row_settings.structure_name
+        )
+        self.morphology_combo.blockSignals(True)
+        self.morphology_combo.setCurrentIndex(
+            max(0, self.morphology_combo.findData(row_settings.tpms_morphology))
+        )
+        self.morphology_combo.blockSignals(False)
+        self.mesh_type_combo.blockSignals(True)
+        self.mesh_type_combo.setCurrentIndex(
+            max(0, self.mesh_type_combo.findData(row_settings.mesh_type))
+        )
+        self.mesh_type_combo.blockSignals(False)
+        self.tetra_strategy_combo.blockSignals(True)
+        self.tetra_strategy_combo.setCurrentIndex(
+            max(0, self.tetra_strategy_combo.findData(row_settings.tetra_strategy)))
+        self.tetra_strategy_combo.blockSignals(False)
+        for field_name in (
+            "size",
+            "cell_size",
+            "solid_fraction",
+            "mesh_resolution",
+            "local_mesh_size",
+            "compression",
+            "random_seed",
+        ):
+            if field_name in self.controls:
+                self.controls[field_name].blockSignals(True)
+                self.controls[field_name].setValue(getattr(row_settings, field_name))
+                self.controls[field_name].blockSignals(False)
+        self._sync_structure_ui_visibility()
+        self._sync_mesh_type()
+        self._show_geometry_workspace()
+        self._sync_test_profile_ui()
+        self.apply_geometry()
+
+    def reset_view(self, *_) -> None:
+        self._set_camera_preset("iso")
+
+    def apply(self) -> None:
+        settings = self.collect()
+        self.refresh_validity()
+        if not self.apply_button.isEnabled():
+            return
+        try:
+            save_settings(settings)
+        except (OSError, ValueError) as exc:
+            QMessageBox.critical(self, "Cannot save settings", str(exc))
+            return
+        try:
+            if self.remote_controller.requested:
+                from truba_remote import run_remote_mechanics
+                context,auth = self.remote_controller.require(settings.solver_backend,settings)
+                source = getattr(self.preview,"remote_source","")
+                if not source: raise RuntimeError("Build this mesh on TRUBA before starting a remote analysis.")
+                self.analysis_job = AnalysisProcess(run_remote_mechanics,settings,context,source,remote_auth=auth)
+            else:
+                self.analysis_job = AnalysisProcess(run_single_analysis, settings, self.preview.mesh,
+                                                   remote_auth=self.truba_dialog.analysis_auth() if settings.solver_backend == "kratos" else None)
+        except Exception as exc:
+            QMessageBox.critical(self, "Cannot start analysis", str(exc))
+            return
+        self.accepted_settings = settings
+        self.apply_button.setEnabled(False)
+        self.force_stop_button.setEnabled(True)
+        self.status.setText("Analysis running...")
+        self._update_status_visuals("busy", "● ANALYSING", False)
+        self.analysis_poll.start()
+
+    def retrieve_truba_job(self):
+        if self.analysis_job is not None or self.remote_controller.future is not None:
+            QMessageBox.information(self,"TRUBA job","Wait for the current operation to finish, or stop it first.")
+            return
+        from PySide6.QtWidgets import QFileDialog
+        from truba_credentials import state_directory
+        filename,_=QFileDialog.getOpenFileName(self,"Retrieve TRUBA job",str(state_directory()/"jobs"),"TRUBA job record (*.json)")
+        if not filename:return
+        try:
+            record=json.loads(Path(filename).read_text())
+            if record.get("kind")=="rustmech_remote":
+                from truba_remote import retrieve_remote_operation
+                self.analysis_job=AnalysisProcess(retrieve_remote_operation,filename,remote_auth=self.truba_dialog.analysis_auth())
+            else:
+                self.analysis_job=AnalysisProcess(run_resume_analysis,filename,remote_auth=self.truba_dialog.analysis_auth())
+        except Exception as error:
+            QMessageBox.warning(self,"TRUBA job",str(error))
+            return
+        self.apply_button.setEnabled(False)
+        self.force_stop_button.setEnabled(True)
+        self.status.setText("Waiting for TRUBA job and retrieving results…")
+        self.analysis_poll.start()
+
+    def show_kratos_results(self):
+        if self._kratos_result_dialog is not None:
+            self._kratos_result_dialog.show()
+            self._kratos_result_dialog.raise_()
+            return
+        try:
+            from kratos_results_view import KratosResultsDialog
+            dialog=KratosResultsDialog(self._latest_kratos_results,self)
+        except Exception as error:
+            QMessageBox.warning(self,"Kratos results",str(error))
+            return
+        self._kratos_result_dialog=dialog
+        dialog.destroyed.connect(lambda *_:setattr(self,"_kratos_result_dialog",None))
+        dialog.show()
+
+    def force_stop_analysis(self) -> None:
+        if self.analysis_job is None:
+            return
+        try:
+            self.analysis_job.force_stop()
+        except Exception as exc:
+            self.status.setText(f"Forced Stop failed: {exc}")
+            return
+        self.analysis_job = None
+        self.analysis_poll.stop()
+        self.force_stop_button.setEnabled(False)
+        self.refresh_validity()
+        self.status.setText("Analysis cancelled. Analysis and solver processes forcibly terminated.")
+        self._update_status_visuals("error", "● CANCELLED", False)
+
+    def _poll_analysis(self) -> None:
+        if self.analysis_job is None:
+            return
+        if not self.analysis_job.done():
+            record=self.analysis_job.remote_status()
+            if record:
+                self.status.setText(f"TRUBA job {record.get('job_id','—')} · {record.get('state','preparing')}")
+            return
+        job, self.analysis_job = self.analysis_job, None
+        self.analysis_poll.stop()
+        self.force_stop_button.setEnabled(False)
+        self.refresh_validity()
+        try:
+            folder = job.result()
+        except Exception as exc:
+            self.status.setText(f"Analysis failed: {exc}")
+            self._update_status_visuals("error", "● FAILED", False)
+        else:
+            if isinstance(folder,dict) and folder.get("remote_retrieval"):
+                result = folder["result"]
+                directory = Path(folder["directory"])/"output"
+                operation = result["operation"]
+                if operation.startswith("thermal_"):
+                    self.thermal_workspace.load_directory(directory)
+                    self.workspace_tabs.setCurrentIndex(3)
+                elif operation.startswith("flow_"):
+                    self.flow_workspace.load_directory(directory)
+                    self.workspace_tabs.setCurrentIndex(2)
+                elif operation in ("probe","prepare"):
+                    self.status.setText(f"Remote runtime report retrieved: {directory}. Check capabilities for the current configuration before computing.")
+                elif operation=="preview":
+                    from truba_remote import load_remote_preview
+                    try:
+                        preview = load_remote_preview(directory/"preview",settings=self.preview_settings())
+                    except (ValueError, OSError) as error:
+                        self.status.setText(f"TRUBA preview retrieved, but cannot be applied to the current geometry: {error}. Results: {directory}")
+                    else:
+                        self.preview = preview
+                        self.render_preview(reset=True)
+                        self.refresh_validity()
+                        self.status.setText(f"TRUBA preview retrieved: {directory}")
+                elif operation=="mechanical":
+                    folder = result["run_folder"]
+                else:
+                    self.status.setText(f"TRUBA results retrieved: {directory}")
+                if operation!="mechanical": return
+            self.status.setText(f"Analysis completed. Results: {folder}")
+            try:
+                report=json.loads((Path(folder)/"summary.json").read_text(encoding="utf-8"))
+                if report.get("solver") == "kratos":
+                    self._latest_kratos_results=str(folder)
+                    self.kratos_panel.view_results_button.setEnabled(True)
+                    if self._persist_solver_profiles:
+                        self.solver_profile_store.settings.setValue("kratos/latestResultFolder",str(folder))
+                        self.solver_profile_store.settings.sync()
+            except (OSError,ValueError):pass
+            self._update_status_visuals("ready", "● COMPLETED", False)
+
+    def _stop_remote_for_close(self):
+        # Keep the job handle available for retry if remote cancellation cannot
+        # be confirmed. Never label a disconnected, still-running job cancelled.
+        job = self.analysis_job
+        if job is not None and getattr(job,"_generic_remote_target",False) is True:
+            self.force_stop_analysis()
+            if self.analysis_job is not None:
+                return False
+        for workspace in (self.flow_workspace,self.thermal_workspace):
+            if workspace.job is not None and getattr(workspace.job,"_generic_remote_target",False) is True:
+                workspace.cancel()
+                if workspace.job is not None:
+                    self.status.setText("Remote cancellation is not confirmed. Reconnect and retry Stop before closing.")
+                    return False
+        doe = self.doe_studio
+        if doe._active_future is not None and getattr(doe._active_future,"_generic_remote_target",False) is True:
+            doe.stop_active_queue()
+            if doe._active_future is not None:
+                self.status.setText("Remote batch cancellation is not confirmed. Reconnect and retry Stop before closing.")
+                return False
+        return True
+
+    def reject(self):
+        if self._stop_remote_for_close(): super().reject()
+
+    def closeEvent(self,event):
+        if not self._stop_remote_for_close():
+            event.ignore()
+            return
+        super().closeEvent(event)
+
+    def dispose(self, *_) -> None:
+        if self.disposed:
+            return
+        if self._solver_profiles_ready and self._persist_solver_profiles:
+            self.solver_profile_store.save(self._active_solver_id, profile_values(self.collect()))
+        self.force_stop_analysis()
+        if hasattr(self,"remote_controller"):
+            self.remote_controller.shutdown()
+        self.disposed = True
+        self.truba_dialog.shutdown()
+        self.debounce.stop()
+        self.poll.stop()
+        self.mesh_cancelled.set()
+        self.mesh_progress.hide()
+        self.cancel_mesh_button.hide()
+        shutdown_mesh_preview()
+        if hasattr(self, "doe_studio"):
+            self.doe_studio.dispose()
+        if hasattr(self, "flow_workspace"):
+            self.flow_workspace.dispose()
+        if hasattr(self, "thermal_workspace"):
+            self.thermal_workspace.dispose()
+        self.executor.shutdown(wait=False, cancel_futures=True)
+        if hasattr(self.plotter, "_camera_transition"):
+            self.plotter._camera_transition.stop()
+        self.plotter.orientation_cube.SetEnabled(0)
+        self.plotter.close()
+
+
+def offline_check(settings: Settings, images: bool = True) -> Path:
+    mesh = generate_volume_mesh(settings)
+    paths = RunPaths.create(offline=True)
+    report = {
+        "status": "offline_mesh_check",
+        "licensed_solve_executed": False,
+    }
+    try:
+        report["mesh"] = export_geometry(settings, mesh, paths, images)
+        report["status"] = (
+            "passed" if not mesh.solve_errors else "mesh_not_solve_ready"
+        )
+        write_json(paths.human / "offline_report.json", report)
+    except Exception as exc:
+        report.update(status="failed", error=str(exc))
+        write_json(paths.human / "offline_report.json", report)
+        raise
+    print(json.dumps(report, indent=2))
+    print(
+        f"OFFLINE ONLY — no licensed ANSYS solve. Outputs: {paths.human}"
+    )
+    if mesh.solve_errors:
+        raise ValueError("\n".join(mesh.solve_errors))
+    return paths.human
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--offline-test",
+        action="store_true",
+        help="Export geometry/mesh without ANSYS",
+    )
+    parser.add_argument(
+        "--no-images",
+        action="store_true",
+        help="Skip images during offline export",
+    )
+    args = parser.parse_args()
+    settings = load_settings()
+    if args.offline_test:
+        offline_check(settings, images=not args.no_images)
+        return 0
+    app = QApplication.instance() or QApplication([sys.argv[0]])
+    app.setApplicationName("RustMech")
+    app.setApplicationDisplayName("RustMech")
+    profiles = SolverProfileStore()
+    settings = profiles.restore(settings)
+    dialog = RustMechDialog(settings, solver_profile_store=profiles)
+    try:
+        dialog.exec()
+    finally:
+        dialog.dispose()
+        dialog.close()
+        app.processEvents()
+    return 0
+
+
+if __name__ == "__main__":
+    import multiprocessing
+    multiprocessing.freeze_support()
+    try:
+        sys.exit(main())
+    except Exception:
+        traceback.print_exc()
+        print(
+            "Operation failed. Inspect this error and the labelled run folder.",
+            file=sys.stderr,
+        )
+        sys.exit(1)

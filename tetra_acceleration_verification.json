@@ -1,0 +1,17 @@
+{
+  "source_kernel_abi": 4,
+  "netgen_array_bridge_loaded": true,
+  "python_tests": 37,
+  "rust_tests": 9,
+  "ruff": true,
+  "clippy": true,
+  "source_gui_smoke": true,
+  "exe_unchanged": true,
+  "exe_sha256": "e5fd4c5b350aebfcfb06e27c238cbb61e78640517e83e99f7fee7948b8bcb4b1",
+  "tetra_elements": 18446,
+  "tet10_nodes": 38507,
+  "invalid_elements": 0,
+  "max_corner_difference_mm": 1.5935679442691253e-09,
+  "preview_tet4_to_tet10_seconds": 0.015620600002876017,
+  "preview_tet10_to_tet4_seconds": 0.009626200000639074
+}

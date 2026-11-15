@@ -1,0 +1,37 @@
+[
+  {
+    "mesh_type": "TET4",
+    "seconds": 13.205904599999485,
+    "elements": 18446,
+    "nodes": 6655,
+    "solve_errors": [],
+    "stages": [
+      "Preparing the specimen surface\u2026",
+      "Locating thin walls and platen contact regions\u2026",
+      "Generating tetrahedra in Netgen\u2026",
+      "Assembling TET4 elements\u2026"
+    ]
+  },
+  {
+    "mesh_type": "TET10",
+    "seconds": 0.015620600002876017,
+    "elements": 18446,
+    "nodes": 38507,
+    "solve_errors": [],
+    "stages": [
+      "Reusing the existing Netgen volume mesh\u2026",
+      "Assembling TET10 elements\u2026"
+    ]
+  },
+  {
+    "mesh_type": "TET4",
+    "seconds": 0.009626200000639074,
+    "elements": 18446,
+    "nodes": 6655,
+    "solve_errors": [],
+    "stages": [
+      "Reusing the existing Netgen volume mesh\u2026",
+      "Assembling TET4 elements\u2026"
+    ]
+  }
+]

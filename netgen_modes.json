@@ -1,0 +1,20 @@
+[
+  {
+    "binary": false,
+    "threads": 1,
+    "preparation_seconds": 1.0450507999994443,
+    "meshing_seconds": 10.968687200002023,
+    "file_bytes": 17770671,
+    "elements": 18446,
+    "volume": 66.5907080878823
+  },
+  {
+    "binary": false,
+    "threads": 8,
+    "preparation_seconds": 1.7045912000030512,
+    "meshing_seconds": 12.563902099995175,
+    "file_bytes": 17770671,
+    "elements": 18446,
+    "volume": 66.5907080878823
+  }
+]

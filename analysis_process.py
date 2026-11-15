@@ -1,0 +1,136 @@
+"""Isolated analysis jobs whose owned process tree can be forcibly stopped."""
+
+import multiprocessing
+import os
+from pathlib import Path
+import pickle
+import signal
+import subprocess
+import tempfile
+import traceback
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
+
+
+def _execute(result_path, target, args):
+    if os.name != "nt":
+        os.setsid()
+    try:
+        payload = (True, target(*args))
+    except BaseException:
+        payload = (False, traceback.format_exc())
+    with open(result_path, "wb") as stream:
+        pickle.dump(payload, stream)
+
+
+class AnalysisProcess:
+    def __init__(self, target, *args, remote_auth=None):
+        self._scratch = tempfile.TemporaryDirectory(prefix="rustmech-analysis-")
+        self._result_path = Path(self._scratch.name) / "result.pkl"
+        self._remote_auth=remote_auth
+        self._remote_marker=None
+        self._generic_remote_target=bool(getattr(target,"remote_job_target",False))
+        if getattr(target,"remote_job_target",False) or (target in (run_single_analysis,run_resume_analysis) and (target is run_resume_analysis or args[0].solver_backend == "kratos")):
+            self._remote_marker=Path(self._scratch.name)/"remote_job.json"
+            args=(*args,remote_auth,str(self._remote_marker))
+        self._remote_future = None
+        if self._generic_remote_target:
+            # Only SSH orchestration runs here; numerical work remains on Slurm.
+            # Stay in the panel's process to reuse its authenticated SSH session.
+            self._remote_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix='truba-job')
+            self._remote_future = self._remote_executor.submit(target, *args)
+            return
+        self._process = multiprocessing.get_context("spawn").Process(
+            target=_execute, args=(str(self._result_path), target, args),
+            name="RustMech-analysis",
+        )
+        try:
+            self._process.start()
+        except BaseException:
+            self._scratch.cleanup()
+            raise
+
+    def done(self):
+        if self._remote_future is not None:
+            return self._remote_future.done()
+        return not self._process.is_alive()
+
+    def remote_status(self):
+        if self._remote_marker is not None and self._remote_marker.exists():
+            import json
+            try:return json.loads(self._remote_marker.read_text())
+            except (OSError,ValueError):pass
+        return None
+
+    def result(self):
+        if self._remote_future is not None:
+            try:
+                return self._remote_future.result()
+            finally:
+                self._remote_executor.shutdown(wait=False)
+                self._scratch.cleanup()
+        self._process.join()
+        try:
+            if not self._result_path.exists():
+                raise RuntimeError(f"Analysis process exited ({self._process.exitcode}).")
+            with self._result_path.open("rb") as stream:
+                success, payload = pickle.load(stream)
+            if not success:
+                raise RuntimeError(payload)
+            return payload
+        finally:
+            self._process.close()
+            self._scratch.cleanup()
+
+    def force_stop(self):
+        if self._remote_marker is not None:
+            if getattr(self,"_generic_remote_target",False): self._remote_marker.with_suffix(".cancel").touch()
+            from truba_jobs import cancel_remote
+            cancel_remote(self._remote_marker,self._remote_auth)
+        if getattr(self, '_remote_future', None) is not None:
+            try:
+                self._remote_future.result(timeout=10)
+            except FutureTimeout:
+                raise RuntimeError('Remote cancellation was requested; waiting for the SSH worker to stop. Retry Stop.')
+            except Exception:
+                pass  # The cancellation marker normally raises CancelledError.
+            self._remote_executor.shutdown(wait=False)
+            self._scratch.cleanup()
+            return
+        if self._process.is_alive():
+            if os.name == "nt":
+                # The same force-termination mechanism used by Task Manager,
+                # scoped to this job's PID and its descendants (including MAPDL).
+                result = subprocess.run(
+                    ["taskkill", "/PID", str(self._process.pid), "/T", "/F"],
+                    capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW,
+                    timeout=10,
+                )
+                if result.returncode and self._process.is_alive():
+                    raise RuntimeError(result.stderr.decode(errors="replace"))
+            else:
+                try:
+                    os.killpg(self._process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    if self._process.is_alive():
+                        self._process.kill()
+            self._process.join(timeout=2)
+            if self._process.is_alive():
+                raise RuntimeError("Analysis process could not be terminated.")
+        self._process.join()
+        self._process.close()
+        self._scratch.cleanup()
+
+
+def run_single_analysis(settings, mesh, remote_auth=None, job_marker=None):
+    from nonlinear_compression import run_analysis
+    from solver_api import create_solver_backend
+
+    return str(run_analysis(settings, mesh, create_solver_backend(settings.solver_backend,remote_auth,job_marker)))
+
+
+def run_resume_analysis(record_path,remote_auth=None,job_marker=None):
+    from nonlinear_compression import resume_kratos_analysis
+    return str(resume_kratos_analysis(record_path,remote_auth,job_marker))
+
+
+    

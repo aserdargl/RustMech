@@ -1,0 +1,163 @@
+{
+  "settings": {
+    "size": 6.0,
+    "surface_resolution": 0.15,
+    "mesh_resolution": 0.7,
+    "local_mesh_size": 0.35
+  },
+  "repeats": 3,
+  "before": [
+    {
+      "repetition": 1,
+      "seconds": 13.225205300004745,
+      "transfer_seconds": 0.9585979000039515,
+      "netgen_seconds": 11.91494860000239,
+      "read_seconds": 0.08590779999940423,
+      "rust_tet10_seconds": 0.003628500002378132,
+      "verification_seconds": 0.016409700001531746,
+      "elements": 18446,
+      "nodes": 38507,
+      "volume": 66.5907080878823,
+      "max_corner_delta": 0.0,
+      "jacobian_min": 0.033468052829844594,
+      "jacobian_mean": 0.584647806077427,
+      "jacobian_p01": 0.15900378516102492,
+      "invalid_elements": 0
+    },
+    {
+      "repetition": 2,
+      "seconds": 15.931234199997562,
+      "transfer_seconds": 1.8626438999999664,
+      "netgen_seconds": 13.173402500004158,
+      "read_seconds": 0.08602600000449456,
+      "rust_tet10_seconds": 0.003638000001956243,
+      "verification_seconds": 0.013462300004903227,
+      "elements": 18446,
+      "nodes": 38507,
+      "volume": 66.5907080878823,
+      "max_corner_delta": 0.0,
+      "jacobian_min": 0.033468052829844594,
+      "jacobian_mean": 0.584647806077427,
+      "jacobian_p01": 0.15900378516102492,
+      "invalid_elements": 0
+    },
+    {
+      "repetition": 3,
+      "seconds": 16.099802400000044,
+      "transfer_seconds": 1.8979628999950364,
+      "netgen_seconds": 13.34126059999835,
+      "read_seconds": 0.09868760000244947,
+      "rust_tet10_seconds": 0.004022100001748186,
+      "verification_seconds": 0.019051800001761876,
+      "elements": 18446,
+      "nodes": 38507,
+      "volume": 66.5907080878823,
+      "max_corner_delta": 0.0,
+      "jacobian_min": 0.033468052829844594,
+      "jacobian_mean": 0.584647806077427,
+      "jacobian_p01": 0.15900378516102492,
+      "invalid_elements": 0
+    }
+  ],
+  "after": [
+    {
+      "repetition": 1,
+      "seconds": 15.797589800000424,
+      "transfer_seconds": 0.7626811000009184,
+      "netgen_seconds": 14.298471499998413,
+      "read_seconds": 0.0015926999985822476,
+      "elements": 18446,
+      "nodes": 38507,
+      "volume": 66.59070808787739,
+      "max_corner_delta": 1.5935679442691253e-09,
+      "jacobian_min": 0.033468052829844594,
+      "jacobian_mean": 0.5846478060788165,
+      "jacobian_p01": 0.15900378516100708,
+      "invalid_elements": 0
+    },
+    {
+      "repetition": 2,
+      "seconds": 14.950017299997853,
+      "transfer_seconds": 0.8334174000046914,
+      "netgen_seconds": 13.34477369999513,
+      "read_seconds": 0.0015704000034020282,
+      "elements": 18446,
+      "nodes": 38507,
+      "volume": 66.59070808787739,
+      "max_corner_delta": 1.5935679442691253e-09,
+      "jacobian_min": 0.033468052829844594,
+      "jacobian_mean": 0.5846478060788165,
+      "jacobian_p01": 0.15900378516100708,
+      "invalid_elements": 0
+    },
+    {
+      "repetition": 3,
+      "seconds": 15.752168700004404,
+      "transfer_seconds": 0.9429638000001432,
+      "netgen_seconds": 14.064286200002243,
+      "read_seconds": 0.0014798000047449023,
+      "elements": 18446,
+      "nodes": 38507,
+      "volume": 66.59070808787739,
+      "max_corner_delta": 1.5935679442691253e-09,
+      "jacobian_min": 0.033468052829844594,
+      "jacobian_mean": 0.5846478060788165,
+      "jacobian_p01": 0.15900378516100708,
+      "invalid_elements": 0
+    }
+  ],
+  "warm_cache": [
+    {
+      "mesh_type": "TET4",
+      "seconds": 0.008311999998113606,
+      "elements": 18446,
+      "nodes": 6655
+    },
+    {
+      "mesh_type": "TET10",
+      "seconds": 0.01866400000290014,
+      "elements": 18446,
+      "nodes": 38507
+    },
+    {
+      "mesh_type": "TET4",
+      "seconds": 0.006605800001125317,
+      "elements": 18446,
+      "nodes": 6655
+    },
+    {
+      "mesh_type": "TET10",
+      "seconds": 0.00938740000128746,
+      "elements": 18446,
+      "nodes": 38507
+    },
+    {
+      "mesh_type": "TET4",
+      "seconds": 0.006107000001065899,
+      "elements": 18446,
+      "nodes": 6655
+    },
+    {
+      "mesh_type": "TET10",
+      "seconds": 0.012206699997477699,
+      "elements": 18446,
+      "nodes": 38507
+    }
+  ],
+  "medians": {
+    "before": {
+      "seconds": 15.931234199997562,
+      "transfer_seconds": 1.8626438999999664,
+      "netgen_seconds": 13.173402500004158,
+      "read_seconds": 0.08602600000449456
+    },
+    "after": {
+      "seconds": 15.752168700004404,
+      "transfer_seconds": 0.8334174000046914,
+      "netgen_seconds": 14.064286200002243,
+      "read_seconds": 0.0015704000034020282
+    },
+    "tet4_reuse_seconds": 0.006605800001125317,
+    "tet10_reuse_seconds": 0.012206699997477699
+  }
+}

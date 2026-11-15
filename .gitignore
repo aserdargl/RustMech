@@ -1,0 +1,49 @@
+__pycache__/
+.ruff_cache/
+build/
+dist/
+packaging/*.spec
+native/netgen_kernel/upstream/
+native/netgen_kernel/zlib/
+native/netgen_kernel/build-pgo/
+
+# --- Git politikasi (2026-11-15) ---
+# Kullanici verisi ve sonuclar
+HumanResults/
+results/
+LegacyDistributions/
+# Derleme, dagitim ve yedekler
+dist*/
+build/
+_backup_before_codex_*/
+# IDE ve yerel durum
+.idea/
+.venv/
+*.pyc
+# Gunlukler ve olcum ciktilari (kokte uretilenler)
+/*.log
+/RustMech.log
+/_skipped.*
+/*_benchmark.json
+/*_before*.json
+/*_after*.json
+/*_comparison.json
+/mesh_*benchmark*.json
+/mesh_baseline.json
+/exe_smoke_test.json
+/exe_preview.png
+benchmarks/
+# Derlenmis ikililer (Build-*.ps1 ile uretilir)
+native/bin/
+native/mesh_kernel/target/
+native/netgen_bridge/build*/
+native/netgen_kernel/build*/
+*.dll
+*.pyd
+*.exe
+# Kimlik bilgileri
+auth.json
+*.pem
+*.key
+.env
+design/

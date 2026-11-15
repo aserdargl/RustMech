@@ -1,0 +1,2 @@
+# Password SSH authentication; PyInstaller collects its cryptographic dependencies.
+paramiko==4.0.0

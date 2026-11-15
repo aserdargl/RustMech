@@ -1,0 +1,32 @@
+{
+  "optimized_kernel_revision": "96e5682f-rustmech-atlas-5",
+  "rust_kernel_abi": 4,
+  "python_tests": 48,
+  "rust_tests": 9,
+  "native_reference_checks": 37054,
+  "ruff": true,
+  "clippy": true,
+  "pinned_source_reproduction_and_idempotence": true,
+  "source_gui_smoke": true,
+  "cold_fresh_process_repeats": 3,
+  "coordinates_and_connectivity_bit_identical": true,
+  "surface_triangles": 264260,
+  "tetrahedra": 9611,
+  "nodes": 3536,
+  "invalid_elements": 0,
+  "before": {
+    "seconds": 23.252419700002065,
+    "netgen_seconds": 18.53888630000438,
+    "cpu_seconds": 22.515625
+  },
+  "after": {
+    "seconds": 19.914287999999942,
+    "netgen_seconds": 15.235478764106915,
+    "cpu_seconds": 19.53125
+  },
+  "core_time_reduction_percent": 17.818802502158306,
+  "call_time_reduction_percent": 14.356061618833705,
+  "exe_unchanged": true,
+  "exe_sha256": "e5fd4c5b350aebfcfb06e27c238cbb61e78640517e83e99f7fee7948b8bcb4b1",
+  "kernel_sha256": "9fa2f67cc0bc72546142f76098992ef8319016be5b94c630bdfb9938cbcee198"
+}

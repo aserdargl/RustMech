@@ -1,0 +1,109 @@
+{
+  "repeats": 1,
+  "fresh_process_each_run": true,
+  "cpu": 2,
+  "geometry": "Gyroid",
+  "surface_spacing": 0.046875,
+  "boundary_sha256": "7d142dd682fc1df2f91d2f587a763377e47a12ac54ef8477a0abdea3da08bae0",
+  "refinement_sha256": "be500b163035b7f41a92aa4af3cc9ea5a36dd2dacca7c7a8e8594dca8033d089",
+  "coordinates_and_connectivity_bit_identical": true,
+  "measurements": {
+    "stock": [
+      {
+        "iteration": 1,
+        "backend": "stock",
+        "structure_name": "Gyroid",
+        "surface_triangles": 666968,
+        "seconds": 60.94714490000479,
+        "cpu_seconds": 60.140625,
+        "netgen_seconds": 44.95301500000642,
+        "elements": 9488,
+        "nodes": 3493,
+        "volume": 68.43985903381802,
+        "jacobian_min": 0.07438086477437139,
+        "jacobian_mean": 0.7035207330095574,
+        "jacobian_p01": 0.4423382544436842,
+        "timers": {
+          "RustMech::GenerateMesh": 44.95301500000642,
+          "CreateTable": 0.15984520362063365,
+          "CreateSortedTable": 0.19449703939422977,
+          "PointFunction - build elementsonpoint table": 0.13078588434931626,
+          "optimize": 0.2154254188376459,
+          "Mesh::ImproveMesh": 0.4571267870786108,
+          "MeshOptimize3d::CombineImprove": 0.098250287366088,
+          "OptimizeVolume": 1.197836780675489,
+          "MeshOptimize3d::SwapImprove2": 0.22761722396427572,
+          "MeshOptimize3d::SplitImprove": 0.2144800595202025,
+          "RemoveIllegalElements": 0.2473811565674422,
+          "UpdateBadness": 0.077350832210915,
+          "Build edges": 0.11418958210372851,
+          "Mesh::CreatePoint2VolumeElementTable": 0.3767097761836723,
+          "MeshOptimize3d::SwapImprove loop": 0.20150812621103625,
+          "MeshOptimize3d::SwapImprove": 0.6895679194769763,
+          "Meshing3::Delaunay": 0.43673076001760547,
+          "MeshVolume": 0.6355139882668484,
+          "Mesh::BuildBoundaryEdges": 0.05572371421432343,
+          "Combineimprove 2D": 0.09918391580910461,
+          "Mesh::CheckOverlappingBoundary": 0.0954015695691017,
+          "Mesh::Compress": 0.3317071203165092,
+          "MeshSmooting 2D - loop": 0.408189308132597,
+          "MeshSmoothing 2D": 0.41823263695971297,
+          "EdgeSwapping (2D)": 0.07264739356755967,
+          "Mesh::CalcSurfacesOfNode": 0.09437047627326152,
+          "surfacemeshing mainloop": 0.30053877398461926,
+          "surface meshing3": 0.09081642336997359,
+          "surface meshing": 0.30181644630288684,
+          "restrictH OneChart 3b": 1.61582603755394,
+          "restrictH OneChart 3a": 3.2105095026994808,
+          "restrictH OneChart 3": 5.593032828764396,
+          "restrictH OneChart 2": 1.7779150236112535,
+          "restrictH OneChart 1": 0.15631509403254928,
+          "find outer chart": 30.923534907380976,
+          "find innner chart": 0.4583026720538413,
+          "makeatlas": 37.333094886100966
+        }
+      }
+    ],
+    "private": [
+      {
+        "iteration": 1,
+        "backend": "private",
+        "structure_name": "Gyroid",
+        "surface_triangles": 666968,
+        "seconds": 83.2320430999971,
+        "cpu_seconds": 71.734375,
+        "netgen_seconds": 54.63707880292253,
+        "elements": 9488,
+        "nodes": 3493,
+        "volume": 68.43985903381802,
+        "jacobian_min": 0.07438086477437139,
+        "jacobian_mean": 0.7035207330095574,
+        "jacobian_p01": 0.4423382544436842,
+        "timers": {
+          "makeatlas": 34.51586028354264,
+          "find outer chart": 27.644444415173158,
+          "find innner chart": 0.4675062803159168,
+          "MeshVolume": 4.865415336074334,
+          "OptimizeVolume": 9.531436060255638,
+          "restrictH OneChart 3": 4.544895699644112,
+          "restrictH OneChart 3a": 3.172455694738029,
+          "restrictH OneChart 3b": 1.3521902554969742,
+          "RustMech::GenerateMesh": 54.63707880292253
+        }
+      }
+    ]
+  },
+  "medians": {
+    "stock": {
+      "seconds": 60.94714490000479,
+      "netgen_seconds": 44.95301500000642,
+      "cpu_seconds": 60.140625
+    },
+    "private": {
+      "seconds": 83.2320430999971,
+      "netgen_seconds": 54.63707880292253,
+      "cpu_seconds": 71.734375
+    }
+  },
+  "netgen_speedup": 0.8227565599206575
+}

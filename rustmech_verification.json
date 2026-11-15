@@ -1,0 +1,30 @@
+{
+  "application": "RustMech",
+  "project_directory": "D:\\MySoftware\\RustMech",
+  "python_tests_passed": 29,
+  "rust_tests_passed": 8,
+  "source_gui_smoke_passed": true,
+  "packaged_gui_smoke_passed": true,
+  "packaged_hex8_offline_passed": true,
+  "packaged_tet10_offline_passed": true,
+  "packaged_tet10_elements": 17719,
+  "packaged_tet10_invalid_elements": 0,
+  "licensed_ansys_solve_executed": false,
+  "core_library": "rustmech_core.dll",
+  "exe": "dist/RustMech/RustMech.exe",
+  "benchmark_files": [
+    "acceleration_benchmark.json",
+    "preview_benchmark.json",
+    "mesh_benchmark_rustmech.json"
+  ],
+  "project_move_verified": true,
+  "tests_repeated_after_move": true,
+  "packaged_gui_smoke_after_move": true,
+  "previous_directory_empty": true,
+  "previous_directory_locked_by_active_session": true,
+  "source_core_abi": 3,
+  "packaged_core_abi": 2,
+  "exe_rebuild_deferred_by_user": true,
+  "performance_report": "efficiency_comparison.json",
+  "packaged_checks_apply_to_prior_build": true
+}

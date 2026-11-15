@@ -1,0 +1,605 @@
+"""Exercise convergence decisions and live Qt updates without a production solver."""
+import csv
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
+from functools import partial
+import time
+import math
+import os
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from threading import Event
+from types import SimpleNamespace
+import unittest
+from unittest.mock import MagicMock, patch
+
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+from PySide6.QtTest import QTest
+from PySide6.QtCore import QSettings
+from PySide6.QtWidgets import QApplication, QComboBox, QDialog
+
+from mesh_convergence import (
+    Level, METRICS, MeshConvergenceDialog, MeshConvergenceWidget,
+    converged_level, differences, next_mesh_size, pair_passes, solve_level,
+)
+from model import Settings
+
+
+SETTINGS = Settings(size=1, cell_size=1, compression=0.1, mesh_resolution=0.2, self_contact_mode="disabled")
+
+
+def process_mesh(settings):
+    return SimpleNamespace(grid=SimpleNamespace(n_cells=round(1 / settings.mesh_resolution**3)),
+                           solve_errors=[])
+
+
+def process_solver(folder, settings, mesh):
+    return {"status": "completed", "run_folder": folder,
+            "graphs": {key: 100 for _, key in METRICS}}
+
+
+def blocking_mesh(marker, settings):
+    Path(marker).write_text("meshing")
+    time.sleep(120)
+    return process_mesh(settings)
+
+
+def blocking_solver(marker, settings, mesh):
+    Path(marker).write_text("solving")
+    time.sleep(120)
+
+
+def completed(size, value, elements, **kwargs):
+    return Level(replace(SETTINGS, mesh_resolution=size), elements=elements,
+                 metrics=[value] * 3, status="completed", **kwargs)
+
+
+class ConvergenceDecisionTests(unittest.TestCase):
+    def test_requires_two_successive_pairs(self):
+        levels = [completed(.2, 100, 100), completed(.15, 101, 200), completed(.1, 102, 300)]
+        self.assertIsNone(converged_level(levels[:2], 2, [0, 1, 2], [0] * 3))
+        self.assertIs(converged_level(levels, 2, [0, 1, 2], [0] * 3), levels[-1])
+        levels[0].metrics = [80] * 3
+        self.assertIsNone(converged_level(levels, 2, [0, 1, 2], [0] * 3))
+
+    def test_selected_metrics_and_absolute_tolerance(self):
+        a, b = completed(.2, 100, 100), completed(.1, 101, 200)
+        b.metrics[1] = 200
+        self.assertTrue(pair_passes(a, b, 2, [0], [0] * 3))
+        self.assertFalse(pair_passes(a, b, 2, [0, 1], [0] * 3))
+        a.metrics, b.metrics = [1e-12] * 3, [0] * 3
+        self.assertTrue(math.isinf(differences(a, b)[0]))
+        self.assertTrue(pair_passes(a, b, 2, [0], [1e-9] * 3))
+
+    def test_identical_or_decreasing_element_counts_are_not_convergence(self):
+        a, b = completed(.2, 100, 100), completed(.1, 100, 100)
+        self.assertFalse(pair_passes(a, b, 2, [0], [0] * 3))
+        b.elements = 99
+        self.assertFalse(pair_passes(a, b, 2, [0], [0] * 3))
+
+    def test_nearly_identical_sizes_are_not_convergence(self):
+        self.assertFalse(pair_passes(completed(.2, 100, 100), completed(.199, 100, 200),
+                                     2, [0], [0] * 3))
+
+    def test_large_jump_inserts_geometric_midpoint_without_repeating_it(self):
+        levels = [completed(.2, 100, 100), completed(.2 / 1.3, 150, 300)]
+        size, kind = next_mesh_size(levels, 2, [0], 1.3)
+        self.assertEqual(kind, "Intermediate")
+        self.assertAlmostEqual(size, math.sqrt(.2 * (.2 / 1.3)))
+        levels.append(completed(size, 120, 200))
+        next_size, kind = next_mesh_size(levels, 2, [0], 1.3)
+        self.assertEqual(kind, "Refinement")
+        self.assertAlmostEqual(next_size, .2 / 1.3**2)
+
+    def test_intermediate_execution_order_does_not_change_comparison_order(self):
+        coarse, medium, fine = completed(.2, 100, 100), completed(.15, 101, 200), completed(.1, 102, 300)
+        self.assertIs(converged_level([coarse, fine, medium], 2, [0], [0] * 3), fine)
+
+    def test_failed_and_nonfinite_results_do_not_confirm_convergence(self):
+        levels = [completed(.2, 100, 100), completed(.15, 101, 200), completed(.1, 102, 300)]
+        levels[-1].status = "failed"
+        self.assertIsNone(converged_level(levels, 2, [0], [0] * 3))
+        levels[-1].status = "completed"
+        levels[-1].metrics[0] = float("nan")
+        self.assertIsNone(converged_level(levels, 2, [0], [0] * 3))
+
+
+class LiveConvergenceTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.app = QApplication.instance() or QApplication([])
+
+    def setUp(self):
+        self.temp = TemporaryDirectory()
+        self.folder = Path(self.temp.name)
+        window_settings = QSettings(str(self.folder / "window.ini"), QSettings.Format.IniFormat)
+        from window_state import WindowStateStore
+        self.window_store = WindowStateStore(self.app, window_settings)
+        graphs = self.folder / "04_Graphs"
+        graphs.mkdir()
+        (graphs / "force_displacement.csv").write_text(
+            "Compression_mm,Compression_Force_N\n0,0\n0.1,100\n", encoding="utf-8")
+        # Decision/UI tests use in-process callbacks; process isolation is tested separately.
+        self.executor = ThreadPoolExecutor(max_workers=1)
+        process_patch = patch("mesh_convergence.AnalysisProcess", side_effect=self.executor.submit)
+        process_patch.start()
+        self.addCleanup(process_patch.stop)
+        self.widgets = []
+        self.calls = []
+        self.release = Event()
+        self.entered = Event()
+
+    def tearDown(self):
+        self.release.set()
+        for widget in self.widgets:
+            if widget.future is not None:
+                widget.future.result(timeout=5)
+            widget.dispose()
+            widget.deleteLater()
+        self.executor.shutdown(wait=True)
+        self.app.processEvents()
+        self.app.removeEventFilter(self.window_store)
+        self.temp.cleanup()
+
+    def mesh(self, settings):
+        return SimpleNamespace(grid=SimpleNamespace(n_cells=round(1 / settings.mesh_resolution**3)),
+                               solve_errors=[])
+
+    def solver(self, settings, mesh):
+        self.calls.append(settings.mesh_resolution)
+        value = 100 * (1 + settings.mesh_resolution**2)
+        return {"status": "completed", "run_folder": str(self.folder),
+                "graphs": {key: value for _, key in METRICS}}
+
+    def widget(self, mesh=None, solver=None, settings=SETTINGS):
+        widget = MeshConvergenceWidget(settings, mesh or self.mesh, solver or self.solver)
+        self.widgets.append(widget)
+        return widget
+
+    def finish(self, widget):
+        for _ in range(40):
+            if widget.future is None:
+                return
+            widget.future.result(timeout=5)
+            widget._poll()
+        self.fail("Study did not finish within the test's bounded attempts")
+
+    def test_automatic_default_is_minimal_and_stops_at_tolerance(self):
+        widget = self.widget()
+        self.assertTrue(widget.automatic.isChecked())
+        self.assertTrue(widget.advanced.isHidden())
+        widget.start()
+        self.assertEqual(widget.results.rowCount(), 1)
+        self.finish(widget)
+        self.assertEqual(len(self.calls), 3)
+        self.assertIn("Converged", widget.status.text())
+        self.assertTrue(widget.apply_button.isEnabled())
+        self.assertTrue(all(v.mesh_seconds is not None and v.solve_seconds is not None for v in widget.rows))
+        self.assertIn("#2", widget.results.item(2, 6).text())
+
+    def test_mesh_time_and_elements_are_visible_while_solver_is_running(self):
+        def blocked_solver(settings, mesh):
+            self.entered.set()
+            self.release.wait(5)
+            return self.solver(settings, mesh)
+        widget = self.widget(solver=blocked_solver)
+        widget.start()
+        self.assertTrue(self.entered.wait(5))
+        widget._poll()
+        self.assertEqual(widget.results.item(0, 7).text(), "Solving")
+        self.assertIn("125 elements", widget.results.item(0, 0).text())
+        self.assertNotEqual(widget.results.item(0, 1).text(), "—")
+        self.assertEqual(widget.results.item(0, 3).text(), "—")
+        widget.request_stop()
+        self.release.set()
+        self.finish(widget)
+        self.assertEqual(len(self.calls), 1)
+        self.assertIn("Stopped", widget.status.text())
+
+    def test_stop_during_meshing_skips_solver(self):
+        def blocked_mesh(settings):
+            self.entered.set()
+            self.release.wait(5)
+            return self.mesh(settings)
+        widget = self.widget(mesh=blocked_mesh)
+        widget.start()
+        self.assertTrue(self.entered.wait(5))
+        widget.request_stop()
+        self.release.set()
+        self.finish(widget)
+        self.assertEqual(self.calls, [])
+        self.assertEqual(widget.rows[0].status, "Stopped after meshing")
+
+    def test_forced_stop_cancels_current_level_and_manual_queue_then_allows_restart(self):
+        widget = self.widget()
+        widget.automatic.setChecked(False)
+        widget.manual.setText("0.2, 0.15, 0.1")
+        job = MagicMock()
+        job.done.return_value = False
+        self.assertFalse(widget.force_stop_button.isEnabled())
+        with patch("mesh_convergence.AnalysisProcess", return_value=job):
+            widget.start()
+            self.assertTrue(widget.force_stop_button.isEnabled())
+            widget.force_stop_button.click()
+        job.force_stop.assert_called_once()
+        self.assertIsNone(widget.future)
+        self.assertIsNone(widget.updates)
+        self.assertFalse(widget.timer.isActive())
+        self.assertEqual(widget.manual_pending, [])
+        self.assertEqual(widget.rows[0].status, "Cancelled (Forced Stop)")
+        self.assertTrue(widget.run_button.isEnabled())
+        self.assertTrue(widget.export_button.isEnabled())
+        self.assertFalse(widget.apply_button.isEnabled())
+        self.assertFalse(widget.force_stop_button.isEnabled())
+        widget.start()
+        self.finish(widget)
+        self.assertIn("Converged", widget.status.text())
+
+    def test_real_process_forced_stop_during_mesh_and_solve_and_restart(self):
+        from analysis_process import AnalysisProcess
+        for phase in ("mesh", "solve"):
+            with self.subTest(phase=phase):
+                marker = str(self.folder / f"{phase}.marker")
+                widget = self.widget(
+                    mesh=partial(blocking_mesh, marker) if phase == "mesh" else process_mesh,
+                    solver=partial(blocking_solver, marker))
+                with patch("mesh_convergence.AnalysisProcess", AnalysisProcess):
+                    widget.start()
+                    job = widget.future
+                    try:
+                        deadline = time.monotonic() + 25
+                        while not Path(marker).exists() and time.monotonic() < deadline:
+                            QTest.qWait(20)
+                        self.assertTrue(Path(marker).exists())
+                        widget._poll()
+                        widget.force_stop_button.click()
+                        self.assertIsNone(widget.future)
+                        self.assertTrue(job._process._closed)
+                        self.assertEqual(widget.rows[-1].status, "Cancelled (Forced Stop)")
+                        self.assertEqual(len(widget.rows), 1)
+                        self.assertFalse(widget.timer.isActive())
+                    finally:
+                        if widget.future is not None:
+                            widget.force_stop()
+                    widget.mesh_generator = process_mesh
+                    widget.solver = partial(process_solver, str(self.folder))
+                    widget.start()
+                    deadline = time.monotonic() + 30
+                    while widget.future is not None and time.monotonic() < deadline:
+                        QTest.qWait(20)
+                    self.assertIsNone(widget.future)
+                    self.assertIn("Converged", widget.status.text())
+
+    def test_failed_forced_stop_retains_job_for_retry(self):
+        widget = self.widget()
+        job = MagicMock()
+        job.force_stop.side_effect = [RuntimeError("still running"), None]
+        with patch("mesh_convergence.AnalysisProcess", return_value=job):
+            widget.start()
+        widget.force_stop_button.click()
+        self.assertIs(widget.future, job)
+        self.assertTrue(widget.force_stop_button.isEnabled())
+        self.assertIn("Forced Stop failed", widget.status.text())
+        widget.force_stop_button.click()
+        self.assertIsNone(widget.future)
+
+    def test_process_start_failure_restores_controls(self):
+        widget = self.widget()
+        with patch("mesh_convergence.AnalysisProcess", side_effect=RuntimeError("cannot spawn")):
+            widget.start()
+        self.assertIsNone(widget.future)
+        self.assertFalse(widget.timer.isActive())
+        self.assertTrue(widget.run_button.isEnabled())
+        self.assertFalse(widget.force_stop_button.isEnabled())
+        self.assertIn("cannot spawn", widget.status.text())
+
+    def test_attempt_limit_and_intermediate_values(self):
+        def unstable(settings, mesh):
+            result = self.solver(settings, mesh)
+            result["graphs"] = {key: 1 / settings.mesh_resolution for _, key in METRICS}
+            return result
+        widget = self.widget(solver=unstable)
+        widget.max_levels.setValue(4)
+        widget.start()
+        self.finish(widget)
+        self.assertEqual(len(widget.rows), 4)
+        self.assertEqual(widget.rows[2].kind, "Intermediate")
+        self.assertGreater(widget.rows[2].settings.mesh_resolution, widget.rows[1].settings.mesh_resolution)
+        self.assertEqual(widget.rows[1].reference, 2)
+        self.assertIn("Attempt limit", widget.status.text())
+        self.assertFalse(widget.apply_button.isEnabled())
+
+    def test_minimum_size_limit(self):
+        widget = self.widget()
+        widget.minimum.setValue(.19)
+        widget.start()
+        self.finish(widget)
+        self.assertEqual(len(self.calls), 1)
+        self.assertIn("Minimum mesh size", widget.status.text())
+
+    def test_element_limit_prevents_solve(self):
+        widget = self.widget()
+        widget.max_elements.setValue(100)
+        widget.start()
+        self.finish(widget)
+        self.assertEqual(self.calls, [])
+        self.assertIn("Element limit exceeded", widget.status.text())
+
+    def test_time_budget_prevents_next_level(self):
+        widget = self.widget()
+        widget.start()
+        widget.future.result(timeout=5)
+        widget.started -= 10000
+        widget._poll()
+        self.assertEqual(len(self.calls), 1)
+        self.assertIn("Time budget", widget.status.text())
+
+    def test_manual_list_stops_early_on_convergence(self):
+        widget = self.widget()
+        widget.automatic.setChecked(False)
+        widget.manual.setText("0.2, 0.15, 0.1, 0.08")
+        widget.start()
+        self.finish(widget)
+        self.assertEqual(self.calls, [.2, .15, .1])
+        self.assertIn("Converged", widget.status.text())
+
+    def test_tetra_local_sizes_scale_without_changing_design(self):
+        widget = self.widget(settings=replace(SETTINGS, mesh_type="TET10", local_mesh_size=.05))
+        level = widget.level_settings(.1)
+        self.assertEqual(level.local_mesh_size, .025)
+        self.assertEqual(level.compression, SETTINGS.compression)
+        self.assertEqual(level.material_name, SETTINGS.material_name)
+
+    def test_loading_and_contacts_are_frozen_for_every_level(self):
+        received = []
+        def solver(settings, mesh):
+            received.append(settings)
+            return self.solver(settings, mesh)
+        widget = self.widget(solver=solver, settings=replace(
+            SETTINGS, bottom_platen_friction_coeff=.45,
+            top_platen_friction_coeff=.25, contact_damping_factor=.03))
+        self.assertFalse(hasattr(widget, "analysis_setup"))
+        widget.start()
+        self.finish(widget)
+        self.assertEqual(len(received), 3)
+        for settings in received:
+            self.assertEqual(settings.compression, .1)
+            self.assertEqual(settings.bottom_platen_friction_coeff, .45)
+            self.assertEqual(settings.top_platen_friction_coeff, .25)
+            self.assertEqual(settings.contact_damping_factor, .03)
+
+    def test_failed_solver_and_incomplete_strain_do_not_continue(self):
+        for status in ("failed", "completed"):
+            with self.subTest(status=status):
+                def bad_solver(settings, mesh):
+                    return {"status": status, "run_folder": "", "graphs": {}}
+                widget = self.widget(solver=bad_solver)
+                widget.start()
+                self.finish(widget)
+                self.assertEqual(len(widget.rows), 1)
+                self.assertIsNone(widget.recommended)
+                self.assertIn("not confirmed", widget.status.text())
+
+    def test_worker_records_meshing_failure_and_missing_metrics(self):
+        def broken_mesh(settings):
+            raise RuntimeError("mesh unavailable")
+        level = solve_level(SETTINGS, broken_mesh, self.solver)
+        self.assertIn("mesh unavailable", level.status)
+        self.assertIsNotNone(level.mesh_seconds)
+        self.assertEqual(self.calls, [])
+        def missing_metrics(settings, mesh):
+            return {"status": "completed", "run_folder": str(self.folder), "graphs": {}}
+        level = solve_level(SETTINGS, self.mesh, missing_metrics)
+        self.assertIn("Missing or non-finite", level.status)
+
+    def test_unselected_missing_metric_does_not_block_convergence(self):
+        def force_only(settings, mesh):
+            result = self.solver(settings, mesh)
+            result["graphs"] = {METRICS[0][1]: result["graphs"][METRICS[0][1]]}
+            return result
+        widget = self.widget(solver=force_only)
+        for check in widget.metric_checks[1:]:
+            check.setChecked(False)
+        widget.start()
+        self.finish(widget)
+        self.assertIn("Converged", widget.status.text())
+        self.assertIn("Modulus: —", widget.results.item(2, 6).toolTip())
+
+    def test_closing_running_dialog_requests_stop_before_disposal(self):
+        def blocked_solver(settings, mesh):
+            self.entered.set()
+            self.release.wait(5)
+            return self.solver(settings, mesh)
+        dialog = MeshConvergenceDialog(SETTINGS, self.mesh, blocked_solver)
+        self.widgets.append(dialog.study)
+        dialog.show()
+        dialog.study.start()
+        self.assertTrue(self.entered.wait(5))
+        dialog.reject()
+        self.assertTrue(dialog.isVisible())
+        self.assertTrue(dialog.study.stop_requested.is_set())
+        self.release.set()
+        self.finish(dialog.study)
+        dialog.reject()
+        self.assertFalse(dialog.isVisible())
+        dialog.deleteLater()
+
+    def test_main_screen_accepts_mesh_sizes_below_previous_input_range(self):
+        from nonlinear_compression import RustMechDialog
+        from studio_style import CompactDoubleSpinBox
+        owner = MagicMock()
+        owner.loading_mode_combo = QComboBox()
+        owner.solver_combo = self.widget().solver_combo
+        owner.self_contact_combo = QComboBox()
+        owner.contact_formulation_combo = QComboBox()
+        owner.platen_contact_combos = {}
+        owner.collect.return_value = SETTINGS
+        owner.controls = {key: CompactDoubleSpinBox() for key in ("mesh_resolution", "local_mesh_size")}
+        for control in owner.controls.values():
+            control.setRange(.1, 10)
+        dialog = MagicMock()
+        dialog.selected_settings = replace(SETTINGS, mesh_resolution=.08, local_mesh_size=.02)
+        with patch("mesh_convergence.MeshConvergenceDialog", return_value=dialog):
+            RustMechDialog.open_mesh_convergence(owner)
+        self.assertAlmostEqual(owner.controls["mesh_resolution"].value(), .08)
+        self.assertAlmostEqual(owner.controls["local_mesh_size"].value(), .02)
+        owner.geometry_changed.assert_called_once()
+        dialog.study.dispose.assert_called_once()
+
+    def test_restart_clears_previous_results(self):
+        widget = self.widget()
+        for _ in range(2):
+            widget.start()
+            self.finish(widget)
+            self.assertEqual(len(widget.rows), 3)
+            self.assertEqual(widget.results.rowCount(), 3)
+
+    def test_controls_share_one_compact_toolbar(self):
+        widget = self.widget()
+        widget.resize(1080, 430)
+        widget.show()
+        self.app.processEvents()
+        self.assertEqual(widget.run_button.text(), "Run")
+        self.assertLess(widget.toolbar.y(), widget.results.y())
+        for control in (widget.solver_combo, widget.start_size, widget.tolerance,
+                        widget.export_button, widget.apply_button,
+                        widget.stop_button, widget.force_stop_button, widget.run_button):
+            self.assertIs(control.parentWidget(), widget.toolbar)
+        buttons = (widget.export_button, widget.apply_button, widget.stop_button,
+                   widget.force_stop_button, widget.run_button)
+        self.assertEqual(len({(button.width(), button.height()) for button in buttons}), 1)
+        self.assertFalse(hasattr(widget, "advanced_button"))
+        self.assertEqual(widget.start_size.width(), 86)
+        self.assertEqual(widget.tolerance.width(), 86)
+        self.assertEqual(widget.solver_combo.width(), 138)
+        self.assertGreater(widget.run_button.x(), widget.stop_button.x())
+        self.assertGreater(widget.run_button.x(), widget.apply_button.x())
+
+    def test_results_stay_single_line_with_full_comparison_in_tooltip(self):
+        widget = self.widget()
+        widget.start()
+        self.finish(widget)
+        for col in range(widget.results.columnCount()):
+            self.assertNotIn("\n", widget.results.horizontalHeaderItem(col).text())
+            self.assertNotIn("\n", widget.results.item(2, col).text())
+        self.assertIn("Force:", widget.results.item(2, 6).toolTip())
+        self.assertIn("Modulus:", widget.results.item(2, 6).toolTip())
+        self.assertIn("SEA:", widget.results.item(2, 6).toolTip())
+        self.assertEqual(widget.results.rowHeight(2), 25)
+
+    def test_narrow_window_scrolls_toolbar_without_widening_window(self):
+        widget = self.widget()
+        widget.resize(650, 350)
+        widget.show()
+        self.app.processEvents()
+        self.assertEqual(widget.width(), 650)
+        self.assertGreater(widget.toolbar_scroll.horizontalScrollBar().maximum(), 0)
+        widget.resize(widget.toolbar.minimumSizeHint().width() + 50, 350)
+        self.app.processEvents()
+        self.assertEqual(widget.toolbar_scroll.horizontalScrollBar().maximum(), 0)
+        self.assertEqual(widget.toolbar_scroll.height(), widget.toolbar.sizeHint().height())
+
+    def test_unavailable_solver_cannot_launch_a_study(self):
+        widget = self.widget()
+        for solver_id in ("openfoam",):
+            widget.solver_combo.setCurrentIndex(widget.solver_combo.findData(solver_id))
+            self.assertFalse(widget.run_button.isEnabled())
+            self.assertIn("disabled", widget.solver_combo.toolTip())
+            with patch("mesh_convergence.QMessageBox.warning") as warning:
+                widget.start()
+            warning.assert_called_once()
+            self.assertIsNone(widget.future)
+            self.assertEqual(widget.rows, [])
+
+    def test_selected_solver_reaches_every_level_and_is_locked_during_run(self):
+        from solver_api import SOLVER_REGISTRY
+        received = []
+        def solver(settings, mesh):
+            received.append(settings.solver_backend)
+            return self.solver(settings, mesh)
+        with patch.dict(SOLVER_REGISTRY, {"kratos": replace(SOLVER_REGISTRY["kratos"], implemented=True)}):
+            widget = self.widget(solver=solver)
+            widget.solver_combo.setCurrentIndex(widget.solver_combo.findData("kratos"))
+            widget.start()
+            self.assertFalse(widget.solver_combo.isEnabled())
+            self.finish(widget)
+            self.assertEqual(received, ["kratos"] * 3)
+            self.assertTrue(widget.solver_combo.isEnabled())
+
+    def test_dialog_restores_window_size_and_position(self):
+        first = MeshConvergenceDialog(SETTINGS, self.mesh, self.solver)
+        self.addCleanup(first.deleteLater)
+        self.widgets.append(first.study)
+        first.show()
+        first.resize(min(1150, self.app.primaryScreen().availableGeometry().width() - 50), 540)
+        first.move(35, 45)
+        self.app.processEvents()
+        saved_size, saved_position = first.size(), first.pos()
+        first.reject()
+        second = MeshConvergenceDialog(SETTINGS, self.mesh, self.solver)
+        self.addCleanup(second.deleteLater)
+        self.widgets.append(second.study)
+        second.show()
+        self.app.processEvents()
+        self.assertEqual(second.size(), saved_size)
+        self.assertEqual(second.pos(), saved_position)
+        second.reject()
+
+    def test_dialog_restores_maximized_state_and_normal_bounds(self):
+        first = MeshConvergenceDialog(SETTINGS, self.mesh, self.solver)
+        self.addCleanup(first.deleteLater)
+        self.widgets.append(first.study)
+        first.resize(650, 350)
+        first.show()
+        self.app.processEvents()
+        normal_size = first.size()
+        first.showMaximized()
+        self.app.processEvents()
+        first.reject()
+        second = MeshConvergenceDialog(SETTINGS, self.mesh, self.solver)
+        self.addCleanup(second.deleteLater)
+        self.widgets.append(second.study)
+        second.show()
+        self.app.processEvents()
+        self.assertTrue(second.isMaximized())
+        second.showNormal()
+        self.app.processEvents()
+        self.assertEqual(second.size(), normal_size)
+        second.reject()
+
+    def test_export_contains_timings_and_reference(self):
+        widget = self.widget()
+        widget.start()
+        self.finish(widget)
+        destination = self.folder / "study.csv"
+        with patch("mesh_convergence.QFileDialog.getSaveFileName", return_value=(str(destination), "")):
+            widget.export()
+        with destination.open(encoding="utf-8-sig", newline="") as stream:
+            records = list(csv.DictReader(stream))
+        self.assertEqual(len(records), 3)
+        self.assertTrue(records[-1]["Mesh (s)"])
+        self.assertEqual(records[-1]["Reference level"], "2")
+
+    def test_apply_returns_verified_mesh_and_closes_dialog(self):
+        dialog = MeshConvergenceDialog(SETTINGS, self.mesh, self.solver)
+        self.widgets.append(dialog.study)
+        dialog.study.start()
+        self.finish(dialog.study)
+        dialog.study.apply_mesh()
+        self.assertEqual(dialog.result(), QDialog.DialogCode.Accepted)
+        self.assertEqual(dialog.selected_settings, dialog.study.recommended.settings)
+        dialog.deleteLater()
+
+    def test_real_timer_delivers_updates_on_event_loop(self):
+        widget = self.widget()
+        widget.start()
+        for _ in range(200):
+            if widget.future is None:
+                break
+            QTest.qWait(10)
+        self.assertIsNone(widget.future)
+        self.assertIn("Converged", widget.status.text())
+
+
+if __name__ == "__main__":
+    unittest.main()
