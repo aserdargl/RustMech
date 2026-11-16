@@ -11,6 +11,35 @@ CAMERA_MOTION_FACTOR = 6.0
 MESH_PREVIEW_ACTOR = "mesh_preview"
 
 
+class _PreviewInteractor(QtInteractor):
+    """Release custom VTK widgets before QtInteractor finalizes its context."""
+
+    def event(self, event):
+        if event.type() == QEvent.Type.DeferredDelete:
+            # deleteLater() bypasses close(): finalize before Qt destroys HWND.
+            self.close()
+        return super().event(event)
+
+    def close(self):
+        if self._closed:
+            return
+        transition = getattr(self, "_camera_transition", None)
+        if transition is not None:
+            transition.stop()
+        controls = getattr(self, "_orientation_controls", None)
+        if controls is not None:
+            self.interactor.removeEventFilter(controls)
+            controls.press = None
+        marker = getattr(self, "orientation_cube", None)
+        if marker is not None:
+            # The cube is custom, so PyVista's renderer widget cleanup does not
+            # own it. Detach while the native window and interactor still exist.
+            marker.SetEnabled(0)
+            marker.SetInteractor(None)
+            marker.SetCurrentRenderer(None)
+        super().close()
+
+
 def _camera_frame(direction, up):
     direction = np.asarray(direction, dtype=float)
     direction /= np.linalg.norm(direction)
@@ -182,7 +211,7 @@ def create_preview_viewport(
     parent, *, simplify_mesh_during_drag: bool = False
 ) -> QtInteractor:
     """Create a trackball viewport with gentler mouse sensitivity."""
-    plotter = QtInteractor(parent, lighting="light kit", auto_update=False)
+    plotter = _PreviewInteractor(parent, lighting="light kit", auto_update=False)
     plotter.enable_trackball_style()
     style = plotter.iren.style
     style.SetMotionFactor(CAMERA_MOTION_FACTOR)
