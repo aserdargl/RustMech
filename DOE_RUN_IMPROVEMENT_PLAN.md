@@ -102,3 +102,8 @@ eklenmemiş çalışma kopyasıdır; bulgular bu hâle göre geçerlidir.
 Tamamlandi: sonuc CSV'sinin geri okunmasi (tamamlanan satirlar atlanir), atomik CSV yazimi, hata raporlama, her satir sonrasi otomatik kayit ve kurtarma plani, yarim kalan satirlarin Interrupted olarak isaretlenmesi. 8 yeni test: tests/test_doe_results_persistence.py.
 
 Bilinen acik sorun (Faz 1'den bagimsiz, dogrulandi): tests.test_doe_sample_settings icindeki splitter testi ([313, 188] != [317, 190]) Faz 1 oncesi kodda da ayni sekilde basarisiz.
+## 6. Faz 2 durumu (uygulandi, kod calisma kopyasinda)
+
+Yapildi: durum metninden tek durum sinifi (classify_status), Run kapsami (bitmeyenler / yalniz basarisizlar / yalniz kismi), ayarlarin Run basinda dondurulmasi, baslatma hatasinin satir hatasi sayilmasi (kuyruk silinmez), hata politikasi (devam / N hatada dur) ve satir basina yeniden deneme, satir basina zaman asimi (varsayilan kapali; "Failed (timeout)"), Run oncesi dogrulama (gecersiz satir Invalid olur ve atlanir; dusuk disk uyarisi), sure/baslangic/deneme sayisi (CSV ve plan) ve ETA. 15 yeni test: tests/test_doe_run_control.py.
+
+Yapilmayan: politika, kapsam ve zaman asimi icin arayuz ogeleri (simdilik widget ozellikleri: failure_policy, max_failures, max_retries, row_timeout_s, run_scope); lisans/cozucu erisim kontrolu; onay penceresi (gecersiz satirlar kullanici onayi beklemeden atlanir ve altbilgide bildirilir). Faz 1 oncesinden gelen 6 geometri/splitter testi (test_doe_window x3, test_doe_sample_settings, test_design_pool, test_remote_mode_ui) Faz 1 oncesi kodda da ayni degerlerle basarisiz.
