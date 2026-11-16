@@ -8,7 +8,7 @@ import numpy as np
 import pyvista as pv
 from PySide6.QtCore import QPoint, Qt
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QToolButton, QWidget
+from PySide6.QtWidgets import QApplication, QFrame, QToolButton, QWidget
 
 from preview_viewport import align_camera, create_preview_viewport
 
@@ -42,6 +42,15 @@ class OrientationTests(unittest.TestCase):
         return QPoint(round(x * widget.width() / width),
                       round((height - 1 - y) * widget.height() / height))
 
+    def wait_for_camera_transition(self, timeout_ms=5000):
+        """Animasyon suresine (480 ms) sabit pay birakmak yerine bitisini bekler."""
+        QTest.qWait(50)
+        waited = 50
+        while self.plotter._camera_transition.timer.isActive() and waited < timeout_ms:
+            QTest.qWait(25)
+            waited += 25
+        self.app.processEvents()
+
     def test_cube_faces_edges_and_corners(self):
         for signs in product((1, -1), repeat=3):
             for point, expected in (
@@ -61,7 +70,7 @@ class OrientationTests(unittest.TestCase):
                     position = self.cube_position(tuple(np.asarray(signs) * point))
                     QTest.mouseClick(self.plotter.interactor, Qt.MouseButton.LeftButton,
                                      pos=position)
-                    QTest.qWait(550)
+                    self.wait_for_camera_transition()
                     camera = self.plotter.camera
                     direction = np.asarray(camera.position) - camera.focal_point
                     direction /= np.linalg.norm(direction)
@@ -116,9 +125,15 @@ class OrientationTests(unittest.TestCase):
             try:
                 dialog.show()
                 self.app.processEvents()
-                button = dialog.findChild(QToolButton, "cameraMenu")
-                self.assertTrue(button.isVisible())
-                self.assertTrue(button.isEnabled())
+                toolbar = dialog.findChild(QFrame, "cameraToolbar")
+                self.assertIsNotNone(toolbar)
+                self.assertTrue(toolbar.isVisible())
+                self.assertTrue(toolbar.isEnabled())
+                buttons = toolbar.findChildren(QToolButton)
+                names = {button.accessibleName() for button in buttons}
+                self.assertLessEqual({"Iso", "XY", "−XY", "XZ", "−XZ", "YZ", "−YZ",
+                                      "Orthographic", "Perspective", "Reset view"}, names)
+                self.assertTrue(all(button.isEnabled() for button in buttons))
                 self.assertTrue(dialog.orthographic_button.isChecked())
                 self.assertTrue(dialog.plotter.camera.parallel_projection)
                 for preset in ("xy", "-xy", "xz", "-xz", "yz", "-yz", "iso"):
