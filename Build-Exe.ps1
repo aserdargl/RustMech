@@ -28,6 +28,8 @@ $arguments = @(
     '--version-file', (Join-Path $PSScriptRoot 'packaging\version_info.txt'),
     '--icon', (Join-Path $PSScriptRoot 'assets\ui\rustmech.ico'),
     '--add-data', ((Join-Path $PSScriptRoot 'assets\ui') + ';assets/ui'),
+    '--add-data', ((Join-Path $PSScriptRoot 'LICENSE') + ';.'),
+    '--add-data', ((Join-Path $PSScriptRoot 'NOTICE.md') + ';.'),
     '--add-data', ((Join-Path $PSScriptRoot 'assets\help') + ';assets/help'),
     '--add-data', ((Join-Path $PSScriptRoot '*.py') + ';remote_sources'),
     '--add-data', ((Join-Path $PSScriptRoot 'assets\ui') + ';remote_sources/assets/ui'),

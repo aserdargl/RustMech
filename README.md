@@ -1086,3 +1086,7 @@ ise VTK/OpenGL penceresi açan testleri gerçek masaüstü oturumunda çalışt�
 tümü başarılıysa çıkış kodu 0'dır. `RUSTMECH_OFFLINE=1` varsayılandır (loopback SSH
 testi atlanır). Yeni bir pencere testi offscreen modda VTK pixel-format hatasıyla
 düşerse `tools/run_tests.py` içindeki `GUI` listesine eklenmelidir.
+
+## Lisans
+
+RustMech, GNU General Public License v3 (veya sonraki bir sürüm) ile dağıtılan özgür bir yazılımdır. Ayrıntılar için [LICENSE](LICENSE) ve [NOTICE.md](NOTICE.md) dosyalarına bakın.
