@@ -5,9 +5,9 @@ from pathlib import Path
 import sys
 from tempfile import TemporaryDirectory
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
-from PySide6.QtCore import QSettings
-from PySide6.QtWidgets import QApplication
-from PySide6.QtTest import QTest
+from PyQt6.QtCore import QSettings
+from PyQt6.QtWidgets import QApplication
+from PyQt6.QtTest import QTest
 from kratos_backend import KratosResults
 from kratos_results_view import KratosResultsDialog
 from nonlinear_compression import extract_curve, export_graphs, export_field_results

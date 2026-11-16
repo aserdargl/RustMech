@@ -9,9 +9,9 @@ from unittest.mock import MagicMock, patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import numpy as np
-from PySide6.QtCore import Qt
-from PySide6.QtTest import QTest, QSignalSpy
-from PySide6.QtWidgets import QApplication
+from PyQt6.QtCore import Qt
+from PyQt6.QtTest import QTest, QSignalSpy
+from PyQt6.QtWidgets import QApplication
 
 import mapdl_backend as backend
 from mesh_convergence import MeshConvergenceDialog, response_metrics, solve_level
@@ -123,7 +123,7 @@ class LoadContactTests(unittest.TestCase):
         QTest.keyClick(spin.lineEdit(), Qt.Key.Key_Return)
         self.app.processEvents()
         self.assertAlmostEqual(spin.value(), .42)
-        self.assertEqual(clicks.count(), 0)
+        self.assertEqual(len(clicks), 0)
         self.assertFalse(dialog.truba_dialog.isVisible())
         selected = dialog.collect()
         with patch("mesh_convergence.MeshConvergenceDialog") as factory:

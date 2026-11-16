@@ -25,9 +25,9 @@ from typing import Callable
 
 import numpy as np
 from studio_style import CompactSpinBox
-from PySide6.QtCore import QSignalBlocker, QTimer, Qt, Signal
-from PySide6.QtGui import QBrush, QColor
-from PySide6.QtWidgets import (
+from PyQt6.QtCore import QSignalBlocker, QTimer, Qt, pyqtSignal as Signal
+from PyQt6.QtGui import QBrush, QColor
+from PyQt6.QtWidgets import (
     QAbstractItemView,
     QApplication,
     QCheckBox,

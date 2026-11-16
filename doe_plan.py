@@ -4,7 +4,7 @@ import json
 import math
 from pathlib import Path
 
-from PySide6.QtCore import QIODevice, QSaveFile
+from PyQt6.QtCore import QIODevice, QSaveFile
 
 from model import Settings, settings_from_dict
 from structure_library import ALL_STRUCTURES_BY_FAMILY, TPMS_MORPHOLOGIES

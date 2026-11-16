@@ -3,8 +3,8 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import MagicMock, patch
 
-from PySide6.QtTest import QSignalSpy
-from PySide6.QtWidgets import QApplication
+from PyQt6.QtTest import QSignalSpy
+from PyQt6.QtWidgets import QApplication
 
 from model import Settings
 from nonlinear_compression import RustMechDialog
@@ -33,7 +33,7 @@ class ForcedStopUiTests(unittest.TestCase):
         ), patch("nonlinear_compression.AnalysisProcess", return_value=job):
             dialog.apply_button.setEnabled(True)
             dialog.apply()
-            self.assertEqual(accepted.count(), 0)
+            self.assertEqual(len(accepted), 0)
             self.assertTrue(dialog.force_stop_button.isEnabled())
             self.assertFalse(dialog.apply_button.isEnabled())
             dialog.force_stop_button.click()

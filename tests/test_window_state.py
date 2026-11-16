@@ -3,8 +3,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from PySide6.QtCore import QSettings, Qt
-from PySide6.QtWidgets import QApplication, QDialog, QSplitter, QVBoxLayout, QWidget
+from PyQt6.QtCore import QSettings, Qt
+from PyQt6.QtWidgets import QApplication, QDialog, QSplitter, QVBoxLayout, QWidget
 
 from window_state import WindowStateStore
 

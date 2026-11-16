@@ -2,8 +2,8 @@
 import json
 import paramiko
 
-from PySide6.QtCore import QThread, QTimer, Qt, Signal
-from PySide6.QtWidgets import (QGroupBox, QHeaderView, QLabel, QPushButton,
+from PyQt6.QtCore import QThread, QTimer, Qt, pyqtSignal as Signal
+from PyQt6.QtWidgets import (QGroupBox, QHeaderView, QLabel, QPushButton,
                                QTableWidget, QTableWidgetItem, QVBoxLayout)
 
 from studio_style import CONTROL_HEIGHT

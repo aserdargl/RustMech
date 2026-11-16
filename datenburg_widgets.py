@@ -1,4 +1,4 @@
-"""Datenburg control sources ported to PySide6, kept local for independent builds.
+"""Datenburg control sources ported locally (PyQt6), kept local for independent builds.
 
 Sources: shell/compact_gradient_button.py, shell/popup_style.py,
 shell/widget_combo_controls.py, shell/widget_numeric_controls.py and
@@ -6,10 +6,10 @@ ui/graphcalc_settings_styles.py. Numeric values remain native Qt models;
 the visible arrow widgets and their geometry are Datenburg's actual widgets.
 """
 from pathlib import Path
-from PySide6.QtCore import QEvent, QSize, Qt, Signal
-from PySide6.QtGui import QColor, QIcon, QPalette, QValidator, QWheelEvent
-from PySide6.QtWidgets import QAbstractSpinBox, QComboBox, QHBoxLayout, QLabel, QLineEdit, QStyledItemDelegate, QVBoxLayout, QWidget
-from shiboken6 import isValid
+from PyQt6.QtCore import QEvent, QSize, Qt, pyqtSignal as Signal
+from PyQt6.QtGui import QColor, QIcon, QPalette, QValidator, QWheelEvent
+from PyQt6.QtWidgets import QAbstractSpinBox, QComboBox, QHBoxLayout, QLabel, QLineEdit, QStyledItemDelegate, QVBoxLayout, QWidget
+from qt_compat import isValid
 
 SKIP_CUSTOM_BUTTON_STYLE_PROPERTY = "skipCustomButtonStyle"
 _ASSETS = Path(__file__).resolve().parent / "assets" / "ui"
@@ -479,8 +479,8 @@ class DatenburgComboDelegate(QStyledItemDelegate):
 
 def configure_button_shadow(button, enabled=True):
     """Keep the face crisp; elevation is a faint one-pixel external shadow."""
-    from PySide6.QtGui import QColor
-    from PySide6.QtWidgets import QGraphicsDropShadowEffect
+    from PyQt6.QtGui import QColor
+    from PyQt6.QtWidgets import QGraphicsDropShadowEffect
 
     button.setProperty("subtleButtonShadowEnabled", bool(enabled))
     effect = button.graphicsEffect()
@@ -508,8 +508,8 @@ def _update_button_shadow(button, pressed=False):
 
 def install_button_shadows(app):
     """Install once at the composition root, including later-created dialogs."""
-    from PySide6.QtCore import QEvent, QObject, Qt
-    from PySide6.QtWidgets import QAbstractSpinBox, QPushButton, QToolButton
+    from PyQt6.QtCore import QEvent, QObject, Qt
+    from PyQt6.QtWidgets import QAbstractSpinBox, QPushButton, QToolButton
 
     if hasattr(app, "_subtle_button_shadow_filter"):
         return

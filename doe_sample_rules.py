@@ -1,8 +1,8 @@
 """Portable sample names and per-user RustMech naming preferences."""
 import json
 import re
-from PySide6.QtCore import QSettings
-from PySide6.QtWidgets import QApplication
+from PyQt6.QtCore import QSettings
+from PyQt6.QtWidgets import QApplication
 
 
 def preferences():

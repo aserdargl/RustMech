@@ -6,9 +6,9 @@ from unittest.mock import patch
 
 import numpy as np
 import pyvista as pv
-from PySide6.QtCore import QPoint, Qt
-from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QFrame, QToolButton, QWidget
+from PyQt6.QtCore import QPoint, Qt
+from PyQt6.QtTest import QTest
+from PyQt6.QtWidgets import QApplication, QFrame, QToolButton, QWidget
 
 from preview_viewport import align_camera, create_preview_viewport
 

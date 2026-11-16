@@ -1,8 +1,8 @@
 """Always-visible camera actions anchored below the viewport orientation cube."""
-from PySide6.QtCore import QByteArray, QEvent, QSize, Qt
-from PySide6.QtGui import QIcon, QPainter, QPixmap
-from PySide6.QtSvg import QSvgRenderer
-from PySide6.QtWidgets import QFrame, QToolButton, QVBoxLayout
+from PyQt6.QtCore import QByteArray, QEvent, QSize, Qt
+from PyQt6.QtGui import QIcon, QPainter, QPixmap
+from PyQt6.QtSvg import QSvgRenderer
+from PyQt6.QtWidgets import QFrame, QToolButton, QVBoxLayout
 
 
 def camera_icon(kind):

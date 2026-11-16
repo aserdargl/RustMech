@@ -4,9 +4,9 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from PySide6.QtCore import QSettings, QTimer, Qt
-from PySide6.QtTest import QTest, QSignalSpy
-from PySide6.QtWidgets import QApplication, QPushButton
+from PyQt6.QtCore import QSettings, QTimer, Qt
+from PyQt6.QtTest import QTest, QSignalSpy
+from PyQt6.QtWidgets import QApplication, QPushButton
 
 from model import Settings
 from nonlinear_compression import RustMechDialog
@@ -85,7 +85,7 @@ class DialogKeyboardTests(unittest.TestCase):
                             self.assertAlmostEqual(spin.value(), 0.65)
                             self.assertFalse(dialog.truba_dialog.isVisible())
                             self.assertTrue(dialog.isVisible())
-                            self.assertTrue(all(spy.count() == 0 for spy in clicks))
+                            self.assertTrue(all(len(spy) == 0 for spy in clicks))
                         QTest.mouseClick(dialog.truba_button, Qt.MouseButton.LeftButton)
                         self.app.processEvents()
                         self.assertTrue(dialog.truba_dialog.isVisible())
@@ -117,7 +117,7 @@ class DialogKeyboardTests(unittest.TestCase):
                             self.assertEqual(dialog.workspace_tabs.currentIndex(), 0)
                             self.assertGreaterEqual(dialog.sidebar_toggle.width(),
                                 dialog.sidebar_toggle.fontMetrics().horizontalAdvance(action.text()) + 24)
-                        self.assertEqual(opened.count(), len(menu.actions()))
+                        self.assertEqual(len(opened), len(menu.actions()))
                         self.assertFalse(dialog.setup_tabs.tabBar().isVisible())
                         # Selecting settings also recovers a previously collapsed saved sidebar.
                         dialog.main_splitter.setSizes([0, sum(expected)])

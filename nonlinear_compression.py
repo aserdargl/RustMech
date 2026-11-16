@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import os
 
-os.environ["QT_API"] = "pyside6"
+os.environ["QT_API"] = "pyqt6"
 
 import argparse
 import csv
@@ -25,9 +25,9 @@ from threading import Event
 import numpy as np
 import pyvista as pv
 from studio_style import CompactSpinBox, CompactComboBox
-from PySide6.QtCore import QSize, QTimer, Qt
-from PySide6.QtGui import QActionGroup
-from PySide6.QtWidgets import (
+from PyQt6.QtCore import QSize, QTimer, Qt
+from PyQt6.QtGui import QActionGroup
+from PyQt6.QtWidgets import (
     QAbstractSpinBox,
     QApplication,
     QCheckBox,
@@ -786,7 +786,7 @@ class RustMechDialog(QDialog):
             install_copy_support(app_inst)
             from ui_input import install_settings_wheel_guard
             install_settings_wheel_guard(app_inst)
-            from PySide6.QtGui import QColor, QPalette
+            from PyQt6.QtGui import QColor, QPalette
 
             app_inst.setStyle("Fusion")
             pal = QPalette()
@@ -3257,7 +3257,7 @@ class RustMechDialog(QDialog):
         if self.analysis_job is not None or self.remote_controller.future is not None:
             QMessageBox.information(self,"TRUBA job","Wait for the current operation to finish, or stop it first.")
             return
-        from PySide6.QtWidgets import QFileDialog
+        from PyQt6.QtWidgets import QFileDialog
         from truba_credentials import state_directory
         filename,_=QFileDialog.getOpenFileName(self,"Retrieve TRUBA job",str(state_directory()/"jobs"),"TRUBA job record (*.json)")
         if not filename:return

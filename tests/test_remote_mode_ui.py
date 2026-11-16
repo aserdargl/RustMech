@@ -5,9 +5,9 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import MagicMock,patch
 
-from PySide6.QtCore import QCoreApplication,QEvent,QPoint,QSettings,Qt
-from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication,QWidget,QGroupBox
+from PyQt6.QtCore import QCoreApplication,QEvent,QPoint,QSettings,Qt
+from PyQt6.QtTest import QTest
+from PyQt6.QtWidgets import QApplication,QWidget,QGroupBox
 
 from model import Settings
 from nonlinear_compression import RustMechDialog

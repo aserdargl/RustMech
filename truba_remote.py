@@ -184,7 +184,7 @@ set -euo pipefail
 rustmech_stage() {{ printf '%s\n' "$1" > progress.txt; printf '%s\n' "$1"; }}
 rustmech_stage 'Preparing request sources'
 export TERM=dumb
-export QT_API=pyside6 QT_QPA_PLATFORM=offscreen MPLBACKEND=Agg
+export QT_API=pyqt6 QT_QPA_PLATFORM=offscreen MPLBACKEND=Agg
 export OMP_NUM_THREADS={context.cores} RUSTMECH_THREADS={context.cores} OPENBLAS_NUM_THREADS=1
 mkdir -p output engine
 trap 'tar -czf result.tar.gz output' EXIT

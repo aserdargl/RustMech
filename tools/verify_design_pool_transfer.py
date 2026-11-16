@@ -17,8 +17,8 @@ SENDER = r'''
 import time
 from unittest.mock import patch
 import pyvista as pv
-from PySide6.QtWidgets import QApplication
-from PySide6.QtTest import QTest
+from PyQt6.QtWidgets import QApplication
+from PyQt6.QtTest import QTest
 import main_ui
 from application_composition import build_default_main_window_dependencies
 from services.region_project import generate_region_model, generate_region_project, replace_region_in_project_model

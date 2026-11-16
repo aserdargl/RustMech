@@ -5,8 +5,8 @@ import paramiko
 from pathlib import Path
 from unittest.mock import patch
 
-from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication
+from PyQt6.QtTest import QTest
+from PyQt6.QtWidgets import QApplication
 
 from truba_connection import TrubaConnectionDialog
 from truba_credentials import CredentialStore

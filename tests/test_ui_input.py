@@ -1,10 +1,10 @@
 """Wheel gestures scroll pages without changing focused settings."""
 import unittest
 
-from PySide6.QtCore import QPoint, QPointF, Qt
-from PySide6.QtGui import QWheelEvent
-from PySide6.QtTest import QTest
-from PySide6.QtWidgets import (
+from PyQt6.QtCore import QPoint, QPointF, Qt
+from PyQt6.QtGui import QWheelEvent
+from PyQt6.QtTest import QTest
+from PyQt6.QtWidgets import (
     QApplication, QComboBox, QDoubleSpinBox, QScrollArea, QSlider, QSpinBox,
     QVBoxLayout, QWidget,
 )

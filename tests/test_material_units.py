@@ -3,9 +3,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from PySide6.QtCore import Qt
-from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QToolButton
+from PyQt6.QtCore import Qt
+from PyQt6.QtTest import QTest
+from PyQt6.QtWidgets import QApplication, QToolButton
 from material_editor import MaterialEditor
 from model import Settings, save_material, plastic_curve_from_total_true_strain
 

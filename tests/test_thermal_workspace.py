@@ -7,9 +7,9 @@ from unittest.mock import patch
 
 import numpy as np
 import pyvista as pv
-from PySide6.QtCore import QSettings,Qt
-from PySide6.QtTest import QSignalSpy,QTest
-from PySide6.QtWidgets import QApplication,QPushButton
+from PyQt6.QtCore import QSettings,Qt
+from PyQt6.QtTest import QSignalSpy,QTest
+from PyQt6.QtWidgets import QApplication,QPushButton
 
 from flow_analysis import FlowSettings
 from model import Settings
@@ -68,7 +68,7 @@ class ThermalWorkspaceTests(unittest.TestCase):
             self.app.processEvents()
             self.assertEqual(control.value(),70)
             constructor.assert_not_called()
-            self.assertEqual(accepted.count(),0)
+            self.assertEqual(len(accepted),0)
             self.assertFalse(dialog.truba_dialog.isVisible())
             thermal.buttons[1].click()
             constructor.assert_called_once()

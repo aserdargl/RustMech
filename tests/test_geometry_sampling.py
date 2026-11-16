@@ -137,7 +137,7 @@ class GeometrySamplingTests(unittest.TestCase):
 
 class GeometryUITests(unittest.TestCase):
     def test_stl_resolution_auto_manual_and_enter(self):
-        from PySide6.QtWidgets import QApplication, QLabel, QWidget
+        from PyQt6.QtWidgets import QApplication, QLabel, QWidget
         from nonlinear_compression import RustMechDialog
 
         app = QApplication.instance() or QApplication([])
@@ -157,12 +157,12 @@ class GeometryUITests(unittest.TestCase):
                 self.assertIsNone(dialog.collect().stl_resolution)
                 dialog.stl_resolution_input.setText('0.04')
                 self.assertEqual(dialog.collect().surface_resolution, .04)
-                from PySide6.QtCore import Qt
-                from PySide6.QtTest import QTest, QSignalSpy
+                from PyQt6.QtCore import Qt
+                from PyQt6.QtTest import QTest, QSignalSpy
                 clicks = QSignalSpy(dialog.stl_auto_button.clicked)
                 for key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
                     QTest.keyClick(dialog.stl_resolution_input, key)
-                self.assertEqual(clicks.count(), 0)
+                self.assertEqual(len(clicks), 0)
                 self.assertEqual(dialog.collect().surface_resolution, .04)
                 dialog.controls['cell_size'].setValue(2)
                 expected = dialog.collect().automatic_surface_resolution

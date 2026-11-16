@@ -1,7 +1,7 @@
 """A collapsible settings column with an always accessible toolbar toggle."""
 
-from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QSplitter
+from PyQt6.QtCore import Qt
+from PyQt6.QtWidgets import QSplitter
 
 
 class SidebarSplitter(QSplitter):

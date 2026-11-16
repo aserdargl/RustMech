@@ -2,9 +2,9 @@
 import math
 import re
 from studio_style import CompactSpinBox, CompactComboBox
-from PySide6.QtCore import Signal
-from PySide6.QtGui import QValidator
-from PySide6.QtWidgets import QCheckBox, QComboBox, QFormLayout, QLabel, QLineEdit, QPushButton
+from PyQt6.QtCore import pyqtSignal as Signal
+from PyQt6.QtGui import QValidator
+from PyQt6.QtWidgets import QCheckBox, QComboBox, QFormLayout, QLabel, QLineEdit, QPushButton
 from studio_style import CompactDoubleSpinBox, SidebarGroupBox, configure_form, field_label
 from solver_profiles import KRATOS_FIELDS
 

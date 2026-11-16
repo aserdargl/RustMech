@@ -3,9 +3,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from PySide6.QtCore import QSettings, Qt
-from PySide6.QtTest import QSignalSpy, QTest
-from PySide6.QtWidgets import QApplication
+from PyQt6.QtCore import QSettings, Qt
+from PyQt6.QtTest import QSignalSpy, QTest
+from PyQt6.QtWidgets import QApplication
 
 from material_editor import MaterialEditor
 from model import Settings
@@ -49,7 +49,7 @@ class TangentHelpTests(unittest.TestCase):
                 QTest.keyClick(elongation.lineEdit(), key)
                 self.app.processEvents()
                 self.assertTrue(dialog.isVisible())
-                self.assertEqual(selected.count(), 0)
+                self.assertEqual(len(selected), 0)
                 self.assertEqual(editor.material_settings(), original)
             self.assertTrue(dialog.use_button.isEnabled())
             QTest.mouseClick(dialog.use_button, Qt.MouseButton.LeftButton)
@@ -59,7 +59,7 @@ class TangentHelpTests(unittest.TestCase):
             self.assertEqual(actual.young_modulus, 200000)
             self.assertEqual(actual.yield_stress, 250)
             self.assertTrue(editor.edit_button.isChecked())
-            self.assertEqual(selected.count(), 1)
+            self.assertEqual(len(selected), 1)
         finally:
             dialog.close()
             editor.close()

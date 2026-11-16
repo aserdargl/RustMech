@@ -1,6 +1,6 @@
 """Typed sample fields use the same geometry and material settings as DoE."""
 import math
-from PySide6.QtWidgets import QLineEdit, QComboBox
+from PyQt6.QtWidgets import QLineEdit, QComboBox
 from studio_style import CompactComboBox
 from structure_library import ALL_STRUCTURES_BY_FAMILY, STRUCTURE_FAMILIES, TPMS_MORPHOLOGIES
 

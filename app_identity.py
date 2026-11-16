@@ -3,7 +3,7 @@
 import sys
 from pathlib import Path
 
-from PySide6.QtGui import QIcon
+from PyQt6.QtGui import QIcon
 
 
 WINDOWS_APP_ID = "RustMech.Desktop"

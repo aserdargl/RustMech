@@ -40,7 +40,7 @@ $arguments = @(
     '--add-binary', ((Join-Path $PSScriptRoot 'native\bin\rustmech_core.dll') + ';native/bin'),
     '--collect-all', 'netgen', '--collect-all', 'pyngcore',
     '--hidden-import', 'ansys.mapdl.reader', '--hidden-import', 'ansys.mapdl.core',
-    '--exclude-module', 'PyQt5', '--exclude-module', 'PyQt6', '--exclude-module', 'PySide2',
+    '--exclude-module', 'PyQt5', '--exclude-module', 'PySide6', '--exclude-module', 'PySide2',
     '--exclude-module', 'torch', '--exclude-module', 'tensorflow', '--exclude-module', 'numba',
     '--exclude-module', 'pytest', '--exclude-module', 'IPython', '--exclude-module', 'jupyter',
     '--exclude-module', 'tkinter', '--exclude-module', '_tkinter',
@@ -48,7 +48,7 @@ $arguments = @(
 )
 & $Python @arguments
 if ($LASTEXITCODE -ne 0) { throw 'RustMech executable build failed.' }
-# PySide6 expects the unversioned Windows ICU API. The build host's Poppler
+# Qt expects the unversioned Windows ICU API. The build host's Poppler
 # PATH can contribute an incompatible ICU 78 DLL with version-suffixed exports.
 # Let Windows supply its ICU DLL instead of shipping that unrelated dependency.
 $packagedIcu = Join-Path $PSScriptRoot 'dist\RustMech\_internal\icuuc.dll'

@@ -1,6 +1,6 @@
 """Sizing for the sample workbench; colors and controls inherit RustMech's theme."""
-from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QPushButton, QLineEdit, QTableView, QVBoxLayout, QSizePolicy
+from PyQt6.QtCore import Qt
+from PyQt6.QtWidgets import QPushButton, QLineEdit, QTableView, QVBoxLayout, QSizePolicy
 from studio_style import CONTROL_HEIGHT, SidebarGroupBox
 
 

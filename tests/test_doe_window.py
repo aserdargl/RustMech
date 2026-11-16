@@ -7,9 +7,9 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from PySide6.QtCore import QSettings, Qt
-from PySide6.QtTest import QSignalSpy, QTest
-from PySide6.QtWidgets import QApplication, QMessageBox, QPushButton, QScrollArea, QWidget
+from PyQt6.QtCore import QSettings, Qt
+from PyQt6.QtTest import QSignalSpy, QTest
+from PyQt6.QtWidgets import QApplication, QMessageBox, QPushButton, QScrollArea, QWidget
 
 from doe_studio import DoEStudioWidget, DoEStudioWindow
 from model import Settings
@@ -76,7 +76,7 @@ class DoEWindowTests(unittest.TestCase):
         QTest.keyClicks(spin.lineEdit(), "12.5")
         QTest.keyClick(spin.lineEdit(), Qt.Key.Key_Return)
         self.assertEqual(spin.value(), 12.5)
-        self.assertTrue(all(spy.count() == 0 for spy in spies))
+        self.assertTrue(all(len(spy) == 0 for spy in spies))
         window.close()
         window.open_workspace()
         self.assertEqual(len(studio.rows), 1)

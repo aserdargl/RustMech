@@ -6,8 +6,8 @@ import tempfile
 from unittest.mock import MagicMock,patch
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
-from PySide6.QtCore import QSettings,QTimer
-from PySide6.QtWidgets import QApplication,QWidget
+from PyQt6.QtCore import QSettings,QTimer
+from PyQt6.QtWidgets import QApplication,QWidget
 from model import ROOT,Settings
 from nonlinear_compression import RustMechDialog
 from solver_profiles import SolverProfileStore

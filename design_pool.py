@@ -2,8 +2,8 @@
 from concurrent.futures import ThreadPoolExecutor
 import json
 
-from PySide6.QtCore import QTimer, Qt, Signal
-from PySide6.QtWidgets import (QAbstractItemView, QApplication, QDialog,
+from PyQt6.QtCore import QTimer, Qt, pyqtSignal as Signal
+from PyQt6.QtWidgets import (QAbstractItemView, QApplication, QDialog,
                               QHeaderView, QLabel, QMessageBox, QPushButton,
                               QTableWidget, QTableWidgetItem, QVBoxLayout)
 

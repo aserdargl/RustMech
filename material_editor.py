@@ -5,8 +5,8 @@ import csv
 from pathlib import Path
 
 from studio_style import CompactComboBox
-from PySide6.QtCore import Qt, Signal
-from PySide6.QtWidgets import (
+from PyQt6.QtCore import Qt, pyqtSignal as Signal
+from PyQt6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
     QDoubleSpinBox,

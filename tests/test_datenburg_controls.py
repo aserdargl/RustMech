@@ -1,9 +1,9 @@
 """Interaction contracts of the real Datenburg control port."""
 import unittest
 
-from PySide6.QtCore import Qt
-from PySide6.QtTest import QSignalSpy, QTest
-from PySide6.QtWidgets import QApplication, QAbstractSpinBox, QToolButton, QWidget
+from PyQt6.QtCore import Qt
+from PyQt6.QtTest import QSignalSpy, QTest
+from PyQt6.QtWidgets import QApplication, QAbstractSpinBox, QToolButton, QWidget
 
 from studio_style import CompactComboBox, CompactDoubleSpinBox, CompactSpinBox, STUDIO_STYLESHEET
 from kratos_settings import ToleranceSpinBox
@@ -31,7 +31,7 @@ class DatenburgControlTests(unittest.TestCase):
                     spy = QSignalSpy(control.valueChanged)
                     QTest.mouseClick(control.btn_up, Qt.MouseButton.LeftButton)
                     self.assertEqual(control.value(), 6)
-                    self.assertEqual(spy.count(), 1)
+                    self.assertEqual(len(spy), 1)
                     control.setValue(10)
                     self.assertFalse(control.btn_up.isEnabled())
                     control.setReadOnly(True)

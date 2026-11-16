@@ -8,9 +8,9 @@ from multiprocessing import get_context
 from time import monotonic
 
 from studio_style import CompactSpinBox, CompactComboBox
-from PySide6.QtCore import QTimer, Qt
-from PySide6.QtGui import QActionGroup
-from PySide6.QtWidgets import (
+from PyQt6.QtCore import QTimer, Qt
+from PyQt6.QtGui import QActionGroup
+from PyQt6.QtWidgets import (
     QAbstractItemView, QCheckBox, QComboBox, QDialog, QFileDialog, QFormLayout, QFrame,
     QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMenu, QMessageBox, QPushButton,
     QScrollArea, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
@@ -232,7 +232,7 @@ class MeshConvergenceWidget(QWidget):
         self.setObjectName("meshConvergenceStudy")
         self.setStyleSheet(STUDIO_STYLESHEET + CONVERGENCE_STYLESHEET)
         from ui_copy import install_copy_support
-        from PySide6.QtWidgets import QApplication
+        from PyQt6.QtWidgets import QApplication
         install_copy_support(QApplication.instance())
         self.settings, self.mesh_generator, self.solver = settings, mesh_generator, solver
         self.remote_controller = getattr(parent,"remote_controller",None)

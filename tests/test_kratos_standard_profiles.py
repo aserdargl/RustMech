@@ -77,7 +77,7 @@ class KratosStandardProfilesTests(unittest.TestCase):
             self.assertTrue(data['self_contact_nodes'])
 
     def test_switch_to_kratos_preserves_standard_and_bonded_grips(self):
-        from PySide6.QtWidgets import QApplication,QWidget
+        from PyQt6.QtWidgets import QApplication,QWidget
         from unittest.mock import MagicMock
         from nonlinear_compression import RustMechDialog
         app=QApplication.instance() or QApplication([])

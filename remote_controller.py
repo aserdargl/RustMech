@@ -4,8 +4,8 @@ from dataclasses import asdict, replace
 import json
 from threading import Event
 
-from PySide6.QtCore import QObject,QTimer,Signal,Qt
-from PySide6.QtWidgets import (QCheckBox,QFormLayout,QGroupBox,QHBoxLayout,QLabel,
+from PyQt6.QtCore import QObject,QTimer,pyqtSignal as Signal,Qt
+from PyQt6.QtWidgets import (QCheckBox,QFormLayout,QGroupBox,QHBoxLayout,QLabel,
                                QLineEdit,QPushButton,QVBoxLayout,QWidget)
 
 from truba_remote import RemoteContext,run_remote_job

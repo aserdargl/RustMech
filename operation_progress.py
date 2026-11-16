@@ -1,8 +1,8 @@
 """Compact per-workspace progress, driven by the existing operation lifecycle."""
 from contextlib import contextmanager
 
-from PySide6.QtCore import QEventLoop, Qt, QTimer
-from PySide6.QtWidgets import QApplication, QHBoxLayout, QLabel, QProgressBar, QSizePolicy, QWidget
+from PyQt6.QtCore import QEventLoop, Qt, QTimer
+from PyQt6.QtWidgets import QApplication, QHBoxLayout, QLabel, QProgressBar, QSizePolicy, QWidget
 
 from studio_style import CONTROL_HEIGHT
 

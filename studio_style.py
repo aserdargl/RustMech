@@ -4,9 +4,9 @@ from html import escape
 from pathlib import Path
 from decimal import Decimal
 
-from PySide6.QtCore import QPoint, QRect, QSize, Qt
-from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen, QValidator
-from PySide6.QtWidgets import QAbstractSpinBox, QComboBox, QDoubleSpinBox, QFormLayout, QGroupBox, QLabel, QLineEdit, QLayout, QSizePolicy, QSpinBox, QStyle, QStyleOptionComboBox, QStyleOptionGroupBox, QStylePainter, QVBoxLayout, QWidget
+from PyQt6.QtCore import QPoint, QRect, QSize, Qt
+from PyQt6.QtGui import QColor, QPainter, QPainterPath, QPen, QValidator
+from PyQt6.QtWidgets import QAbstractSpinBox, QComboBox, QDoubleSpinBox, QFormLayout, QGroupBox, QLabel, QLineEdit, QLayout, QSizePolicy, QSpinBox, QStyle, QStyleOptionComboBox, QStyleOptionGroupBox, QStylePainter, QVBoxLayout, QWidget
 
 
 CONTROL_HEIGHT = 25
@@ -43,7 +43,10 @@ class CompactComboBox(DatenburgComboBox):
         self.setFixedHeight(CONTROL_HEIGHT)
         self.setStyleSheet(graphcalc_combo_stylesheet().replace("#GraphCalcCombo", ""))
         self._apply_light_popup_style()
-        self.view().setItemDelegate(DatenburgComboDelegate(self.view()))
+        # PyQt6: keep a Python reference; the delegate's parent is the combo's
+        # C++-owned popup view, whose wrapper is temporary.
+        self._item_delegate = DatenburgComboDelegate(self.view())
+        self.view().setItemDelegate(self._item_delegate)
         self.view().setTextElideMode(Qt.TextElideMode.ElideNone)
 
     def paintEvent(self, event):

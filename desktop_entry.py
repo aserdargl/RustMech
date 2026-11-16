@@ -8,7 +8,7 @@ import traceback
 def smoke_test(studio):
     from pathlib import Path
     from tempfile import TemporaryDirectory
-    from PySide6.QtCore import QSettings, QTimer
+    from PyQt6.QtCore import QSettings, QTimer
     from window_state import WindowStateStore
 
     app = studio.QApplication.instance() or studio.QApplication([])
@@ -116,6 +116,9 @@ def run():
     )
     log = (root / "RustMech.log").open("a", encoding="utf-8", buffering=1)
     sys.stdout = sys.stderr = log
+    from qt_compat import install_exception_hook
+
+    install_exception_hook()  # PyQt6 would otherwise abort on errors in Qt callbacks
     try:
         if "--offline-test" not in sys.argv:
             from mesh_preview_worker import warmup_mesh_preview
@@ -129,7 +132,7 @@ def run():
     except Exception:
         traceback.print_exc()
         if "--offline-test" not in sys.argv and "--smoke-test" not in sys.argv:
-            from PySide6.QtWidgets import QApplication, QMessageBox
+            from PyQt6.QtWidgets import QApplication, QMessageBox
 
             _app = QApplication.instance() or QApplication([])
             from app_identity import configure_application

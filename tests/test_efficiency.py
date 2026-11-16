@@ -148,7 +148,7 @@ class EfficiencyTests(unittest.TestCase):
             [
                 sys.executable,
                 "-c",
-                "import sys, mesh_engine; assert 'PySide6' not in sys.modules; assert 'matplotlib.pyplot' not in sys.modules; assert 'nonlinear_compression' not in sys.modules",
+                "import sys, mesh_engine; assert 'PyQt6' not in sys.modules; assert 'matplotlib.pyplot' not in sys.modules; assert 'nonlinear_compression' not in sys.modules",
             ],
             capture_output=True,
             text=True,

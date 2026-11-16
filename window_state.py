@@ -1,7 +1,7 @@
 """Per-user window geometry and layout preferences for native Qt windows."""
 
-from PySide6.QtCore import QEvent, QObject, QPoint, QSettings
-from PySide6.QtWidgets import QApplication, QDialog, QFileDialog, QMainWindow, QMessageBox, QSplitter
+from PyQt6.QtCore import QEvent, QObject, QPoint, QSettings
+from PyQt6.QtWidgets import QApplication, QDialog, QFileDialog, QMainWindow, QMessageBox, QSplitter
 
 
 class WindowStateStore(QObject):

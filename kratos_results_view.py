@@ -5,9 +5,9 @@ from types import SimpleNamespace
 import numpy as np
 import pyvista as pv
 from studio_style import CompactComboBox
-from PySide6.QtCore import Qt, QUrl
-from PySide6.QtGui import QDesktopServices
-from PySide6.QtWidgets import QDialog,QVBoxLayout,QHBoxLayout,QComboBox,QLabel,QPushButton
+from PyQt6.QtCore import Qt, QUrl
+from PyQt6.QtGui import QDesktopServices
+from PyQt6.QtWidgets import QDialog,QVBoxLayout,QHBoxLayout,QComboBox,QLabel,QPushButton
 from studio_style import STUDIO_STYLESHEET,CompactDoubleSpinBox,CONTROL_HEIGHT
 from preview_viewport import create_preview_viewport
 from kratos_backend import KratosResults

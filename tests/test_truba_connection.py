@@ -9,9 +9,9 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 import paramiko
-from PySide6.QtCore import QPoint, QSettings, Qt
-from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QLineEdit, QMessageBox
+from PyQt6.QtCore import QPoint, QSettings, Qt
+from PyQt6.QtTest import QTest
+from PyQt6.QtWidgets import QApplication, QLineEdit, QMessageBox
 
 from truba_connection import ConnectionWorker, TrubaConnectionDialog
 from truba_credentials import CredentialStore

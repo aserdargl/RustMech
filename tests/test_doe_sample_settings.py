@@ -3,9 +3,9 @@ import copy
 from dataclasses import replace
 from pathlib import Path
 import unittest
-from PySide6.QtCore import Qt
-from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QComboBox, QStyle
+from PyQt6.QtCore import Qt
+from PyQt6.QtTest import QTest
+from PyQt6.QtWidgets import QComboBox, QStyle
 from studio_style import CompactComboBox
 from model import Settings
 from doe_sample_rules import sample_name, validate_sample_state

@@ -69,7 +69,7 @@ def align_compression_surface(surface, bottom_cell, top_cell):
 
 
 def store_surface(surface):
-    from PySide6.QtCore import QStandardPaths
+    from PyQt6.QtCore import QStandardPaths
     directory = Path(QStandardPaths.writableLocation(QStandardPaths.StandardLocation.AppLocalDataLocation)) / 'imported_geometry'
     directory.mkdir(parents=True, exist_ok=True)
     digest = sha256(surface.points.tobytes() + surface.faces.tobytes()).hexdigest()

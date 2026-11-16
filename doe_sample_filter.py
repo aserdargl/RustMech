@@ -1,7 +1,7 @@
 """Small, independent search and column selection for each sample table."""
 
-from PySide6.QtCore import Signal
-from PySide6.QtWidgets import QHBoxLayout, QLineEdit, QWidget
+from PyQt6.QtCore import pyqtSignal as Signal
+from PyQt6.QtWidgets import QHBoxLayout, QLineEdit, QWidget
 
 from studio_style import CompactComboBox
 

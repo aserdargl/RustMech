@@ -2,8 +2,8 @@
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 
-from PySide6.QtCore import QSize, QTimer, Qt, Signal
-from PySide6.QtWidgets import (
+from PyQt6.QtCore import QSize, QTimer, Qt, pyqtSignal as Signal
+from PyQt6.QtWidgets import (
     QDialog, QDialogButtonBox, QFormLayout, QFrame, QHBoxLayout, QLabel,
     QPushButton, QScrollArea, QSizePolicy, QSplitter, QVBoxLayout, QWidget,
 )
@@ -180,7 +180,7 @@ class ActiveGeometryPanel(QWidget):
         if not self.property("splitterPreferencesRestored"):
             self.setProperty("splitterPreferencesRestored", True)
             # This dock is created on demand, after the main window restoration.
-            from PySide6.QtWidgets import QApplication
+            from PyQt6.QtWidgets import QApplication
             store = getattr(QApplication.instance(), "_rustmech_window_state", None)
             if store is not None:
                 state = store.settings.value(
@@ -390,7 +390,7 @@ class GeometryLibraryDialog(QDialog):
     def __init__(self, settings, surface_builder, parent=None):
         super().__init__(parent)
         from window_state import install_window_state
-        from PySide6.QtWidgets import QApplication
+        from PyQt6.QtWidgets import QApplication
         install_window_state(QApplication.instance())
         self.setObjectName("doeGeometryLibrary")
         self.setWindowTitle("Geometry · library preview")

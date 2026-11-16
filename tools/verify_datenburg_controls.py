@@ -26,9 +26,9 @@ def render(reference, output):
         combo = NoWheelComboBox
     else:
         sys.path.insert(0, str(ROOT))
-        from PySide6.QtCore import Qt
-        from PySide6.QtTest import QTest
-        from PySide6.QtWidgets import QApplication, QWidget, QVBoxLayout, QPushButton
+        from PyQt6.QtCore import Qt
+        from PyQt6.QtTest import QTest
+        from PyQt6.QtWidgets import QApplication, QWidget, QVBoxLayout, QPushButton
         from studio_style import CompactSpinBox, CompactDoubleSpinBox, CompactComboBox
         from datenburg_widgets import compact_gradient_button_stylesheet, graphcalc_combo_stylesheet
         def integer():

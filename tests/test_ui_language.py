@@ -6,9 +6,9 @@ import tempfile
 import unittest
 from unittest.mock import MagicMock, patch
 
-from PySide6.QtCore import QCoreApplication, QEvent, QLocale, QSettings, Qt
-from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QLabel, QLineEdit, QPushButton, QWidget
+from PyQt6.QtCore import QCoreApplication, QEvent, QLocale, QSettings, Qt
+from PyQt6.QtTest import QTest
+from PyQt6.QtWidgets import QApplication, QLabel, QLineEdit, QPushButton, QWidget
 
 from model import Settings
 from solver_profiles import SolverProfileStore
@@ -104,7 +104,7 @@ class LanguageTests(unittest.TestCase):
 
     def test_preference_is_read_by_a_fresh_process(self):
         self.manager.set_language('tr')
-        script = "from PySide6.QtCore import QSettings; from PySide6.QtWidgets import QApplication; from ui_language import install_language; import sys; app=QApplication([]); print(install_language(app,QSettings(sys.argv[1],QSettings.Format.IniFormat)).language)"
+        script = "from PyQt6.QtCore import QSettings; from PyQt6.QtWidgets import QApplication; from ui_language import install_language; import sys; app=QApplication([]); print(install_language(app,QSettings(sys.argv[1],QSettings.Format.IniFormat)).language)"
         result = subprocess.run([sys.executable, '-c', script, self.preferences.fileName()],
                                 cwd=Path(__file__).resolve().parents[1], capture_output=True, text=True, timeout=30)
         self.assertEqual(result.returncode, 0, result.stderr)

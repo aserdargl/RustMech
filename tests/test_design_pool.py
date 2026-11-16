@@ -9,9 +9,9 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 import pyvista as pv
-from PySide6.QtCore import QSettings, Qt
-from PySide6.QtTest import QSignalSpy, QTest
-from PySide6.QtWidgets import QApplication, QWidget
+from PyQt6.QtCore import QSettings, Qt
+from PyQt6.QtTest import QSignalSpy, QTest
+from PyQt6.QtWidgets import QApplication, QWidget
 
 from analysis_queue import AnalysisQueueWidget, AnalysisQueueWindow, QueueStore
 from design_exchange import list_designs, publish_design, read_design
@@ -179,7 +179,7 @@ class DesignPoolTests(unittest.TestCase):
         spy = QSignalSpy(pool.geometry_prepared)
         QTest.keyClick(pool.table, Qt.Key.Key_Return)
         self.assertIsNone(pool.future)
-        self.assertEqual(spy.count(), 0)
+        self.assertEqual(len(spy), 0)
         self.assertEqual(pool.table.rowCount(), 1)
         self.assertTrue(pool.prepare.isEnabled())
 

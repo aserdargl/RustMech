@@ -1,8 +1,8 @@
 from concurrent.futures import ThreadPoolExecutor
 
 from studio_style import CompactComboBox, CONTROL_HEIGHT, STUDIO_STYLESHEET
-from PySide6.QtCore import Qt, QTimer
-from PySide6.QtWidgets import (
+from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtWidgets import (
     QApplication, QDialog, QDialogButtonBox, QFrame, QHBoxLayout, QLabel,
     QPushButton, QSizePolicy, QVBoxLayout,
 )

@@ -149,13 +149,13 @@ class StandardResultTests(unittest.TestCase):
 class StandardUiTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        from PySide6.QtWidgets import QApplication
+        from PyQt6.QtWidgets import QApplication
         cls.app=QApplication.instance() or QApplication([])
 
     def test_select_lock_restore_and_enter(self):
         from nonlinear_compression import RustMechDialog
-        from PySide6.QtCore import Qt
-        from PySide6.QtTest import QTest
+        from PyQt6.QtCore import Qt
+        from PyQt6.QtTest import QTest
         with patch('window_state.install_window_state'),patch.object(RustMechDialog,'start_preview',lambda self:None):
             dialog=RustMechDialog(Settings())
             try:

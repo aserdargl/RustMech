@@ -7,8 +7,8 @@ import socket
 from threading import Event
 
 import paramiko
-from PySide6.QtCore import QThread, Qt, Signal
-from PySide6.QtWidgets import (QApplication, QCheckBox, QDialog, QFormLayout, QFrame, QGroupBox, QHBoxLayout,
+from PyQt6.QtCore import QThread, Qt, pyqtSignal as Signal
+from PyQt6.QtWidgets import (QApplication, QCheckBox, QDialog, QFormLayout, QFrame, QGroupBox, QHBoxLayout,
                                QLabel, QLineEdit, QMessageBox, QPushButton, QScrollArea, QSplitter,
                                QTabWidget, QVBoxLayout, QWidget)
 

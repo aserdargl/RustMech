@@ -5,9 +5,9 @@ import time
 import unittest
 from unittest.mock import MagicMock, patch
 
-from PySide6.QtCore import QSettings
-from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QDialog, QVBoxLayout, QWidget
+from PyQt6.QtCore import QSettings
+from PyQt6.QtTest import QTest
+from PyQt6.QtWidgets import QApplication, QDialog, QVBoxLayout, QWidget
 
 from analysis_process import AnalysisProcess, report_analysis_step
 from operation_progress import OperationProgress

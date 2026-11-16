@@ -4,7 +4,7 @@ from threading import Event
 import unittest
 from unittest.mock import MagicMock, patch
 
-from PySide6.QtWidgets import QApplication, QWidget
+from PyQt6.QtWidgets import QApplication, QWidget
 
 from mesh_engine import build_preview
 from model import Settings

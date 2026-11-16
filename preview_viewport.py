@@ -1,7 +1,7 @@
 """Shared mouse controls for the 3D preview windows."""
 
 from pyvistaqt import QtInteractor
-from PySide6.QtCore import QEvent, QObject, Qt, QTimer
+from PyQt6.QtCore import QEvent, QObject, Qt, QTimer
 import numpy as np
 from time import monotonic
 from scipy.spatial.transform import Rotation, Slerp

@@ -9,8 +9,8 @@ import numpy as np
 import pyvista as pv
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
-from PySide6.QtCore import Qt,QTimer
-from PySide6.QtWidgets import (QFileDialog,QFormLayout,QHBoxLayout,QLabel,QPushButton,
+from PyQt6.QtCore import Qt,QTimer
+from PyQt6.QtWidgets import (QFileDialog,QFormLayout,QHBoxLayout,QLabel,QPushButton,
                               QSlider,QSplitter,QWidget)
 
 from analysis_process import AnalysisProcess

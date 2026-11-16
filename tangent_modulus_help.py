@@ -2,8 +2,8 @@
 from math import isfinite
 from pathlib import Path
 
-from PySide6.QtCore import Qt, Signal
-from PySide6.QtWidgets import QDialog, QFormLayout, QLabel, QPushButton, QTextBrowser, QVBoxLayout
+from PyQt6.QtCore import Qt, pyqtSignal as Signal
+from PyQt6.QtWidgets import QDialog, QFormLayout, QLabel, QPushButton, QTextBrowser, QVBoxLayout
 
 from studio_style import ActionFlowLayout, CompactDoubleSpinBox, configure_form
 

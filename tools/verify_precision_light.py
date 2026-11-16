@@ -13,10 +13,10 @@ sys.path.insert(0, str(ROOT))
 
 
 def main() -> int:
-    from PySide6.QtCore import QPoint, QSettings, QTimer, Qt
-    from PySide6.QtGui import QImage, QPainter
-    from PySide6.QtTest import QTest
-    from PySide6.QtWidgets import QApplication, QToolButton
+    from PyQt6.QtCore import QPoint, QSettings, QTimer, Qt
+    from PyQt6.QtGui import QImage, QPainter
+    from PyQt6.QtTest import QTest
+    from PyQt6.QtWidgets import QApplication, QToolButton
     from mesh_convergence import MeshConvergenceDialog
     from nonlinear_compression import RustMechDialog
     from model import Settings

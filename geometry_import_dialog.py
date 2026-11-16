@@ -2,10 +2,10 @@
 from imported_geometry import read_surface, plane_faces, align_compression_surface, store_surface
 from pathlib import Path
 from contextlib import nullcontext
-from PySide6.QtCore import Qt
+from PyQt6.QtCore import Qt
 
 def choose_geometry(parent):
-    from PySide6.QtWidgets import QFileDialog
+    from PyQt6.QtWidgets import QFileDialog
     path, _ = QFileDialog.getOpenFileName(parent, 'Import geometry (mm)', '', 'Surface geometry (*.stl *.obj *.ply *.vtp)')
     if not path:
         return None
@@ -24,7 +24,7 @@ def choose_geometry(parent):
     return None
 
 
-from PySide6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton
+from PyQt6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton
 
 
 class GeometryImportDialog(QDialog):
@@ -32,7 +32,7 @@ class GeometryImportDialog(QDialog):
         super().__init__(parent)
         from pyvistaqt import QtInteractor
         from window_state import install_window_state
-        from PySide6.QtWidgets import QApplication
+        from PyQt6.QtWidgets import QApplication
         install_window_state(QApplication.instance())
         self.setObjectName('geometryImport')
         self.setWindowTitle(f'Import geometry — {filename}')

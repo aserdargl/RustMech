@@ -6,8 +6,8 @@ import os
 from pathlib import Path
 from uuid import uuid4
 
-from PySide6.QtCore import QLockFile, Qt
-from PySide6.QtWidgets import QLabel, QPushButton, QTableWidgetItem
+from PyQt6.QtCore import QLockFile, Qt
+from PyQt6.QtWidgets import QLabel, QPushButton, QTableWidgetItem
 
 from design_exchange import pool_directory
 from doe_studio import (COL_RUN, COL_STRUCTURE, DoEStudioWidget, DoEStudioWindow,

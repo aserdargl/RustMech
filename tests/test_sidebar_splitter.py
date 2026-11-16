@@ -3,9 +3,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from PySide6.QtCore import QSettings, Qt
-from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QDialog, QToolButton, QVBoxLayout, QWidget
+from PyQt6.QtCore import QSettings, Qt
+from PyQt6.QtTest import QTest
+from PyQt6.QtWidgets import QApplication, QDialog, QToolButton, QVBoxLayout, QWidget
 
 from sidebar_splitter import SidebarSplitter
 from window_state import WindowStateStore

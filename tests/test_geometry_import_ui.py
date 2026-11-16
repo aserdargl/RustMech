@@ -5,9 +5,9 @@ import unittest
 from unittest.mock import patch
 
 import pyvista as pv
-from PySide6.QtCore import QSettings, Qt
-from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication
+from PyQt6.QtCore import QSettings, Qt
+from PyQt6.QtTest import QTest
+from PyQt6.QtWidgets import QApplication
 
 from geometry_import_dialog import GeometryImportDialog
 from nonlinear_compression import RustMechDialog

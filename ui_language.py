@@ -7,11 +7,11 @@ import re
 import sys
 from string import Formatter
 from weakref import WeakKeyDictionary
-from shiboken6 import isValid
+from qt_compat import isValid
 
-from PySide6.QtCore import QEvent, QObject, QSettings, QSignalBlocker, QSize, QTranslator, Signal
-from PySide6.QtGui import QIcon
-from PySide6.QtWidgets import (
+from PyQt6.QtCore import QEvent, QObject, QSettings, QSignalBlocker, QSize, QTranslator, pyqtSignal as Signal
+from PyQt6.QtGui import QIcon
+from PyQt6.QtWidgets import (
     QApplication, QAbstractButton, QAbstractItemView, QGroupBox, QHeaderView,
     QHBoxLayout, QLabel, QLineEdit, QMenu, QMessageBox, QStyledItemDelegate,
     QTabBar, QTableWidget, QToolButton, QWidget,
@@ -90,6 +90,7 @@ class LanguageManager(QObject):
         if self.language not in ('en', 'tr'):
             self.language = 'en'
         self._sources = WeakKeyDictionary()
+        self._delegates = {}
         self._busy = False
         self._closed = False
         self.qt_translator = _QtTranslator(self)
@@ -182,7 +183,12 @@ class LanguageManager(QObject):
                         self._property(table, f'header/{index}', item.text, item.setText)
             if isinstance(widget, QAbstractItemView) and not isinstance(widget, QHeaderView):
                 if type(widget.itemDelegate()) is QStyledItemDelegate:
-                    widget.setItemDelegate(_DisplayDelegate(widget))
+                    # PyQt6: hold the delegate here; the widget wrapper may be
+                    # temporary (e.g. a combo's internal popup view).
+                    delegate = _DisplayDelegate(widget)
+                    self._delegates[id(widget)] = delegate
+                    widget.destroyed.connect(lambda *_, key=id(widget): self._delegates.pop(key, None))
+                    widget.setItemDelegate(delegate)
         finally:
             self._busy = False
 

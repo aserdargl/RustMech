@@ -1,8 +1,8 @@
 """Compact, geometry-first planning surface for the DoE workspace."""
 from dataclasses import replace
 
-from PySide6.QtCore import Qt
-from PySide6.QtWidgets import (
+from PyQt6.QtCore import Qt
+from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QGridLayout, QLabel,
     QPushButton, QCheckBox, QListWidget, QTreeWidget, QTreeWidgetItem,
     QTabWidget, QScrollArea, QSplitter, QSizePolicy,

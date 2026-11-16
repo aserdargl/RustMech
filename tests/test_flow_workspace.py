@@ -4,9 +4,9 @@ import tempfile
 import unittest
 from unittest.mock import MagicMock, patch
 
-from PySide6.QtCore import QSettings, Qt
-from PySide6.QtTest import QSignalSpy, QTest
-from PySide6.QtWidgets import QApplication, QPushButton
+from PyQt6.QtCore import QSettings, Qt
+from PyQt6.QtTest import QSignalSpy, QTest
+from PyQt6.QtWidgets import QApplication, QPushButton
 
 from model import Settings
 from nonlinear_compression import RustMechDialog
@@ -67,7 +67,7 @@ class FlowWorkspaceTests(unittest.TestCase):
             self.app.processEvents()
             self.assertAlmostEqual(speed.value(),.02)
             constructor.assert_not_called()
-            self.assertEqual(accepted.count(),0)
+            self.assertEqual(len(accepted),0)
             self.assertFalse(dialog.truba_dialog.isVisible())
             flow.buttons[1].click()
             constructor.assert_called_once()

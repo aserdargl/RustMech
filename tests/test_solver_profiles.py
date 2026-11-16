@@ -5,9 +5,9 @@ from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import MagicMock, patch
 
-from PySide6.QtCore import QSettings, Qt
-from PySide6.QtTest import QSignalSpy, QTest
-from PySide6.QtWidgets import QApplication, QWidget
+from PyQt6.QtCore import QSettings, Qt
+from PyQt6.QtTest import QSignalSpy, QTest
+from PyQt6.QtWidgets import QApplication, QWidget
 
 from model import Settings, load_settings, save_settings
 from nonlinear_compression import RustMechDialog
@@ -83,7 +83,7 @@ class SolverProfileTests(unittest.TestCase):
         QTest.keyClicks(control.lineEdit(), "52")
         QTest.keyClick(control.lineEdit(), Qt.Key.Key_Return)
         self.assertEqual(control.value(), 52)
-        self.assertEqual(clicks.count(), 0)
+        self.assertEqual(len(clicks), 0)
         self.assertFalse(dialog.truba_dialog.isVisible())
         tolerance = dialog.kratos_panel.fields["kratos_absolute_tolerance"]
         tolerance.setFocus()
@@ -113,7 +113,7 @@ class SolverProfileTests(unittest.TestCase):
         penalty.lineEdit().selectAll();QTest.keyClicks(penalty.lineEdit(),'25000')
         QTest.keyClick(penalty.lineEdit(),Qt.Key.Key_Return)
         self.assertEqual(penalty.value(),25000.)
-        self.assertEqual(clicks.count(),0)
+        self.assertEqual(len(clicks),0)
         self.assertFalse(dialog.truba_dialog.isVisible())
         self.select(dialog,'ansys_mapdl')
         self.assertEqual(dialog.collect(),ansys)

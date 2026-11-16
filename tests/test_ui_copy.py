@@ -2,10 +2,10 @@
 import csv
 import io
 import unittest
-from PySide6.QtCore import QItemSelectionModel, Qt
-from PySide6.QtGui import QKeySequence
-from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QLabel, QLineEdit, QTableWidget, QTableWidgetItem
+from PyQt6.QtCore import QItemSelectionModel, Qt
+from PyQt6.QtGui import QKeySequence
+from PyQt6.QtTest import QTest
+from PyQt6.QtWidgets import QApplication, QLabel, QLineEdit, QTableWidget, QTableWidgetItem
 from ui_copy import copy_table, install_copy_support
 
 

@@ -8,9 +8,9 @@ import uuid
 import numpy as np
 import pyvista as pv
 from studio_style import CompactSpinBox, CompactComboBox
-from PySide6.QtCore import QSettings, Qt, QTimer, QUrl
-from PySide6.QtGui import QDesktopServices
-from PySide6.QtWidgets import (QCheckBox, QComboBox, QFileDialog, QFormLayout, QHBoxLayout,
+from PyQt6.QtCore import QSettings, Qt, QTimer, QUrl
+from PyQt6.QtGui import QDesktopServices
+from PyQt6.QtWidgets import (QCheckBox, QComboBox, QFileDialog, QFormLayout, QHBoxLayout,
                               QLabel, QLineEdit, QPushButton, QScrollArea,
                               QSplitter, QVBoxLayout, QWidget)
 

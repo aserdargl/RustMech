@@ -1,8 +1,8 @@
 """Draggable, numbered naming tokens with native Qt model ordering."""
 
-from PySide6.QtCore import QMimeData, QModelIndex, QPersistentModelIndex, QRectF, QSize, Qt, Signal
-from PySide6.QtGui import QColor, QDrag, QPainter, QPen
-from PySide6.QtWidgets import QAbstractItemView, QListWidget, QStyledItemDelegate, QStyle
+from PyQt6.QtCore import QMimeData, QModelIndex, QPersistentModelIndex, QRectF, QSize, Qt, pyqtSignal as Signal
+from PyQt6.QtGui import QColor, QDrag, QPainter, QPen
+from PyQt6.QtWidgets import QAbstractItemView, QListWidget, QStyledItemDelegate, QStyle
 
 C_BG_PANEL, C_BG_SOFT, C_BORDER, C_BTN_BLUE = "#FFFFFF", "#F3F3F3", "#D1DBE5", "#1E4D8D"
 

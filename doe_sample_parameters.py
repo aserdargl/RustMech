@@ -1,7 +1,7 @@
 """Separate fixed properties from variable rows with one value per cell."""
 
-from PySide6.QtCore import QByteArray, Qt, Signal
-from PySide6.QtWidgets import (
+from PyQt6.QtCore import QByteArray, Qt, pyqtSignal as Signal
+from PyQt6.QtWidgets import (
     QAbstractItemView, QComboBox, QHBoxLayout, QHeaderView, QLabel, QPushButton, QStyledItemDelegate,
     QSplitter, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )

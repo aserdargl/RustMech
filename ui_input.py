@@ -1,7 +1,7 @@
 """Application-wide input rules for settings controls."""
-from PySide6.QtCore import QEvent, QObject
-from PySide6.QtGui import QWheelEvent
-from PySide6.QtWidgets import (
+from PyQt6.QtCore import QEvent, QObject, QPointF, Qt
+from PyQt6.QtGui import QWheelEvent
+from PyQt6.QtWidgets import (
     QAbstractScrollArea, QAbstractSpinBox, QApplication, QComboBox, QDial,
     QSlider, QTabBar, QWidget,
 )
@@ -23,10 +23,10 @@ class SettingsWheelGuard(QObject):
                     if isinstance(parent, QAbstractScrollArea):
                         viewport = parent.viewport()
                         forwarded = QWheelEvent(
-                            viewport.mapFromGlobal(event.globalPosition().toPoint()),
+                            QPointF(viewport.mapFromGlobal(event.globalPosition().toPoint())),
                             event.globalPosition(), event.pixelDelta(), event.angleDelta(),
                             event.buttons(), event.modifiers(), event.phase(), event.inverted(),
-                            event.source(), event.pointingDevice(),
+                            Qt.MouseEventSource.MouseEventNotSynthesized, event.pointingDevice(),
                         )
                         QApplication.sendEvent(viewport, forwarded)
                         break

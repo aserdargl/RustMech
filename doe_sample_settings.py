@@ -1,6 +1,6 @@
 """Sample naming and explicit combination matrices inside the DoE workspace."""
-from PySide6.QtCore import QByteArray, QEvent, QRect, Qt
-from PySide6.QtWidgets import (
+from PyQt6.QtCore import QByteArray, QEvent, QRect, Qt
+from PyQt6.QtWidgets import (
     QAbstractItemView, QCheckBox, QHBoxLayout, QLabel,
     QLineEdit, QPushButton, QScrollArea, QVBoxLayout, QWidget, QTabWidget,
     QSplitter, QStyledItemDelegate, QStyle, QStyleOptionViewItem,
@@ -48,7 +48,7 @@ class _NamingCheckDelegate(QStyledItemDelegate):
 
 class SampleSettingsPage(QWidget):
     def __init__(self, owner):
-        from PySide6.QtWidgets import QHeaderView, QTableWidget, QTableWidgetItem, QLayout
+        from PyQt6.QtWidgets import QHeaderView, QTableWidget, QTableWidgetItem, QLayout
         from doe_sample_blocks import NamingBlocks
         from doe_sample_style import compact_sample_widgets, sample_section
         super().__init__(owner)
@@ -325,7 +325,7 @@ class SampleSettingsPage(QWidget):
             self.select_block()
 
     def add_field(self, key, label=None):
-        from PySide6.QtWidgets import QListWidgetItem
+        from PyQt6.QtWidgets import QListWidgetItem
         if key not in self.values or key in {field["key"] for field in self.rule()["fields"]}:
             return
         if label is None:

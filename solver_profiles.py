@@ -2,7 +2,7 @@
 import json
 from dataclasses import asdict
 
-from PySide6.QtCore import QSettings
+from PyQt6.QtCore import QSettings
 from model import ANALYSIS_FIELDS, Settings, settings_from_dict
 
 KRATOS_FIELDS = tuple(name for name in Settings.__dataclass_fields__ if name.startswith(("kratos_", "truba_")))

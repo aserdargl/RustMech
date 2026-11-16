@@ -14,10 +14,10 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-from PySide6.QtTest import QTest
+from PyQt6.QtTest import QTest
 from studio_style import NUMERIC_FIELD_WIDTH
-from PySide6.QtCore import QSettings
-from PySide6.QtWidgets import QApplication, QComboBox, QDialog
+from PyQt6.QtCore import QSettings
+from PyQt6.QtWidgets import QApplication, QComboBox, QDialog
 
 from mesh_convergence import (
     Level, METRICS, MeshConvergenceDialog, MeshConvergenceWidget,

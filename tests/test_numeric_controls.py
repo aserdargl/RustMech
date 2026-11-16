@@ -1,10 +1,10 @@
 """Numeric entry precision, compact display and digit limits in real Qt controls."""
 import unittest
 
-from PySide6.QtCore import QLocale, Qt
-from PySide6.QtGui import QValidator
-from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QWidget
+from PyQt6.QtCore import QLocale, Qt
+from PyQt6.QtGui import QValidator
+from PyQt6.QtTest import QTest
+from PyQt6.QtWidgets import QApplication, QWidget
 
 from studio_style import CompactDoubleSpinBox, CompactSpinBox, STUDIO_STYLESHEET
 from mesh_convergence_style import CONVERGENCE_STYLESHEET

@@ -14,9 +14,9 @@ PROBE = textwrap.dedent("""
     from tempfile import TemporaryDirectory
     from unittest.mock import patch
     import pyvista as pv
-    from shiboken6 import isValid
-    from PySide6.QtCore import QCoreApplication, QEvent, QSettings, QTimer
-    from PySide6.QtWidgets import QApplication
+    from qt_compat import isValid
+    from PyQt6.QtCore import QCoreApplication, QEvent, QSettings, QTimer
+    from PyQt6.QtWidgets import QApplication
     from model import Settings
     from window_state import WindowStateStore
 

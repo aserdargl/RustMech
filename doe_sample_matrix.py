@@ -3,8 +3,8 @@ from dataclasses import asdict, replace
 from itertools import product
 import math
 
-from PySide6.QtCore import Qt
-from PySide6.QtWidgets import (
+from PyQt6.QtCore import Qt
+from PyQt6.QtWidgets import (
     QHBoxLayout, QLabel, QPushButton, QSplitter, QTableWidget, QTableWidgetItem,
     QVBoxLayout, QWidget, QHeaderView, QAbstractItemView, QSizePolicy,
 )
