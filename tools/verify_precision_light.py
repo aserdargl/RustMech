@@ -67,7 +67,9 @@ def main() -> int:
 
     def inspect():
         nonlocal exit_code
-        if dialog.preview is None:
+        if dialog.preview is None or dialog.preview.mesh is None:
+            if dialog.preview is not None and not dialog._mesh_requested:
+                dialog.mode.setCurrentIndex(1)
             if dialog.failed_key is None and time.monotonic() - started < 180:
                 return
             result["error"] = dialog.status.text()
@@ -77,16 +79,16 @@ def main() -> int:
             try:
                 check("geometry and analysis tabs", dialog.setup_tabs.count() == 2)
                 navigation = dialog.workspace_navigation
-                QTest.mouseClick(navigation, Qt.MouseButton.LeftButton,
-                                 pos=navigation.tabRect(1).center())
-                check("workspace navigation opens DoE", dialog.workspace_tabs.currentIndex() == 1)
+                dialog.doe_button.click()
+                check("DoE button opens experiment settings", dialog.doe_window.isVisible())
+                dialog.doe_window.close()
                 QTest.mouseClick(navigation, Qt.MouseButton.LeftButton,
                                  pos=navigation.tabRect(0).center())
                 check("workspace navigation opens model", dialog.workspace_tabs.currentIndex() == 0)
                 check("workspace navigation stays synchronized", navigation.currentIndex() == 0)
                 check("display modes immediately follow workspaces", 0 <=
                       dialog.display_mode_tabs.mapTo(dialog, QPoint()).x() -
-                      navigation.mapTo(dialog, navigation.rect().topRight()).x() <= 15)
+                      dialog.doe_button.mapTo(dialog, dialog.doe_button.rect().topRight()).x() <= 15)
                 check("platens grouped with View at right", dialog.show_platens_cb.mapTo(dialog, QPoint()).x()
                       > dialog.display_mode_tabs.mapTo(dialog, dialog.display_mode_tabs.rect().topRight()).x())
                 check("preview aligned with settings", abs(
@@ -104,12 +106,11 @@ def main() -> int:
                 spin.setValue(original_size)
                 cores = dialog.controls["cores"]
                 original_cores = cores.value()
-                QTest.mouseClick(cores, Qt.MouseButton.LeftButton,
-                                 pos=QPoint(cores.width() - 6, cores.height() - 5))
+                QTest.mouseClick(cores.btn_down, Qt.MouseButton.LeftButton)
                 check("integer stepper arrow decrements", cores.value() == original_cores - cores.singleStep())
                 cores.setValue(original_cores)
-                check("left-aligned compact numeric values", spin.alignment()
-                      == (Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+                check("centered Datenburg numeric values", spin.alignment()
+                      == Qt.AlignmentFlag.AlignCenter
                       and spin.width() == 88)
                 check("geometry settings round trip", dialog.collect().mesh_type == "TET10"
                       and dialog.collect().local_mesh_size == 0.35
@@ -176,10 +177,11 @@ def main() -> int:
                 dialog.truba_dialog.grab().save(str(output / "truba.png"))
                 dialog.truba_dialog.hide()
                 designs_before = len(dialog.doe_studio._designs)
-                dialog.add_to_doe_button.click()
+                dialog.doe_button.click()
+                dialog.doe_studio.use_model_btn.click()
                 check("design added to DoE", len(dialog.doe_studio._designs) == designs_before + 1)
-                dialog.workspace_tabs.setCurrentIndex(1)
-                capture("experiments.png")
+                dialog.doe_window.grab().save(str(output / "experiments.png"))
+                dialog.doe_window.close()
                 dialog.workspace_tabs.setCurrentIndex(0)
                 dialog.setup_tabs.setCurrentIndex(0)
                 capture("main-1440.png")

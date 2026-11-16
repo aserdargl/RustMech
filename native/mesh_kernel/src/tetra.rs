@@ -1,5 +1,5 @@
 //! Straight-sided TET10 assembly. Each undirected edge owns one shared midpoint.
-use crate::guarded;
+use crate::{guarded, fits_buffer};
 use std::collections::HashMap;
 use std::{ptr, slice};
 
@@ -21,8 +21,8 @@ pub unsafe extern "C" fn rustmech_triangle_normals(
             || faces.is_null()
             || output.is_null()
             || point_count == 0
-            || point_count > 50_000_000
-            || count > 50_000_000
+            || !fits_buffer(point_count, 3, 8)
+            || !fits_buffer(count, 3, 8)
         {
             return Err("Invalid triangle normal buffers".into());
         }
@@ -109,7 +109,7 @@ pub unsafe extern "C" fn rustmech_tet_plan_new(
     counts: *mut usize,
 ) -> *mut TetPlan {
     guarded(|| {
-        if corners.is_null() || counts.is_null() || count == 0 || count > 1_100_000 {
+        if corners.is_null() || counts.is_null() || count == 0 || !fits_buffer(count, 10, 8) {
             return Err("Invalid tetrahedron input buffer".into());
         }
         let plan = Box::new(TetPlan::new(

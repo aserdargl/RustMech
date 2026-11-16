@@ -47,3 +47,5 @@ auth.json
 *.key
 .env
 design/
+_backup_*/
+DoEResults/

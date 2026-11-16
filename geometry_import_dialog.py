@@ -1,6 +1,7 @@
 """Interactive geometry import workspace."""
 from imported_geometry import read_surface, plane_faces, align_compression_surface, store_surface
 from pathlib import Path
+from contextlib import nullcontext
 from PySide6.QtCore import Qt
 
 def choose_geometry(parent):
@@ -8,11 +9,15 @@ def choose_geometry(parent):
     path, _ = QFileDialog.getOpenFileName(parent, 'Import geometry (mm)', '', 'Surface geometry (*.stl *.obj *.ply *.vtp)')
     if not path:
         return None
-    dialog = GeometryImportDialog(read_surface(path), Path(path).name, parent)
+    progress = getattr(parent, 'operation_progress', None)
+    with progress.step('Reading imported geometry…') if progress is not None else nullcontext():
+        surface = read_surface(path)
+    dialog = GeometryImportDialog(surface, Path(path).name, parent)
     try:
         if dialog.exec():
             surface, height = dialog.result_surface
-            return store_surface(surface), height, Path(path).name
+            with progress.step('Saving imported geometry…') if progress is not None else nullcontext():
+                return store_surface(surface), height, Path(path).name
     finally:
         dialog.plotter.close()
         dialog.deleteLater()
@@ -49,6 +54,9 @@ class GeometryImportDialog(QDialog):
             button.clicked.connect(lambda checked=False, i=index: self.set_role(i))
             row.addWidget(button)
         layout.addLayout(row)
+
+        from operation_progress import OperationProgress
+        self.operation_progress = OperationProgress(self)
         self.plotter = QtInteractor(self)
         layout.addWidget(self.plotter.interactor, 1)
         self.plotter.set_background('#f0f0f0', top='#ffffff')
@@ -71,6 +79,16 @@ class GeometryImportDialog(QDialog):
             button.setDefault(False)
             row.addWidget(button)
         layout.addLayout(row)
+        layout.addWidget(self.operation_progress)
+
+    def done(self, result):
+        # Finalize before QDialog hides the native OpenGL window.
+        self.plotter.close()
+        super().done(result)
+
+    def closeEvent(self, event):
+        self.plotter.close()
+        super().closeEvent(event)
 
     def set_role(self, role):
         self.role = role
@@ -85,6 +103,13 @@ class GeometryImportDialog(QDialog):
         self.select_cell(cell)
 
     def select_cell(self, cell):
+        self.operation_progress.begin_step('Finding planar faces and validating geometry…')
+        try:
+            self._select_cell(cell)
+        finally:
+            self.operation_progress.update_step(False, '')
+
+    def _select_cell(self, cell):
         ids, _, _ = plane_faces(self.surface, cell)
         self.selected[self.role] = cell
         actor = self.plotter.add_mesh(self.surface.extract_cells(ids), color=('#22c55e' if self.role == 0 else '#f97316'),

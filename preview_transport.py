@@ -156,7 +156,7 @@ def unpack_preview(payload, segment, cached):
         grid(payload["surface"]) if payload["surface"] is not None else cached.surface
     )
     if payload["mesh"] is None:
-        mesh = cached.mesh
+        mesh = cached.mesh if payload.get('reuse_mesh', False) and cached is not None else None
     else:
         data = {}
         for name, value in payload["mesh"].items():

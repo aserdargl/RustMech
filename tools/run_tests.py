@@ -17,7 +17,8 @@ GUI = {
     "test_dialog_keyboard", "test_flow_workspace", "test_forced_stop_ui",
     "test_geometry_import_ui", "test_loading_contact", "test_standard_tests",
     "test_thermal_workspace", "test_viewport_orientation", "test_remote_mode_ui",
-    "test_doe_window",
+    "test_doe_window", "test_design_pool",
+    "test_viewport_lifecycle",
 }
 
 

@@ -14,6 +14,19 @@ from structure_library import evaluate_priority_field
 
 
 class GeometrySamplingTests(unittest.TestCase):
+    def test_explicit_stl_resolution_is_saved_validated_and_used(self):
+        settings = replace(Settings(size=1, cell_size=1), stl_resolution=.05)
+        self.assertEqual(settings.surface_resolution, .05)
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "settings.json"
+            save_settings(settings, path)
+            self.assertEqual(load_settings(path), settings)
+        for value in (0, -1, float('nan'), float('inf'), 'invalid', True):
+            self.assertTrue(validate_geometry(replace(settings, stl_resolution=value), include_mesh=False))
+        coarse = mesh_engine.make_surface(settings)
+        fine = mesh_engine.make_surface(replace(settings, stl_resolution=.025))
+        self.assertGreater(fine.n_cells, coarse.n_cells)
+
     def test_old_surface_spacing_is_ignored_and_not_saved(self):
         for legacy_spacing in (0.01, 2.0, "obsolete"):
             settings = settings_from_dict({"surface_resolution": legacy_spacing})
@@ -59,9 +72,9 @@ class GeometrySamplingTests(unittest.TestCase):
 
     def test_preview_reuses_geometry_but_rebuilds_a_coarser_mesh(self):
         settings = Settings(size=1, cell_size=1, mesh_resolution=0.05)
-        first = mesh_engine.build_preview(settings)
+        first = mesh_engine.build_preview(settings, include_mesh=True)
         with patch.object(mesh_engine, "make_surface", side_effect=AssertionError("geometry was rebuilt")):
-            coarse = mesh_engine.build_preview(replace(settings, mesh_resolution=0.125), first)
+            coarse = mesh_engine.build_preview(replace(settings, mesh_resolution=0.125), first, include_mesh=True)
         self.assertIs(coarse.surface, first.surface)
         self.assertIsNot(coarse.mesh, first.mesh)
         self.assertLess(coarse.mesh.grid.n_cells, first.mesh.grid.n_cells)
@@ -111,19 +124,19 @@ class GeometrySamplingTests(unittest.TestCase):
                 self.assertTrue(np.any(actual.points[:, 2] == 0))
                 self.assertTrue(np.any(actual.points[:, 2] == settings.size))
 
-    def test_geometry_budget_never_silently_coarsens_features(self):
+    def test_memory_preflight_never_silently_coarsens_features(self):
         settings = Settings(cell_size=0.1)
-        errors = validate_geometry(settings)
-        self.assertTrue(any("Preserving this geometry's details" in error for error in errors))
-        with self.assertRaisesRegex(ValueError, "surface sampling memory limit"):
-            mesh_engine.make_surface(settings)
-        self.assertEqual(errors, validate_geometry(replace(settings, mesh_resolution=0.5)))
+        self.assertEqual(validate_geometry(settings), [])
+        with patch("mesh_resources.available_memory", return_value=1024):
+            with self.assertRaisesRegex(MemoryError, "Reference surface sampling"):
+                mesh_engine.make_surface(settings)
+        self.assertEqual(validate_geometry(replace(settings, mesh_resolution=0.5)), [])
         for fraction in (0, 100, 101, float("nan")):
             self.assertTrue(validate_geometry(replace(Settings(), solid_fraction=fraction)))
 
 
 class GeometryUITests(unittest.TestCase):
-    def test_surface_spacing_control_is_removed_and_mesh_edits_keep_geometry(self):
+    def test_stl_resolution_auto_manual_and_enter(self):
         from PySide6.QtWidgets import QApplication, QLabel, QWidget
         from nonlinear_compression import RustMechDialog
 
@@ -140,6 +153,24 @@ class GeometryUITests(unittest.TestCase):
                 self.assertNotIn("surface_resolution", dialog.controls)
                 self.assertFalse(any("surface spacing" in label.text().lower() for label in dialog.findChildren(QLabel)))
                 spacing = dialog.collect().surface_resolution
+                self.assertEqual(dialog.stl_resolution_input.text(), 'auto')
+                self.assertIsNone(dialog.collect().stl_resolution)
+                dialog.stl_resolution_input.setText('0.04')
+                self.assertEqual(dialog.collect().surface_resolution, .04)
+                from PySide6.QtCore import Qt
+                from PySide6.QtTest import QTest, QSignalSpy
+                clicks = QSignalSpy(dialog.stl_auto_button.clicked)
+                for key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+                    QTest.keyClick(dialog.stl_resolution_input, key)
+                self.assertEqual(clicks.count(), 0)
+                self.assertEqual(dialog.collect().surface_resolution, .04)
+                dialog.controls['cell_size'].setValue(2)
+                expected = dialog.collect().automatic_surface_resolution
+                dialog.stl_auto_button.click()
+                self.assertAlmostEqual(float(dialog.stl_resolution_input.text()), expected)
+                dialog.stl_resolution_input.clear()
+                self.assertIsNone(dialog.collect().stl_resolution)
+                dialog.controls['cell_size'].setValue(Settings().cell_size)
                 dialog.controls["mesh_resolution"].setValue(0.4)
                 dialog.controls["local_mesh_size"].setValue(0.03)
                 self.assertEqual(dialog.collect().surface_resolution, spacing)

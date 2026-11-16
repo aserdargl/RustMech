@@ -7,17 +7,17 @@ from queue import Empty
 from multiprocessing import get_context
 from time import monotonic
 
-from studio_style import CompactComboBox
+from studio_style import CompactSpinBox, CompactComboBox
 from PySide6.QtCore import QTimer, Qt
 from PySide6.QtGui import QActionGroup
 from PySide6.QtWidgets import (
     QAbstractItemView, QCheckBox, QComboBox, QDialog, QFileDialog, QFormLayout, QFrame,
     QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMenu, QMessageBox, QPushButton,
-    QScrollArea, QSpinBox, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
+    QScrollArea, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
 from analysis_process import AnalysisProcess
-from model import ANALYSIS_FIELDS, MAX_FE_ELEMENTS, TETRAHEDRAL_MESH_TYPES, validate_settings
+from model import ANALYSIS_FIELDS, TETRAHEDRAL_MESH_TYPES, validate_settings
 from solver_api import SOLVER_REGISTRY, get_solver_capabilities
 from mesh_convergence_style import CONVERGENCE_STYLESHEET
 from studio_style import CONTROL_HEIGHT, NUMERIC_FIELD_WIDTH, STUDIO_STYLESHEET, CompactDoubleSpinBox, configure_form
@@ -78,17 +78,19 @@ def valid_metrics(level, selected=range(len(METRICS))):
 
 
 def solve_level(settings, mesh_generator, solver, publish=None, stop=None,
-                max_elements=MAX_FE_ELEMENTS, selected=range(len(METRICS))):
+                max_elements=0, selected=range(len(METRICS))):
     """Publish snapshots through a queue; never touch widgets from the worker."""
     level = Level(settings)
     stage, started = "mesh", monotonic()
     try:
+        from analysis_process import report_analysis_step
+        report_analysis_step("Generating finite element mesh…")
         mesh = mesh_generator(settings)
         level.mesh_seconds = monotonic() - started
         level.elements = mesh.grid.n_cells
         if mesh.solve_errors:
             raise ValueError(mesh.solve_errors[0])
-        if level.elements > max_elements:
+        if max_elements and level.elements > max_elements:
             level.status = f"Element limit exceeded ({max_elements:,}); not solved"
         elif stop is not None and stop.is_set():
             level.status = "Stopped after meshing"
@@ -315,18 +317,19 @@ class MeshConvergenceWidget(QWidget):
         form.addRow("Refinement factor", self.factor)
         self.minimum = self._number(settings.mesh_resolution / 10, 1e-9, 1e6, " mm")
         form.addRow("Minimum global size", self.minimum)
-        self.max_levels = QSpinBox()
+        self.max_levels = CompactSpinBox()
         self.max_levels.setRange(3, 100)
         self.max_levels.setValue(12)
         self.max_levels.setFixedHeight(CONTROL_HEIGHT)
-        self.max_levels.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        self.max_levels.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.max_levels.setFixedWidth(NUMERIC_FIELD_WIDTH)
         form.addRow("Maximum attempts", self.max_levels)
-        self.max_elements = QSpinBox()
-        self.max_elements.setRange(1, 100_000_000)
-        self.max_elements.setValue(MAX_FE_ELEMENTS)
+        self.max_elements = CompactSpinBox()
+        self.max_elements.setRange(0, 2_147_483_647)
+        self.max_elements.setSpecialValueText("Unlimited")
+        self.max_elements.setValue(0)
         self.max_elements.setFixedHeight(CONTROL_HEIGHT)
-        self.max_elements.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        self.max_elements.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.max_elements.setFixedWidth(NUMERIC_FIELD_WIDTH)
         form.addRow("Maximum elements", self.max_elements)
         self.max_minutes = self._number(120, 0.1, 100000, " min")
@@ -405,6 +408,12 @@ class MeshConvergenceWidget(QWidget):
         results_layout.addWidget(results_header)
         results_layout.addWidget(self.results, 1)
         layout.addWidget(self.results_panel, 1)
+        from operation_progress import OperationProgress
+        self.operation_progress = OperationProgress(self, provider=lambda: (
+            self.future is not None,
+            (self.status.text() + " · " + self.rows[-1].status) if self.rows else self.status.text(),
+        ))
+        layout.addWidget(self.operation_progress)
         self.solver_combo.currentIndexChanged.connect(self._solver_changed)
         if self.remote_controller is not None: self.remote_controller.changed.connect(self._solver_changed)
         self._solver_changed()
@@ -689,6 +698,10 @@ class MeshConvergenceWidget(QWidget):
             self.rows[-1] = update
         self._render(len(self.rows) - 1)
         if not self.future.done():
+            if hasattr(self.future, "progress_status"):
+                stage = self.future.progress_status()
+                if stage:
+                    self._set_status(f"Level {len(self.rows)} · {stage}")
             return
         try:
             level = self.future.result()

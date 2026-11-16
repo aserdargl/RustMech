@@ -185,10 +185,13 @@ def write_poly_mesh(grid, folder):
 
 
 def export_flow_case(specimen, flow, directory):
+    from analysis_process import report_analysis_step
+    report_analysis_step("Building fluid mesh…")
     directory = Path(directory)
     if directory.exists() and any(directory.iterdir()):
         raise ValueError("Choose a new or empty CFD case folder to avoid mixing meshes and results.")
     grid, metadata = build_flow_grid(specimen, flow)
+    report_analysis_step("Exporting OpenFOAM mesh and case files…")
     directory.mkdir(parents=True,exist_ok=True)
     grid.save(directory/"fluid_mesh.vtu")
     write_poly_mesh(grid,directory/"constant"/"polyMesh")
@@ -255,10 +258,13 @@ def stop_flow_case(flow, directory):
 
 
 def execute_flow_case(specimen,flow,directory):
+    from analysis_process import report_analysis_step
+    report_analysis_step("Checking OpenFOAM runtime…")
     check_flow_runtime(flow)
     export_flow_case(specimen,flow,directory)
     case = shlex.quote(linux_path(directory))
     script = f"source {shlex.quote(flow.foam_bashrc)} >/dev/null 2>&1 && cd {case} && exec setsid --wait bash Allrun"
+    report_analysis_step("Checking mesh and solving flow…")
     result = _wsl(flow,script,capture_output=True)
     if result.returncode:
         details = ""
@@ -266,6 +272,7 @@ def execute_flow_case(specimen,flow,directory):
             path = Path(directory)/filename
             if path.exists(): details += "\n"+filename+"\n"+path.read_text(errors="replace")[-3500:]
         raise RuntimeError("OpenFOAM failed; inspect the case logs. "+result.stderr.decode(errors="replace")[-1000:]+details)
+    report_analysis_step("Processing flow results…")
     return summarize_flow_case(directory)
 
 

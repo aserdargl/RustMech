@@ -1,6 +1,225 @@
 # RustMech
 
+## Arayüz dili ve TRUBA bağlantısı
+
+Sağ üst köşedeki **English / Türkçe** seçicisinden arayüz dili değiştirilir.
+Tercih kullanıcıya özel saklanır ve sonraki açılışta geri yüklenir. Dil geçişi
+açık yardımcı pencereleri, menüleri, açıklamaları ve sonuç grafiklerinin
+başlıklarını da günceller; sayısal girdiler, çözücü kimlikleri ve kayıtlı plan
+verileri değişmez.
+
+TRUBA penceresinde **Bağlantı**, **Kaynaklar** ve **Gelişmiş** sekmeleri
+kimlik bilgilerini, kaynak oturumunu ve uzak çalışma ortamını ayrı sunar.
+Pencereyi açmak veya dil değiştirmek bağlantı, kaynak tahsisi ya da analiz
+başlatmaz. Bağlantı **Bağlan**, hesaplama modu ve kaynak tahsisi kendi açık
+eylemleriyle başlatılır. Pencerenin konumu, boyutu ve büyütülmüş durumu korunur.
+
+## Gitterburg Tasarim Havuzu
+
+Gitterburg'da alt komut cubugundaki **Output / Cikti** menusunden
+**Send to RustMech / RustMech'e gonder** secilir. Gercek uretim geometrisi,
+tasarim adi, mm birimi ve kaynak parametreleri kullaniciya ait ortak havuza
+bagimsiz bir kopya olarak kaydedilir. RustMech'in acik olmasi gerekmez.
+
+RustMech'te **Designs > Design Pool (Gitterburg)** menusunu acin. Bir veya
+birden fazla tasarim secip **Configure selected** ile destek ve yukleme
+yuzeylerini belirleyin. Ana Mechanic calisma alaninda malzeme, mesh, yukleme
+ve cozucuyu ayarlayin; **Designs > Add current model to analysis queue**
+ile isi ekleyin. Coklu secimde her eklemeden sonra siradaki tasarim hazirlanir.
+**Designs > Analysis queue** penceresinde isleri secin, yukari/asagi tasiyin
+ve **Run analysis queue** ile baslatin. Gonderme, havuzu acma veya kuyruga
+ekleme otomatik analiz baslatmaz. Bu kuyruk mekanik analizler icindir;
+Flow/Thermal calisma alanlarinin mevcut ayri akislari korunur.
+
+Havuz varsayilan olarak `%LOCALAPPDATA%/Gitterburg-RustMech/DesignPool`,
+kuyruk ise `%LOCALAPPDATA%/Gitterburg-RustMech/RustMech/analysis_queue.json`
+konumundadir. Kuyruk her isin geometri, malzeme ve analiz ayarlarini saklar;
+Gitterburg'daki sonraki duzenlemeler hazir isleri degistirmez. Kesilen isler
+yeniden acilista isaretsiz gelir; otomatik yeniden baslatilmaz. Pencere
+boyutlari ve konumlari da kullaniciya ozel saklanir.
+
+Analize hazirlanan geometri kapali, manifold ve tek baglantili bir kati
+olmali; iki karsilikli paralel duz yukleme yuzeyi secilebilmelidir. Uygun
+olmayan geometrinin nedeni gosterilir. Programlarin kaynak koddan guncel
+surumlerini calistirin; mevcut eski EXE'ler bu degisikliklerle yeniden
+paketlenmedikce yeni komutlari icermez.
+
+Entegrasyon kontrolu (cozucu baslatmaz):
+`..\Gitterburg\.venv\Scripts\python.exe tools\verify_design_pool_transfer.py`
+Testlerde `RUSTMECH_DESIGN_POOL` ve `RUSTMECH_ANALYSIS_QUEUE` ile gecici
+konumlar kullanilabilir. Uretimde havuzu degistirirken iki uygulamaya da ayni
+`RUSTMECH_DESIGN_POOL` konumu verilmelidir.
+
+## Geometri önizlemesi ve isteğe bağlı analiz ağı
+
+DoE **New geometry > Add**, güncel yapı ve ölçüleri parametre kopyası
+olarak plana ekler. Yüzey önizlemesinin tamamlanmasını beklemez; ekleme
+sırasında önizleme, FE hacim ağı veya analiz işi başlatmaz. Sayısal alana
+yazılan son değer Add tıklamasında onaylanır; geçersiz ölçüler eklenmez.
+DoE ekleme, deney/ML tablosu oluşturma ve yüzey önizlemelerinde yalnız yapı ve
+ölçüler doğrulanır. Mesh türü/stratejisi, global/yerel ağ boyutu ve eleman
+sayısı bu adımları engellemez; ayarlar değiştirilmeden saklanır. Mesh
+kontrolü/üretimi veya analiz istendiğinde tam FE doğrulaması uygulanır.
+
+DoE üst çubuğundaki **Save** ve **Open**, planı `.rustmech-doe.json`
+dosyasına kaydeder ve geri açar. Dosya; tasarımları ve dahil edilme seçimlerini,
+grupların değişken aralıklarını, örnekleme/şekil değiştirme ayarlarını, New
+Geometry taslağını, DoE ve ML tablolarını ve tablolardaki sonuç değerlerini
+saklar. Geometri ve sonuç dosyalarının kendisi pakete eklenmez; mevcut dosya
+yolları korunur. Open analiz veya önizleme işi başlatmaz; geri yüklenen
+geometriyi görmek için **Apply** kullanılır. Kaydedilmemiş değişiklikler varsa
+Open önce uyarır; geçersiz dosya mevcut planı değiştirmez. Save/Open, çalışan
+toplu iş bitene veya durdurulana kadar devre dışıdır.
+
+Ana çalışma alanı artık **Geometry** görünümüyle açılır. Geometri/Structure
+**Apply** yalnız yüzeyi hazırlar; Netgen veya HEX hacim ağı üretimini beklemez.
+**FE Mesh**, **Overlay**, mesh bölümünün **Apply** düğmesi veya **Run analysis**
+hacim ağı üretimini açıkça ister. Run analysis önce eksik ağı arka planda
+hazırlar, doğrular ve aynı ağı çözücüye aktarır. Bu sırada ayarlar değişirse
+veya üretim iptal edilirse bekleyen analiz kendiliğinden başlamaz. Geometri
+önizlemesinde FE eleman/düğüm göstergeleri ağ hazırlanana kadar `—` gösterir.
+TRUBA modunda yüzey önizlemesi ayrı `surface` işi, FE ağı ayrı `preview` işi
+olarak çalışır; bu değişiklik uzaktan hesaplama politikasını değiştirmez.
+
+Gitterburg'un VTK Flying Edges yüzey çıkarımı RustMech'in mevcut alan
+örneklemesi, katı oranı eşiği ve kapalı sınır kurallarına uyarlandı. Açık veya
+manifold olmayan hızlı konturlar Lewiner Marching Cubes yoluna döner.
+Geometri çözünürlüğü düşürülmez; uyumlu yüzey ve FE ağı önbellekleri korunur.
+GPU altyapısı taşınmadı. Büyük referans yüzeylerde aşağıdaki otomatik parçalı
+üretim yolu kullanılır.
+
+### Otomatik parçalı yüzey üretimi
+
+İstenen numune ölçüsü ve yüzey çözünürlüğünün gerektirdiği ızgara 16 milyon
+noktayı aşınca veya tek parça alan tamponlarının tahmini o anda boş belleğin
+dörtte birini aşınca **chunked mode otomatik açılır**. DoE Active/DesingLab
+önizlemeleri, ana geometri önizlemesi ve referans yüzey isteyen analiz yolları
+aynı politikayı kullanır. Mesh boyutu, numune ölçüsü, katı oranı eşiği ve yüzey
+çözünürlüğü değiştirilmez; bunun için ayrı bir UI seçeneği gerekmez.
+
+Alan yaklaşık iki milyon noktalık sınırlı bloklarda örneklenir; uygun periyodik
+ızgaralarda kesimler hücre sınırlarına oturtulur. Aynı fazdaki iç bloklar ve
+aynı dış kapak düzenine sahip bloklar bir kez konturlanıp yeniden kullanılır.
+Tek hücrenin alan örnekleri de tekrar değerlendirilmez. Izgaraya tam oturmayan
+periyotlarda ve rastgele gözenekli yapılarda şablon kopyalama uygulanmaz;
+istenen koordinatlar sınırlı bloklarda doğrudan değerlendirilir.
+
+Bloklar ortak örnek düzlemini paylaşır, her ızgara hücresi yalnız bir bloğa
+aittir ve iç sınırlara kapak eklenmez. Birleşim noktaları aynı global ızgara
+kenarının skaler değerlerinden hesaplanır. Çıkış koordinatları önceki VTK
+yoluyla aynı float32 hassasiyetindedir; boyutsal yuvarlama veya yakın noktaları
+toleransla kaynaştırma yapılmaz. Dış yükleme düzlemlerindeki yalnız kayan nokta
+yuvarlama hataları düzeltilir. Hızlı kontur kapalı/manifold değilse aynı blok
+planı Lewiner ile tekrar çıkarılır. Yeni oluşturulmuş yüzeyin daha önce yapılmış
+topoloji kontrolü normal hesabından sonra gereksiz yere tekrarlanmaz.
+
+Şablon önbelleği en fazla 128 MiB veya boş belleğin 1/16'sı kadardır. Sığmayan
+ara şablonlar kullanıcıya ait geçici çalışma klasörüne yazılır. Son yüzey ve
+birleştirme tamponları yine belleğe sığmalıdır; mevcut bellek ön kontrolleri
+korunur. Parçalı üretim sınırsız büyüklükte son yüzey garantisi vermez.
+
+Karşılaştırma komutu (bağımsız süreçler, üç tekrar medyanı; çizim/çözücü hariç):
+
+```powershell
+& '..\Gitterburg\.venv\Scripts\python.exe' tools/benchmark_chunked_surface.py --repeats 3 --unaligned
+```
+
+`chunked_surface_benchmark.json`; tek parça, parçalı ve periyodik şablonları
+kapalı parçalı yolların süre ve tepe RSS belleğini raporlar. Hacim, kapak
+alanları, sınırlar, kapalı/manifold yüzey ve her yönde en fazla 4096 köşe için
+yüzeye uzaklık karşılaştırılır. Birim kontrolleri `tests.test_chunked_surface`
+içindedir; ortak sınırlar, iç kapak oluşmaması, rastgele/uyumsuz periyotlar,
+disk taşması, Lewiner geri dönüşü ve otomatik bellek politikası kapsanır.
+
+16 Kasım 2026, üç tekrar medyanı (1 mm hücre, aynı yüzey çözünürlüğü):
+
+| Geometri / numune | Tek parça | Otomatik chunked | Tek parça / chunked tepe RSS |
+| --- | ---: | ---: | ---: |
+| Gyroid, 4×4×4 hücre | 5,965 s | 4,767 s | 1,312 / 0,857 GiB |
+| BCC, 4×4×4 hücre | 2,945 s | 3,573 s | 0,969 / 0,591 GiB |
+| Gyroid, 3,13 mm, ızgaraya oturmayan periyot | 13,739 s | 9,219 s | 1,764 / 1,323 GiB |
+
+Periyodik şablonların kullanılması aynı parçalı yöntemi Gyroid'de 1,70×,
+BCC'de 1,22× hızlandırdı. Hizalanmış örneklerde 64 bloktan yalnız 27'si
+konturlandı, kalan 37 blok yeniden kullanıldı; alan yalnız 80³ noktada
+değerlendirildi. Hizalanmayan örnekte şablon tekrar kullanımı sıfırdır.
+Chunked mode her geometride tek parça yöntemden hızlı değildir: bu BCC
+örneğinde yaklaşık %21 süre maliyeti karşılığında tepe bellek yaklaşık %39
+azaldı. Bellek baskısı ve büyük boyutlar otomatik seçimin ana gerekçeleridir.
+
+Üç örnek de kapalı/manifold kaldı; sınırlar aynıydı. En büyük bağıl hacim
+farkı %0,000866, en büyük bağıl kapak alanı farkı %0,000030 ve örneklenen iki
+yönlü yüzey uzaklığı 4,13e-7 mm oldu. Uzaklık kontrolü her yönde en fazla 4096
+köşeyi örnekler; tam Hausdorff hesabı değildir. Ölçümler çizim, süreç açılışı,
+FE hacim ağı üretimi ve çözücü süresini kapsamaz. Ham rapor kökteki
+`chunked_surface_benchmark.json` dosyasındadır; bu ölçüm çıktısı mevcut Git
+politikasına göre ignore edilir, tekrar üretim betiği kaynakta tutulur.
+
+Tekrar üretilebilir karşılaştırma:
+
+```powershell
+& '..\Gitterburg\.venv\Scripts\python.exe' tools/benchmark_surface_preview.py
+```
+
+`surface_preview_benchmark.json`, aynı skaler örnekler üzerinde eski/yeni
+yüzey çıkarımını; kapalı/manifold yüzeyi, yönelimi, hacmi, sınırları, yükleme
+yüzeyi alanlarını ve iki yönlü köşe-yüzey uzaklıklarını karşılaştırır.
+Gyroid sheet/network ve BCC için 1 ve 2 hücre/eksen olmak üzere altı örnek
+kullanılır. Önizleme akışı ayrıca HEX8 ve TET4 için ölçülür. Süreler sıcak
+süreçte üç tekrarın medyanıdır; eski tam önizleme ölçümünde tetra ağ
+önbelleği her tekrarda temizlenir. Çizim, süreç açılışı, veri aktarımı, gerçek
+çözücü ve SLURM bekleme süreleri dahil değildir.
+
+16 Kasım 2026'da testlerle eşzamanlı çalıştırılmayan son ölçüm:
+
+| Önizleme hesabı (1 mm numune, 1 mm hücre) | Önce: yüzey + FE ağı | Şimdi: yalnız geometri | Hız oranı |
+| --- | ---: | ---: | ---: |
+| HEX8, 0,1 mm ağ | 90,96 ms | 86,55 ms | 1,05× |
+| TET4, Netgen, 0,1 mm global/yerel ağ | 4,100 s | 87,02 ms | 47,11× |
+
+Yalnız yüzey çıkarımı altı örnekte 1,04–1,34× hızlandı. Altı örneğin
+tamamında Flying Edges kullanıldı ve doğruluk eşikleri geçti: açık kenar yok,
+kapalı/manifold yüzey, aynı sınırlar, en büyük bağıl hacim farkı %0,0003952,
+en büyük iki yönlü köşe-yüzey uzaklığı 1,165e-7 mm. TET4 önizlemesindeki büyük
+kazanç hacim ağının ertelenmesidir; analiz toplam süresinin 47× hızlandığı
+anlamına gelmez. Her iki FE karşılaştırma ağı da mevcut çözüm ön kontrollerini
+geçti; harici çözücü çalıştırılmadı.
+
+Regresyon testleri `tests.test_surface_preview` ve
+`tests.test_surface_preview_ui` içindedir. 16 Kasım 2026 doğrulamasında ilgili
+73 çekirdek/Qt testi ve 28 masaüstü testi geçti; pencere durumu, Enter davranışı,
+önbellek, iptal, analiz ağı yeniden kullanımı ve sahte TRUBA akışları kapsandı.
+Masaüstü testlerinde VTK OpenGL bağlam uyarıları görüldü; bu sonuç çizimin
+görsel olarak doğrulandığı veya çizim hızının ölçüldüğü anlamına gelmez.
+Canlı TRUBA ve gerçek çözücü çalıştırılmadı. Kaynak sürümü
+`Run-RustMech.ps1` ile açılır; mevcut EXE ayrıca yeniden paketlenmelidir.
+
 ## Güncel durum ve çevrimdışı testler
+
+### Büyük sonlu eleman modelleri
+
+DoE ve ortak mesh doğrulamasındaki 150 bölme / 1.100.000 eleman üst
+sınırları kaldırıldı. Rust HEX8/HEX20 ve TET10 çekirdeği, Netgen ve APDL
+aktarımı da eski eleman sınırlarını uygulamaz. Numune boyutu, global/yerel
+mesh boyutu ve geometri örnekleme aralığı otomatik değiştirilmez.
+Standart numunelerin HEX elemanları da Rust çekirdeğinde oluşturulur.
+
+Mesh üretimindeki büyük tamponlar, o anda kullanılabilir belleğe göre
+ön kontrolden geçer; yetersizse gerekli ve kullanılabilir GiB bilgisi
+gösterilir. Bu tahmin çözücünün matris/faktörizasyon belleğini kapsamaz.
+Yerel mesh üretimi yerel belleği, uzak mesh üretimi çalıştığı sunucunun
+belleğini kullanır. Yerel indekste taşmayı önleyen veri biçimi kontrolleri
+korunur. Mesh Convergence eleman bütçesi varsayılan olarak `Unlimited`;
+kullanıcının belirlediği pozitif bütçe uygulanmaya devam eder.
+
+Kaynak sürümü `Run-RustMech.ps1` ile yeniden açın. Rust çekirdeği ABI 5,
+özel Netgen çekirdeği `96e5682f-rustmech-atlas-6` olarak yeniden derlendi.
+Eski EXE paketleri ayrıca yeniden paketlenmedikçe bu değişiklikleri içermez.
+
+Regresyon kontrolü: `..\Gitterburg\.venv\Scripts\python.exe -m unittest tests.test_large_mesh`.
+Bu test 2 milyonun üzerinde HEX elemanı üretip APDL dosyasına aktarır;
+TET10 düğüm oluşturma ve kalite hesaplarını 2.000.001 elemanla sınar.
+Harici çözücü başlatmaz.
 
 RustMech; PySide6/VTK arayüzü, Rust/Netgen ağ çekirdekleri, yerel ANSYS MAPDL,
 TRUBA/Kratos mekanik analizi ve ayrı OpenFOAM CFD/CHT çalışma alanlarını içerir.
@@ -67,11 +286,12 @@ SSH bağlantısını kurmak hesaplama modunu ya da bir analizi kendiliğinden ba
    Python modülü, ayrı çalışma ortamının Python yolu ve OpenCFD modülü kullanıcıya
    özel saklanır. Varsayılan OpenCFD modül adı geçmiş kurulumla uyumludur;
    gerçekten yüklenebildiği ayrıca doğrulanır.
-3. TRUBA hesaplama modunu açın. Bir **SLURM yetenek kontrolü** çalışır: Linux
+3. **Allocate resources** ile kaynak ayırın veya **Refresh session** ile kayıtlı
+   oturumu doğrulayın. Oturum RUNNING ve işçi hazır olunca bir **SLURM yetenek kontrolü** çalışır: Linux
    Python/Rust çekirdeği, Netgen, Kratos uygulamaları ve uyumlu OpenCFD komutları
    hesaplama düğümünde kontrol edilir. Kuyruk beklerken işlemler hazır sayılmaz.
-4. Çalışma ortamı yoksa **Prepare remote runtime** düğmesine açıkça basın.
-   Bu işlem ayrı bir SLURM işiyle kullanıcıya ait
+4. Çalışma ortamı eksik veya eskiyse sistem aynı tahsis içinde otomatik hazırlar.
+   **Prepare remote runtime** elle onarım için kullanılabilir. Bu işlem kullanıcıya ait
    `~/.local/share/RustMech/remote-v1` ortamını, bilimsel Python bağımlılıklarını,
    Kratos 10.4.4 paketlerini ve Linux Rust çekirdeğini kurar. Sistem Python'unu
    veya kabuk açılış dosyalarını değiştirmez. Paket indirmek için hesaplama
@@ -82,8 +302,10 @@ SSH bağlantısını kurmak hesaplama modunu ya da bir analizi kendiliğinden ba
    aynı kullanıcı ortamında [uv ile yönetilen tam Python 3.12](https://docs.astral.sh/uv/guides/install-python/)
    kullanır. Paylaşılan Python kurulumu ve kabuk başlangıç dosyaları değişmez.
 5. Yetenek kontrolü başarılı olduktan sonra normal mesh/analiz düğmelerini kullanın.
-   Bağlantı veya çalışma ortamı değişirse **Check remote capabilities** ile yeniden
-   doğrulayın. Kontrol ve kurulum işleri kendi Stop düğmesiyle iptal edilebilir.
+   Bağlantı veya çalışma ortamı değişirse otomatik kontrol yeniden yapılır.
+   İlk kurulum indirme ve derleme nedeniyle birkaç dakika veya daha uzun sürebilir;
+   aşaması üst başlıkta ve Advanced durum alanında gösterilir. Hazır ortam yeniden
+   kurulmaz. Kontrol ve kurulum işleri kendi Stop düğmesiyle iptal edilebilir.
 
 TRUBA modunda mevcut destek:
 
@@ -778,27 +1000,52 @@ projenin tüm dosyaları RustMech konumundadır. PyCharm için RustMech klasör�
 
 TRUBA panelinde bağlantıyı kurun, kuyruk (Partition), hesap, CPU, bellek ve
 Wall time değerlerini belirleyip **Allocate resources** düğmesine basın.
-Örneğin `72:00:00` üç günlük tahsis ister; kuyruğun ve hesabınızın bu süreyi ve
-kaynak miktarını kabul etmesi gerekir. İlk tahsis Slurm kuyruğunda bekler.
-**Refresh session** kayıtlı oturumun durumunu ve kalan süresini yeniler.
+Yeni oturumların varsayılan süresi `72:00:00` (üç gün), kuyruk seçimi **Auto**
+olur. Kaydedilmiş bir kuyruk seçimi korunur; 72 saat desteklemeyen eski Debug
+tercihi yeni istekler için Auto'ya alınır. Mevcut tahsis değiştirilmez.
+Auto, hamsi/barbun/orfoz CPU kuyruklarını gerçek iş oluşturmayan
+`sbatch --test-only` ile doğrular ve Slurm'un tahmin ettiği en erken başlangıcı
+seçer. Tahmin yoksa canlı CPU/bellek durumunda uygun boş kapasiteyi tercih eder.
+GPU kuyrukları mevcut CPU çözücüleri için ayrılmaz; ücretli öncelik veya ek
+hizmet talebi gönderilmez. Tahmin değişebilir; kuyruğun ve hesabın
+72 saati ve kaynak miktarını kabul etmesi gerekir. İlk tahsis Slurm'da bekler.
+**Refresh session** kayıtlı oturumu bu çalıştırmaya bağlar ve durumu yeniler.
 
-Oturum hazır olduğunda TRUBA hesaplama modunu etkinleştirin ve
-**Check remote capabilities** ile ortamı doğrulayın; gerekirse
-**Prepare remote runtime** kullanın. Bu kontroller de aynı tahsiste çalışır.
-Ardından ağ üretimi ve analizler, yeni `sbatch` tahsisi açmadan aynı kaynağın
+Bağlanmak veya TRUBA hesaplama modunu işaretlemek tek başına Slurm işi
+oluşturmaz. Ortam kontrolü, hazırlık ve hesaplamalar için önce bir kaynak
+oturumu ayırmak veya kayıtlı oturumu yenilemek gerekir.
+Allocate kaynak isteğiyle TRUBA hesaplama modu açılır. Oturum RUNNING ve işçi
+hazır olduğunda uzak ortam bir kez otomatik kontrol edilir; gerekirse aynı tahsiste
+otomatik hazırlanır ve doğrulanır. Başarısız kurulum kendiliğinden sürekli
+tekrarlanmaz; hata ayrıntısı Advanced durum alanında gösterilir. Üst başlık
+Slurm tahsisi RUNNING olarak doğrulanınca **yeşil RUNNING** gösterir; işçi ve
+üretim ortamı da doğrulanınca **yeşil READY** olur. RUNNING sırasında işçinin
+başlaması, ortam kontrolü veya kurulum gereksinimi ayrıca yazılır; hesaplama
+yalnız READY koşulları sağlandığında açılır. Kuyrukta veya tahsis doğrulanmamışsa
+sarıdır. Yalnız SSH bağlantısı yeşil READY sayılmaz.
+Hazır olma bildirimi üretim başlatmaz. **Apply** geometriyi aynı kaynağın
+`surface` adımında (büyükse otomatik chunked/periyodik yolla) üretir; VTP sonucu
+indirilip yerel ekranda çizilir. FE Mesh isteği ayrıca hacim ağını üretir.
+Ağ üretimi ve analizler, yeni `sbatch` tahsisi açmadan aynı kaynağın
 `srun` adımları olarak sırayla yürütülür. Önceki analiz çalışıyorsa yeni analiz
 uygulamanın oturum kuyruğunda bekler. Kaynak ayarları oturum boyunca sabittir.
 
 Boşta geçirilen süre de tahsis süresine dahildir. Süre bittiğinde devam eden
 hesaplama durdurulabilir; uygulama kendiliğinden yeni tahsis açmaz. Bir analizi
 iptal etmek kaynak oturumunu kapatmaz. **Release resources** oturumu ve içindeki
-işleri sonlandırır. RustMech'i kapatmak tahsisi serbest bırakmaz; yeniden açınca
-aynı Windows kullanıcısına ait kayıt **Refresh session** ile doğrulanabilir.
+işleri sonlandırır. **Normal kapanış**, bu çalıştırmada ayrılan veya açıkça
+Refresh session ile bağlanılan RustMech tahsisini de otomatik bırakır; henüz
+kuyrukta bekleyen veya gönderimi tamamlanmamış istek de kapsanır. Kapanış
+arka planda iptali ve yalnız ilgili job ID'sinin sonlandığını doğrular.
+Doğrulama başarısızsa pencere açık kalır; bağlantıyı düzeltip yeniden kapatın.
+Başlangıçta yalnız diskten okunan, bu çalıştırmaya bağlanılmamış eski tahsise
+dokunulmaz. İşletim sisteminin süreci zorla öldürmesi/çökmesi normal kapanış
+akışını çalıştıramaz; kalan kayıt sonraki açılışta doğrulanıp bırakılabilir.
 Bağlantı hatasında kayıtlı işi yenileyin veya geri alın; tekrar kaynak talep
 ederek belirsiz bir gönderimin kopyasını oluşturmayın.
 
 Oturum protokolü ve iptal kontrolleri:
-`python -m unittest tests.test_truba_session tests.test_truba_remote tests.test_remote_mode_ui`.
+`python -m unittest tests.test_truba_close tests.test_truba_session tests.test_truba_remote tests.test_remote_mode_ui`.
 
 ## Imported geometry and compression faces
 

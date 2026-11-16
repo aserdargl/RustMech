@@ -84,11 +84,14 @@ def build_thermal_grid(specimen, flow):
 
 
 def export_thermal_case(specimen, flow, thermal, directory):
+    from analysis_process import report_analysis_step
+    report_analysis_step("Building water and solid region meshes…")
     thermal.validate(specimen,flow)
     directory = Path(directory)
     if directory.exists() and any(directory.iterdir()):
         raise ValueError("Choose a new or empty thermal case folder.")
     grid,metadata = build_thermal_grid(specimen,flow)
+    report_analysis_step("Exporting thermal regions and case files…")
     directory.mkdir(parents=True,exist_ok=True)
     grid.save(directory/"thermal_mesh.vtu")
     write_poly_mesh(grid,directory/"constant/polyMesh")
@@ -159,11 +162,14 @@ def export_thermal_case(specimen, flow, thermal, directory):
 
 
 def execute_thermal_case(specimen,flow,thermal,directory):
+    from analysis_process import report_analysis_step
+    report_analysis_step("Checking thermal solver runtime…")
     thermal.validate(specimen,flow)
     flow.validate_local_runtime()
     runtime = _wsl(flow,f"source {shlex.quote(flow.foam_bashrc)} >/dev/null 2>&1 && command -v chtMultiRegionFoam && command -v splitMeshRegions && command -v checkMesh",capture_output=True,timeout=30)
     if runtime.returncode: raise RuntimeError("OpenCFD chtMultiRegionFoam/splitMeshRegions/checkMesh unavailable in the selected WSL environment.")
     export_thermal_case(specimen,flow,thermal,directory)
+    report_analysis_step("Splitting regions, checking mesh and solving heat transfer…")
     result = _wsl(flow,f"source {shlex.quote(flow.foam_bashrc)} >/dev/null 2>&1 && cd {shlex.quote(linux_path(directory))} && exec setsid --wait bash Allrun",capture_output=True)
     if result.returncode:
         logs = ""
@@ -171,6 +177,7 @@ def execute_thermal_case(specimen,flow,thermal,directory):
             path = Path(directory)/name
             if path.exists(): logs += "\n"+name+"\n"+path.read_text(errors="replace")[-2400:]
         raise RuntimeError("Transient CHT failed. "+logs[-7000:])
+    report_analysis_step("Processing temperature history and thermal results…")
     return summarize_thermal_case(directory)
 
 

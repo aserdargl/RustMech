@@ -12,8 +12,8 @@ def smoke_test(studio):
     from window_state import WindowStateStore
 
     app = studio.QApplication.instance() or studio.QApplication([])
-    app.setApplicationName("RustMech")
-    app.setApplicationDisplayName("RustMech")
+    from app_identity import configure_application
+    configure_application(app)
     preferences = TemporaryDirectory(prefix="rustmech-smoke-")
     app._rustmech_window_state = WindowStateStore(app, QSettings(
         str(Path(preferences.name) / "windows.ini"), QSettings.Format.IniFormat))
@@ -132,6 +132,8 @@ def run():
             from PySide6.QtWidgets import QApplication, QMessageBox
 
             _app = QApplication.instance() or QApplication([])
+            from app_identity import configure_application
+            configure_application(_app)
             QMessageBox.critical(
                 None,
                 "RustMech",

@@ -10,8 +10,24 @@ import tempfile
 import traceback
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
 
+_progress_path = None
+
+
+def report_analysis_step(message):
+    """Publish a stage from an owned analysis process without affecting its result."""
+    if _progress_path is not None:
+        try:
+            temporary = _progress_path.with_suffix(".tmp")
+            temporary.write_text(message, encoding="utf-8")
+            temporary.replace(_progress_path)
+        except OSError:
+            pass
+
 
 def _execute(result_path, target, args):
+    global _progress_path
+    _progress_path = Path(result_path).with_suffix(".progress")
+    report_analysis_step("Preparing operation…")
     if os.name != "nt":
         os.setsid()
     try:
@@ -60,6 +76,12 @@ class AnalysisProcess:
             try:return json.loads(self._remote_marker.read_text())
             except (OSError,ValueError):pass
         return None
+
+    def progress_status(self):
+        try:
+            return self._result_path.with_suffix(".progress").read_text(encoding="utf-8")
+        except OSError:
+            return None
 
     def result(self):
         if self._remote_future is not None:

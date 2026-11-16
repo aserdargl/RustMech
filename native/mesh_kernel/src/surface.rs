@@ -119,9 +119,9 @@ pub unsafe extern "C" fn rustmech_surface_plan_new(
             || triangles.is_null()
             || counts.is_null()
             || point_count == 0
-            || point_count > 50_000_000
+            || point_count > i32::MAX as usize
             || triangle_count == 0
-            || triangle_count > 50_000_000
+            || !crate::fits_buffer(triangle_count, 3, 4)
         {
             return Err("Invalid triangle surface buffers".into());
         }

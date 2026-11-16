@@ -30,7 +30,7 @@ def kernel_path():
     folder = Path(__file__).resolve().parent / "native" / "bin" / "netgen_kernel"
     try:
         metadata = json.loads((folder / "build.json").read_text(encoding="utf-8"))
-        if metadata["revision"] != "96e5682f-rustmech-atlas-5":
+        if metadata["revision"] != "96e5682f-rustmech-atlas-6":
             return None
         for name in ("rustmech_netgen.dll", "rustmech_ngcore.dll"):
             with (folder / name).open("rb") as stream:
@@ -45,7 +45,7 @@ def kernel_path():
         library.rustmech_netgen_revision.restype = ct.c_char_p
         return (
             path
-            if library.rustmech_netgen_revision() == b"96e5682f-rustmech-atlas-5"
+            if library.rustmech_netgen_revision() == b"96e5682f-rustmech-atlas-6"
             else None
         )
     except (OSError, ValueError, KeyError, AttributeError, RuntimeError):

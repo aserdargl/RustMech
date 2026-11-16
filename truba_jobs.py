@@ -220,9 +220,7 @@ class WinSCPJobs:
         self.execute(lines,received)
 
     def cancel(self, record):
-        remote=validated_remote_path(record["remote_directory"],self.username)
-        # Cancel by recorded ID or read the job-owned job.id after an interrupted submission.
-        command="mkdir -p -- "+shlex.quote(remote)+" && cd "+shlex.quote(remote)+" && touch cancel.request && if [ -s job.id ]; then job=$(cat job.id); case \"$job\" in *[!0-9]*|'') exit 2;; esac; scancel \"$job\"; fi"
+        command = cancellation_script(record, self.username)
         self.execute(["call bash -lc "+shlex.quote(command)])
 
 
@@ -273,12 +271,49 @@ class SSHJobs:
                     except FileNotFoundError:pass
 
     def cancel(self,record):
-        remote=validated_remote_path(record["remote_directory"],self.username)
         with self.connect() as client:
-            command="mkdir -p -- "+shlex.quote(remote)+" && cd "+shlex.quote(remote)+" && touch cancel.request && if [ -s job.id ]; then job=$(cat job.id); case \"$job\" in *[!0-9]*|'') exit 2;; esac; scancel \"$job\"; fi"
+            command = cancellation_script(record, self.username)
             _,out,err=client.exec_command("bash -lc "+shlex.quote(command))
             if out.channel.recv_exit_status():
                 raise RuntimeError("TRUBA cancellation failed; reconnect and retry using the job record.")
+
+
+def cancellation_script(record, username):
+    """Accept an already-ended job, but never mistake scancel acceptance for exit."""
+    from truba_session import QUEUE_FUNCTION
+    remote = validated_remote_path(record['remote_directory'], username)
+    job = str(record.get('job_id') or '')
+    if job and (not job.isascii() or not job.isdigit()):
+        raise ValueError('Invalid SLURM job ID')
+    return 'set -euo pipefail\n' + QUEUE_FUNCTION + 'mkdir -p -- ' + shlex.quote(remote) + '\ncd ' + shlex.quote(remote) + '\n' + '''
+touch cancel.request
+# An in-flight sbatch must publish its ID before cancellation can be confirmed.
+for attempt in {1..30}; do
+ [ ! -d submission.lock ] || [ -s job.id ] || { sleep 1; continue; }
+ break
+done
+job=''' + shlex.quote(job) + '''
+if [ -s job.id ]; then
+ remote_job=$(cat job.id)
+ case "$remote_job" in *[!0-9]*|'') exit 2;; esac
+ [ -z "$job" ] || [ "$job" = "$remote_job" ] || exit 2
+ job=$remote_job
+fi
+if [ -z "$job" ]; then
+ [ ! -d submission.lock ] || exit 3
+ exit 0
+fi
+scancel "$job" || true
+for attempt in {1..40}; do
+ state=$(rustmech_queue "$job" '%T')
+ case "$state" in
+  ''|COMPLETED*|CANCELLED*|FAILED*|TIMEOUT*|NODE_FAIL*|OUT_OF_MEMORY*|PREEMPTED*|BOOT_FAIL*|DEADLINE*|REVOKED*) exit 0;;
+ esac
+ sleep .25
+done
+echo 'Cancellation not confirmed; reconnect and retry.' >&2
+exit 3
+'''
 
 
 def validated_remote_path(path,username):

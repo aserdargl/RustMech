@@ -8,7 +8,7 @@ from itertools import permutations, product
 import numpy as np
 import pyvista as pv
 
-from model import MAX_FE_ELEMENTS
+from mesh_resources import require_memory
 from structure_library import evaluate_priority_field
 from periodic_sampling import has_repeating_cell
 
@@ -61,10 +61,7 @@ def _cell(settings, threshold, on_progress):
     # A cell is uniformly resolved to the local target. This is deliberately
     # conservative: cell copies must share the contact refinement on all faces.
     n = max(24, int(np.ceil(period / min(settings.mesh_resolution, settings.local_mesh_size))))
-    repeats = period_count(settings) ** 3
-    # A lower estimate catches impossible requests before allocating a grid.
-    if n > 64 or 6 * n ** 3 * settings.solid_fraction / 100 * repeats > MAX_FE_ELEMENTS:
-        raise PeriodicUnavailable('local size would exceed the periodic element budget')
+    require_memory(n ** 3 * 1400, "Periodic cell meshing")
     if on_progress:
         on_progress(f'Meshing one periodic {settings.structure_family} cell ({n} intervals)…')
     h = period / n
@@ -105,8 +102,8 @@ def _cell(settings, threshold, on_progress):
     # Exact isovalue coincidences create zero-volume cells; their collapsed
     # faces disappear when coincident points are merged.
     grid = grid.extract_cells(determinants > h ** 3 * 1e-12).clean(tolerance=period * 1e-10)
-    if not grid.n_cells or grid.n_cells * repeats > MAX_FE_ELEMENTS:
-        raise PeriodicUnavailable('clipped cell exceeds the periodic element budget')
+    if not grid.n_cells:
+        raise PeriodicUnavailable('clipped cell has no solid elements')
     boundary = grid.extract_surface(algorithm='dataset_surface')
     if not boundary.is_manifold:
         raise PeriodicUnavailable('clipped cell boundary is not closed')
@@ -118,8 +115,8 @@ def _cell(settings, threshold, on_progress):
 
 
 def tile_cell(cell, period, count, on_progress=None):
-    if cell.n_cells * count ** 3 > MAX_FE_ELEMENTS:
-        raise PeriodicUnavailable('tiled mesh exceeds the element limit')
+    require_memory(count ** 3 * (cell.n_points * 96 + cell.n_cells * 512),
+                   "Periodic mesh replication and connectivity")
     if on_progress:
         on_progress(f'Replicating and welding {count}×{count}×{count} cells…')
     offsets = np.array(list(product(range(count), repeat=3))) * period
@@ -158,12 +155,11 @@ def face_components(grid):
 
     cells = np.asarray(grid.cell_connectivity).reshape(-1, 4)
     face = np.sort(cells[:, ((0, 1, 2), (0, 1, 3), (0, 2, 3), (1, 2, 3))].reshape(-1, 3), axis=1)
-    n = grid.n_points
-    if n > 2_000_000:
-        raise PeriodicUnavailable('face connectivity exceeds the verification budget')
-    code = (face[:, 0] * n + face[:, 1]) * n + face[:, 2]
-    order = np.argsort(code)
-    same = code[order][1:] == code[order][:-1]
+    # Lexicographic face IDs avoid overflowing the old n**3 packed key on
+    # large meshes while retaining exact (rather than hashed) adjacency.
+    order = np.lexsort(face.T[::-1])
+    ordered = face[order]
+    same = np.all(ordered[1:] == ordered[:-1], axis=1)
     if np.any(same[1:] & same[:-1]):
         raise PeriodicUnavailable('more than two tetrahedra share a face')
     left, right = order[:-1][same] // 4, order[1:][same] // 4

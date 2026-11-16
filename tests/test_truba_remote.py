@@ -115,6 +115,25 @@ class RemoteProtocolTests(unittest.TestCase):
             cancel.assert_called_once()
         self.assertEqual(FakeTransport.instances[-1].submissions,0)
 
+    def test_job_list_cancellation_is_not_overwritten_by_monitor(self):
+        from concurrent.futures import CancelledError
+        from truba_jobs import write_record
+        original = FakeTransport.command
+        directory = self.root / 'external-cancel'
+
+        def command(transport, script):
+            if 'RUSTMECH_QUEUE' in script:
+                path = directory / 'remote_job.json'
+                record = json.loads(path.read_text())
+                write_record(path, dict(record, state='cancelled'))
+                return 'RUSTMECH_QUEUE=RUNNING|None\n'
+            return original(transport, script)
+
+        with patch.object(FakeTransport, 'command', command):
+            with self.assertRaises(CancelledError):
+                run_remote_job(dict(operation='probe'), RemoteContext(), directory=directory)
+        self.assertEqual(json.loads((directory / 'remote_job.json').read_text())['state'], 'cancelled')
+
     def test_archive_rejects_traversal_and_links(self):
         for name,link in (("../outside",False),("/absolute",False),("output/link",True)):
             archive_path = self.root/"bad.tar.gz"
@@ -134,6 +153,24 @@ class RemoteProtocolTests(unittest.TestCase):
         self.assertEqual(len(commands),1)
         self.assertNotIn("\n",commands[0])
         self.assertIn("base64 -d",commands[0])
+        self.assertTrue(commands[0].startswith("call env TERM=dumb bash -lc "))
+
+    def test_ssh_sets_term_before_login_startup(self):
+        from unittest.mock import MagicMock
+        from truba_jobs import SSHJobs
+        import shlex
+        transport = object.__new__(RemoteTransport)
+        transport.delegate = MagicMock(spec=SSHJobs)
+        client = transport.delegate.connect.return_value.__enter__.return_value
+        out, err = MagicMock(), MagicMock()
+        out.read.return_value = b'ok'
+        err.read.return_value = b''
+        out.channel.recv_exit_status.return_value = 0
+        client.exec_command.return_value = (None, out, err)
+        script = "printf '%s' 'hello world'"
+        self.assertEqual(transport.command(script), 'ok')
+        client.exec_command.assert_called_once_with(
+            'env TERM=dumb bash -lc ' + shlex.quote(script), timeout=60)
 
     def test_bundle_excludes_results_settings_and_binary_windows_kernels(self):
         path = self.root/"source.tar.gz"

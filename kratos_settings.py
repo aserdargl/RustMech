@@ -1,10 +1,10 @@
 """Kratos-specific numerical controls using the shared compact studio style."""
 import math
 import re
-from studio_style import CompactComboBox
+from studio_style import CompactSpinBox, CompactComboBox
 from PySide6.QtCore import Signal
 from PySide6.QtGui import QValidator
-from PySide6.QtWidgets import QCheckBox, QComboBox, QFormLayout, QLabel, QSpinBox, QLineEdit, QPushButton
+from PySide6.QtWidgets import QCheckBox, QComboBox, QFormLayout, QLabel, QLineEdit, QPushButton
 from studio_style import CompactDoubleSpinBox, SidebarGroupBox, configure_form, field_label
 from solver_profiles import KRATOS_FIELDS
 
@@ -63,7 +63,7 @@ class KratosSettingsPanel(SidebarGroupBox):
         form.addRow(field_label('Penalty factor',penalty),penalty)
         self.fields['kratos_contact_method'].currentIndexChanged.connect(
             lambda *_:penalty.setEnabled(self.fields['kratos_contact_method'].currentData()=='penalty'))
-        iterations = QSpinBox()
+        iterations = CompactSpinBox()
         iterations.setRange(1, 1000)
         iterations.setKeyboardTracking(False)
         iterations.valueChanged.connect(lambda *_: self.changed.emit())
@@ -101,7 +101,7 @@ class KratosSettingsPanel(SidebarGroupBox):
             control.textChanged.connect(lambda *_: self.changed.emit())
             self.fields[key] = control
             form.addRow(field_label(title,control),control)
-        memory=QSpinBox()
+        memory=CompactSpinBox()
         memory.setRange(1,4194304)
         memory.setSuffix(" MB")
         memory.setKeyboardTracking(False)

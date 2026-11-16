@@ -128,7 +128,7 @@ class RemoteTransport:
     def command(self,script):
         if isinstance(self.delegate,SSHJobs):
             with self.delegate.connect() as client:
-                _,out,err = client.exec_command("bash -lc "+shlex.quote(script),timeout=60)
+                _,out,err = client.exec_command("env TERM=dumb bash -lc "+shlex.quote(script),timeout=60)
                 data = out.read().decode(errors="replace")
                 error = err.read().decode(errors="replace")
                 if out.channel.recv_exit_status(): raise RuntimeError("TRUBA command failed: "+error[-1500:])
@@ -138,7 +138,7 @@ class RemoteTransport:
         # program directly in its command file.
         encoded = base64.b64encode(script.encode("utf-8")).decode("ascii")
         command = "printf %s "+shlex.quote(encoded)+" | base64 -d | bash -l"
-        self.delegate.execute(["call bash -lc "+shlex.quote(command)],on_line=lines.append)
+        self.delegate.execute(["call env TERM=dumb bash -lc "+shlex.quote(command)],on_line=lines.append)
         return "\n".join(lines)
 
     def put(self,local,remote):
@@ -167,7 +167,8 @@ def slurm_script(context,username,request):
     runtime = _shell_path(context.runtime_python)
     prepare = request["operation"]=="prepare"
     python_load = "module load "+shlex.quote(context.python_module) if context.python_module else ":"
-    foam_load = "module load "+shlex.quote(context.foam_module)+" >/dev/null 2>&1 || true" if context.foam_module else ":"
+    needs_foam = request['operation'] in ('probe', 'prepare', 'flow_export', 'flow_solve', 'thermal_export', 'thermal_solve')
+    foam_load = "module load "+shlex.quote(context.foam_module)+" >/dev/null 2>&1 || true" if context.foam_module and needs_foam else ":"
     return f'''#!/bin/bash -l
 #SBATCH --job-name=RustMech-remote
 #SBATCH --partition={partition}
@@ -180,6 +181,8 @@ def slurm_script(context,username,request):
 #SBATCH --output=slurm.out
 #SBATCH --error=slurm.err
 set -euo pipefail
+rustmech_stage() {{ printf '%s\n' "$1" > progress.txt; printf '%s\n' "$1"; }}
+rustmech_stage 'Preparing request sources'
 export TERM=dumb
 export QT_API=pyside6 QT_QPA_PLATFORM=offscreen MPLBACKEND=Agg
 export OMP_NUM_THREADS={context.cores} RUSTMECH_THREADS={context.cores} OPENBLAS_NUM_THREADS=1
@@ -187,6 +190,7 @@ mkdir -p output engine
 trap 'tar -czf result.tar.gz output' EXIT
 echo "{request['source_sha256']}  engine.tar.gz" | sha256sum -c -
 tar -xzf engine.tar.gz -C engine
+rustmech_stage 'Loading runtime modules'
 set +u
 {python_load}
 {foam_load}
@@ -198,6 +202,7 @@ test ! -e cancel.request
 if [ ! -x "$runtime_python" ]; then
     python3 engine/remote_worker.py request.json --missing-runtime
 else
+    rustmech_stage 'Starting Python worker'
     "$runtime_python" engine/remote_worker.py request.json
 fi
 '''
@@ -269,8 +274,17 @@ def run_remote_job(request,context,auth=None,marker=None,*,directory=None,resume
         record["session"] = session
         _write_paths(paths,record)
     def is_cancelled():
-        return (cancelled is not None and cancelled.is_set()) or (marker is not None and Path(marker).with_suffix(".cancel").exists())
+        saved = json.loads(paths[0].read_text()) if paths[0].exists() else {}
+        return (saved.get('state') == 'cancelled'
+                or (cancelled is not None and cancelled.is_set())
+                or (marker is not None and Path(marker).with_suffix(".cancel").exists()))
     def update(stage):
+        # The job-list worker may have cancelled this request on another channel.
+        # Do not revive its durable record with an older monitor response.
+        saved = json.loads(paths[0].read_text()) if paths[0].exists() else {}
+        if saved.get('state') == 'cancelled':
+            from concurrent.futures import CancelledError
+            raise CancelledError
         record["state"] = stage
         _write_paths(paths,record)
         if on_progress: on_progress("TRUBA · "+stage)
@@ -325,7 +339,7 @@ printf 'RUSTMECH_JOB_ID=%s\n' "$(cat job.id)"
                 from truba_session import QUEUE_FUNCTION
                 reply = transport.command("cd "+shlex.quote(remote)+
                     "\nset -e\n"+QUEUE_FUNCTION+
-                    f"printf 'RUSTMECH_STEP='; cat step.status 2>/dev/null || true\nprintf '\\nRUSTMECH_QUEUE='; rustmech_queue {record['job_id']} '%T|%r'")
+                    f"printf 'RUSTMECH_STEP='; cat step.status 2>/dev/null || true\nprintf '\\nRUSTMECH_QUEUE='; rustmech_queue {record['job_id']} '%T|%r'\nprintf '\\nRUSTMECH_PROGRESS='; head -c 500 progress.txt 2>/dev/null || true")
                 step = re.search(r"^RUSTMECH_STEP=(.*)$",reply,re.MULTILINE)
                 if step and step[1].startswith(("COMPLETED|","FAILED|","CANCELLED|")):
                     record["step_status"] = step[1].strip()
@@ -341,6 +355,9 @@ printf 'RUSTMECH_JOB_ID=%s\n' "$(cat job.id)"
                 break
             if record.get("session"):
                 value = "session · "+("running" if step and step[1]=="RUNNING" else "waiting for previous analysis")
+                progress = re.search(r'^RUSTMECH_PROGRESS=(.*)$', reply, re.MULTILINE)
+                if step and step[1] == 'RUNNING' and progress and progress[1].strip():
+                    value += ' · ' + progress[1].strip()
             if value!=record["state"]: update(value)
             if cancelled is not None: cancelled.wait(2)
             else: time.sleep(2)
@@ -409,7 +426,10 @@ def load_remote_preview(directory, *, settings=None):
     return preview
 
 
-def run_remote_preview(settings,context,auth,on_progress,cancelled):
+def run_remote_preview(settings,context,auth,on_progress,cancelled,*,include_mesh=True):
+    if not include_mesh:
+        from mesh_engine import Preview, preview_key
+        return Preview(run_remote_surface(settings,context,auth,cancelled),None,preview_key(settings))
     result,directory = run_remote_job(dict(operation="preview",settings=asdict(settings)),context,auth,on_progress=on_progress,cancelled=cancelled)
     preview = load_remote_preview(directory/"output/preview",settings=settings)
     return preview
@@ -454,7 +474,7 @@ def retrieve_remote_operation(record_path,remote_auth=None,job_marker=None):
 retrieve_remote_operation.remote_job_target = True
 
 
-def run_remote_surface(settings,context,auth,cancelled):
-    result,directory = run_remote_job(dict(operation="surface",settings=asdict(settings)),context,auth,cancelled=cancelled)
+def run_remote_surface(settings,context,auth,cancelled,on_progress=None):
+    result,directory = run_remote_job(dict(operation="surface",settings=asdict(settings)),context,auth,cancelled=cancelled,on_progress=on_progress)
     import pyvista as pv
     return pv.read(directory/"output/surface.vtp")

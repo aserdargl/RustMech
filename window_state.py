@@ -14,11 +14,18 @@ class WindowStateStore(QObject):
     def key(window):
         return f"windows/{type(window).__name__}/{window.objectName() or 'default'}"
 
+    @staticmethod
+    def splitters(window):
+        # QObject descendants also include owned top-level windows. Their
+        # layouts belong exclusively to their own preferences, not the owner.
+        return [splitter for splitter in window.findChildren(QSplitter)
+                if splitter.window() is window]
+
     def save(self, window):
         key = self.key(window)
         # Qt saveGeometry retains normal bounds even when maximized/minimized.
         self.settings.setValue(f"{key}/geometry", window.saveGeometry())
-        for index, splitter in enumerate(window.findChildren(QSplitter)):
+        for index, splitter in enumerate(self.splitters(window)):
             name = splitter.objectName() or str(index)
             self.settings.setValue(f"{key}/splitters/{name}", splitter.saveState())
             width = splitter.property("expandedSidebarWidth")
@@ -46,14 +53,20 @@ class WindowStateStore(QObject):
                     max(area.left(), min(frame.left(), area.right() - frame.width() + 1)),
                     max(area.top(), min(frame.top(), area.bottom() - frame.height() + 1)),
                 ))
-        for index, splitter in enumerate(window.findChildren(QSplitter)):
+        for index, splitter in enumerate(self.splitters(window)):
             name = splitter.objectName() or str(index)
             state = self.settings.value(f"{key}/splitters/{name}")
             width = self.settings.value(f"{key}/splitters/{name}/expandedSidebarWidth")
             if width is not None:
                 splitter.setProperty("expandedSidebarWidth", int(width))
             if state is not None:
-                splitter.restoreState(state)
+                # Qt restores orientation too. Never let a stale numeric key
+                # turn a horizontal settings column into a vertical panel.
+                probe = QSplitter()
+                valid = probe.restoreState(state)
+                if valid and probe.orientation() == splitter.orientation():
+                    splitter.restoreState(state)
+                probe.deleteLater()
         if isinstance(window, QMainWindow):
             state = self.settings.value(f"{key}/docks")
             if state is not None:
@@ -73,3 +86,24 @@ class WindowStateStore(QObject):
 def install_window_state(app):
     if not hasattr(app, "_rustmech_window_state"):
         app._rustmech_window_state = WindowStateStore(app)
+
+
+def show_restored_window(window):
+    """Reopen a hidden maximized Qt window without losing its normal bounds."""
+    store = getattr(QApplication.instance(), "_rustmech_window_state", None)
+    if not window.isVisible() and window.isMaximized() and store is not None:
+        geometry = store.settings.value(f"{store.key(window)}/geometry")
+        if geometry is not None:
+            # On Windows, showing an already maximized hidden widget makes Qt
+            # replace normalGeometry with the screen bounds. Reset that native
+            # state before restoring the actual saved normal/maximized geometry.
+            window.showNormal()
+            window.restoreGeometry(geometry)
+        else:
+            window.show()
+    else:
+        window.show()
+    if window.isMinimized():
+        window.showNormal()
+    window.raise_()
+    window.activateWindow()

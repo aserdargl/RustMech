@@ -7,12 +7,12 @@ import uuid
 
 import numpy as np
 import pyvista as pv
-from studio_style import CompactComboBox
+from studio_style import CompactSpinBox, CompactComboBox
 from PySide6.QtCore import QSettings, Qt, QTimer, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QFileDialog, QFormLayout, QHBoxLayout,
                               QLabel, QLineEdit, QPushButton, QScrollArea,
-                              QSpinBox, QSplitter, QVBoxLayout, QWidget)
+                              QSplitter, QVBoxLayout, QWidget)
 
 from analysis_process import AnalysisProcess
 from flow_analysis import FlowSettings, export_flow_case, execute_flow_case, stop_flow_case
@@ -79,7 +79,7 @@ class FlowWorkspace(QWidget):
             ("dynamic_viscosity","Viscosity / Pa·s",.00000001,1000),
             ("cells_across","Cells / diameter",8,128),
             ("iterations","Max iterations",20,20000)):
-            control = QSpinBox() if name in ("cells_across","iterations") else CompactDoubleSpinBox()
+            control = CompactSpinBox() if name in ("cells_across","iterations") else CompactDoubleSpinBox()
             if isinstance(control,CompactDoubleSpinBox): control.setDecimals(8)
             control.setRange(lo,hi)
             control.setValue(getattr(defaults,name))
@@ -166,6 +166,11 @@ class FlowWorkspace(QWidget):
         self.splitter.addWidget(right)
         self.splitter.setStretchFactor(1,1)
         self.splitter.setSizes([300,1000])
+        from operation_progress import OperationProgress
+        self.operation_progress = OperationProgress(self, provider=lambda: (
+            self.job is not None, self.status.text(),
+        ))
+        layout.addWidget(self.operation_progress)
         self.inputs_changed()
 
     def collect(self):
@@ -237,8 +242,11 @@ class FlowWorkspace(QWidget):
                 record = self.job.remote_status()
                 if record: self.status.setText(f"TRUBA job {record.get('job_id','pending')} · {record.get('state','preparing')}")
                 return
+            stage = self.job.progress_status() if hasattr(self.job, "progress_status") else None
+            if stage:
+                self.status.setText(stage)
             path = self.case_directory/self.LOG_NAME
-            if path.exists():
+            if path.exists() and (not stage or stage.startswith(("Checking mesh and solving", "Splitting regions"))):
                 with path.open("rb") as stream:
                     stream.seek(max(0,path.stat().st_size-2000))
                     lines = stream.read().decode(errors="replace").splitlines()
@@ -346,11 +354,13 @@ class FlowWorkspace(QWidget):
                     traces = data.streamlines_from_source(seeds,vectors="Velocity_m_s",integration_direction="forward",max_length=data.length*5)
                     traces.points *= 1000
                     if traces.n_points:
-                        self.plotter.add_mesh(traces,scalars="Speed_m_s",line_width=2,cmap="viridis",scalar_bar_args={"title":"Speed / m/s"})
+                        from ui_language import translate
+                        self.plotter.add_mesh(traces,scalars="Speed_m_s",line_width=2,cmap="viridis",scalar_bar_args={"title":translate("Speed / m/s")})
                     self.plotter.add_mesh(grid.outline(),color="#526174")
                 else:
                     display = grid.slice(normal="x",origin=centre) if view in (1,2) else grid.clip(normal="x",origin=centre)
-                    self.plotter.add_mesh(display,scalars=scalar,cmap="viridis",scalar_bar_args={"title":label})
+                    from ui_language import translate
+                    self.plotter.add_mesh(display,scalars=scalar,cmap="viridis",scalar_bar_args={"title":translate(label)})
             self.plotter.render()
         except Exception as error:
             self.status.setText("Cannot render flow field: "+str(error))

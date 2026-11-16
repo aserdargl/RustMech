@@ -32,11 +32,9 @@ HEX_EDGES = (
     (0, 4), (1, 5), (2, 6), (3, 7),
 )
 TET_EDGES = ((0, 1), (1, 2), (2, 0), (0, 3), (1, 3), (2, 3))
-MAX_SUBDIVISIONS = 150
-MAX_FE_ELEMENTS = 1_100_000
-MAX_SURFACE_SAMPLES = 256**3
 NUMERIC_GEOMETRY_FIELDS = ("size", "cell_size", "solid_fraction")
 GEOMETRY_FIELDS = (
+    "stl_resolution",
     "test_profile", "specimen_architecture", "core_fraction",
     "imported_geometry_path",
     "imported_geometry_name",
@@ -114,6 +112,7 @@ class Settings:
     size: float = 6.0
     cell_size: float = 3.0
     solid_fraction: float = 30.0
+    stl_resolution: float | None = None
     mesh_resolution: float = 0.2
     mesh_type: str = "HEX8"
     local_mesh_size: float = 0.050
@@ -176,13 +175,25 @@ class Settings:
 
     @property
     def surface_resolution(self) -> float:
-        """Automatic reference sampling, independent of all FE mesh settings.
+        """Reference sampling, independent of all FE mesh settings."""
+        if self.stl_resolution is not None:
+            return self.stl_resolution
+        return self.automatic_surface_resolution
+
+    @property
+    def automatic_surface_resolution(self) -> float:
+        """Automatic reference sampling based on geometry features.
 
         Resolve each period with at least 80 intervals. Sheets and porous walls
         become thin approximately in proportion to phase fraction; strut/network
         thickness scales approximately with its square root. Resolve both solid
         and void features, including small pores at high solid fractions.
         """
+        if self.test_profile != 'custom':
+            from standard_tests import profile
+            minimum_dimension = min(profile(self).dimensions)
+            return (min(minimum_dimension / 16, self.cell_size / 20)
+                    if self.specimen_architecture != 'solid' else minimum_dimension / 16)
         phase = min(self.solid_fraction, 100 - self.solid_fraction) / 100
         walls = self.structure_family == "porous" or (
             self.structure_family == "tpms" and self.tpms_morphology == "sheet"
@@ -191,20 +202,29 @@ class Settings:
         return self.cell_size / max(80, 12 / feature_scale)
 
 
-def validate_geometry(settings: Settings) -> list[str]:
+def validate_geometry(settings: Settings, *, include_mesh: bool = True) -> list[str]:
+    """Validate shape/dimensions, optionally including FE requirements.
+
+    Planning and surface previews use include_mesh=False. Mesh/solver entry
+    points retain the full validation by default.
+    """
     from standard_tests import validate_profile, profile
-    errors = validate_profile(settings)
+    errors = validate_profile(settings, include_mesh=include_mesh)
+    if settings.stl_resolution is not None and (
+        not is_finite_number(settings.stl_resolution) or settings.stl_resolution <= 0
+    ):
+        errors.append('STL surface resolution must be positive and finite (mm).')
     if settings.imported_geometry_path:
         if not isinstance(settings.imported_geometry_path, str) or not Path(settings.imported_geometry_path).is_file():
             errors.append('Imported geometry file is missing. Import the geometry again.')
-        if settings.mesh_type not in TETRAHEDRAL_MESH_TYPES:
+        if include_mesh and settings.mesh_type not in TETRAHEDRAL_MESH_TYPES:
             errors.append('Imported geometry requires TET4 or TET10 elements.')
-        if settings.tetra_strategy == 'periodic':
+        if include_mesh and settings.tetra_strategy == 'periodic':
             errors.append('Imported geometry requires Auto or Netgen meshing.')
-        for name in ('size', 'mesh_resolution', 'local_mesh_size'):
+        for name in (('size', 'mesh_resolution', 'local_mesh_size') if include_mesh else ('size',)):
             if not is_finite_number(getattr(settings, name)) or getattr(settings, name) <= 0:
                 errors.append(f'{name} must be positive and finite.')
-        if not errors and settings.local_mesh_size > settings.mesh_resolution:
+        if include_mesh and not errors and settings.local_mesh_size > settings.mesh_resolution:
             errors.append('Local mesh size must not exceed the global FE mesh size.')
         return errors
     if (
@@ -235,11 +255,12 @@ def validate_geometry(settings: Settings) -> list[str]:
         errors.append("Unsupported structure morphology.")
     if isinstance(settings.random_seed, bool) or not isinstance(settings.random_seed, int):
         errors.append("random_seed must be an integer.")
-    if settings.mesh_type not in MESH_TYPES:
+    if include_mesh and settings.mesh_type not in MESH_TYPES:
         errors.append("Unsupported FE mesh type.")
-    if settings.tetra_strategy not in ("auto", "netgen", "periodic"):
+    if include_mesh and settings.tetra_strategy not in ("auto", "netgen", "periodic"):
         errors.append("Unsupported tetrahedral mesh strategy.")
-    for name in (*NUMERIC_GEOMETRY_FIELDS, "mesh_resolution", "local_mesh_size"):
+    numeric_fields = (*NUMERIC_GEOMETRY_FIELDS, "mesh_resolution", "local_mesh_size") if include_mesh else NUMERIC_GEOMETRY_FIELDS
+    for name in numeric_fields:
         value = getattr(settings, name)
         if isinstance(value, bool) or not isinstance(value, (int, float)) or not np.isfinite(value):
             errors.append(f"{name} must be a finite number.")
@@ -249,13 +270,13 @@ def validate_geometry(settings: Settings) -> list[str]:
         return errors
     if profile(settings):
         p = profile(settings)
-        if settings.mesh_type in TETRAHEDRAL_MESH_TYPES:
+        if include_mesh and settings.mesh_type in TETRAHEDRAL_MESH_TYPES:
             if settings.local_mesh_size > settings.mesh_resolution:
                 errors.append('Local mesh size must not exceed the global mesh size.')
-        else:
+        elif include_mesh:
             divisions = np.ceil(np.array(p.dimensions)/settings.mesh_resolution)
-            if np.min(divisions) < 4 or np.prod(divisions) > MAX_FE_ELEMENTS*4:
-                errors.append('Standard specimen needs at least four elements through its thickness and a bounded mesh. Adjust global mesh size.')
+            if np.min(divisions) < 4:
+                errors.append('Standard specimen needs at least four elements through its thickness. Adjust global mesh size.')
         if settings.solid_fraction >= 100:
             errors.append('Pore solid fraction must be below 100%; select Solid specimen for a solid coupon.')
         return errors
@@ -263,24 +284,17 @@ def validate_geometry(settings: Settings) -> list[str]:
         errors.append("Solid fraction must be between 0 and 100%.")
     if settings.cell_size > settings.size:
         errors.append("Period / characteristic size must not exceed cube size.")
-    if settings.mesh_type not in TETRAHEDRAL_MESH_TYPES:
+    if include_mesh and settings.mesh_type not in TETRAHEDRAL_MESH_TYPES:
         n = int(np.ceil(settings.size / settings.mesh_resolution))
-        if not 4 <= n <= MAX_SUBDIVISIONS:
-            errors.append(f"FE mesh requires 4..{MAX_SUBDIVISIONS} subdivisions per axis.")
+        if n < 4:
+            errors.append("FE mesh requires at least 4 subdivisions per axis.")
         count = round(n**3 * settings.solid_fraction / 100)
-        if not 1 <= count <= MAX_FE_ELEMENTS:
-            errors.append(f"FE mesh requires 1..{MAX_FE_ELEMENTS:,} solid elements.")
-    elif settings.local_mesh_size > settings.mesh_resolution:
+        if count < 1:
+            errors.append("FE mesh requires at least one solid element.")
+    elif include_mesh and settings.local_mesh_size > settings.mesh_resolution:
         errors.append(f"Local {settings.mesh_type} size must not exceed the global FE mesh size.")
     if errors:
         return errors
-    surface_n = int(np.ceil(settings.size / settings.surface_resolution))
-    if (surface_n + 3) ** 3 > MAX_SURFACE_SAMPLES:
-        errors.append(
-            "Preserving this geometry's details exceeds the surface sampling memory limit. "
-            "Increase the period / pore scale relative to the cube size, or use a less extreme "
-            "solid fraction. Changing FE mesh sizes does not change this limit."
-        )
     return errors
 
 
@@ -450,8 +464,8 @@ def plastic_curve_from_total_true_strain(curve, young_modulus):
     return points
 
 
-def require_geometry(settings: Settings) -> None:
-    errors = validate_geometry(settings)
+def require_geometry(settings: Settings, *, include_mesh: bool = True) -> None:
+    errors = validate_geometry(settings, include_mesh=include_mesh)
     if errors:
         raise ValueError("\n".join(errors))
 

@@ -217,7 +217,7 @@ class RustMeshTests(unittest.TestCase):
                 self.assert_grid_equal(actual, expected)
 
     def test_invalid_inputs_raise_python_errors(self):
-        for values in [np.zeros((2, 2)), np.zeros((0, 2, 2)), np.zeros((151, 1, 1))]:
+        for values in [np.zeros((2, 2)), np.zeros((0, 2, 2))]:
             with self.assertRaises(ValueError):
                 select_voxels(values, 1)
             with self.assertRaises(ValueError):

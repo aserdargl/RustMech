@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from PySide6.QtCore import QSettings
+from PySide6.QtCore import QSettings, Qt
 from PySide6.QtWidgets import QApplication, QDialog, QSplitter, QVBoxLayout, QWidget
 
 from window_state import WindowStateStore
@@ -83,6 +83,63 @@ class WindowStateTests(unittest.TestCase):
         self.assertTrue(self.app.primaryScreen().availableGeometry().intersects(second.frameGeometry()))
         other, _ = self.window("main")
         self.assertIsNone(self.settings.value(f"{self.store.key(other)}/geometry"))
+
+    def test_owner_does_not_save_or_restore_secondary_splitters(self):
+        owner, own_splitter = self.window()
+        own_splitter.setObjectName("settings")
+        child = QDialog(owner)
+        child.setObjectName("experiments")
+        layout = QVBoxLayout(child)
+        secondary = QSplitter(Qt.Orientation.Vertical)
+        secondary.setObjectName("experimentPlan")
+        secondary.addWidget(QWidget())
+        secondary.addWidget(QWidget())
+        layout.addWidget(secondary)
+        self.windows.append(child)
+        self.store.save(owner)
+        key = self.store.key(owner)
+        self.assertIsNone(self.settings.value(f"{key}/splitters/experimentPlan"))
+        # Even old contaminated parent preferences must not reach the child.
+        wrong = QSplitter(Qt.Orientation.Horizontal)
+        self.settings.setValue(f"{key}/splitters/experimentPlan", wrong.saveState())
+        self.store.restore(owner)
+        self.assertEqual(secondary.orientation(), Qt.Orientation.Vertical)
+
+    def test_wrong_orientation_record_cannot_rotate_settings_column(self):
+        window, splitter = self.window()
+        splitter.setObjectName("settings")
+        wrong = QSplitter(Qt.Orientation.Vertical)
+        wrong.addWidget(QWidget())
+        wrong.addWidget(QWidget())
+        self.settings.setValue(f"{self.store.key(window)}/splitters/settings", wrong.saveState())
+        self.store.restore(window)
+        self.assertEqual(splitter.orientation(), Qt.Orientation.Horizontal)
+
+    def test_named_layout_survives_insertion_of_other_splitters(self):
+        first, splitter = self.window()
+        splitter.setObjectName("settings")
+        first.show()
+        self.app.processEvents()
+        splitter.setSizes([170, 440])
+        expected = splitter.sizes()
+        first.hide()
+        second = QDialog()
+        second.setObjectName("main")
+        second.resize(first.size())
+        layout = QVBoxLayout(second)
+        added = QSplitter(Qt.Orientation.Vertical, second)
+        added.setObjectName("newPlan")
+        added.hide()
+        restored = QSplitter(Qt.Orientation.Horizontal)
+        restored.setObjectName("settings")
+        restored.addWidget(QWidget())
+        restored.addWidget(QWidget())
+        layout.addWidget(restored)
+        self.windows.append(second)
+        second.show()
+        self.app.processEvents()
+        self.assertEqual(restored.orientation(), Qt.Orientation.Horizontal)
+        self.assertEqual(restored.sizes(), expected)
 
 
 if __name__ == "__main__":
