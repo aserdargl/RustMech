@@ -106,6 +106,7 @@ class ExperimentRow:
     started_at: str = ""
     duration_s: float | None = None
     attempts: int = 0
+    folder_job: dict | None = None
 
     def dataset_columns(self) -> list:
         """Return stable geometry grouping and analysis metadata for CSV export."""
@@ -1595,7 +1596,8 @@ class DoEStudioWidget(QWidget):
         self._row_started = time.monotonic()
 
         s = row.to_settings(self._run_base())
-        worker = ExperimentWorker(self._mesh_generator, self._batch_solver_runner)
+        worker = ExperimentWorker(self._mesh_generator, self._batch_solver_runner,
+                                  (row.folder_job or {}).get("destination"))
         try:
             controller = getattr(self,"remote_controller",None)
             if controller is not None and controller.requested:
@@ -1603,10 +1605,18 @@ class DoEStudioWidget(QWidget):
                 # Design snapshots retain geometry/materials, but execution follows
                 # the currently selected solver (the remote mode selects Kratos).
                 execution = self._run_base()
+                if row.folder_job and s.solver_backend != execution.solver_backend:
+                    raise ValueError('Folder job solver differs from the current TRUBA solver. Select the saved solver before running.')
                 s = replace(s, **{key: value for key, value in asdict(execution).items()
                                   if key.startswith('kratos_') or key in ('solver_backend', 'cores', 'automatic_cores')})
                 context,auth = controller.require("mesh" if self._active_mode=="check" else s.solver_backend,s)
-                self._active_future = AnalysisProcess(run_remote_doe,r_idx,s,context,self._active_mode!="check",remote_auth=auth)
+                if row.folder_job:
+                    from folder_batch_results import run_remote_folder_doe
+                    self._active_future = AnalysisProcess(run_remote_folder_doe, r_idx, s, context,
+                                                          self._active_mode != "check", row.folder_job['destination'],
+                                                          remote_auth=auth)
+                else:
+                    self._active_future = AnalysisProcess(run_remote_doe,r_idx,s,context,self._active_mode!="check",remote_auth=auth)
             elif self._active_mode == "check":
                 self._active_future = AnalysisProcess(worker._evaluate_row_mesh, r_idx, s)
             else:
@@ -1932,9 +1942,10 @@ class DoEStudioWidget(QWidget):
 class ExperimentWorker:
     """Picklable job context; no UI objects cross the process boundary."""
 
-    def __init__(self, mesh_generator, batch_solver_runner):
+    def __init__(self, mesh_generator, batch_solver_runner, output_directory=None):
         self._mesh_generator = mesh_generator
         self._batch_solver_runner = batch_solver_runner
+        self._output_directory = output_directory
 
     def _evaluate_row_mesh(
         self, r_idx: int, settings: Settings
@@ -1985,7 +1996,10 @@ class ExperimentWorker:
                     "hex8_elements": int(mesh.grid.n_cells),
                     "status": "Mesh Disconnected",
                 }
-            summary = self._batch_solver_runner(settings, mesh)
+            if self._output_directory:
+                summary = self._batch_solver_runner(settings, mesh, output_directory=self._output_directory)
+            else:
+                summary = self._batch_solver_runner(settings, mesh)
             graphs = summary.get("graphs", {})
             fields = summary.get("fields", {})
             return {
