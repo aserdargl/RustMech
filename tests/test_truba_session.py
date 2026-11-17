@@ -95,6 +95,55 @@ class ResourceSessionTests(unittest.TestCase):
         self.assertEqual(released['state'], 'released')
         self.assertIn('scancel 321', SessionTransport.commands[-1])
 
+    def test_confirmed_release_clears_only_requests_owned_by_that_session(self):
+        directory = self.root / 'active-request'
+        child = dict(kind='rustmech_remote', host=HOST, username='tester',
+                     session=self.session, state='session · running', local_directory=str(directory))
+        registry = self.root / 'state/jobs'
+        write_record(registry / 'active.json', child)
+        write_record(directory / 'remote_job.json', child)
+        write_record(registry / 'downloaded.json', dict(child, state='downloaded'))
+        write_record(registry / 'other.json', dict(child, session=dict(self.session, job_id='999')))
+        release_session(self.session)
+        self.assertEqual(json.loads((registry / 'active.json').read_text())['state'], 'cancelled')
+        self.assertEqual(json.loads((directory / 'remote_job.json').read_text())['state'], 'cancelled')
+        self.assertEqual(json.loads((registry / 'downloaded.json').read_text())['state'], 'downloaded')
+        self.assertEqual(json.loads((registry / 'other.json').read_text())['state'], 'session · running')
+
+    @unittest.skipUnless(BASH and Path(BASH).is_file(), 'Bash is required')
+    def test_release_shell_waits_for_terminal_state_and_preserves_record_on_failure(self):
+        def shell(always_running):
+            def command(transport, script):
+                preamble = '''scancel() { printf '%s\\n' "$1" > cancelled_job; }
+sleep() { :; }
+squeue() {
+ n=$(cat polls 2>/dev/null || echo 0)
+ n=$((n+1)); echo "$n" > polls
+ if [ "$n" -lt 2 ]; then echo COMPLETING; fi
+}
+'''
+                if always_running:
+                    preamble += 'squeue() { echo RUNNING; }\n'
+                path = self.root / 'release.sh'
+                path.write_text(preamble + script, encoding='utf-8', newline='\n')
+                completed = subprocess.run([str(BASH), '--noprofile', '--norc', str(path)],
+                                           cwd=self.root, capture_output=True, timeout=15)
+                if completed.returncode:
+                    raise RuntimeError(completed.stderr.decode())
+                return completed.stdout.decode()
+            return command
+        with patch.object(SessionTransport, 'command', shell(True)):
+            with self.assertRaisesRegex(RuntimeError, 'still unconfirmed'):
+                release_session(self.session)
+        self.assertEqual(json.loads(session_path().read_text())['state'], 'RUNNING')
+        with patch.object(SessionTransport, 'command', shell(False)):
+            result = release_session(self.session)
+        self.assertEqual(result['state'], 'released')
+        self.assertEqual((self.root / 'cancelled_job').read_text().strip(), '321')
+        self.assertEqual((self.root / 'polls').read_text().strip(), '2')
+        with patch.object(SessionTransport, 'command', side_effect=AssertionError('duplicate cancellation')):
+            self.assertEqual(release_session(result)['state'], 'released')
+
     @unittest.skipUnless(BASH and Path(BASH).is_file(), 'Bash is required')
     def test_actual_submission_shell_reuses_job_and_reports_scheduler_rejection(self):
         scripts = []

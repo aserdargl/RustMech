@@ -7,7 +7,7 @@ from unittest.mock import MagicMock,patch
 
 from PySide6.QtCore import QCoreApplication,QEvent,QPoint,QSettings,Qt
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication,QWidget
+from PySide6.QtWidgets import QApplication,QWidget,QGroupBox
 
 from model import Settings
 from nonlinear_compression import RustMechDialog
@@ -25,6 +25,10 @@ class RemoteModeUiTests(unittest.TestCase):
         session_patch.start()
         self.addCleanup(session_patch.stop)
         self.temp=tempfile.TemporaryDirectory()
+        for module in ('truba_session', 'truba_jobs', 'truba_remote', 'truba_connection'):
+            state_patch = patch(module + '.state_directory', return_value=Path(self.temp.name) / 'truba')
+            state_patch.start()
+            self.addCleanup(state_patch.stop)
         self.preferences=QSettings(str(Path(self.temp.name)/"ui.ini"),QSettings.Format.IniFormat)
         self.previous=getattr(self.app,"_rustmech_window_state",None)
         if self.previous: self.app.removeEventFilter(self.previous)
@@ -49,9 +53,15 @@ class RemoteModeUiTests(unittest.TestCase):
         else: del self.app._rustmech_window_state
         self.temp.cleanup()
 
-    def enable(self,**capabilities):
+    def enable(self,with_session=True,**capabilities):
         with patch.object(self.controller,"refresh"):
             self.controller.toggle.setChecked(True)
+        if with_session:
+            from dataclasses import asdict
+            self.controller.session = dict(job_id='321', state='RUNNING', ready=True,
+                                           context=asdict(self.controller.context()))
+            self.controller.session_watch = True
+            self.controller.session_next_refresh = float('inf')
         self.controller.capabilities=dict(mesh=True,netgen=True,kratos=True,flow=True,thermal=True,
                                          ansys_mapdl=False,mesh_types=["HEX8","HEX20","TET4","TET10"],reasons={})
         self.controller.capabilities.update(capabilities)
@@ -70,6 +80,245 @@ class RemoteModeUiTests(unittest.TestCase):
         field.setFocus()
         QTest.keyClick(field,Qt.Key.Key_Return)
         self.assertFalse(self.controller.requested)
+
+    def test_enabling_remote_mode_and_runtime_checks_without_session_submit_nothing(self):
+        with patch.object(self.controller.executor, 'submit') as submit:
+            self.controller.toggle.setChecked(True)
+            self.controller.refresh(False)
+            self.controller.refresh(True)
+            self.controller.connection_changed(True)
+            submit.assert_not_called()
+        self.assertFalse(self.controller.ready)
+        with self.assertRaisesRegex(RuntimeError, 'resource session'):
+            self.controller.require('mesh')
+
+    def test_runtime_check_uses_ready_session_id(self):
+        from concurrent.futures import Future
+        self.enable()
+        pending = Future()
+        with patch.object(self.controller.executor, 'submit', return_value=pending) as submit:
+            self.controller.refresh(False)
+        try:
+            submit.assert_called_once()
+            self.assertEqual(submit.call_args.args[2].session_id, '321')
+        finally:
+            self.controller.future = None
+            self.controller.timer.stop()
+
+    def test_default_session_is_72_hours_and_explicit_allocate_enables_remote_mode(self):
+        from concurrent.futures import Future
+        from remote_controller import allocate_with_limits
+        pending = Future()
+        self.assertEqual(self.controller.controls['walltime'].text(), '72:00:00')
+        with patch.object(self.controller.session_executor, 'submit', return_value=pending) as submit:
+            self.controller.session_command('allocate')
+        try:
+            self.assertIs(submit.call_args.args[0], allocate_with_limits)
+            self.assertEqual(submit.call_args.args[1].walltime, '72:00:00')
+            self.assertEqual(submit.call_args.args[1].partition, 'auto')
+            self.assertTrue(self.controller.requested)
+            self.assertTrue(self.controller.release_on_exit)
+        finally:
+            self.controller.session_future = None
+            self.controller.release_on_exit = False
+
+    def test_ready_banner_requires_running_allocation_and_verified_runtime(self):
+        from dataclasses import asdict
+        from truba_remote import RemoteContext
+        self.enable(with_session=False)
+        self.assertNotEqual(self.window.brand_header.property('computeState'), 'ready')
+        self.controller.session = dict(job_id='321', state='RUNNING', ready=True,
+                                       allocated_partition='hamsi', allocated_nodes='hamsi001',
+                                       context=asdict(RemoteContext(partition='hamsi', cores=28, walltime='72:00:00')))
+        self.controller.session_watch = True
+        with patch.object(self.window, 'start_preview') as generate:
+            self.controller.changed.emit()
+            self.app.processEvents()
+            generate.assert_not_called()
+        self.assertEqual(self.window.brand_header.property('computeState'), 'ready')
+        self.assertIn('READY', self.window.brand_subtitle_lbl.text())
+        self.controller.session.update(state='PENDING', ready=False)
+        self.controller.changed.emit()
+        self.assertEqual(self.window.brand_header.property('computeState'), 'pending')
+
+    def test_running_banner_is_green_before_runtime_is_ready_without_enabling_compute(self):
+        from concurrent.futures import Future
+        self.enable()
+        self.controller.capabilities = None
+        self.controller.session['ready'] = False
+        self.controller.changed.emit()
+        self.assertEqual(self.window.brand_header.property('computeState'), 'allocated')
+        self.assertIn('RUNNING', self.window.brand_subtitle_lbl.text())
+        self.assertIn('worker starting', self.window.brand_subtitle_lbl.text())
+        self.assertFalse(self.controller.ready)
+        # Verify the painted background as well as the state property.
+        self.app.processEvents()
+        image = self.window.brand_header.grab().toImage()
+        self.assertEqual(image.pixelColor(3, 3).name(), '#e7f3e8')
+        self.controller.session['ready'] = True
+        self.controller.future = Future()
+        self.controller.changed.emit()
+        self.assertIn('checking runtime', self.window.brand_subtitle_lbl.text())
+        self.assertFalse(self.controller.ready)
+        self.controller.future = None
+        self.controller.capabilities = dict(mesh=False)
+        self.controller.changed.emit()
+        self.assertIn('see runtime details', self.window.brand_subtitle_lbl.text())
+        self.assertFalse(self.controller.ready)
+        self.controller.capabilities = dict(mesh=True)
+        self.controller.changed.emit()
+        self.assertEqual(self.window.brand_header.property('computeState'), 'ready')
+        self.assertTrue(self.controller.ready)
+        self.controller.session_watch = False
+        self.controller.changed.emit()
+        self.assertEqual(self.window.brand_header.property('computeState'), 'pending')
+
+    def test_connection_panel_tracks_slurm_pending_and_running(self):
+        from concurrent.futures import Future
+        from dataclasses import asdict
+        from truba_remote import RemoteContext
+        self.assertIn('Slurm: NONE', self.controller.session_state.text())
+        self.controller.session_watch = True
+        self.controller.session_action = 'watch'
+        context = asdict(RemoteContext(partition='hamsi', cores=28))
+        for state, ready, explanation in (
+                ('PENDING', False, 'not been allocated'),
+                ('RUNNING', False, 'worker is starting'),
+                ('RUNNING', True, 'worker is ready')):
+            completed = Future()
+            completed.set_result(dict(job_id='321', state=state, ready=ready,
+                                      context=context, reason='Resources' if state == 'PENDING' else '',
+                                      allocated_partition='hamsi',
+                                      allocated_nodes='hamsi001' if state == 'RUNNING' else ''))
+            self.controller.session_future = completed
+            self.controller.poll_session()
+            self.assertIn('Slurm: ' + state, self.controller.session_state.text())
+            self.assertIn(explanation, self.controller.session_state.text())
+            self.assertIn('321', self.controller.session_status.text())
+        self.assertIn('hamsi001', self.controller.session_status.text())
+        self.controller.session_watch = False
+        self.controller.update_session_controls()
+        self.assertIn('Saved state', self.controller.session_state.text())
+        self.assertNotIn('worker is ready', self.controller.session_state.text())
+        self.controller.session.update(state='released', ready=False)
+        self.controller.update_session_controls()
+        self.assertIn('Resources released', self.controller.session_state.text())
+
+    def test_runtime_is_checked_once_when_allocation_becomes_ready(self):
+        from concurrent.futures import Future
+        from dataclasses import asdict
+        from truba_remote import RemoteContext
+        self.enable()
+        self.controller.capabilities = None
+        self.controller.session_watch = True
+        completed = Future()
+        completed.set_result(dict(job_id='321', state='RUNNING', ready=True,
+                                  context=asdict(RemoteContext(partition='hamsi', cores=28, walltime='72:00:00'))))
+        self.controller.session_future = completed
+        self.controller.session_action = 'watch'
+        with patch.object(self.controller, 'refresh') as check:
+            self.controller.poll_session()
+            self.controller.poll_session()
+            check.assert_called_once_with(False, automatic=True)
+
+    def test_running_session_dispatches_automatic_setup_and_retains_failure(self):
+        from concurrent.futures import Future
+        from remote_controller import ensure_remote_runtime
+        self.enable()
+        self.controller.capabilities = None
+        pending = Future()
+        with patch.object(self.controller.executor, 'submit', return_value=pending) as submit:
+            self.controller.poll_session()
+            self.assertIs(submit.call_args.args[0], ensure_remote_runtime)
+            self.assertEqual(submit.call_args.args[1].session_id, '321')
+            with self.assertRaisesRegex(RuntimeError, 'automatically'):
+                self.controller.require('mesh')
+            self.controller.runtime_progress.emit('Building remote mesh kernel')
+            self.assertIn('Building remote mesh kernel', self.window.brand_subtitle_lbl.text())
+            pending.set_exception(RuntimeError('Package download failed'))
+            self.controller.poll()
+            self.controller.poll_session()
+            submit.assert_called_once()
+        self.assertFalse(self.controller.ready)
+        with self.assertRaisesRegex(RuntimeError, 'Package download failed'):
+            self.controller.require('mesh')
+
+    def test_release_is_available_during_watch_runtime_check_and_remote_preview(self):
+        from concurrent.futures import Future
+        controller = self.controller
+        controller.session = dict(job_id='321', state='RUNNING', ready=True)
+        controller.session_watch = True
+        pending_watch = Future()
+        controller.session_future = pending_watch
+        controller.session_action = 'watch'
+        controller.future = Future()
+        self.window.future = Future()
+        self.window._preview_is_remote = True
+        released = Future()
+        try:
+            controller.update_session_controls()
+            self.assertTrue(controller.session_release.isEnabled())
+            with patch.object(controller.release_executor, 'submit', return_value=released) as submit:
+                controller.session_release.click()
+            self.assertIs(submit.call_args.args[2], pending_watch)
+            self.assertTrue(controller.cancelled.is_set())
+            self.assertTrue(self.window.mesh_cancelled.is_set())
+            self.assertFalse(controller.session_watch)
+            self.assertFalse(controller.session_release.isEnabled())
+            pending_watch.set_result(dict(controller.session))
+            released.set_result(dict(controller.session, state='released', ready=False))
+            controller.poll_session()
+            self.assertEqual(controller.session['state'], 'released')
+            self.assertIsNone(controller.session_future)
+            self.assertIn('Resources released', self.window.truba_dialog.job_list.hint.text())
+        finally:
+            controller.future = self.window.future = None
+            controller.session_future = controller.release_future = None
+            controller.session_watch = False
+            self.window._preview_is_remote = False
+
+    def test_close_waits_for_resource_release_and_failure_keeps_window_open(self):
+        from concurrent.futures import Future
+        pending = Future()
+        self.controller.session = dict(job_id='321', state='RUNNING', ready=True)
+        self.controller.release_on_exit = True
+        with patch.object(self.controller.close_executor, 'submit', return_value=pending):
+            self.window.close()
+        self.assertTrue(self.window.isVisible())
+        self.assertTrue(self.controller.closing)
+        pending.set_exception(RuntimeError('VPN disconnected'))
+        self.controller.poll_close()
+        self.assertTrue(self.window.isVisible())
+        self.assertIn('not confirmed', self.window.status.text())
+        retry = Future()
+        retry.set_result(dict(job_id='321', state='released', ready=False))
+        with patch.object(self.controller.close_executor, 'submit', return_value=retry):
+            self.window.close()
+            self.controller.poll_close()
+        self.assertFalse(self.window.isVisible())
+        self.assertTrue(self.controller.close_confirmed)
+
+    def test_unattached_saved_session_is_not_cancelled_on_close(self):
+        self.controller.session = dict(job_id='321', state='RUNNING', ready=True)
+        self.controller.release_on_exit = False
+        with patch.object(self.controller.close_executor, 'submit') as submit:
+            self.assertTrue(self.controller.request_close())
+            submit.assert_not_called()
+
+    def test_old_debug_preference_does_not_shorten_the_72_hour_default(self):
+        import json
+        from dataclasses import asdict
+        from remote_controller import RemoteController
+        from truba_remote import RemoteContext
+        self.preferences.setValue('remote/context', json.dumps(asdict(RemoteContext(partition='debug', walltime='00:30:00'))))
+        restored = RemoteController(self.window, self.preferences)
+        try:
+            self.assertEqual(restored.context().partition, 'auto')
+            self.assertEqual(restored.context().walltime, '72:00:00')
+        finally:
+            restored.shutdown()
+            restored.scroll.deleteLater()
+            restored.advanced_panel.deleteLater()
 
     def test_session_controls_are_explicit_and_enter_only_commits_field(self):
         self.assertEqual(self.controller.controls['partition'].currentData(), 'auto')
@@ -198,10 +447,13 @@ class RemoteModeUiTests(unittest.TestCase):
         panel.show()
         self.app.processEvents()
         sections = [panel.settings_layout.itemAt(i).widget()
-                    for i in range(panel.settings_layout.count())]
-        self.assertEqual([section.title() for section in sections], [
-            'Server and VPN', 'Credentials and password storage',
+                    for i in range(panel.settings_layout.count())] + panel._remote_sections
+        groups = [section for section in sections if isinstance(section, QGroupBox)]
+        self.assertEqual([section.title() for section in groups], [
+            'Credentials and password storage',
             'CPU, RAM and resource session', 'Advanced · remote runtime'])
+        self.assertEqual([panel.tabs.tabText(i) for i in range(panel.tabs.count())],
+                         ['Connection', 'Resources', 'Advanced'])
         self.assertLess(sections[0].height(), 65)
         self.assertIs(panel.connect_button.parentWidget(), panel.username.parentWidget())
         self.assertIs(self.controller.controls['cores'].parentWidget(), self.controller.resource_panel)
@@ -272,6 +524,7 @@ class RemoteModeUiTests(unittest.TestCase):
         self.assertTrue(self.window.automatic_cores.isChecked())
         self.assertEqual(self.window.controls['cores'].value(), 1)
         self.controller.require('kratos', self.window.collect())
+        self.controller.session['context']['cores'] = 4
         self.controller.controls['cores'].setValue(4)
         self.controller.capabilities = dict(mesh=True, kratos=True, mesh_types=['HEX8', 'TET4'])
         self.controller.changed.emit()
@@ -290,6 +543,63 @@ class RemoteModeUiTests(unittest.TestCase):
         self.app.processEvents()
         self.assertEqual(self.window.solver_combo.currentData(),original)
         self.assertFalse(self.controller.requested)
+
+    def test_disconnect_restores_local_mode_and_dispatches_local_mesh(self):
+        original = self.window.solver_combo.currentData()
+        self.enable()
+        self.controller.session = dict(job_id='321', state='RUNNING', ready=True)
+        self.controller.session_watch = True
+        dialog = self.window.truba_dialog
+        dialog.worker = MagicMock()
+        dialog.connected = True
+        dialog._update_controls()
+        with patch.object(self.controller, 'refresh') as refresh:
+            dialog.disconnect_button.click()
+            self.app.processEvents()
+            refresh.assert_not_called()
+        self.assertFalse(self.controller.requested)
+        self.assertFalse(self.controller.toggle.isChecked())
+        self.assertFalse(self.controller.session_watch)
+        self.assertIsNone(self.controller.capabilities)
+        self.assertEqual(self.window.solver_combo.currentData(), original)
+        self.assertIn('Local mode', self.controller.status.text())
+        self.assertEqual(self.controller.session['job_id'], '321')
+        with patch.object(self.controller.session_executor, 'submit') as remote_submit:
+            self.controller.poll_session()
+            remote_submit.assert_not_called()
+        with patch.object(self.window.executor, 'submit', return_value=MagicMock()) as submit, \
+                patch.object(self.controller, 'require') as require, \
+                patch('nonlinear_compression.run_mesh_preview') as local:
+            RustMechDialog.start_preview(self.window)
+            self.assertIs(submit.call_args.args[0], local)
+            require.assert_not_called()
+        self.window.future = None
+
+    def test_disconnect_selects_local_mode_even_with_submitted_remote_analysis(self):
+        self.enable()
+        job = MagicMock()
+        self.window.analysis_job = job
+        try:
+            self.controller.disconnect()
+            self.assertFalse(self.controller.requested)
+            self.assertFalse(self.controller.toggle.isChecked())
+            self.assertIs(self.window.analysis_job, job)
+            job.force_stop.assert_not_called()
+        finally:
+            self.window.analysis_job = None
+
+    def test_completed_remote_probe_cannot_restore_capabilities_after_disconnect(self):
+        from concurrent.futures import Future
+        self.enable()
+        pending = Future()
+        self.controller.future = pending
+        self.controller.disconnect()
+        pending.set_result((dict(capabilities=dict(mesh=True, kratos=True)), None))
+        self.controller.poll()
+        self.assertIsNone(self.controller.future)
+        self.assertIsNone(self.controller.capabilities)
+        self.assertFalse(self.controller.requested)
+        self.assertIn('Local mode', self.controller.status.text())
 
     def test_unconfirmed_remote_cancel_keeps_workspace_open_and_job_available(self):
         job=MagicMock()
@@ -339,6 +649,23 @@ class RemoteModeUiTests(unittest.TestCase):
             doe.start_mesh_precheck()
             self.assertIs(start.call_args.args[0],run_remote_doe)
             self.assertFalse(start.call_args.args[4])
+            doe.stop_active_queue()
+
+    def test_doe_new_geometry_is_porous_and_solve_uses_current_remote_solver(self):
+        from dataclasses import replace
+        doe = self.window.doe_studio
+        self.assertEqual(doe.planner.geometry_panel.selected_settings().specimen_architecture, 'porous_all')
+        old = replace(self.window.collect(), solver_backend='ansys_mapdl', self_contact_mode='disabled')
+        doe.add_design(old)
+        doe.add_blank_row()
+        self.enable()
+        self.assertEqual(self.window.collect().solver_backend, 'kratos')
+        with patch('doe_studio.AnalysisProcess') as start:
+            doe.start_batch_solve()
+            self.assertIsNotNone(start.call_args, [(row.status, row.enabled) for row in doe._rows])
+            self.assertIs(start.call_args.args[0], run_remote_doe)
+            self.assertEqual(start.call_args.args[2].solver_backend, 'kratos')
+            self.assertTrue(start.call_args.args[4])
             doe.stop_active_queue()
 
 

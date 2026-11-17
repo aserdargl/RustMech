@@ -20,7 +20,7 @@ def _serve_preview(connection, scratch):
     with connection:
         while True:
             try:
-                settings, parent_key = connection.recv()
+                settings, parent_key, include_mesh = connection.recv()
             except EOFError:
                 return
 
@@ -28,7 +28,7 @@ def _serve_preview(connection, scratch):
                 connection.send(("progress", stage))
 
             try:
-                result = build_preview(settings, cached, on_progress=report)
+                result = build_preview(settings, cached, on_progress=report, include_mesh=include_mesh)
                 shared = cached is not None and cached.key == parent_key
                 surface = (
                     None
@@ -37,9 +37,10 @@ def _serve_preview(connection, scratch):
                 )
                 mesh = None if shared and result.mesh is cached.mesh else result.mesh
                 if surface is None and mesh is None:
-                    connection.send(("result", (result.key, None, None)))
+                    connection.send(("result", (result.key, result.mesh is not None)))
                 else:
                     payload, arrays, size = pack_preview(result.key, surface, mesh)
+                    payload['reuse_mesh'] = bool(shared and result.mesh is cached.mesh)
                     connection.send(("shared_layout", (payload, size)))
                     kind, name = connection.recv()
                     if kind != "shared_buffer":
@@ -109,7 +110,7 @@ class PreviewWorker:
             self._segment.unlink()
             self._segment = None
 
-    def build(self, settings, cached, on_progress, cancelled):
+    def build(self, settings, cached, on_progress, cancelled, *, include_mesh=False):
         from mesh_engine import Preview
         from preview_transport import unpack_preview
 
@@ -120,7 +121,7 @@ class PreviewWorker:
                 self._stop()
                 self._start()
             try:
-                self._connection.send((settings, cached.key if cached else None))
+                self._connection.send((settings, cached.key if cached else None, include_mesh))
                 while not cancelled.is_set():
                     if not self._connection.poll(_CANCEL_POLL_SECONDS):
                         if not self._process.is_alive():
@@ -142,12 +143,8 @@ class PreviewWorker:
                         finally:
                             self._release_segment()
                     elif kind == "result":
-                        key, surface, mesh = value
-                        return Preview(
-                            surface if surface is not None else cached.surface,
-                            mesh if mesh is not None else cached.mesh,
-                            key,
-                        )
+                        key, has_mesh = value
+                        return Preview(cached.surface, cached.mesh if has_mesh else None, key)
                     else:
                         raise ValueError(value)
                 raise CancelledError
@@ -176,8 +173,8 @@ _DEFAULT_WORKER = PreviewWorker()
 atexit.register(_DEFAULT_WORKER.close)
 
 
-def run_mesh_preview(settings, cached, on_progress, cancelled):
-    return _DEFAULT_WORKER.build(settings, cached, on_progress, cancelled)
+def run_mesh_preview(settings, cached, on_progress, cancelled, *, include_mesh=False):
+    return _DEFAULT_WORKER.build(settings, cached, on_progress, cancelled, include_mesh=include_mesh)
 
 
 def shutdown_mesh_preview():

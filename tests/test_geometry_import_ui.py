@@ -90,13 +90,31 @@ class GeometryImportUITests(unittest.TestCase):
                 try:
                     self.assertEqual(dialog.collect().imported_geometry_path, result[0])
                     self.assertFalse(dialog.controls['size'].isEnabled())
-                    with patch('geometry_import_dialog.choose_geometry', return_value=result):
-                        dialog.import_geometry()
+                    self.assertEqual(dialog.family_combo.currentData(), 'imported')
+                    self.assertTrue(dialog.family_combo.isEnabled())
+                    import_index = dialog.family_combo.findData('imported')
+                    with patch('geometry_import_dialog.choose_geometry', return_value=result) as choose:
+                        dialog.family_combo.activated.emit(import_index)
+                        choose.assert_called_once_with(dialog)
                     self.assertEqual(dialog.preview_settings().imported_geometry_path, result[0])
                     self.assertEqual(dialog.collect().size, settings.size)
+                    dialog.family_combo.setCurrentIndex(dialog.family_combo.findData('lattice'))
+                    self.assertFalse(dialog.collect().imported_geometry_path)
+                    self.assertEqual(dialog.collect().structure_family, 'lattice')
+                    with patch('geometry_import_dialog.choose_geometry', return_value=None):
+                        dialog.family_combo.setCurrentIndex(import_index)
+                        dialog.family_combo.activated.emit(import_index)
+                    self.assertEqual(dialog.family_combo.currentData(), 'lattice')
+                    self.assertFalse(dialog.collect().imported_geometry_path)
+                    with patch('geometry_import_dialog.choose_geometry', return_value=result):
+                        dialog.family_combo.setCurrentIndex(import_index)
+                        dialog.family_combo.activated.emit(import_index)
+                    self.assertEqual(dialog.family_combo.currentData(), 'imported')
+                    self.assertEqual(dialog.collect().structure_family, 'lattice')
                     dialog.clear_imported_geometry()
                     self.assertFalse(dialog.collect().imported_geometry_path)
                     self.assertTrue(dialog.controls['size'].isEnabled())
+                    self.assertEqual(dialog.family_combo.currentData(), 'lattice')
                 finally:
                     dialog.dispose()
                     dialog.close()

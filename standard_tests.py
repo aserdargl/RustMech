@@ -5,6 +5,7 @@ porous gauge section is explicitly reported as an architected research coupon.
 Coordinates and loads are mm/N/MPa; tension is +Z, flexure/compression are -Z.
 """
 from dataclasses import dataclass, asdict, replace
+import math
 import numpy as np
 import pyvista as pv
 
@@ -98,7 +99,7 @@ def profile_report(settings):
     return report
 
 
-def validate_profile(settings):
+def validate_profile(settings, *, include_mesh=True):
     if settings.test_profile == 'custom':
         return []
     p = profile(settings)
@@ -115,7 +116,7 @@ def validate_profile(settings):
         errors.append('Porous centre length must be between 10 and 100% of the available centre region.')
     if settings.size != p.dimensions[2]:
         errors.append('The standard profile fixes specimen height; reselect the profile.')
-    if settings.tetra_strategy == 'periodic':
+    if include_mesh and settings.tetra_strategy == 'periodic':
         errors.append('Standard specimens require Auto or Netgen meshing.')
     if p.kind == 'compression' and (settings.specimen_architecture != 'porous_all' or settings.solid_fraction > 50):
         errors.append('ISO 13314 profile requires a porous specimen throughout with solid fraction ≤50%.')
@@ -166,10 +167,11 @@ def make_standard_surface(settings):
     from skimage.measure import marching_cubes
     from mesh_engine import surface_from_marching_cubes
     dims = np.array(profile(settings).dimensions)
-    step = min(dims.min()/16, settings.cell_size/20) if settings.specimen_architecture != 'solid' else dims.min()/16
+    step = settings.surface_resolution
     divisions = np.ceil(dims/step).astype(int)
-    if np.prod(divisions+3) > 256**3:
-        raise ValueError('Standard specimen surface exceeds the sampling limit. Increase the pore scale.')
+    from mesh_resources import require_memory
+    require_memory(math.prod(int(n) + 3 for n in divisions) * 12,
+                   "Standard specimen surface sampling")
     spacing = dims/divisions
     axes = [np.arange(-1, n+2)*h for n, h in zip(divisions, spacing)]
     field = sample_shape(settings, axes)
@@ -178,13 +180,16 @@ def make_standard_surface(settings):
     vertices, faces, _, _ = marching_cubes(field, 0., spacing=tuple(spacing), allow_degenerate=False)
     vertices -= spacing
     vertices = np.clip(vertices, 0., dims)
-    a,b,c = vertices[faces].transpose(1,0,2)
-    faces = faces[np.linalg.norm(np.cross(b-a,c-a),axis=1)>1e-12]
+    a,b,c = np.asarray(vertices[faces], dtype=np.float64).transpose(1,0,2)
+    # Clipping can create zero-area faces. Keep every positive-area triangle:
+    # an absolute area cutoff removes valid small caps and opens the solid.
+    faces = faces[np.any(np.cross(b-a,c-a) != 0, axis=1)]
     return surface_from_marching_cubes(vertices, faces)
 
 
 def make_standard_mesh(settings, surface=None, on_progress=None):
-    from model import FEMesh, MAX_FE_ELEMENTS
+    from model import FEMesh
+    from mesh_resources import require_memory
     from rust_mesh import select_voxels
     p = profile(settings)
     if settings.mesh_type.startswith('TET'):
@@ -199,22 +204,15 @@ def make_standard_mesh(settings, surface=None, on_progress=None):
         edges[0]=np.concatenate([np.linspace(a,b,int(np.ceil((b-a)/settings.mesh_resolution))+1)[:-1]
                                  for a,b in zip(stations[:-1],stations[1:])]+[np.array([dims[0]])])
         divisions[0]=len(edges[0])-1
-    if np.prod(divisions) > MAX_FE_ELEMENTS*4:
-        raise ValueError('Standard specimen FE sampling exceeds the limit. Increase mesh size.')
+    require_memory(math.prod(map(int, divisions)) * 24, "Standard specimen FE sampling")
     spacing = np.array([np.diff(edge).max() for edge in edges])
     axes = [(edge[:-1]+edge[1:])/2 for edge in edges]
     values = sample_shape(settings, axes).astype(float)
     count = int(np.count_nonzero(values<0))
-    if not 1 <= count <= MAX_FE_ELEMENTS:
-        raise ValueError('Standard specimen exceeds the element limit or has no solid cells.')
-    if max(divisions) <= 150:
-        retained, removed, components = select_voxels(values, count)
-    else:
-        from scipy.ndimage import label, generate_binary_structure
-        labels, components=label(values<0,generate_binary_structure(3,1))
-        counts=np.bincount(labels.ravel());counts[0]=0
-        retained=labels==np.argmax(counts)
-        removed=(values<0)&~retained
+    if count < 1:
+        raise ValueError('Standard specimen has no solid cells.')
+    retained, removed, components = select_voxels(values, count)
+    del values
     grid = rectangular_hex_grid(retained, settings.mesh_type=='HEX20')
     excluded = rectangular_hex_grid(removed, settings.mesh_type=='HEX20')
     for dimension,edge in enumerate(edges):
@@ -230,28 +228,9 @@ def make_standard_mesh(settings, surface=None, on_progress=None):
 
 
 def rectangular_hex_grid(mask, quadratic=False):
-    """Rectangular coupons may exceed the custom cube kernel's 150-axis limit."""
-    locations=np.argwhere(mask)
-    if not len(locations):return pv.UnstructuredGrid()
-    corners=np.array([[0,0,0],[1,0,0],[1,1,0],[0,1,0],[0,0,1],[1,0,1],[1,1,1],[0,1,1]])
-    points,inverse=np.unique((locations[:,None,:]+corners).reshape(-1,3),axis=0,return_inverse=True)
-    points=points.astype(float)
-    cells=inverse.reshape(-1,8)
-    width=8
-    cell_type=pv.CellType.HEXAHEDRON
-    if quadratic:
-        from model import HEX_EDGES
-        edges=cells[:,np.array(HEX_EDGES)].reshape(-1,2)
-        edges.sort(axis=1)
-        unique,indices=np.unique(edges,axis=0,return_inverse=True)
-        mids=(points[unique[:,0]]+points[unique[:,1]])/2
-        cells=np.column_stack((cells,indices.reshape(-1,12)+len(points)))
-        points=np.vstack((points,mids));width=20;cell_type=pv.CellType.QUADRATIC_HEXAHEDRON
-    grid=pv.UnstructuredGrid(np.column_stack((np.full(len(cells),width),cells)).ravel(),
-        np.full(len(cells),cell_type,np.uint8),points)
-    grid.point_data['ansys_node_num']=np.arange(1,grid.n_points+1)
-    grid.cell_data['ansys_elem_num']=np.arange(1,grid.n_cells+1)
-    return grid
+    """Assemble rectangular coupon elements in the same Rust HEX kernel."""
+    from rust_mesh import build_hex_grid
+    return build_hex_grid(mask, 1., quadratic=quadratic)
 
 
 def fixture_surfaces(settings, displacement=0.):

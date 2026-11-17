@@ -26,6 +26,7 @@ $arguments = @(
     '--workpath', (Join-Path $PSScriptRoot 'build'),
     '--specpath', (Join-Path $PSScriptRoot 'packaging'),
     '--version-file', (Join-Path $PSScriptRoot 'packaging\version_info.txt'),
+    '--icon', (Join-Path $PSScriptRoot 'assets\ui\rustmech.ico'),
     '--add-data', ((Join-Path $PSScriptRoot 'assets\ui') + ';assets/ui'),
     '--add-data', ((Join-Path $PSScriptRoot 'assets\help') + ';assets/help'),
     '--add-data', ((Join-Path $PSScriptRoot '*.py') + ';remote_sources'),

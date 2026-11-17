@@ -214,13 +214,13 @@ class EfficiencyTests(unittest.TestCase):
         try:
             with patch("preview_transport.unpack_preview", fail_decode):
                 with self.assertRaisesRegex(ValueError, "transport test failure"):
-                    worker.build(settings, None, None, Event())
+                    worker.build(settings, None, None, Event(), include_mesh=True)
             self.assertIsNone(worker._segment)
             self.assertIsNone(worker._process)
             self.assertEqual(len(names), 1)
             with self.assertRaises(FileNotFoundError):
                 SharedMemory(name=names[0])
-            preview = worker.build(settings, None, None, Event())
+            preview = worker.build(settings, None, None, Event(), include_mesh=True)
             self.assertGreater(preview.mesh.grid.n_cells, 0)
         finally:
             worker.close()

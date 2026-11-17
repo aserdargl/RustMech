@@ -11,12 +11,12 @@ from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
 from PySide6.QtCore import Qt,QTimer
 from PySide6.QtWidgets import (QFileDialog,QFormLayout,QHBoxLayout,QLabel,QPushButton,
-                              QSlider,QSpinBox,QSplitter,QWidget)
+                              QSlider,QSplitter,QWidget)
 
 from analysis_process import AnalysisProcess
 from flow_workspace import FlowWorkspace
 from model import ROOT
-from studio_style import CompactDoubleSpinBox,configure_form,field_label,CONTROL_HEIGHT
+from studio_style import CompactSpinBox, CompactDoubleSpinBox,configure_form,field_label,CONTROL_HEIGHT
 from thermal_analysis import ThermalSettings,execute_thermal_case,export_thermal_case
 
 
@@ -60,7 +60,7 @@ class ThermalWorkspace(FlowWorkspace):
             ("time_step_s","Max time step / s",.000001,1000),
             ("output_interval_s","Save interval / s",.000001,10000),
             ("outer_correctors","Coupling correctors",2,50)):
-            control = QSpinBox() if name=="outer_correctors" else CompactDoubleSpinBox()
+            control = CompactSpinBox() if name=="outer_correctors" else CompactDoubleSpinBox()
             if isinstance(control,CompactDoubleSpinBox): control.setDecimals(6)
             control.setRange(lo,hi)
             control.setValue(getattr(defaults,name))
@@ -206,19 +206,20 @@ class ThermalWorkspace(FlowWorkspace):
         self.plotter.reset_camera()
 
     def draw_history(self):
+        from ui_language import translate
         self.figure.clear()
         axis = self.figure.add_subplot(111)
         axis.set_facecolor("#f8fafc")
         rows = self.thermal_report["history"]
         times = [r["time_s"] for r in rows]
         for key,label,color in (("water_mean_C","Water mean","#1687c8"),("outlet_bulk_C","Outlet water","#12986b"),("tpms_mean_C","TPMS mean","#d67b22")):
-            if key in rows[0]: axis.plot(times,[r[key] for r in rows],label=label,color=color,linewidth=1.5)
+            if key in rows[0]: axis.plot(times,[r[key] for r in rows],label=translate(label),color=color,linewidth=1.5)
         if "tpms_min_C" in rows[0]:
-            axis.fill_between(times,[r["tpms_min_C"] for r in rows],[r["tpms_max_C"] for r in rows],color="#d67b22",alpha=.12,label="TPMS min–max")
-        axis.axhline(self.manifest["thermal"]["inlet_temperature_c"],color="#cc4455",linestyle=":",label="Inlet water")
+            axis.fill_between(times,[r["tpms_min_C"] for r in rows],[r["tpms_max_C"] for r in rows],color="#d67b22",alpha=.12,label=translate("TPMS min–max"))
+        axis.axhline(self.manifest["thermal"]["inlet_temperature_c"],color="#cc4455",linestyle=":",label=translate("Inlet water"))
         self.time_cursor = axis.axvline(0,color="#526174",linewidth=.8)
-        axis.set_xlabel("Time / s",fontsize=9)
-        axis.set_ylabel("Temperature / °C",fontsize=9)
+        axis.set_xlabel(translate("Time / s"),fontsize=9)
+        axis.set_ylabel(translate("Temperature / °C"),fontsize=9)
         axis.tick_params(labelsize=8)
         axis.grid(alpha=.2)
         axis.legend(fontsize=8,loc="best",ncol=4)
@@ -265,9 +266,10 @@ class ThermalWorkspace(FlowWorkspace):
                 display = grid.slice(normal="x",origin=np.asarray(self.grid.center)*1000) if view in (0,3,4) else grid.clip(normal="x",origin=np.asarray(self.grid.center)*1000)
                 field = "Speed_m_s" if view==3 else "Pressure_Pa" if view==4 else "Temperature_C"
                 if field not in display.cell_data: continue
+                from ui_language import translate
                 self.plotter.add_mesh(display,scalars=field,cmap="turbo" if view<3 else "viridis",clim=limits if view<3 else None,
                                       opacity=.65 if view==2 and name=="water" else 1,
-                                      scalar_bar_args={"title":"Temperature / °C" if view<3 else "Speed / m/s" if view==3 else "Gauge pressure / Pa"})
+                                      scalar_bar_args={"title":translate("Temperature / °C" if view<3 else "Speed / m/s" if view==3 else "Gauge pressure / Pa")})
             self.plotter.render()
         except Exception as error: self.status.setText("Cannot render thermal field: "+str(error))
 

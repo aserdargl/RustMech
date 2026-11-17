@@ -8,11 +8,11 @@ from threading import Event
 
 import paramiko
 from PySide6.QtCore import QThread, Qt, Signal
-from PySide6.QtWidgets import (QCheckBox, QDialog, QFormLayout, QGroupBox, QHBoxLayout,
-                               QLabel, QLineEdit, QMessageBox, QPushButton, QScrollArea,
-                               QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QApplication, QCheckBox, QDialog, QFormLayout, QFrame, QGroupBox, QHBoxLayout,
+                               QLabel, QLineEdit, QMessageBox, QPushButton, QScrollArea, QSplitter,
+                               QTabWidget, QVBoxLayout, QWidget)
 
-from studio_style import STUDIO_STYLESHEET
+from studio_style import CONTROL_HEIGHT, STUDIO_STYLESHEET
 from truba_credentials import CredentialStore, state_directory
 
 HOST = "172.16.6.15"
@@ -129,6 +129,7 @@ class ConnectionWorker(QThread):
 
 class TrubaConnectionDialog(QDialog):
     connection_changed = Signal(bool)
+    disconnect_requested = Signal()
 
     def analysis_auth(self):
         worker=self.worker
@@ -142,7 +143,12 @@ class TrubaConnectionDialog(QDialog):
         self.setWindowTitle("TRUBA connection")
         self.setObjectName("trubaConnectionDialog")
         self.setStyleSheet(STUDIO_STYLESHEET)
-        self.setMinimumSize(360, 240)
+        self.setMinimumSize(360, 320)
+        self.setWindowFlag(Qt.WindowType.WindowMaximizeButtonHint, True)
+        self.setSizeGripEnabled(True)
+        from ui_language import LanguageSelector, install_language
+        preferences = getattr(getattr(parent, 'solver_profile_store', None), 'settings', None)
+        self.language_manager = install_language(QApplication.instance(), preferences)
         self.process = None  # Used by workspace no-startup-connection checks.
         self.worker = None
         self.connected = False
@@ -150,38 +156,78 @@ class TrubaConnectionDialog(QDialog):
         self.state_dir = state_directory()
         self.credentials = credential_store if credential_store is not None else CredentialStore()
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setContentsMargins(8, 8, 8, 6)
+        layout.setSpacing(6)
+        header = QFrame()
+        header.setObjectName('trubaHeader')
+        header_layout = QHBoxLayout(header)
+        header_layout.setContentsMargins(8, 5, 8, 5)
+        header_layout.setSpacing(8)
+        heading = QVBoxLayout()
+        heading.setSpacing(0)
+        title = QLabel('TRUBA')
+        title.setObjectName('trubaTitle')
+        heading.addWidget(title)
+        subtitle = QLabel('Remote compute')
+        subtitle.setObjectName('mutedHintLabel')
+        heading.addWidget(subtitle)
+        header_layout.addLayout(heading)
+        header_layout.addStretch()
+        self.connection_badge = QLabel('Disconnected')
+        self.connection_badge.setObjectName('trubaConnectionBadge')
+        header_layout.addWidget(self.connection_badge, 0, Qt.AlignmentFlag.AlignVCenter)
+        self.language_selector = LanguageSelector(self.language_manager, self)
+        header_layout.addWidget(self.language_selector)
+        layout.addWidget(header)
+        self.tabs = QTabWidget()
+        self.tabs.tabBar().setExpanding(False)
+        self.jobs_splitter = QSplitter(Qt.Orientation.Vertical)
+        self.jobs_splitter.setObjectName('trubaJobsSplitter')
+        self.jobs_splitter.setChildrenCollapsible(False)
+        self.jobs_splitter.setHandleWidth(6)
+        self.jobs_splitter.addWidget(self.tabs)
+        layout.addWidget(self.jobs_splitter, 1)
         self.settings_scroll = QScrollArea()
         self.settings_scroll.setWidgetResizable(False)
         self.settings_scroll.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
-        layout.addWidget(self.settings_scroll)
+        self.tabs.addTab(self.settings_scroll, 'Connection')
         self.settings_content = QWidget()
         content = QVBoxLayout(self.settings_content)
         content.setContentsMargins(0, 0, 0, 0)
-        content.setSpacing(8)
+        content.setSpacing(4)
         self.settings_layout = content
 
-        server = QGroupBox("Server and VPN")
+        server = QFrame()
         server_layout = QVBoxLayout(server)
-        server_layout.setContentsMargins(8, 4, 8, 6)
+        server_layout.setContentsMargins(8, 2, 8, 2)
         server_layout.setSpacing(0)
         server_layout.addWidget(QLabel(f"TRUBA · {HOST} · VPN required"))
         content.addWidget(server)
+        content.setAlignment(Qt.AlignmentFlag.AlignTop)
 
         account = QGroupBox("Credentials and password storage")
         account_layout = QVBoxLayout(account)
+        account_layout.setContentsMargins(8, 4, 8, 6)
+        account_layout.setSpacing(4)
         fields = QFormLayout()
+        fields.setContentsMargins(0, 0, 0, 0)
+        fields.setHorizontalSpacing(8)
+        fields.setVerticalSpacing(4)
         fields.setRowWrapPolicy(QFormLayout.RowWrapPolicy.DontWrapRows)
         self.username = QLineEdit()
+        self.username.setFixedSize(200, CONTROL_HEIGHT)
         self.username.setPlaceholderText("TRUBA username")
         self.password = QLineEdit()
+        self.password.setFixedSize(200, CONTROL_HEIGHT)
         self.password.setEchoMode(QLineEdit.EchoMode.Password)
         self.show_password = QCheckBox("Show password")
         self.show_password.toggled.connect(self._set_password_visible)
         password_row = QHBoxLayout()
         password_row.setContentsMargins(0, 0, 0, 0)
-        password_row.addWidget(self.password, 1)
+        password_row.setSpacing(6)
+        password_row.addWidget(self.password)
         password_row.addWidget(self.show_password)
+        password_row.addStretch()
         fields.addRow("Username", self.username)
         fields.addRow("Password", password_row)
         account_layout.addLayout(fields)
@@ -200,6 +246,7 @@ class TrubaConnectionDialog(QDialog):
         # Reserve room for longer connection messages without moving actions.
         self.status.setFixedHeight(self.status.fontMetrics().lineSpacing() * 2 + 6)
         buttons = QHBoxLayout()
+        buttons.setSpacing(6)
         self.connect_button = QPushButton("Connect")
         self.connect_button.setObjectName("primaryLaunchBtn")
         self.disconnect_button = QPushButton("Disconnect")
@@ -210,14 +257,16 @@ class TrubaConnectionDialog(QDialog):
         for button in (self.connect_button, self.disconnect_button):
             buttons.addWidget(button)
         buttons.addWidget(self.forget_button)
+        buttons.addStretch()
         account_layout.addLayout(buttons)
         account_layout.addWidget(self.status)
         content.addWidget(account)
         # Keep the entire form anchored and unchanged on resize. Smaller
         # viewports scroll instead of squeezing, wrapping or relocating fields.
         self.settings_scroll.setWidget(self.settings_content)
+        self._remote_sections = []
         self.fit_settings_content()
-        self.resize(self.settings_content.width() + 36, self.settings_content.height() + 36)
+        self.resize(500, 540)
         self.connect_button.clicked.connect(self.start_connection)
         self.disconnect_button.clicked.connect(self.stop_connection)
         self.forget_button.clicked.connect(self.forget_password)
@@ -230,11 +279,63 @@ class TrubaConnectionDialog(QDialog):
         except (OSError, ValueError):
             self.status.setText("Saved credentials cannot be read by this Windows user. Enter your credentials again.")
         self._update_controls()
+        self.language_manager.changed.connect(self._language_changed)
+        from truba_job_list import TrubaJobList
+        self.job_list = TrubaJobList(self)
+        self.jobs_splitter.addWidget(self.job_list)
+        self.jobs_splitter.setStretchFactor(0, 1)
+        self.jobs_splitter.setStretchFactor(1, 1)
+        # Initial proportions only; WindowStateStore restores the named splitter.
+        self.jobs_splitter.setSizes([310, 140])
+        from operation_progress import OperationProgress
+        self.operation_progress = OperationProgress(self, provider=self._operation_state)
+        layout.addWidget(self.operation_progress)
+
+    def _operation_state(self):
+        controller = getattr(self.parent(), "remote_controller", None)
+        if controller is not None:
+            if controller.close_future is not None or controller.future is not None:
+                return True, controller.status.text()
+            if controller.limits_future is not None:
+                return True, "Checking TRUBA resource limits…"
+            if controller.release_future is not None:
+                return True, controller.session_status.text()
+            if controller.session_future is not None:
+                return True, controller.session_status.text()
+        if self.job_list.workers:
+            return True, self.job_list.hint.text()
+        return self.worker is not None and (not self.connected or self.stopping), self.status.text()
+
+    def install_remote_sections(self, resources, advanced):
+        # The runtime controller owns the controls; this dialog owns presentation.
+        while self.tabs.count() > 1:
+            previous = self.tabs.widget(1)
+            self.tabs.removeTab(1)
+            previous.hide()
+            previous.setParent(self)
+        self._remote_sections = [resources, advanced]
+        for section, title in ((resources, 'Resources'), (advanced, 'Advanced')):
+            scroll = QScrollArea()
+            scroll.setWidgetResizable(False)
+            scroll.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+            scroll.setWidget(section)
+            self.tabs.addTab(scroll, title)
+        self.fit_settings_content()
+
+    def _language_changed(self, *_):
+        self.language_manager.localize_tree(self)
+        self.fit_settings_content()
 
     def fit_settings_content(self):
         """Size the shared, non-reflowing canvas when sections are installed."""
         self.settings_content.ensurePolished()
-        width = max(560, self.settings_layout.minimumSize().width())
+        # Resolve compact action sizes before calculating the form minimum.
+        buttons = (self.connect_button, self.disconnect_button)
+        button_width = max(132, *(button.fontMetrics().horizontalAdvance(button.text()) + 28 for button in buttons))
+        for button in buttons:
+            button.setFixedSize(button_width, CONTROL_HEIGHT)
+        self.forget_button.setFixedSize(self.forget_button.fontMetrics().horizontalAdvance(self.forget_button.text()) + 24, CONTROL_HEIGHT)
+        width = max(460, self.settings_layout.minimumSize().width())
         self.settings_content.setFixedWidth(width)
         for index in range(self.settings_layout.count()):
             section = self.settings_layout.itemAt(index).widget()
@@ -245,6 +346,11 @@ class TrubaConnectionDialog(QDialog):
             section.setFixedHeight(height if height >= 0 else section.sizeHint().height())
         self.settings_layout.invalidate()
         self.settings_content.setFixedHeight(self.settings_layout.sizeHint().height())
+        for section in self._remote_sections:
+            # Long advanced paths must not widen the connection form.
+            section.setFixedWidth(max(width, section.layout().minimumSize().width()))
+            section.layout().invalidate()
+            section.setFixedHeight(section.heightForWidth(section.width()) if section.hasHeightForWidth() else section.sizeHint().height())
 
     def keyPressEvent(self, event):
         if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
@@ -320,6 +426,11 @@ class TrubaConnectionDialog(QDialog):
             "local_error": "Local connection settings could not be read or written.",
         }
         self.status.setText(messages.get(state, "Disconnected"))
+        self.connection_badge.setText('Connected' if self.connected else
+                                      'Connecting...' if state in ('connecting', 'authenticating', 'reconnecting') else 'Disconnected')
+        self.connection_badge.setProperty('connected', self.connected)
+        self.connection_badge.style().unpolish(self.connection_badge)
+        self.connection_badge.style().polish(self.connection_badge)
         if self.connected and self.remember.isChecked():
             try:
                 self.credentials.save(self.username.text().strip(), self.password.text())
@@ -333,6 +444,9 @@ class TrubaConnectionDialog(QDialog):
 
     def _update_controls(self):
         running = self.worker is not None
+        self.connection_badge.setProperty('connected', self.connected)
+        self.connection_badge.style().unpolish(self.connection_badge)
+        self.connection_badge.style().polish(self.connection_badge)
         self.connect_button.setEnabled(not running)
         self.connect_button.setText("Connected" if self.connected else "Connect")
         self.connect_button.setProperty("trubaConnected", self.connected)
@@ -347,7 +461,9 @@ class TrubaConnectionDialog(QDialog):
             self.stopping = True
             self.connected = False
             self.connection_changed.emit(False)
+            self.disconnect_requested.emit()
             self.status.setText("Disconnecting...")
+            self.connection_badge.setText('Disconnecting...')
             self.worker.stop()
             self._update_controls()
 
@@ -355,6 +471,7 @@ class TrubaConnectionDialog(QDialog):
         worker = self.worker
         self.worker = None
         self.connected = False
+        self.connection_badge.setText('Disconnected')
         self.connection_changed.emit(False)
         if self.stopping:
             self.status.setText("Disconnected")
@@ -365,6 +482,7 @@ class TrubaConnectionDialog(QDialog):
             worker.deleteLater()
 
     def shutdown(self):
+        self.job_list.shutdown()
         self.stop_connection()
         if self.worker is not None:
             self.worker.wait()

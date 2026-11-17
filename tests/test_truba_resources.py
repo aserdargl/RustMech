@@ -2,6 +2,7 @@
 from dataclasses import replace
 import unittest
 from unittest.mock import patch
+from datetime import datetime, timezone
 
 from truba_resources import BASELINES, candidates, parse_catalog, allocate_with_limits, automatic_context, test_submission as validate_submission
 from truba_remote import RemoteContext, slurm_script
@@ -58,7 +59,7 @@ class QueuePolicyTests(unittest.TestCase):
 
     def test_auto_resolves_live_limits_resources_and_submits_once(self):
         context = RemoteContext(partition='auto')
-        with patch('truba_resources.fetch_catalog', return_value=BASELINES), patch('truba_resources.test_submission'), patch('truba_session.create_session') as submit:
+        with patch('truba_resources.fetch_catalog', return_value=BASELINES), patch('truba_resources.test_submission', return_value=None), patch('truba_session.create_session') as submit:
             allocate_with_limits(context, 'auth')
         submit.assert_called_once_with(replace(context, partition='barbun', cores=20, memory_mb=170000), 'auth')
 
@@ -71,7 +72,7 @@ class QueuePolicyTests(unittest.TestCase):
         self.assertEqual((chosen.partition, chosen.cores), ('orfoz', 64))
 
     def test_auto_retries_whole_node_if_job_submit_plugin_rejects_half(self):
-        with patch('truba_resources.fetch_catalog', return_value=BASELINES), patch('truba_resources.test_submission', side_effect=[RuntimeError('Use whole node'), None]), patch('truba_session.create_session') as submit:
+        with patch('truba_resources.fetch_catalog', return_value=BASELINES), patch('truba_resources.test_submission', side_effect=[RuntimeError('Use whole node'), None, None, None]), patch('truba_session.create_session') as submit:
             allocate_with_limits(RemoteContext(partition='auto'))
         self.assertEqual(submit.call_args.args[0].cores, 40)
         self.assertEqual(submit.call_count, 1)
@@ -88,10 +89,15 @@ class QueuePolicyTests(unittest.TestCase):
     def test_preflight_uses_test_only_without_allocating(self):
         with patch('truba_remote.RemoteTransport') as transport:
             transport.return_value.username = 'tester'
+            transport.return_value.command.return_value = ''
             validate_submission(RemoteContext())
         command = transport.return_value.command.call_args.args[0]
         self.assertIn('sbatch --test-only', command)
         self.assertNotIn('sbatch --parsable', command)
+        self.assertIn('mkdir -p -- /arf/scratch/tester/RustMech\ncd -- /arf/scratch/tester/RustMech\n', command)
+        self.assertIn('LC_ALL=C TZ=UTC', command)
+        self.assertIn('sbatch --test-only 2>&1', command)
+        self.assertLess(command.index('cd -- '), command.index('sbatch --test-only'))
 
     def test_job_submit_rejection_never_creates_manual_or_auto_session(self):
         for context in (RemoteContext(), RemoteContext(partition='auto')):
@@ -106,6 +112,58 @@ class QueuePolicyTests(unittest.TestCase):
         self.assertEqual(catalog['barbun-cuda'].max_gpus, 2)
         self.assertIsNone(catalog['barbun-cuda'].min_memory_mb)
         self.assertEqual(candidates('barbun-cuda', 20, 1536, '01:00:00', catalog, gpus=1), 'barbun-cuda')
+
+    def test_auto_compares_all_cpu_queue_estimates_and_submits_only_earliest(self):
+        catalog = dict(BASELINES)
+        catalog['hamsi'] = replace(catalog['hamsi'], idle_capacities=((56, 190000),))
+        estimates = {'hamsi': 300, 'barbun': 100, 'orfoz': 200}
+        checked = []
+        def estimate(context, auth):
+            checked.append(context)
+            return estimates[context.partition]
+        with patch('truba_resources.fetch_catalog', return_value=catalog), patch(
+                'truba_resources.test_submission', side_effect=estimate), patch(
+                'truba_session.create_session') as submit:
+            allocate_with_limits(RemoteContext(partition='auto'), 'auth')
+        self.assertEqual({c.partition for c in checked}, set(estimates))
+        self.assertTrue(all(c.gpus == 0 for c in checked))
+        submit.assert_called_once()
+        self.assertEqual(submit.call_args.args[0].partition, 'barbun')
+
+    def test_known_start_estimate_is_used_when_other_queues_have_no_prediction(self):
+        def estimate(context, auth):
+            return 200 if context.partition == 'orfoz' else None
+        with patch('truba_resources.fetch_catalog', return_value=BASELINES), patch(
+                'truba_resources.test_submission', side_effect=estimate), patch(
+                'truba_session.create_session') as submit:
+            allocate_with_limits(RemoteContext(partition='auto'))
+        submit.assert_called_once()
+        self.assertEqual(submit.call_args.args[0].partition, 'orfoz')
+
+    def test_unknown_estimates_fall_back_to_idle_fit_and_rejection_is_excluded(self):
+        catalog = dict(BASELINES)
+        catalog['hamsi'] = replace(catalog['hamsi'], idle_capacities=((56, 190000),))
+        def estimate(context, auth):
+            if context.partition == 'hamsi':
+                raise RuntimeError('Account cannot use this queue')
+            return None
+        with patch('truba_resources.fetch_catalog', return_value=catalog), patch(
+                'truba_resources.test_submission', side_effect=estimate), patch(
+                'truba_session.create_session') as submit:
+            allocate_with_limits(RemoteContext(partition='auto'))
+        submit.assert_called_once()
+        self.assertEqual(submit.call_args.args[0].partition, 'barbun')
+
+    def test_preflight_parses_stderr_estimate_and_missing_or_invalid_dates(self):
+        for value, expected in (
+                ('sbatch: Job 123 to start at 2026-11-17T10:30:00 using 28 processors',
+                 datetime(2026, 11, 17, 10, 30, tzinfo=timezone.utc).timestamp()),
+                ('sbatch: Job 123 to start at 2026-99-17T10:30:00', None),
+                ('sbatch: Job 123 can run', None)):
+            with self.subTest(value=value), patch('truba_remote.RemoteTransport') as transport:
+                transport.return_value.username = 'tester'
+                transport.return_value.command.return_value = value
+                self.assertEqual(validate_submission(RemoteContext()), expected)
 
     def test_failed_live_refresh_never_submits(self):
         with patch('truba_resources.fetch_catalog', side_effect=RuntimeError('Offline')), patch('truba_session.create_session') as submit:

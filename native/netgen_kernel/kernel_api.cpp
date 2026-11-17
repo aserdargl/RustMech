@@ -7,6 +7,7 @@
 #include <stlgeom.hpp>
 #include <nginterface_v2.hpp>
 #include <vector>
+#include <limits>
 
 namespace {
 thread_local std::string last_error;
@@ -20,7 +21,7 @@ struct Output {
 }
 
 extern "C" __declspec(dllexport) uint32_t rustmech_netgen_abi() { return 1; }
-extern "C" __declspec(dllexport) const char* rustmech_netgen_revision() { return "96e5682f-rustmech-atlas-5"; }
+extern "C" __declspec(dllexport) const char* rustmech_netgen_revision() { return "96e5682f-rustmech-atlas-6"; }
 extern "C" __declspec(dllexport) void rustmech_netgen_set_progress(Progress callback) { progress=callback; }
 extern "C" __declspec(dllexport) const char* rustmech_netgen_error() { return last_error.c_str(); }
 extern "C" __declspec(dllexport) void* rustmech_netgen_generate(
@@ -30,7 +31,8 @@ extern "C" __declspec(dllexport) void* rustmech_netgen_generate(
     try {
         last_error.clear();
         if (!points || !faces || !normals || !counts || np == 0 || nf == 0 ||
-            nf > 50000000 || np > 50000000 || ns > 50000000 || (ns && !samples) ||
+            nf > std::numeric_limits<int>::max() || np > std::numeric_limits<int>::max() ||
+            ns > std::numeric_limits<int>::max() || (ns && !samples) ||
             !std::isfinite(maxh) || !std::isfinite(localh) || maxh <= 0 || localh <= 0)
             throw std::invalid_argument("Invalid Netgen input arrays or sizes");
         ngcore::printmessage_importance = 0;
@@ -73,11 +75,11 @@ extern "C" __declspec(dllexport) void* rustmech_netgen_generate(
             if(stage>=5 && !geometry->volumemeshed) throw std::runtime_error("Netgen volume generation failed");
         }
         }
-        if(mesh->GetNE()==0 || mesh->GetNE()>1100000)
-            throw std::runtime_error("Netgen mesh has "+std::to_string(mesh->GetNE())+" elements. Limit: 1,100,000. Increase the mesh sizes.");
+        if(mesh->GetNE()==0)
+            throw std::runtime_error("Netgen mesh has no solid elements.");
         auto output=std::make_unique<Output>();
-        output->points.reserve(mesh->GetNP()*3);
-        output->cells.reserve(mesh->GetNE()*4);
+        output->points.reserve(static_cast<size_t>(mesh->GetNP())*3);
+        output->cells.reserve(static_cast<size_t>(mesh->GetNE())*4);
         for(auto& point:mesh->Points()) for(int d=0;d<3;++d) output->points.push_back(point[d]);
         for(const auto& cell:mesh->VolumeElements()) {
             if(cell.GetType()!=netgen::TET) throw std::runtime_error("Expected linear tetrahedra");

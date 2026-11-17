@@ -11,6 +11,40 @@ from standard_tests import apply_profile, sample_shape, profile_report, fixture_
 
 
 class StandardGeometryTests(unittest.TestCase):
+    def test_small_valid_cap_triangles_survive_standard_surface_generation(self):
+        import pyvista as pv
+        from standard_tests import make_standard_surface
+
+        width = 2e-7
+        vertices = np.array([
+            [0, 0, 0], [1, 0, 0], [1, width, 0], [0, width, 0],
+            [0, 0, width], [1, 0, width], [1, width, width], [0, width, width],
+            [.5, 0, 0],
+        ], dtype=np.float64)
+        faces = np.array([
+            [0, 2, 1], [0, 3, 2], [4, 5, 6], [4, 6, 7],
+            [0, 1, 5], [0, 5, 4], [1, 2, 6], [1, 6, 5],
+            [2, 3, 7], [2, 7, 6], [3, 0, 4], [3, 4, 7],
+            [0, 8, 1],  # Exactly collinear: this face must still be removed.
+        ], dtype=np.int32)
+        settings = replace(apply_profile(Settings(), 'iso13314_cube'), stl_resolution=.5)
+        # Inject a known closed contour with tiny end caps. Keep the real clipping,
+        # triangle filtering, native cleanup and STL writer in the exercised path.
+        with patch('standard_tests.sample_shape', return_value=np.zeros((3, 3, 3), np.float32)), patch(
+            'skimage.measure.marching_cubes', return_value=(vertices + .5, faces, None, None)
+        ):
+            surface = make_standard_surface(settings)
+        self.assertEqual(surface.n_cells, 12)
+        self.assertEqual(surface.n_open_edges, 0)
+        self.assertTrue(surface.is_manifold)
+        with TemporaryDirectory() as folder:
+            path = Path(folder) / 'small-caps.stl'
+            surface.save(path)
+            restored = pv.read(path)
+        self.assertEqual(restored.n_cells, 12)
+        self.assertEqual(restored.n_open_edges, 0)
+        self.assertTrue(restored.is_manifold)
+
     def test_profiles_persist_and_old_settings_remain_custom(self):
         from model import settings_from_dict
         self.assertEqual(settings_from_dict({'size':6}).test_profile,'custom')
@@ -57,8 +91,8 @@ class StandardGeometryTests(unittest.TestCase):
     def test_architecture_invalidates_mesh_cache(self):
         settings=apply_profile(Settings(),'iso178_preferred')
         changed=replace(settings,specimen_architecture='porous_centre')
-        cached=build_preview(settings)
-        rebuilt=build_preview(changed,cached)
+        cached=build_preview(settings, include_mesh=True)
+        rebuilt=build_preview(changed,cached,include_mesh=True)
         self.assertNotEqual(preview_key(settings),preview_key(changed))
         self.assertIsNot(cached.surface,rebuilt.surface)
         self.assertIsNot(cached.mesh,rebuilt.mesh)

@@ -76,20 +76,32 @@ class SubstepUITests(unittest.TestCase):
         dialog = self.dialog
         self.assertEqual(dialog.substeps_status.text(), 'Automatic')
         self.assertTrue(dialog.substeps_advanced.isHidden())
-        self.assertFalse(dialog.substeps_advanced_button.isChecked())
+        self.assertEqual(dialog.substeps_mode_combo.currentText(), "Automatic")
         for name in ('substeps', 'minimum_substeps', 'maximum_substeps'):
             self.assertTrue(dialog.substeps_advanced.isAncestorOf(dialog.controls[name]))
         self.assertEqual(dialog.collect().substep_limits, (40, 4000))
-        dialog.substeps_advanced_button.click()
+        dialog.substeps_mode_combo.setCurrentIndex(1)
         self.assertFalse(dialog.substeps_advanced.isHidden())
         dialog.controls['minimum_substeps'].setValue(10)
         dialog.controls['substeps'].setValue(50)
         dialog.controls['maximum_substeps'].setValue(2000)
-        dialog.substeps_advanced_button.click()
+        dialog.substeps_mode_combo.setCurrentIndex(0)
         self.assertTrue(dialog.substeps_advanced.isHidden())
+        self.assertEqual(dialog.collect().substeps, Settings().substeps)
+        self.assertEqual(dialog.collect().substep_limits, Settings().substep_limits)
+        dialog.substeps_mode_combo.setCurrentIndex(1)
         self.assertEqual(dialog.collect().substeps, 50)
         self.assertEqual(dialog.collect().substep_limits, (10, 2000))
         self.assertEqual(validate_settings(dialog.collect()), [])
+        # Solver profiles restore custom stepping instead of silently using defaults.
+        custom = replace(Settings(), substeps=60, minimum_substeps=12, maximum_substeps=2400)
+        dialog._apply_solver_profile(custom)
+        self.assertEqual(dialog.substeps_mode_combo.currentText(), "Advanced")
+        self.assertEqual(dialog.collect().substeps, 60)
+        self.assertEqual(dialog.collect().substep_limits, (12, 2400))
+        dialog._apply_solver_profile(Settings())
+        self.assertEqual(dialog.substeps_mode_combo.currentText(), "Automatic")
+        self.assertTrue(dialog.substeps_advanced.isHidden())
 
 
 if __name__ == '__main__':

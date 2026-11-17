@@ -68,7 +68,7 @@ class GeometryImportTests(unittest.TestCase):
 
     def test_real_tetra_mesh_and_cache_switch(self):
         settings = self.imported()
-        preview = build_preview(settings)
+        preview = build_preview(settings, include_mesh=True)
         self.assertGreater(preview.mesh.grid.n_cells, 0)
         self.assertFalse(preview.mesh.solve_errors)
         self.assertAlmostEqual(preview.mesh.fraction, 100, places=4)

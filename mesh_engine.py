@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from contextlib import contextmanager
+from contextvars import ContextVar
 from functools import lru_cache
 from hashlib import blake2b
 
@@ -14,7 +16,21 @@ from model import FEMesh, Settings, TETRAHEDRAL_MESH_TYPES, require_geometry
 from rust_mesh import build_hex_grid, largest_triangle_surface, select_voxels
 from structure_library import evaluate_priority_field
 from periodic_sampling import sample_priority_grid
+from mesh_resources import require_memory
 from tetrahedral_mesh import generate_tetrahedral_mesh
+
+
+_single_surface = ContextVar('single_surface', default=False)
+
+
+@contextmanager
+def single_surface_mode():
+    """Keep nested compute-node geometry work on the whole-surface path."""
+    token = _single_surface.set(True)
+    try:
+        yield
+    finally:
+        _single_surface.reset(token)
 
 
 def gyroid_field(x, y, z, cell_size: float):
@@ -55,8 +71,8 @@ def _surface_threshold_for_settings(
     return float(np.quantile(field, fraction / 100))
 
 
-def make_surface(settings: Settings) -> pv.PolyData:
-    require_geometry(settings)
+def make_surface(settings: Settings, *, surface_backend="flying_edges", chunked=None, on_progress=None) -> pv.PolyData:
+    require_geometry(settings, include_mesh=False)
     if settings.test_profile != 'custom':
         from standard_tests import make_standard_surface
         return make_standard_surface(settings)
@@ -68,7 +84,14 @@ def make_surface(settings: Settings) -> pv.PolyData:
         return surface
     n = max(4, int(np.ceil(settings.size / settings.surface_resolution)))
     spacing = settings.size / n
+    require_memory((n + 3) * 40, 'Reference surface sampling axes')
     axis = np.arange(-1, n + 2, dtype=float) * spacing
+    from chunked_surface import should_chunk, build_chunked_surface
+    if not _single_surface.get() and (chunked is True or (chunked is None and should_chunk(len(axis)))):
+        surface = build_chunked_surface(settings, axis, spacing, backend=surface_backend, on_progress=on_progress)
+        surface.field_data['_rustmech_reference'] = np.frombuffer(_surface_signature(surface, settings), dtype=np.uint8).copy()
+        return surface
+    require_memory((n + 3) ** 3 * 12, "Reference surface sampling")
     threshold = geometry_threshold(settings)
     # Bound temporary field buffers and stay within the native sampler's
     # per-call limit even for automatically refined thin-wall geometries.
@@ -79,27 +102,91 @@ def make_surface(settings: Settings) -> pv.PolyData:
     field[[0, -1], :, :] = 1
     field[:, [0, -1], :] = 1
     field[:, :, [0, -1]] = 1
-    vertices, faces, _, _ = marching_cubes(
-        field,
-        level=0,
-        spacing=(spacing,) * 3,
-        allow_degenerate=False,
-        gradient_direction="descent",
-    )
-    vertices -= spacing
-    np.clip(vertices, 0, settings.size, out=vertices)
-    # Projection can collapse triangles on cap edges. Remove them before the
-    # native merge so they cannot become spurious lines or corrupt normals.
-    corners = vertices[faces]
-    distinct = (
-        np.any(corners[:, 0] != corners[:, 1], axis=1)
-        & np.any(corners[:, 1] != corners[:, 2], axis=1)
-        & np.any(corners[:, 2] != corners[:, 0], axis=1)
-    )
-    faces = faces[distinct]
-    surface = surface_from_marching_cubes(vertices, faces)
+    surface = extract_reference_surface(field, spacing, settings.size, backend=surface_backend)
+    surface.field_data['_surface_mode'] = ['single']
     surface.field_data['_rustmech_reference'] = np.frombuffer(_surface_signature(surface, settings), dtype=np.uint8).copy()
     return surface
+
+
+def extract_reference_surface(field, spacing, size, *, backend="flying_edges"):
+    """Gitterburg's Flying Edges path, retaining RustMech's closed solid boundary.
+
+    Ambiguous contours fall back to Lewiner's topology-preserving extraction.
+    Both paths consume the same signed samples, ghost layer and clipping bounds.
+    """
+    if backend == "flying_edges":
+        vertices, faces = contour_arrays(field, spacing, backend=backend)
+        if len(faces):
+            surface = _project_reference_surface(vertices, faces, spacing, size)
+            if surface.n_cells and _reference_is_closed(surface):
+                surface.field_data['_surface_extractor'] = ['flying_edges']
+                return surface
+        backend = "marching_cubes"
+    vertices, faces = contour_arrays(field, spacing, backend=backend)
+    surface = _project_reference_surface(vertices, faces, spacing, size)
+    surface.field_data['_surface_extractor'] = ['marching_cubes']
+    return surface
+
+
+def contour_arrays(field, spacing=1.0, *, backend="flying_edges"):
+    """Raw, uncapped contour for a single owned block of grid cells."""
+    if backend == "flying_edges":
+        from vtkmodules.vtkCommonDataModel import vtkImageData
+        from vtkmodules.vtkFiltersCore import vtkFlyingEdges3D
+        from vtkmodules.util.numpy_support import numpy_to_vtk, vtk_to_numpy
+
+        image = vtkImageData()
+        image.SetDimensions(*field.shape)
+        image.SetSpacing(*((spacing,) * 3))
+        values = np.asarray(field, dtype=np.float32).ravel(order="F")
+        image.GetPointData().SetScalars(numpy_to_vtk(values, deep=False))
+        extractor = vtkFlyingEdges3D()
+        extractor.SetInputData(image)
+        extractor.SetValue(0, 0.0)
+        extractor.ComputeNormalsOff()
+        extractor.ComputeGradientsOff()
+        extractor.ComputeScalarsOff()
+        extractor.Update()
+        poly = extractor.GetOutput()
+        if poly.GetNumberOfPolys():
+            vertices = vtk_to_numpy(poly.GetPoints().GetData()).copy()
+            # Flying Edges points toward the negative phase; solids here are negative.
+            faces = vtk_to_numpy(poly.GetPolys().GetConnectivityArray()).reshape(-1, 3)[:, ::-1].copy()
+            return vertices, faces
+        return np.empty((0, 3), np.float32), np.empty((0, 3), np.int32)
+    if backend != "marching_cubes":
+        raise ValueError(f"Unknown surface extractor: {backend}")
+    vertices, faces, _, _ = marching_cubes(
+        field, level=0, spacing=(spacing,) * 3,
+        allow_degenerate=False, gradient_direction="descent",
+    )
+    return vertices, faces
+
+
+def _project_reference_surface(vertices, faces, spacing, size):
+    vertices -= spacing
+    np.clip(vertices, 0, size, out=vertices)
+    # VTK's float32 spacing/origin arithmetic can leave nominal cap vertices
+    # one ULP inside the specimen. Put only roundoff-close coordinates back
+    # on their exact loading planes before merging and removing degeneracies.
+    tolerance = np.finfo(vertices.dtype).eps * max(size, spacing) * 2
+    for start in range(0, len(vertices), 262_144):
+        points = vertices[start:start + 262_144]
+        points[np.abs(points) <= tolerance] = 0
+        points[np.abs(points - size) <= tolerance] = size
+    # Projection can collapse triangles on cap edges. Remove them before the
+    # native merge so they cannot become spurious lines or corrupt normals.
+    distinct = np.empty(len(faces), dtype=bool)
+    for start in range(0, len(faces), 262_144):
+        corners = vertices[faces[start:start + 262_144]]
+        distinct[start:start + len(corners)] = (
+            np.any(corners[:, 0] != corners[:, 1], axis=1)
+            & np.any(corners[:, 1] != corners[:, 2], axis=1)
+            & np.any(corners[:, 2] != corners[:, 0], axis=1)
+        )
+    if not np.all(distinct):
+        faces = faces[distinct]
+    return surface_from_marching_cubes(vertices, faces)
 
 
 def _surface_signature(surface, settings):
@@ -138,9 +225,19 @@ def surface_from_marching_cubes(vertices, faces):
     # form open/non-manifold patches; retain VTK's orientation repair for them.
     if not surface.is_manifold:
         return _vtk_surface_cleanup(vertices, faces)
-    return surface.compute_normals(
+    result = surface.compute_normals(
         consistent_normals=False, auto_orient_normals=False, split_vertices=False
     )
+    # The unchanged connectivity was checked just above. Do not scan millions
+    # of edges a second time in the caller after computing only normals.
+    result._rustmech_fresh_closed_surface = True
+    return result
+
+
+def _reference_is_closed(surface):
+    """Use only on a freshly constructed, unmodified reference surface."""
+    checked = getattr(surface, '_rustmech_fresh_closed_surface', None)
+    return surface.is_manifold if checked is None else checked
 
 
 def _vtk_surface_cleanup(vertices, faces):
@@ -162,7 +259,7 @@ def generate_volume_mesh(
         from standard_tests import make_standard_mesh
         return make_standard_mesh(settings, surface, on_progress)
     if settings.mesh_type in TETRAHEDRAL_MESH_TYPES:
-        surface = surface if surface is not None else make_surface(settings)
+        surface = surface if surface is not None else make_surface(settings, on_progress=on_progress)
         provenance = surface.field_data.get('_rustmech_reference')
         periodic_threshold = (geometry_threshold(settings)
                               if provenance is not None and bytes(provenance) == _surface_signature(surface, settings)
@@ -183,10 +280,12 @@ def generate_volume_mesh(
     # on each mesh would move the implicit boundary during a convergence study.
     count = int(np.count_nonzero(values < geometry_threshold(settings)))
     retained, removed, original_components = select_voxels(values, count)
+    del values
     if on_progress:
         on_progress(f"Assembling {settings.mesh_type} elements…")
     quadratic = settings.mesh_type == "HEX20"
     removed_grid = build_hex_grid(removed, spacing, quadratic=quadratic)
+    del removed
     grid, bottom, top = build_hex_grid(
         retained, spacing, quadratic=quadratic, return_boundaries=True
     )
@@ -207,7 +306,7 @@ def generate_volume_mesh(
 @dataclass
 class Preview:
     surface: pv.PolyData
-    mesh: FEMesh
+    mesh: FEMesh | None
     key: tuple
 
 
@@ -232,24 +331,29 @@ def preview_key(settings: Settings) -> tuple:
 
 
 def build_preview(
-    settings: Settings, cached: Preview | None = None, *, on_progress=None
+    settings: Settings, cached: Preview | None = None, *, on_progress=None, include_mesh=False
 ) -> Preview:
+    """Prepare geometry; create a volume mesh only on an explicit request.
+
+    A compatible existing FE mesh can be retained without doing any meshing.
+    Changing its settings invalidates it even for a geometry-only request.
+    """
     key = preview_key(settings)
-    if cached and cached.key[:8] == key[:8] and cached.key[13:] == key[13:]:
+    if cached and cached.key[:8] == key[:8] and cached.key[12:] == key[12:]:
         surface = cached.surface
     else:
         if on_progress:
             on_progress("Preparing the specimen surface…")
-        surface = make_surface(settings)
+        surface = make_surface(settings, on_progress=on_progress)
 
     def mesh_key(preview_settings_key):
         if preview_settings_key[9] in TETRAHEDRAL_MESH_TYPES:
             return preview_settings_key
-        return (*preview_settings_key[:7], *preview_settings_key[8:10], *preview_settings_key[13:])
+        return (*preview_settings_key[:7], *preview_settings_key[8:10], *preview_settings_key[12:])
 
-    mesh = (
-        cached.mesh
-        if cached and mesh_key(cached.key) == mesh_key(key)
-        else generate_volume_mesh(settings, surface, on_progress=on_progress)
-    )
+    mesh = None
+    if cached and cached.mesh is not None and mesh_key(cached.key) == mesh_key(key):
+        mesh = cached.mesh
+    elif include_mesh:
+        mesh = generate_volume_mesh(settings, surface, on_progress=on_progress)
     return Preview(surface, mesh, key)

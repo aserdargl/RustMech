@@ -6,34 +6,77 @@ from decimal import Decimal
 
 from PySide6.QtCore import QPoint, QRect, QSize, Qt
 from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen, QValidator
-from PySide6.QtWidgets import QAbstractSpinBox, QComboBox, QDoubleSpinBox, QFormLayout, QGroupBox, QLabel, QLayout, QListView, QSizePolicy, QStyle, QStyleOptionGroupBox, QStylePainter, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QAbstractSpinBox, QComboBox, QDoubleSpinBox, QFormLayout, QGroupBox, QLabel, QLineEdit, QLayout, QSizePolicy, QSpinBox, QStyle, QStyleOptionComboBox, QStyleOptionGroupBox, QStylePainter, QVBoxLayout, QWidget
 
 
 CONTROL_HEIGHT = 25
 FORM_LABEL_WIDTH = 118
 FORM_FIELD_MIN_WIDTH = 94
-NUMERIC_FIELD_WIDTH = 88
+NUMERIC_FIELD_WIDTH = 80
 FORM_COLUMN_GAP = 4
 
+_UI_ASSETS = Path(__file__).resolve().parent / "assets" / "ui"
+from datenburg_widgets import (
+    DatenburgComboBox, DatenburgComboDelegate, DatenburgStepperFace, compact_gradient_button_stylesheet,
+    graphcalc_combo_stylesheet,
+)
 
-class CompactComboBox(QComboBox):
+
+def configure_stepper(control: QAbstractSpinBox) -> None:
+    """Install Datenburg's actual composite field and frameless arrow column."""
+    control._build_datenburg_face()
+
+
+class CompactSpinBox(DatenburgStepperFace, QSpinBox):
+    """Integer counterpart of the shared Datenburg decimal stepper."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        configure_stepper(self)
+
+
+class CompactComboBox(DatenburgComboBox):
     """Use compact list rows and size the popup to its full item contents."""
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.setView(QListView(self))
+        self.setFixedHeight(CONTROL_HEIGHT)
+        self.setStyleSheet(graphcalc_combo_stylesheet().replace("#GraphCalcCombo", ""))
+        self._apply_light_popup_style()
+        self.view().setItemDelegate(DatenburgComboDelegate(self.view()))
         self.view().setTextElideMode(Qt.TextElideMode.ElideNone)
+
+    def paintEvent(self, event):
+        from ui_language import translate
+        option = QStyleOptionComboBox()
+        self.initStyleOption(option)
+        if not self.property('languageSelector'):
+            option.currentText = translate(option.currentText)
+        if self.property('flagSelector'):
+            # Keep language names in the popup/accessibility model; show only
+            # the flag in the compact closed selector (also on Windows).
+            option.currentText = ''
+        painter = QStylePainter(self)
+        painter.drawComplexControl(QStyle.ComplexControl.CC_ComboBox, option)
+        painter.drawControl(QStyle.ControlElement.CE_ComboBoxLabel, option)
 
     def showPopup(self):
         view = self.view()
+        self._apply_light_popup_style()
         view.ensurePolished()
         margins = view.contentsMargins()
         width = (view.sizeHintForColumn(self.modelColumn())
                  + margins.left() + margins.right() + 2 * view.frameWidth()
                  + view.verticalScrollBar().sizeHint().width())
+        from ui_language import translate
+        width = max(width, max((self.fontMetrics().horizontalAdvance(translate(self.itemText(i)))
+                               for i in range(self.count())), default=0) + 28)
         # Recompute on every opening, including after model/font/DPI changes.
         screen = self.screen().availableGeometry()
         view.setMinimumWidth(min(max(self.width(), width), screen.width()))
+        # Datenburg/Qt 6.10 lays out 17px rows and paints the 2px item
+        # padding within its 21px delegate rect. Pin the same grid on Qt 6.11.
+        view.setGridSize(QSize(max(1, view.minimumWidth() - 2), 17))
         super().showPopup()
 
 
@@ -237,7 +280,7 @@ class ActionFlowLayout(QLayout):
         return y + row_height - rect.y() + margins.bottom()
 
 
-class CompactDoubleSpinBox(QDoubleSpinBox):
+class CompactDoubleSpinBox(DatenburgStepperFace, QDoubleSpinBox):
     """Keep up to twelve entered digits without fixed-width decimal padding."""
 
     MAX_DIGITS = 12
@@ -246,11 +289,8 @@ class CompactDoubleSpinBox(QDoubleSpinBox):
         super().__init__(*args, **kwargs)
         self.setDecimals(self.MAX_DIGITS)
         self.setGroupSeparatorShown(False)
-        self.setFixedHeight(CONTROL_HEIGHT)
+        configure_stepper(self)
         self.setFixedWidth(NUMERIC_FIELD_WIDTH)
-        self.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-        self.setAccelerated(True)
-        self.setProperty("stepperFamily", "DatenburgStepper")
 
     def textFromValue(self, value: float) -> str:
         # Significant-digit formatting avoids exposing binary float noise;
@@ -292,6 +332,11 @@ def field_label(text: str, control: QWidget, *, tooltip: str = "") -> QLabel:
     if isinstance(control, QAbstractSpinBox):
         control.setFixedWidth(NUMERIC_FIELD_WIDTH)
         control.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+    elif isinstance(control, QLineEdit):
+        control.setMinimumWidth(FORM_FIELD_MIN_WIDTH)
+        control.setMaximumWidth(180)
+        control.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        control.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
     else:
         control.setMinimumWidth(FORM_FIELD_MIN_WIDTH)
         control.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
@@ -310,7 +355,9 @@ def field_label(text: str, control: QWidget, *, tooltip: str = "") -> QLabel:
 
 
 # A single theme covers the main window and every auxiliary dialog.
-_UI_ASSETS = Path(__file__).resolve().parent / "assets" / "ui"
 STUDIO_STYLESHEET = (_UI_ASSETS / "datenburg.qss").read_text(encoding="utf-8").replace(
     "@ASSETS@", _UI_ASSETS.as_posix()
+) + "\n" + "\n".join(
+    compact_gradient_button_stylesheet(selector)
+    for selector in ("QPushButton", "QToolButton")
 )

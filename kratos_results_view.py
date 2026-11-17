@@ -85,8 +85,9 @@ class KratosResultsDialog(QDialog):
         display.points=np.asarray(self.mesh.points)+displacement*self.scale.value()
         display.point_data["Result"]=field
         self.plotter.remove_actor("kratos_result",render=False)
+        from ui_language import translate
         self.plotter.add_mesh(display,scalars="Result",name="kratos_result",cmap="viridis",show_edges=False,
-                              scalar_bar_args={"title":self.field.currentText()})
+                              scalar_bar_args={"title":translate(self.field.currentText())})
         bottom,top=self.reader.platen_reactions(index)
         from standard_tests import kind,load_sign
         sign=load_sign(self.reader.settings)
@@ -100,6 +101,10 @@ class KratosResultsDialog(QDialog):
     def keyPressEvent(self,event):
         if event.key() in (Qt.Key.Key_Enter,Qt.Key.Key_Return):event.accept()
         else:super().keyPressEvent(event)
+
+    def done(self,result):
+        self.plotter.close()
+        super().done(result)
 
     def closeEvent(self,event):
         self.plotter.close()

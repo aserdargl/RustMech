@@ -4,9 +4,10 @@ import unittest
 from PySide6.QtCore import QLocale, Qt
 from PySide6.QtGui import QValidator
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QWidget
 
-from studio_style import CompactDoubleSpinBox
+from studio_style import CompactDoubleSpinBox, CompactSpinBox, STUDIO_STYLESHEET
+from mesh_convergence_style import CONVERGENCE_STYLESHEET
 
 
 class NumericControlTests(unittest.TestCase):
@@ -85,6 +86,36 @@ class NumericControlTests(unittest.TestCase):
         self.assertEqual(self.spin.text(), "6,5")
         self.spin.stepDown()
         self.assertEqual(self.spin.text(), "6")
+
+    def test_shared_integer_and_decimal_appearance_and_arrow_hit_targets(self):
+        parent = QWidget()
+        parent.setObjectName("meshConvergenceStudy")
+        parent.setStyleSheet(STUDIO_STYLESHEET + CONVERGENCE_STYLESHEET)
+        try:
+            for index, kind in enumerate((CompactSpinBox, CompactDoubleSpinBox)):
+                with self.subTest(kind=kind.__name__):
+                    spin = kind(parent)
+                    spin.move(0, index * 30)
+                    spin.setRange(0, 10)
+                    spin.setValue(5)
+                    parent.show()
+                    self.app.processEvents()
+                    self.assertEqual(spin.height(), 25)
+                    self.assertEqual(spin.alignment(), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+                    self.assertEqual(spin.field.alignment(), spin.alignment())
+                    self.assertEqual(spin.property("stepperFamily"), "DatenburgStepper")
+                    self.assertFalse(spin.keyboardTracking())
+                    margins = spin.lineEdit().textMargins()
+                    self.assertEqual((margins.left(), margins.top(), margins.right(), margins.bottom()), (0, 0, 0, 0))
+                    # A nested workspace theme must not change the shared font.
+                    self.assertEqual(spin.lineEdit().font().pixelSize(), 11)
+                    for arrow, expected in ((spin.btn_up, 6), (spin.btn_down, 5)):
+                        self.assertEqual(arrow.width(), 13)
+                        self.assertEqual(arrow.height(), 10)
+                        QTest.mouseClick(arrow, Qt.MouseButton.LeftButton)
+                        self.assertEqual(spin.value(), expected)
+        finally:
+            parent.close()
 
 
 if __name__ == "__main__":

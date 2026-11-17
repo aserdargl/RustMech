@@ -37,7 +37,18 @@ def _exception_detail(error):
     return ' Caused by: '.join(details)
 
 
+def _stage(message):
+    print(message, flush=True)
+    temporary = Path('progress.txt.tmp')
+    temporary.write_text(message, encoding='utf-8')
+    temporary.replace('progress.txt')
+
+
 def probe(request,missing=False):
+    operation = request.get('operation', 'probe')
+    full = operation in ('probe', 'prepare')
+    mechanics = operation in ('mechanical', 'convergence_level', 'doe_solve')
+    tetra = request.get('settings', {}).get('mesh_type') in ('TET4', 'TET10') and operation != 'surface'
     capabilities = dict(mesh=False,netgen=False,kratos=False,flow=False,thermal=False,ansys_mapdl=False,
                         mesh_types=[],reasons={},hostname=socket.gethostname(),python=sys.executable,
                         foam_version=os.environ.get("WM_PROJECT_VERSION",""))
@@ -62,25 +73,35 @@ def probe(request,missing=False):
     except Exception as error:
         capabilities["reasons"]["mesh"] = f"Mesh runtime unavailable: {_exception_detail(error)}"
         return capabilities
+    # Geometry and HEX meshing do not need Netgen, Kratos or OpenFOAM.
+    if not full and not tetra and not mechanics and not operation.startswith(('flow_', 'thermal_')):
+        return capabilities
     try:
-        importlib.import_module("netgen.meshing")
+        if full or tetra:
+            importlib.import_module("netgen.meshing")
         if request.get("operation") in ("probe","prepare"):
             checked=subprocess.run([sys.executable,str(Path(__file__).resolve()),"--netgen-smoke"],
                                    capture_output=True,timeout=90)
             if checked.returncode:
                 raise RuntimeError("Reference TPMS tetrahedral mesh self-test failed; TET4/TET10 are disabled. "+checked.stderr.decode(errors="replace")[-700:])
-        capabilities["netgen"] = True
-        capabilities["mesh_types"] += ["TET4","TET10"]
+        if full or tetra:
+            capabilities["netgen"] = True
+            capabilities["mesh_types"] += ["TET4","TET10"]
     except Exception as error: capabilities["reasons"]["netgen"] = str(error)
+    if not full and not mechanics:
+        if not operation.startswith(('flow_', 'thermal_')):
+            return capabilities
     try:
-        for name in ("KratosMultiphysics","KratosMultiphysics.StructuralMechanicsApplication",
+        for name in (("KratosMultiphysics","KratosMultiphysics.StructuralMechanicsApplication",
                      "KratosMultiphysics.ContactStructuralMechanicsApplication",
                      "KratosMultiphysics.ConstitutiveLawsApplication","KratosMultiphysics.LinearSolversApplication",
-                     "nonlinear_compression"):
+                     "nonlinear_compression") if full or mechanics else ()):
             importlib.import_module(name)
-        capabilities["kratos"] = True
+        capabilities["kratos"] = full or mechanics
     except Exception as error: capabilities["reasons"]["kratos"] = f"Kratos/reporting runtime unavailable: {error}"
     capabilities["reasons"]["ansys_mapdl"] = "A remote MAPDL license/runtime integration is not qualified. Use supported Kratos mechanics in TRUBA mode."
+    if not full and not operation.startswith(('flow_', 'thermal_')):
+        return capabilities
     compatible = bool(re.fullmatch(r"v?\d{4}(?:[-+].*)?",capabilities["foam_version"]))
     for key,commands in (("flow",("simpleFoam","checkMesh")),("thermal",("chtMultiRegionFoam","splitMeshRegions","checkMesh"))):
         if not compatible:
@@ -147,10 +168,23 @@ def _batch(settings,mesh):
 
 
 def run_operation(request,output):
+    from remote_operations import required_capability
+    required_capability(request)
+    if request['operation'] in ('probe', 'prepare'):
+        return _run_operation(request, output)
+    from mesh_engine import single_surface_mode
+    # Cover indirect surface generation too: previews, meshes, DoE, convergence
+    # and flow/thermal exports all share this execution scope.
+    with single_surface_mode():
+        return _run_operation(request, output)
+
+
+def _run_operation(request,output):
     operation = request["operation"]
     from remote_operations import required_capability
     needed = required_capability(request)
     if operation in ("probe","prepare"): return dict(capabilities=probe(request))
+    _stage('Checking runtime for ' + operation)
     capabilities = probe(request)
     if not capabilities.get(needed):
         raise RuntimeError(capabilities["reasons"].get(needed,capabilities["reasons"].get("mesh",f"{needed} is unavailable")))
@@ -176,14 +210,15 @@ def run_operation(request,output):
         errors = KRATOS_CAPABILITIES.validate(settings)
         if errors:
             raise ValueError("\n".join(errors))
-    if settings.mesh_type not in capabilities["mesh_types"] and operation not in ("flow_export","flow_solve","thermal_export","thermal_solve"):
+    if settings.mesh_type not in capabilities["mesh_types"] and operation not in ("surface","flow_export","flow_solve","thermal_export","thermal_solve"):
         raise RuntimeError(f"Remote mesher does not support {settings.mesh_type} in this environment.")
     if operation=="preview":
-        preview = build_preview(settings,on_progress=lambda stage:print(stage,flush=True))
+        preview = build_preview(settings,on_progress=lambda stage:print(stage,flush=True),include_mesh=True)
         save_preview(preview,settings,output/"preview")
         return dict(preview="preview")
     if operation=="surface":
-        make_surface(settings).save(output/"surface.vtp")
+        _stage('Generating specimen surface')
+        make_surface(settings, on_progress=_stage).save(output/"surface.vtp")
         return dict(surface="surface.vtp")
     if operation.startswith(("flow_","thermal_")):
         from flow_analysis import FlowSettings,export_flow_case,summarize_flow_case
@@ -228,6 +263,7 @@ def run_operation(request,output):
         level = solve_level(settings,generate_volume_mesh,_batch,max_elements=request["max_elements"],selected=request["selected"])
         return dict(level=asdict(level))
     if operation in ("doe_mesh","doe_solve"):
+        _stage('Meshing specimen' if operation == 'doe_mesh' else 'Meshing and solving DoE specimen')
         from doe_studio import ExperimentWorker
         worker = ExperimentWorker(generate_volume_mesh,_batch)
         method = worker._solve_row if operation=="doe_solve" else worker._evaluate_row_mesh
@@ -240,7 +276,7 @@ def main():
         from mesh_engine import build_preview
         from model import Settings
         preview=build_preview(Settings(size=1,cell_size=1,solid_fraction=40,mesh_type="TET4",
-                                       mesh_resolution=.3,local_mesh_size=.15,tetra_strategy="netgen"))
+                                       mesh_resolution=.3,local_mesh_size=.15,tetra_strategy="netgen"),include_mesh=True)
         if preview.mesh.grid.n_cells<=0 or preview.mesh.solve_errors:
             raise RuntimeError("Reference tetrahedral mesh is not solve-ready.")
         return 0

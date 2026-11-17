@@ -12,7 +12,6 @@ mod tetra;
 #[allow(unused_parens)]
 mod tpms_generated;
 
-const MAX_AXIS: usize = 150;
 const SELECTED: u32 = u32::MAX;
 const CORNERS: [[usize; 3]; 8] = [
     [0, 0, 0],
@@ -54,27 +53,45 @@ fn guarded<T>(operation: impl FnOnce() -> Result<T, String>) -> Option<T> {
 }
 
 fn dimensions(nx: usize, ny: usize, nz: usize, length: usize) -> Result<(), String> {
-    if [nx, ny, nz].iter().any(|&n| n == 0 || n > MAX_AXIS) {
-        return Err(format!("Voxel dimensions must be between 1 and {MAX_AXIS}"));
+    if [nx, ny, nz].contains(&0) {
+        return Err("Voxel dimensions must be positive".into());
     }
-    if nx * ny * nz != length {
+    if nx.checked_mul(ny).and_then(|n| n.checked_mul(nz)) != Some(length) {
         return Err("Voxel buffer length does not match its dimensions".into());
     }
+    // Queue/origin indices and component labels use u32; MAX is a sentinel.
+    if length >= u32::MAX as usize || !fits_buffer(length, 1, 8) {
+        return Err("Voxel buffer exceeds the native index format".into());
+    }
     Ok(())
+}
+
+pub(crate) fn fits_buffer(count: usize, width: usize, item_size: usize) -> bool {
+    count.checked_mul(width).and_then(|n| n.checked_mul(item_size))
+        .is_some_and(|bytes| bytes <= isize::MAX as usize)
+}
+
+fn filled<T: Clone>(length: usize, value: T) -> Result<Vec<T>, String> {
+    let mut buffer = Vec::new();
+    buffer.try_reserve_exact(length).map_err(|e| format!("Mesh allocation failed: {e}"))?;
+    buffer.resize(length, value);
+    Ok(buffer)
 }
 
 fn select(values: &[f64], shape: [usize; 3], count: usize) -> Result<(Vec<u32>, u32, u32), String> {
     if count > values.len() || values.iter().any(|v| !v.is_finite()) {
         return Err("Voxel values must be finite and count must not exceed their length".into());
     }
-    let mut labels = vec![0; values.len()];
+    let mut labels = filled(values.len(), 0)?;
     if count == 0 {
         return Ok((labels, 0, 0));
     }
     // Partition values, then resolve threshold ties in C grid order. This is
     // identical to taking count items from a stable argsort, without sorting all.
     let threshold = {
-        let mut scratch = values.to_vec();
+        let mut scratch = Vec::new();
+        scratch.try_reserve_exact(values.len()).map_err(|e| format!("Voxel selection allocation failed: {e}"))?;
+        scratch.extend_from_slice(values);
         let (_, pivot, _) =
             scratch.select_nth_unstable_by(count - 1, |a, b| a.partial_cmp(b).unwrap());
         *pivot
@@ -101,6 +118,7 @@ fn select(values: &[f64], shape: [usize; 3], count: usize) -> Result<(Vec<u32>, 
         components += 1;
         labels[seed] = components;
         queue.clear();
+        queue.try_reserve(1).map_err(|e| format!("Connectivity allocation failed: {e}"))?;
         queue.push(seed as u32);
         let mut head = 0;
         while head < queue.len() {
@@ -109,29 +127,31 @@ fn select(values: &[f64], shape: [usize; 3], count: usize) -> Result<(Vec<u32>, 
             let x = index / plane;
             let y = (index / nz) % ny;
             let z = index % nz;
-            let mut visit = |neighbour| {
+            let mut visit = |neighbour| -> Result<(), String> {
                 if labels[neighbour] == SELECTED {
+                    queue.try_reserve(1).map_err(|e| format!("Connectivity allocation failed: {e}"))?;
                     labels[neighbour] = components;
                     queue.push(neighbour as u32);
                 }
+                Ok(())
             };
             if x > 0 {
-                visit(index - plane);
+                visit(index - plane)?;
             }
             if x + 1 < nx {
-                visit(index + plane);
+                visit(index + plane)?;
             }
             if y > 0 {
-                visit(index - nz);
+                visit(index - nz)?;
             }
             if y + 1 < ny {
-                visit(index + nz);
+                visit(index + nz)?;
             }
             if z > 0 {
-                visit(index - 1);
+                visit(index - 1)?;
             }
             if z + 1 < nz {
-                visit(index + 1);
+                visit(index + 1)?;
             }
         }
         // Equal-size components retain the first one in C grid order (SciPy).
@@ -156,7 +176,7 @@ pub struct HexPlan {
 }
 
 impl HexPlan {
-    fn new(solid: &[u8], shape: [usize; 3], quadratic: bool) -> Self {
+    fn new(solid: &[u8], shape: [usize; 3], quadratic: bool) -> Result<Self, String> {
         let scale = if quadratic { 2 } else { 1 };
         let lattice = shape.map(|n| scale * n + 1);
         let [nx, ny, nz] = shape;
@@ -186,19 +206,18 @@ impl HexPlan {
             );
         }
         let cell_count = solid.iter().filter(|&&v| v != 0).count();
-        let mut origins = Vec::with_capacity(cell_count);
+        let mut origins = Vec::new();
+        origins.try_reserve_exact(cell_count).map_err(|e| format!("Element allocation failed: {e}"))?;
         // Empty masks do not allocate a potentially large lattice.
         let mut node_ids = if cell_count == 0 {
             Vec::new()
         } else {
-            vec![
-                -1;
+            filled(
                 if quadratic {
                     nx * pair + even_plane
                 } else {
                     lattice.iter().product()
-                }
-            ]
+                }, -1)?
         };
         for (index, &occupied) in solid.iter().enumerate() {
             if occupied == 0 {
@@ -238,6 +257,9 @@ impl HexPlan {
                     };
                     for z in (0..lattice[2]).step_by(z_step) {
                         if node_ids[key] == -2 {
+                            if point_count >= i32::MAX as usize {
+                                return Err("HEX node numbering exceeds the signed 32-bit contact ID format".into());
+                            }
                             node_ids[key] = point_count as i32;
                             point_count += 1;
                             if z == 0 {
@@ -252,7 +274,7 @@ impl HexPlan {
                 }
             }
         }
-        Self {
+        Ok(Self {
             node_ids,
             origins,
             offsets,
@@ -262,7 +284,7 @@ impl HexPlan {
             point_count,
             bottom,
             top,
-        }
+        })
     }
 
     fn write(&self, spacing: f64, points: &mut [f64], cells: &mut [i64]) {
@@ -319,7 +341,7 @@ impl HexPlan {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn rustmech_core_abi_version() -> u32 {
-    4
+    5
 }
 
 #[unsafe(no_mangle)]
@@ -382,7 +404,7 @@ pub unsafe extern "C" fn rustmech_hex_plan_new(
             return Err("Invalid hex plan arguments".into());
         }
         let solid = unsafe { slice::from_raw_parts(solid, length) };
-        let plan = Box::new(HexPlan::new(solid, [nx, ny, nz], quadratic != 0));
+        let plan = Box::new(HexPlan::new(solid, [nx, ny, nz], quadratic != 0)?);
         unsafe {
             *counts = plan.point_count;
             *counts.add(1) = plan.origins.len();
@@ -490,7 +512,7 @@ mod tests {
 
     #[test]
     fn shared_quadratic_edge_nodes_and_no_face_centres() {
-        let plan = HexPlan::new(&[1, 1], [2, 1, 1], true);
+        let plan = HexPlan::new(&[1, 1], [2, 1, 1], true).unwrap();
         assert_eq!(plan.point_count, 32);
         let mut points = vec![0.0; 3 * plan.point_count];
         let mut cells = vec![0; 40];
@@ -505,7 +527,7 @@ mod tests {
 
     #[test]
     fn empty_plan_and_invalid_values() {
-        let plan = HexPlan::new(&[0; 8], [2, 2, 2], false);
+        let plan = HexPlan::new(&[0; 8], [2, 2, 2], false).unwrap();
         assert_eq!(plan.point_count, 0);
         assert!(plan.node_ids.is_empty());
         plan.write(0.1, &mut [], &mut []);
@@ -517,7 +539,7 @@ mod tests {
     #[test]
     fn quadratic_lattice_contains_only_corners_and_edges() {
         let [nx, ny, nz] = [3, 4, 5];
-        let plan = HexPlan::new(&vec![1; nx * ny * nz], [nx, ny, nz], true);
+        let plan = HexPlan::new(&vec![1; nx * ny * nz], [nx, ny, nz], true).unwrap();
         let expected = (nx + 1) * (ny + 1) * (nz + 1)
             + nx * (ny + 1) * (nz + 1)
             + (nx + 1) * ny * (nz + 1)

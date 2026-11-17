@@ -10,7 +10,8 @@ import pyvista as pv
 from vtkmodules.vtkCommonCore import reference
 from vtkmodules.vtkCommonDataModel import vtkGenericCell, vtkStaticCellLocator
 
-from model import FEMesh, MAX_FE_ELEMENTS, Settings, TET_EDGES
+from model import FEMesh, Settings, TET_EDGES
+from mesh_resources import require_memory
 from netgen_io import geometry_from_surface, restrict_h
 from netgen_kernel import generate_arrays, kernel_path
 from rust_mesh import quadratic_tetra_arrays, tet_metrics
@@ -144,10 +145,7 @@ def _platen_samples(surface, settings):
     # Sample the contact planes directly. Subdividing arbitrary triangles can
     # generate hundreds of thousands of redundant points after decimation.
     n = max(1, int(np.ceil(settings.size / (_CONTACT_SAMPLE_SPACING_FACTOR * settings.local_mesh_size))))
-    if 2 * (n + 1) ** 2 > MAX_FE_ELEMENTS:
-        raise ValueError(
-            "The platen refinement exceeds the sampling limit. Increase the local mesh size."
-        )
+    require_memory(2 * (n + 1) ** 2 * 128, "Platen refinement sampling")
     axis = np.linspace(0, settings.size, n + 1)
     x, y = np.meshgrid(axis, axis, indexing='ij')
     xy = np.column_stack((x.ravel(), y.ravel()))
@@ -162,8 +160,7 @@ def _platen_samples(surface, settings):
     starts, ends = np.asarray(rim.points)[edges[:, 0]], np.asarray(rim.points)[edges[:, 1]]
     divisions = np.maximum(1, np.ceil(np.linalg.norm(ends - starts, axis=1) /
                                     (_CONTACT_SAMPLE_SPACING_FACTOR * settings.local_mesh_size)).astype(np.int64))
-    if len(points) + int(divisions.sum()) > MAX_FE_ELEMENTS:
-        raise ValueError('The platen refinement exceeds the sampling limit. Increase the local mesh size.')
+    require_memory(int(divisions.sum()) * 128, "Platen rim sampling")
     owners = np.repeat(np.arange(len(edges)), divisions)
     steps = np.arange(len(owners)) - np.repeat(np.cumsum(divisions) - divisions, divisions)
     edge_points = starts[owners] + (ends - starts)[owners] * (steps / divisions[owners])[:, None]
@@ -173,11 +170,8 @@ def _platen_samples(surface, settings):
 
 def _read_grid(mesh, mesh_type):
     count = len(mesh.Elements3D())
-    if not 1 <= count <= MAX_FE_ELEMENTS:
-        raise ValueError(
-            f"{mesh_type} mesh has {count:,} elements. Limit: {MAX_FE_ELEMENTS:,}. "
-            "Increase the mesh sizes."
-        )
+    if count < 1:
+        raise ValueError(f"{mesh_type} mesh has no solid elements.")
     if mesh_type == "TET10":
         mesh.SecondOrder()
         order, cell_type = _NETGEN_TO_VTK, pv.CellType.QUADRATIC_TETRA

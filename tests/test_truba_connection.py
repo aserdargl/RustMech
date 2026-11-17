@@ -203,6 +203,30 @@ class TrubaTests(unittest.TestCase):
         finally:
             self.app.removeEventFilter(store)
 
+    def test_jobs_splitter_resizes_table_and_restores_after_reopening(self):
+        store = WindowStateStore(self.app, QSettings(str(self.directory / 'splitter.ini'), QSettings.Format.IniFormat))
+        try:
+            first = self.dialog()
+            first.resize(680, 650)
+            first.show()
+            self.app.processEvents()
+            splitter = first.jobs_splitter
+            before = first.job_list.table.height()
+            splitter.moveSplitter(180, 1)
+            self.app.processEvents()
+            self.assertGreater(first.job_list.table.height(), before)
+            self.assertGreater(first.job_list.table.height(), 160)
+            self.assertGreater(first.tabs.height(), 0)
+            expected = splitter.sizes()
+            first.hide()
+            second = self.dialog()
+            second.show()
+            self.app.processEvents()
+            self.assertEqual(second.jobs_splitter.sizes(), expected)
+            self.assertEqual(second.size(), first.size())
+        finally:
+            self.app.removeEventFilter(store)
+
     def test_resize_and_status_changes_keep_controls_anchored(self):
         dialog = self.dialog()
         dialog.show()
@@ -232,6 +256,16 @@ class TrubaTests(unittest.TestCase):
         button = dialog.disconnect_button
         self.assertTrue(dialog.settings_scroll.viewport().rect().contains(
             button.mapTo(dialog.settings_scroll.viewport(), button.rect().center())))
+
+    def test_server_information_uses_one_compact_row(self):
+        dialog = self.dialog()
+        dialog.show()
+        self.app.processEvents()
+        server = dialog.settings_layout.itemAt(0).widget()
+        account = dialog.settings_layout.itemAt(1).widget()
+        self.assertLessEqual(server.height(), server.fontMetrics().lineSpacing() + 8)
+        self.assertEqual(account.y() - server.geometry().bottom() - 1,
+                         dialog.settings_layout.spacing())
 
     @unittest.skipIf(os.environ.get("RUSTMECH_OFFLINE") == "1", "Offline run: local SSH socket handshake")
     def test_real_local_ssh_password_handshake(self):

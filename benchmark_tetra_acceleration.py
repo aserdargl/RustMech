@@ -47,7 +47,7 @@ def main():
                 stages = []
                 start = perf_counter()
                 cached = worker.build(
-                    replace(settings, mesh_type=kind), cached, stages.append, Event()
+                    replace(settings, mesh_type=kind), cached, stages.append, Event(), include_mesh=True
                 )
                 rows.append(
                     dict(

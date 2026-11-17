@@ -5,6 +5,7 @@ Policy reference: https://docs.truba.gov.tr/2-temel_bilgiler/hesaplama_kumeleri.
 Scheduler defaults (DefMemPerCPU) are not minimum memory requirements.
 """
 from dataclasses import dataclass, replace
+from datetime import datetime, timezone
 import re
 
 MIN_CPUS = 1
@@ -191,10 +192,26 @@ def test_submission(context, auth=None):
     """Ask Slurm (including job-submit plugins) to validate; never allocate."""
     import shlex
     from truba_remote import RemoteTransport, slurm_script
+    from truba_jobs import SAFE_NAME
     transport = RemoteTransport(context, auth)
+    if not SAFE_NAME.fullmatch(transport.username):
+        raise ValueError('Invalid TRUBA username.')
+    scratch = shlex.quote(f'/arf/scratch/{transport.username}/RustMech')
     script = slurm_script(context, transport.username,
                           dict(operation='probe', source_sha256='0' * 64, native_sha256='0' * 64))
-    transport.command('set -e\nprintf %s ' + shlex.quote(script) + ' | sbatch --test-only')
+    # Site job-submit plugins validate the submitter's working directory even
+    # for --test-only. Match the real submission's scratch location.
+    reply = transport.command('set -e\nexport LC_ALL=C TZ=UTC\nmkdir -p -- ' + scratch + '\ncd -- ' + scratch +
+                              '\nprintf %s ' + shlex.quote(script) + ' | sbatch --test-only 2>&1')
+    # Slurm writes its estimate to stderr. UTC makes comparisons independent
+    # of the workstation and cluster time zones. Missing estimates are normal.
+    match = re.search(r'\bto start at (\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})', reply)
+    if match:
+        try:
+            return datetime.fromisoformat(match[1]).replace(tzinfo=timezone.utc).timestamp()
+        except ValueError:
+            pass
+    return None
 
 
 def allocate_with_limits(context, auth=None):
@@ -204,20 +221,28 @@ def allocate_with_limits(context, auth=None):
     if context.partition == 'auto':
         options = automatic_options(context, catalog, min_cpus=context.cores)
         last_error = None
-        for option in options:
+        accepted = []
+        for order, option in enumerate(options):
             limit = catalog[option.partition]
             full_node = replace(option, cores=limit.max_cpus,
                                 memory_mb=limit.suggested_memory(limit.max_cpus))
-            # Some job-submit plugins require whole nodes despite a lower
-            # published CPU minimum. Auto may try the whole-node request.
+            # Validate without submitting. Only try a whole node if the site's
+            # job-submit plugin rejects the smaller request.
             for choice in dict.fromkeys((option, full_node)):
                 try:
-                    test_submission(choice, auth)
+                    estimate = test_submission(choice, auth)
                 except RuntimeError as error:
                     last_error = error
                     continue
-                return create_session(choice, auth)
-        raise RuntimeError('Slurm rejected the automatic proposals; no allocation was submitted. ' + str(last_error))
+                # A numeric prediction wins over unknown availability. If no
+                # predictions exist, retain automatic_options' idle-fit order.
+                known = isinstance(estimate, (int, float))
+                accepted.append(((not known, estimate if known else 0, order), choice))
+                break
+        if not accepted:
+            raise RuntimeError('Slurm rejected the automatic proposals; no allocation was submitted. ' + str(last_error))
+        _, chosen = min(accepted, key=lambda item: item[0])
+        return create_session(chosen, auth)
     if context.gpus or any(BASELINES[name].min_gpus for name in context.partition.split(',')):
         raise ValueError('The current RustMech solvers use CPUs. GPU queues require a GPU-enabled solver and cannot be allocated here.')
     partition = candidates(context.partition, context.cores, context.memory_mb, context.walltime, catalog, gpus=context.gpus)

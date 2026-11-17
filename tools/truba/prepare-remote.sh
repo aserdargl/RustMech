@@ -1,8 +1,10 @@
 #!/bin/bash
-# Invoked only by the explicit Prepare remote runtime action, on a SLURM node.
+# Invoked automatically for an incomplete runtime, or by manual repair, on a SLURM node.
 set -euo pipefail
 runtime_python="$1"
 native_sha="$2"
+stage() { printf '%s\n' "$1" > progress.txt; printf '%s\n' "$1"; }
+stage 'Preparing private Python environment'
 environment="$(dirname "$(dirname "$runtime_python")")"
 python3 - "$environment" <<'PY'
 from pathlib import Path
@@ -45,6 +47,7 @@ PY
   "$bootstrap_python" -m venv "$environment"
 fi
 "$runtime_python" -c 'import ctypes, ssl; assert hasattr(ctypes, "CDLL")'
+stage 'Installing Python and solver packages (first setup may take several minutes)'
 "$runtime_python" -m pip install --disable-pip-version-check --only-binary=:all: --timeout 30 --retries 1 \
   'numpy>=2.0,<3' 'scipy>=1.14,<2' 'scikit-image>=0.25,<0.27' \
   'pyvista>=0.46,<0.48' 'vtk>=9.4,<9.7' 'netgen-mesher>=6.2.2506' \
@@ -53,12 +56,14 @@ fi
   'KratosContactStructuralMechanicsApplication==10.4.4' \
   'KratosConstitutiveLawsApplication==10.4.4' 'KratosLinearSolversApplication==10.4.4'
 export CARGO_HOME="$environment/cargo" RUSTUP_HOME="$environment/rustup"
+stage 'Preparing Rust compiler'
 if [ ! -x "$CARGO_HOME/bin/cargo" ]; then
   curl --fail --location --proto '=https' --tlsv1.2 https://sh.rustup.rs -o "$environment/rustup-init.sh"
   sh "$environment/rustup-init.sh" -y --profile minimal --default-toolchain 1.85.1 --no-modify-path
 fi
 export CARGO_BUILD_JOBS="${SLURM_CPUS_PER_TASK:-1}"
 kernel_target="$environment/kernel-build/$native_sha"
+stage 'Building remote mesh kernel'
 "$CARGO_HOME/bin/cargo" build --release --locked --manifest-path engine/native/mesh_kernel/Cargo.toml --target-dir "$kernel_target"
 mkdir -p "$environment/native"
 cp "$kernel_target/release/librustmech_core.so" "$environment/native/librustmech_core.so.new"
@@ -68,4 +73,5 @@ import json,sys
 from pathlib import Path
 Path(sys.argv[1]).write_text(json.dumps(dict(native_sha256=sys.argv[2])))
 PY
+stage 'Verifying remote runtime dependencies'
 "$runtime_python" -m pip check

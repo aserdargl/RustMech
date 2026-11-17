@@ -40,10 +40,6 @@ QWidget#meshConvergenceStudy QAbstractSpinBox QLineEdit {
 QWidget#meshConvergenceStudy QComboBox:disabled,
 QWidget#meshConvergenceStudy QAbstractSpinBox:disabled,
 QWidget#meshConvergenceStudy QLineEdit:disabled { color: #94A3B8; background: #F1F5F9; }
-QWidget#meshConvergenceStudy QPushButton {
-    font-size: 12px; padding: 1px; min-height: 19px; max-height: 19px;
-}
-QWidget#meshConvergenceStudy QPushButton:focus { padding: 0; }
 QWidget#meshConvergenceStudy QFrame#convergenceResultsPanel {
     background: #F4FBFF; border: 1px solid #B7D4E8; border-radius: 5px;
 }

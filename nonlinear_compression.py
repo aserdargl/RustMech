@@ -24,7 +24,7 @@ from threading import Event
 
 import numpy as np
 import pyvista as pv
-from studio_style import CompactComboBox
+from studio_style import CompactSpinBox, CompactComboBox
 from PySide6.QtCore import QSize, QTimer, Qt
 from PySide6.QtGui import QActionGroup
 from PySide6.QtWidgets import (
@@ -39,13 +39,12 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLayout,
     QLabel,
+    QLineEdit,
     QMenu,
     QMessageBox,
-    QProgressBar,
     QPushButton,
     QScrollArea,
     QSizePolicy,
-    QSpinBox,
     QSplitter,
     QStyle,
     QTabBar,
@@ -62,8 +61,9 @@ from setup_help import GEOMETRY_HELP
 from truba_connection import TrubaConnectionDialog
 from kratos_settings import KratosSettingsPanel
 from solver_profiles import SolverProfileStore, profile_values
-from doe_studio import DoEStudioWidget
+from doe_studio import DoEStudioWidget, DoEStudioWindow
 from preview_viewport import MESH_PREVIEW_ACTOR, create_preview_viewport
+from camera_toolbar import CameraToolbar
 from doe_preview import DoEBoundaryPreview
 from mesh_preview_worker import run_mesh_preview, shutdown_mesh_preview
 from model import (
@@ -606,6 +606,8 @@ def run_analysis(
     backend: SolverBackend,
     images: bool = True,
 ) -> Path:
+    from analysis_process import report_analysis_step
+    report_analysis_step("Validating analysis settings and mesh…")
     require_settings(settings)
     errors = backend.capabilities.validate(settings) + mesh.solve_errors
     if errors:
@@ -623,6 +625,7 @@ def run_analysis(
     print(f"Results: {paths.human}", flush=True)
     try:
         write_json(status, report)
+        report_analysis_step("Exporting geometry and mesh…")
         report["mesh"] = export_geometry(settings, mesh, paths, images=images)
         report["status"] = "solving"
         write_json(status, report)
@@ -632,6 +635,7 @@ def run_analysis(
             f"Starting {backend.capabilities.display_name}...",
             flush=True,
         )
+        report_analysis_step(f"Solving · {backend.capabilities.display_name}…")
         execution = backend.solve(AnalysisRequest(settings, mesh, paths.raw))
         report["solve_attempted"] = execution.solve_attempted
         report["licensed_solve_executed"] = execution.solve_attempted and backend.capabilities.identifier == "ansys_mapdl"
@@ -643,10 +647,13 @@ def run_analysis(
                 execution.error or "Solver did not return results."
             )
         result = execution.results
+        report_analysis_step("Extracting reactions and response curves…")
         history, report["reactions"] = extract_curve(result)
+        report_analysis_step("Exporting graphs…")
         report["graphs"] = export_graphs(
             history, settings, paths.human / "04_Graphs", mesh=mesh, images=images, result=result
         )
+        report_analysis_step("Exporting result fields…")
         report["fields"] = export_field_results(
             result, mesh, paths.human / "03_Results", images=images
         )
@@ -713,7 +720,7 @@ def run_batch_experiment(
     return summary_data
 
 
-class NoWheelSpinBox(QSpinBox):
+class NoWheelSpinBox(CompactSpinBox):
     """Spinbox that ignores mouse wheel scrolling."""
 
     def __init__(self, *args, **kwargs):
@@ -762,7 +769,7 @@ class NoWheelComboBox(CompactComboBox):
 
 
 class RustMechDialog(QDialog):
-    """Compact settings editor with debounced, nonblocking exact FE preview."""
+    """Compact settings editor with geometry preview and on-demand FE meshing."""
 
     def __init__(
         self,
@@ -806,9 +813,13 @@ class RustMechDialog(QDialog):
         self.analysis_poll.timeout.connect(self._poll_analysis)
         self.accepted_settings = None
         self.preview = None
+        self._mesh_requested = False
+        self._analysis_after_mesh = None
         self.controls = {}
         self.solver_profile_store = solver_profile_store if solver_profile_store is not None else SolverProfileStore()
         self._persist_solver_profiles = solver_profile_store is not None
+        from ui_language import install_language
+        self.language_manager = install_language(QApplication.instance(), self.solver_profile_store.settings)
         self._solver_profiles = {}
         self._active_solver_id = settings.solver_backend
         self._switching_solver = False
@@ -867,6 +878,7 @@ class RustMechDialog(QDialog):
         model_layout.setSpacing(2)
 
         self.main_splitter = SidebarSplitter()
+        self.main_splitter.setObjectName("mechanicSettingsSplitter")
         self.main_splitter.setOpaqueResize(True)
         self.main_splitter.setHandleWidth(3)
 
@@ -882,7 +894,9 @@ class RustMechDialog(QDialog):
         left.setSpacing(2)
 
         brand_card = QFrame()
+        self.brand_header = brand_card
         brand_card.setObjectName("brandHeader")
+        brand_card.setProperty('computeState', 'local')
         brand_layout = QHBoxLayout(brand_card)
         brand_layout.setContentsMargins(10, 4, 10, 4)
         brand_layout.setSpacing(12)
@@ -901,12 +915,17 @@ class RustMechDialog(QDialog):
         brand_layout.addWidget(self.brand_subtitle_lbl)
         self.truba_dialog = TrubaConnectionDialog(self)
         self.truba_button = QPushButton("TRUBA")
-        self.truba_button.setObjectName("secondaryActionBtn")
+        self.truba_button.setObjectName("trubaConnectBtn")
+        self.truba_button.setProperty("trubaConnected", False)
+        self.truba_button.setFixedSize(132, CONTROL_HEIGHT)
         self.truba_button.setToolTip("Connect to TRUBA with your own username and password")
         self.truba_button.clicked.connect(self.truba_dialog.show)
         self.truba_dialog.connection_changed.connect(self._update_truba_button)
         brand_layout.addWidget(self.truba_button)
         brand_layout.addWidget(unit_badge)
+        from ui_language import LanguageSelector
+        self.language_selector = LanguageSelector(self.language_manager, self)
+        brand_layout.addWidget(self.language_selector)
         layout.addWidget(brand_card)
 
         self.setup_tabs = QTabWidget()
@@ -923,7 +942,7 @@ class RustMechDialog(QDialog):
         self.controls['core_fraction'].setSuffix(' %')
         self.test_profile_combo = NoWheelComboBox()
         self.test_profile_combo.setObjectName('standardTestCombo')
-        self.test_profile_combo.addItem('Özel deney / Custom experiment', 'custom')
+        self.test_profile_combo.addItem('Custom experiment', 'custom')
         for identifier, p in PROFILES.items():self.test_profile_combo.addItem(p.label, identifier)
         self.test_profile_combo.setCurrentIndex(max(0,self.test_profile_combo.findData(settings.test_profile)))
         self.architecture_combo = NoWheelComboBox()
@@ -948,6 +967,23 @@ class RustMechDialog(QDialog):
                 ("solid_fraction", "Solid fraction", 1, 99, 1, 2),
             ],
         )
+        self.stl_resolution_input = QLineEdit()
+        self.stl_resolution_input.setFixedSize(80, CONTROL_HEIGHT)
+        self.stl_resolution_input.setPlaceholderText("auto")
+        self.stl_resolution_input.setText(
+            "auto" if settings.stl_resolution is None else f"{settings.stl_resolution:.12g}")
+        self.stl_auto_button = QPushButton("Auto")
+        self.stl_auto_button.setAutoDefault(False)
+        self.stl_auto_button.setDefault(False)
+        self.stl_auto_button.setFixedSize(
+            self.stl_auto_button.fontMetrics().horizontalAdvance("Otomatik") + 16, CONTROL_HEIGHT)
+        geometry_form.addRow(field_label(
+            "STL resolution (mm)", self.stl_resolution_input,
+            tooltip="Surface sampling spacing in mm, independent of FE element size. "
+                    "Leave empty or enter auto for automatic resolution. "
+                    "Auto fills in the current automatically calculated value."))
+        self.stl_resolution_input.setFixedWidth(80)
+        self.stl_auto_button.clicked.connect(self._fill_auto_stl_resolution)
         mesh_form = self.add_group(
             geometry_fields, "Mesh", settings,
             [
@@ -963,9 +999,11 @@ class RustMechDialog(QDialog):
         self.family_combo = NoWheelComboBox()
         for fam_key, fam_label in STRUCTURE_FAMILIES.items():
             self.family_combo.addItem(fam_label, fam_key)
+        self.family_combo.addItem('Import geometry…', 'imported')
         resolved_fam, resolved_name = resolve_family_and_name(
             settings.structure_family, settings.structure_name
         )
+        self._generated_family = resolved_fam
         self.family_combo.setCurrentIndex(
             max(0, self.family_combo.findData(resolved_fam))
         )
@@ -1004,9 +1042,6 @@ class RustMechDialog(QDialog):
         self.structure_apply_button.setObjectName("structureApplyBtn")
         self.structure_apply_button.setAutoDefault(False)
         self.structure_apply_button.setDefault(False)
-        self.structure_apply_button.setFixedWidth(
-            max(56, self.structure_apply_button.fontMetrics().horizontalAdvance("Apply") + 16)
-        )
         self.structure_apply_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.structure_apply_button.setToolTip(
             "Apply the selected structure and geometry settings to the 3D preview."
@@ -1015,14 +1050,19 @@ class RustMechDialog(QDialog):
         structure_actions = QWidget()
         structure_action_row = QHBoxLayout(structure_actions)
         structure_action_row.setContentsMargins(0, 0, 0, 0)
-        structure_action_row.setSpacing(0)
+        structure_action_row.setSpacing(4)
+        structure_action_row.addWidget(self.stl_resolution_input)
+        structure_action_row.addWidget(self.stl_auto_button)
         structure_action_row.addStretch()
         structure_action_row.addWidget(self.structure_apply_button)
         geometry_form.addRow(structure_actions)
-        self.import_geometry_button = QPushButton('Import geometry…')
-        self.import_geometry_button.setAutoDefault(False)
-        self.import_geometry_button.clicked.connect(self.import_geometry)
-        geometry_form.addRow(self.import_geometry_button)
+        self.structure_apply_button.ensurePolished()
+        structure_action_width = max(80, max(
+            self.structure_apply_button.fontMetrics().horizontalAdvance(text)
+            for text in ("Auto", "Otomatik", "Apply", "Uygula")
+        ) + 24)
+        self.stl_auto_button.setFixedSize(structure_action_width, CONTROL_HEIGHT)
+        self.structure_apply_button.setFixedSize(structure_action_width, CONTROL_HEIGHT)
         self.clear_import_button = QPushButton('Use generated structure')
         self.clear_import_button.setAutoDefault(False)
         self.clear_import_button.clicked.connect(self.clear_imported_geometry)
@@ -1065,7 +1105,7 @@ class RustMechDialog(QDialog):
         self.mesh_apply_button.setFixedWidth(self.structure_apply_button.width())
         self.mesh_apply_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.mesh_apply_button.setToolTip("Apply current settings and build the FE mesh.")
-        self.mesh_apply_button.clicked.connect(self.apply_geometry)
+        self.mesh_apply_button.clicked.connect(self.apply_mesh)
         mesh_actions = QWidget()
         mesh_action_row = QHBoxLayout(mesh_actions)
         mesh_action_row.setContentsMargins(0, 0, 0, 0)
@@ -1080,6 +1120,10 @@ class RustMechDialog(QDialog):
         self._morph_label_widget = morph_lbl
 
         self.family_combo.currentIndexChanged.connect(self._on_family_changed)
+        self.family_combo.activated.connect(
+            lambda index: self.import_geometry()
+            if self.family_combo.itemData(index) == 'imported' else None
+        )
         self.structure_combo.currentIndexChanged.connect(self._on_structure_selection_changed)
         self.morphology_combo.currentIndexChanged.connect(self._on_structure_selection_changed)
         self._sync_structure_ui_visibility()
@@ -1105,12 +1149,6 @@ class RustMechDialog(QDialog):
         convergence_button.setCursor(Qt.CursorShape.PointingHandCursor)
         convergence_button.clicked.connect(self.open_mesh_convergence)
         action_row.addWidget(convergence_button)
-        self.add_to_doe_button = QPushButton("Add to DoE")
-        self.add_to_doe_button.setObjectName("experimentActionBtn")
-        self.add_to_doe_button.setEnabled(False)
-        self.add_to_doe_button.setToolTip("Add a snapshot of the current 3D model and setup.")
-        self.add_to_doe_button.clicked.connect(self._add_current_design)
-        action_row.addWidget(self.add_to_doe_button)
         geometry_fields.addWidget(geometry_actions)
 
         contact_form = self.add_group(
@@ -1244,18 +1282,19 @@ class RustMechDialog(QDialog):
         )
         substeps_row = QWidget()
         self._substeps_row = substeps_row
-        substeps_layout = ActionFlowLayout(substeps_row)
-        substeps_layout.setAlignment(Qt.AlignmentFlag.AlignRight)
+        substeps_layout = QHBoxLayout(substeps_row)
         substeps_layout.setContentsMargins(0, 0, 0, 0)
-        substeps_layout.setSpacing(4)
-        self.substeps_status = QLabel("Automatic")
-        self.substeps_status.setToolTip("The solver adapts the load increment to convergence.")
-        substeps_layout.addWidget(self.substeps_status)
-        self.substeps_advanced_button = QPushButton("Advanced")
-        self.substeps_advanced_button.setObjectName("secondaryActionBtn")
-        self.substeps_advanced_button.setCheckable(True)
-        self.substeps_advanced_button.setToolTip("Initial substeps and automatic stepping limits")
-        substeps_layout.addWidget(self.substeps_advanced_button)
+        substeps_layout.setSpacing(0)
+        self.substeps_status = QLabel("Automatic", substeps_row)
+        self.substeps_status.hide()
+        self.substeps_mode_combo = NoWheelComboBox()
+        self.substeps_mode_combo.addItem("Automatic", "automatic")
+        self.substeps_mode_combo.addItem("Advanced", "advanced")
+        self.substeps_mode_combo.setFixedWidth(110)
+        self.substeps_mode_combo.setToolTip(
+            "Automatic uses recommended load stepping defaults. Advanced applies the values below.")
+        substeps_layout.addWidget(self.substeps_mode_combo)
+        substeps_layout.addStretch()
         solver_form.addRow(field_label("Substeps", substeps_row), substeps_row)
 
         self.substeps_advanced = QWidget()
@@ -1278,7 +1317,8 @@ class RustMechDialog(QDialog):
             self.controls[key] = control
             advanced_form.addRow(field_label(label, control, tooltip=hint), control)
         self.substeps_advanced.hide()
-        self.substeps_advanced_button.toggled.connect(self.substeps_advanced.setVisible)
+        self.substeps_mode_combo.currentIndexChanged.connect(self._substeps_mode_changed)
+        self._restore_substeps_mode(settings)
         solver_form.addRow(self.substeps_advanced)
 
         # Keep all specimen conditions together, immediately below the mesh.
@@ -1451,9 +1491,26 @@ class RustMechDialog(QDialog):
             action.setData(index)
             action.setChecked(index == 0)
             self.workspace_actions.addAction(action)
+            action.setVisible(index != 1)
             action.triggered.connect(lambda checked=False, page=index: self.workspace_tabs.setCurrentIndex(page))
         self.workspace_button.setMenu(self.workspace_menu)
         navigation.addWidget(self.workspace_button)
+        self.doe_button = QPushButton("DoE")
+        self.doe_button.setObjectName("experimentActionBtn")
+        self.doe_button.setToolTip("Open Design of Experiments settings.")
+        self.doe_button.clicked.connect(self._show_doe_workspace)
+        navigation.addWidget(self.doe_button)
+        self.designs_button = QToolButton()
+        self.designs_button.setObjectName("headerMenu")
+        self.designs_button.setText("Designs")
+        self.designs_button.setAccessibleName("Design Pool and analysis queue")
+        self.designs_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        designs_menu = QMenu(self.designs_button)
+        designs_menu.addAction("Design Pool (Gitterburg)...", self._show_design_pool)
+        designs_menu.addAction("Add current model to analysis queue", self._enqueue_current_model)
+        designs_menu.addAction("Analysis queue...", self._show_analysis_queue)
+        self.designs_button.setMenu(designs_menu)
+        navigation.addWidget(self.designs_button)
 
         self.display_mode_group = QFrame()
         self.display_mode_group.setObjectName("displayModeGroup")
@@ -1467,8 +1524,8 @@ class RustMechDialog(QDialog):
         self.mode.addItems(
             ["Smooth geometry", "FE mesh", "Smooth + FE overlay"]
         )
-        self.mode.setCurrentIndex(1)
-        self.mode.currentIndexChanged.connect(self.render_preview)
+        self.mode.setCurrentIndex(0)
+        self.mode.currentIndexChanged.connect(self._display_mode_changed)
         # Retain the mode model for existing render/preview integrations.
         self.mode.hide()
         self.display_mode_tabs = QTabBar()
@@ -1500,6 +1557,7 @@ class RustMechDialog(QDialog):
         self.fragment_status.setVisible(False)
 
         self.preview_splitter = QSplitter(Qt.Orientation.Vertical)
+        self.preview_splitter.setObjectName("mechanicPreviewSplitter")
         self.preview_splitter.setChildrenCollapsible(True)
         self.preview_splitter.setOpaqueResize(True)
         self.preview_splitter.setHandleWidth(5)
@@ -1515,12 +1573,8 @@ class RustMechDialog(QDialog):
         viewport_layout.setContentsMargins(0, 0, 0, 0)
         viewport_layout.setSpacing(2)
 
-        camera_controls = QToolButton()
-        camera_controls.setText("View")
-        camera_controls.setObjectName("cameraMenu")
-        camera_controls.setEnabled(True)
-        camera_controls.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
-        camera_controls.setToolTip("Camera orientation, projection and reset")
+        camera_controls = CameraToolbar(viewport_container)
+        self.camera_toolbar = camera_controls
         camera_menu = QMenu(camera_controls)
         for label, preset, tooltip in (
             ("Iso", "iso", "Isometric view"),
@@ -1532,11 +1586,12 @@ class RustMechDialog(QDialog):
             ("−YZ", "-yz", "View the YZ plane from −X"),
         ):
             preset_action = camera_menu.addAction(label)
+            camera_controls.add_camera_action(preset_action, preset)
             preset_action.setToolTip(tooltip)
             preset_action.triggered.connect(
                 lambda checked=False, view=preset: self._set_camera_preset(view)
             )
-        camera_menu.addSeparator()
+        camera_controls.column.addSpacing(3)
         projection_group = QActionGroup(camera_menu)
         projection_group.setExclusive(True)
         self.orthographic_button = camera_menu.addAction("Orthographic")
@@ -1548,9 +1603,9 @@ class RustMechDialog(QDialog):
         projection_group.addAction(self.perspective_button)
         self.perspective_button.setToolTip("Toggle perspective projection (OFF: orthographic view)")
         self.perspective_button.toggled.connect(self._set_perspective)
-        camera_menu.addAction("Reset view", self.reset_view)
-        camera_controls.setMenu(camera_menu)
-        view_toolbar.addWidget(camera_controls)
+        camera_controls.add_camera_action(self.orthographic_button, "orthographic")
+        camera_controls.add_camera_action(self.perspective_button, "perspective")
+        camera_controls.add_camera_action(camera_menu.addAction("Reset view", self.reset_view), "reset")
 
         self.plotter = create_preview_viewport(self, simplify_mesh_during_drag=True)
         self.plotter.on_orientation_selected = lambda: self.orthographic_button.setChecked(True)
@@ -1601,7 +1656,7 @@ class RustMechDialog(QDialog):
         telemetry_layout.setContentsMargins(12, 8, 12, 8)
         telemetry_layout.setSpacing(4)
 
-        self.stats = QLabel("Preparing exact FE preview...")
+        self.stats = QLabel("Preparing geometry preview...")
         self.stats.setObjectName("statsReadout")
         self.stats.setWordWrap(True)
         telemetry_layout.addWidget(self.stats)
@@ -1612,6 +1667,8 @@ class RustMechDialog(QDialog):
         details_action = camera_menu.addAction("Mesh diagnostics")
         details_action.setCheckable(True)
         details_action.toggled.connect(telemetry_card.setVisible)
+        camera_controls.add_camera_action(details_action, "diagnostics")
+        camera_controls.attach(self.plotter.interactor)
         self._kpi_labels["spacing"].parentWidget().hide()
 
         cancel = QPushButton("Cancel")
@@ -1665,19 +1722,19 @@ class RustMechDialog(QDialog):
         status_layout.addWidget(cancel)
         status_layout.addWidget(self.apply_button)
         status_layout.addWidget(self.force_stop_button)
-        self.mesh_progress = QProgressBar()
-        self.mesh_progress.setObjectName("meshProgress")
-        self.mesh_progress.setAccessibleName("FE mesh generation progress")
-        self.mesh_progress.setRange(0, 0)
-        self.mesh_progress.setTextVisible(False)
-        self.mesh_progress.setFixedHeight(8)
-        self.mesh_progress.hide()
+        from operation_progress import OperationProgress
+        self.operation_progress = OperationProgress(self, provider=lambda: (
+            self.future is not None or self.analysis_job is not None
+            or getattr(getattr(self, "remote_controller", None), "close_future", None) is not None,
+            self.status.text(),
+        ))
+        self.mesh_progress = self.operation_progress.bar
         self.cancel_mesh_button = QPushButton("Cancel meshing")
         self.cancel_mesh_button.setObjectName("secondaryActionBtn")
         self.cancel_mesh_button.clicked.connect(self.cancel_meshing)
         self.cancel_mesh_button.hide()
         progress_layout = QHBoxLayout()
-        progress_layout.addWidget(self.mesh_progress, 1)
+        progress_layout.addStretch(1)
         progress_layout.addWidget(self.cancel_mesh_button)
         model_layout.addLayout(progress_layout)
 
@@ -1702,6 +1759,11 @@ class RustMechDialog(QDialog):
         self.doe_studio.preview_requested.connect(self.load_from_doe_row)
         self.doe_studio.boundary_preview_requested.connect(self._show_doe_bounds)
         self.doe_studio.model_requested.connect(self._show_geometry_workspace)
+        self.doe_studio.use_model_btn.clicked.connect(self._add_current_design)
+        self.doe_window = DoEStudioWindow(self.doe_studio, self)
+        self.design_pool = None
+        self.analysis_queue_widget = None
+        self.analysis_queue_window = None
 
         self.main_splitter.addWidget(preview_tab)
         self.main_splitter.setStretchFactor(0, 0)
@@ -1709,7 +1771,9 @@ class RustMechDialog(QDialog):
         self.main_splitter.setSizes([300, 1116])
         model_layout.insertWidget(0, self.main_splitter, 1)
         self.workspace_tabs.addTab(model_workspace, "Mechanic")
-        self.workspace_tabs.addTab(self.doe_studio, "&Experiments (DoE)")
+        # Keep workspace indices stable for existing integrations. Selecting
+        # this entry opens the independent window and returns to the model.
+        self.workspace_tabs.addTab(QWidget(), "&Experiments (DoE)")
         from flow_workspace import FlowWorkspace
         self.flow_workspace = FlowWorkspace(self.collect, self, preferences=self.solver_profile_store.settings,viewport_factory=create_preview_viewport)
         self.workspace_tabs.addTab(self.flow_workspace, "&Flow (CFD)")
@@ -1717,6 +1781,10 @@ class RustMechDialog(QDialog):
         self.thermal_workspace = ThermalWorkspace(self.collect, self, preferences=self.solver_profile_store.settings,viewport_factory=create_preview_viewport)
         self.workspace_tabs.addTab(self.thermal_workspace, "&Thermal (CHT)")
         def sync_workspace_context(index):
+            if index == 1:
+                self.workspace_tabs.setCurrentIndex(0)
+                self._show_doe_workspace()
+                return
             self.workspace_button.setText(workspace_names[index])
             self.workspace_actions.actions()[index].setChecked(True)
             flow_active = index in (2,3)
@@ -1724,6 +1792,8 @@ class RustMechDialog(QDialog):
             unit_badge.setText("Units: mm  °C  s  Pa" if index==3 else "Units: mm  m/s  Pa" if flow_active else "Units: mm  N  MPa")
             remote = getattr(self,"remote_controller",None)
             self.brand_subtitle_lbl.setText("TRUBA · remote compute" if remote is not None and remote.requested else "OpenFOAM · WSL" if flow_active else self.solver_capabilities.display_name)
+            if remote is not None:
+                self._update_remote_banner()
             self.sidebar_toggle.setVisible(not flow_active)
             self.display_mode_tabs.setVisible(not flow_active)
             self.display_mode_group.setVisible(not flow_active)
@@ -1734,6 +1804,7 @@ class RustMechDialog(QDialog):
         layout.addWidget(toolbar_frame)
         layout.addWidget(self.workspace_tabs, 1)
         model_layout.addWidget(self.status_banner)
+        model_layout.addWidget(self.operation_progress)
 
         for button_type in (QPushButton, QToolButton):
             for button in self.findChildren(button_type):
@@ -1757,6 +1828,14 @@ class RustMechDialog(QDialog):
         self.sidebar_toggle.setFixedWidth(
             max(self.sidebar_toggle.fontMetrics().horizontalAdvance(name)
                 for name in self.method_names) + 32)
+        navigation_buttons = (self.workspace_button, self.doe_button, self.designs_button)
+        navigation_width = max(
+            max(button.sizeHint().width() for button in navigation_buttons),
+            max(self.workspace_button.fontMetrics().horizontalAdvance(name)
+                for name in workspace_names if name != "Experiments (DoE)") + 32,
+        )
+        for button in navigation_buttons:
+            button.setFixedSize(navigation_width, CONTROL_HEIGHT)
         self.workspace_tabs.setMinimumSize(0, 0)
         preview_tab.setMinimumWidth(
             120 + right.contentsMargins().left() + right.contentsMargins().right()
@@ -1772,6 +1851,7 @@ class RustMechDialog(QDialog):
         self.poll.timeout.connect(self.poll_preview)
         self.poll.start()
 
+        self.stl_resolution_input.textChanged.connect(self.geometry_changed)
         for name, control in self.controls.items():
             if name in GEOMETRY_FIELDS:
                 control.valueChanged.connect(self.geometry_changed)
@@ -1804,11 +1884,34 @@ class RustMechDialog(QDialog):
         self.doe_studio.remote_controller = self.remote_controller
         self.remote_controller.mode_changed.connect(self._remote_mode_changed)
         self.remote_controller.changed.connect(self._remote_state_changed)
+        self.remote_controller.close_ready.connect(self.reject)
         self.test_profile_combo.currentIndexChanged.connect(self._test_profile_changed)
         self.architecture_combo.currentIndexChanged.connect(self._architecture_changed)
         self.controls['core_fraction'].valueChanged.connect(self._architecture_changed)
         self._sync_test_profile_ui()
+        self.language_manager.changed.connect(self._refresh_ui_language)
+        self._refresh_ui_language()
         QTimer.singleShot(0, self.start_preview)
+
+    def _refresh_ui_language(self, *_):
+        from ui_language import translate
+        self.language_manager.localize_tree(self)
+        self.sidebar_toggle.setFixedWidth(max(self.sidebar_toggle.fontMetrics().horizontalAdvance(translate(name))
+                                             for name in self.method_names) + 32)
+        navigation = (self.workspace_button, self.doe_button, self.designs_button)
+        width = max(button.fontMetrics().horizontalAdvance(button.text()) + 32 for button in navigation)
+        for button in navigation:
+            button.setFixedSize(width, CONTROL_HEIGHT)
+        for widget in self.findChildren(QWidget):
+            if hasattr(widget, '_action_groups'):
+                for buttons in widget._action_groups:
+                    widget._size_action_group(*buttons)
+            plotter = getattr(widget, 'plotter', None)
+            if plotter is not None:
+                self.language_manager.localize_plotter(plotter)
+        figure = getattr(self.thermal_workspace, 'figure', None)
+        if figure is not None:
+            self.language_manager.localize_figure(figure)
 
     def _test_profile_changed(self, *_):
         from standard_tests import apply_profile
@@ -1830,6 +1933,8 @@ class RustMechDialog(QDialog):
             self.imported_geometry_name = selected.imported_geometry_name
             self.imported_geometry_height = selected.size if selected.imported_geometry_path else None
             self.import_geometry_label.setText(selected.imported_geometry_name or 'No imported geometry')
+            self.stl_resolution_input.setText(
+                "auto" if selected.stl_resolution is None else f"{selected.stl_resolution:.12g}")
             for name in ('size','mesh_resolution','local_mesh_size','cell_size','solid_fraction','random_seed','core_fraction','compression'):
                 if name=='size':self.controls[name].setMaximum(max(100,selected.size))
                 self.controls[name].setValue(getattr(selected,name))
@@ -1865,13 +1970,14 @@ class RustMechDialog(QDialog):
         self._test_form.setRowVisible(self.architecture_combo,active)
         self._test_form.setRowVisible(self.controls['core_fraction'],active and settings.specimen_architecture=='porous_centre')
         self.controls['size'].setEnabled(not active and not bool(self.imported_geometry_path))
-        self.import_geometry_button.setEnabled(not active)
+        self.family_combo.model().item(self.family_combo.findData('imported')).setEnabled(not active)
         self.clear_import_button.setEnabled(not active)
         for identifier in ('solid','porous_centre','porous_all'):
             item=self.architecture_combo.model().item(self.architecture_combo.findData(identifier))
             item.setEnabled(not active or (identifier=='porous_all' if p.kind=='compression' else identifier!='porous_all'))
         porous=not active or settings.specimen_architecture!='solid'
-        for widget in (self.family_combo,self.structure_combo,self.morphology_combo,
+        self.family_combo.setEnabled(porous)
+        for widget in (self.structure_combo,self.morphology_combo,
                 *(self.controls[name] for name in ('cell_size','solid_fraction','random_seed'))):
             widget.setEnabled(porous and not bool(self.imported_geometry_path))
         if active:
@@ -1914,16 +2020,62 @@ class RustMechDialog(QDialog):
         self.refresh_validity()
         if controller.requested:
             self.brand_subtitle_lbl.setText("TRUBA · remote compute")
-            if controller.ready and self.future is None and self.preview is None:
-                QTimer.singleShot(0,self.start_preview)
+            if controller.ready and self.future is None and self.preview is None and not controller.closing:
+                self.status.setText('TRUBA ready. Click Apply to generate the geometry remotely.')
         else:
             self.brand_subtitle_lbl.setText("OpenFOAM · WSL" if self.workspace_tabs.currentIndex() in (2,3) else self.solver_capabilities.display_name)
+        self._update_remote_banner()
+
+    def _update_remote_banner(self):
+        controller = getattr(self, 'remote_controller', None)
+        if controller is None:
+            return
+        session = controller.session or {}
+        allocated = bool(controller.requested and controller.session_watch
+                         and session.get('state') == 'RUNNING' and session.get('job_id'))
+        verified = allocated and controller.ready
+        state = 'local'
+        if controller.closing:
+            state, text = 'pending', 'TRUBA · releasing resources…'
+        elif verified:
+            partition = session.get('allocated_partition') or session.get('context', {}).get('partition', '')
+            state, text = 'ready', f'TRUBA · READY · {partition}'
+        elif allocated:
+            state = 'allocated'
+            if not session.get('ready'):
+                detail = 'session worker starting'
+            elif controller.future is not None:
+                detail = controller.runtime_stage or 'checking runtime'
+            elif controller.capabilities is None:
+                detail = 'runtime not verified'
+            else:
+                detail = 'runtime unavailable · see runtime details'
+            text = f'TRUBA · RUNNING · {detail}'
+        elif controller.requested:
+            state, text = 'pending', f"TRUBA · {session.get('state', 'checking runtime')}"
+        elif session.get('ready') and controller.session_watch:
+            state, text = 'pending', 'Local mode · TRUBA resources reserved'
+        else:
+            local_name = 'OpenFOAM · WSL' if self.workspace_tabs.currentIndex() in (2, 3) else self.solver_capabilities.display_name
+            text = f'SSH connected · {local_name}' if self.truba_dialog.connected else local_name
+        self.brand_subtitle_lbl.setText(text)
+        self.brand_header.setToolTip(
+            f"{text}\nJob: {session.get('job_id', '—')} · Nodes: {session.get('allocated_nodes', '—')}\n"
+            f"Remaining: {session.get('remaining', '—')}\nApply explicitly starts remote generation when ready.")
+        if allocated and not verified:
+            self.brand_header.setToolTip(self.brand_header.toolTip() + '\n' + controller.status.text())
+        if self.brand_header.property('computeState') != state:
+            self.brand_header.setProperty('computeState', state)
+            self.brand_header.style().unpolish(self.brand_header)
+            self.brand_header.style().polish(self.brand_header)
+            self.brand_header.update()
 
     def _update_truba_button(self, connected: bool) -> None:
         self.truba_button.setText("Connected" if connected else "TRUBA")
         self.truba_button.setProperty("trubaConnected", connected)
         self.truba_button.style().unpolish(self.truba_button)
         self.truba_button.style().polish(self.truba_button)
+        self._update_remote_banner()
 
     def _add_setup_page(self, title: str) -> QVBoxLayout:
         scroll = QScrollArea()
@@ -2079,16 +2231,27 @@ class RustMechDialog(QDialog):
 
     def _on_family_changed(self, *_) -> None:
         family_key = str(self.family_combo.currentData() or "tpms")
+        if family_key == 'imported':
+            self._sync_import_controls()
+            return
+        self._generated_family = family_key
+        had_import = bool(self.imported_geometry_path)
+        self.imported_geometry_path = ''
+        self.imported_geometry_name = ''
+        self.imported_geometry_height = None
         self._populate_structure_items(family_key)
+        self._sync_import_controls()
         self._sync_structure_ui_visibility()
         self.geometry_changed()
+        if had_import:
+            self.apply_geometry()
 
     def _on_structure_selection_changed(self, *_) -> None:
         self._sync_structure_ui_visibility()
         self.geometry_changed()
 
     def _sync_structure_ui_visibility(self) -> None:
-        family_key = str(self.family_combo.currentData() or "tpms")
+        family_key = self._generated_family
         is_porous = family_key == "porous"
         is_lattice = family_key == "lattice"
         if "random_seed" in self.controls:
@@ -2148,6 +2311,18 @@ class RustMechDialog(QDialog):
         self._sync_test_profile_ui()
         self.refresh_validity()
 
+    def _restore_substeps_mode(self, settings):
+        defaults = Settings()
+        advanced = (settings.substeps != defaults.substeps
+                    or settings.substep_limits != defaults.substep_limits)
+        self.substeps_mode_combo.setCurrentIndex(1 if advanced else 0)
+        self.substeps_advanced.setVisible(advanced)
+
+    def _substeps_mode_changed(self, *_):
+        self.substeps_advanced.setVisible(self.substeps_mode_combo.currentData() == "advanced")
+        if getattr(self, "_solver_profiles_ready", False):
+            self.refresh_validity()
+
     def _apply_solver_profile(self, settings):
         combos = (
             (self.mesh_type_combo, settings.mesh_type),
@@ -2177,6 +2352,7 @@ class RustMechDialog(QDialog):
             self._manual_cores = settings.cores
             self._manual_contact_values = None
             self.controls["cores"].setEnabled(not self.automatic_cores.isChecked())
+            self._restore_substeps_mode(settings)
             self.kratos_panel.apply_settings(settings)
         finally:
             for widget, previous in blocked:
@@ -2404,8 +2580,22 @@ class RustMechDialog(QDialog):
             dialog.study.dispose()
             dialog.deleteLater()
 
+    def _stl_resolution_value(self):
+        text = self.stl_resolution_input.text().strip()
+        if not text or text.lower() == "auto":
+            return None
+        try:
+            return float(text.replace(",", "."))
+        except ValueError:
+            return float("nan")
+
+    def _fill_auto_stl_resolution(self, *_):
+        value = self.collect().automatic_surface_resolution
+        self.stl_resolution_input.setText(f"{value:.12g}")
+
     def collect(self) -> Settings:
         settings=Settings(
+            stl_resolution=self._stl_resolution_value(),
             test_profile=self.test_profile_combo.currentData(),
             specimen_architecture=self.architecture_combo.currentData(),
             imported_geometry_path=self.imported_geometry_path,
@@ -2415,7 +2605,7 @@ class RustMechDialog(QDialog):
             loading_mode=self.loading_mode_combo.currentData(),
             bottom_platen_contact=self.platen_contact_combos["bottom"].currentData(),
             top_platen_contact=self.platen_contact_combos["top"].currentData(),
-            structure_family=str(self.family_combo.currentData() or "tpms"),
+            structure_family=self._generated_family,
             structure_name=str(self.structure_combo.currentData() or "Gyroid"),
             tpms_morphology=str(self.morphology_combo.currentData() or "sheet"),
             solver_backend=str(self.solver_combo.currentData() or "ansys_mapdl"),
@@ -2434,6 +2624,9 @@ class RustMechDialog(QDialog):
             **self.material_editor.extra_values(),
             **self.kratos_panel.values(),
         )
+        if self.substeps_mode_combo.currentData() == "automatic":
+            settings = replace(settings, substeps=Settings().substeps,
+                               minimum_substeps=None, maximum_substeps=None)
         if self.imported_geometry_path:
             settings = replace(settings, size=self.imported_geometry_height)
         if settings.test_profile != 'custom':
@@ -2479,9 +2672,23 @@ class RustMechDialog(QDialog):
 
     def _sync_import_controls(self):
         generated = not bool(self.imported_geometry_path)
-        for widget in (self.family_combo, self.structure_combo, self.morphology_combo,
+        family = self.family_combo.currentData()
+        if family in STRUCTURE_FAMILIES:
+            self._generated_family = family
+        self.family_combo.blockSignals(True)
+        self.family_combo.setCurrentIndex(self.family_combo.findData(
+            self._generated_family if generated else 'imported'))
+        self.family_combo.blockSignals(False)
+        self._geometry_import_rows_visible(not generated)
+        for widget in (self.structure_combo, self.morphology_combo,
+                       self.stl_resolution_input, self.stl_auto_button,
                        *(self.controls[name] for name in ('size', 'cell_size', 'solid_fraction', 'random_seed'))):
             widget.setEnabled(generated)
+
+    def _geometry_import_rows_visible(self, visible):
+        form = self.import_geometry_label.parentWidget().layout()
+        form.setRowVisible(self.import_geometry_label, visible)
+        form.setRowVisible(self.clear_import_button, visible)
 
     def _sync_mesh_type(self) -> None:
         local_size = self.controls["local_mesh_size"]
@@ -2510,17 +2717,34 @@ class RustMechDialog(QDialog):
 
     def apply_geometry(self, *_) -> None:
         settings = self.collect()
-        errors = validate_geometry(settings)
+        errors = validate_geometry(settings, include_mesh=False)
         if errors:
             self.status.setText("\n".join(errors))
             self._update_status_visuals("error", "● VALIDATION ERROR", True)
             return
         self.active_geometry = settings
+        self._mesh_requested = False
+        self._analysis_after_mesh = None
+        self.mode.setCurrentIndex(0)
         self.failed_key = None
         self.debounce.stop()
         self.apply_button.setEnabled(False)
-        self.add_to_doe_button.setEnabled(False)
+        self.doe_studio.use_model_btn.setEnabled(True)
         self.start_preview()
+
+    def apply_mesh(self, *_) -> None:
+        self.apply_geometry()
+        if not validate_geometry(self.collect()):
+            self._mesh_requested = True
+            self.mode.setCurrentIndex(1)
+            self.start_preview()
+
+    def _display_mode_changed(self, index):
+        if index in (1, 2):
+            self._mesh_requested = True
+            self.failed_key = None
+            self.start_preview()
+        self.render_preview()
 
     def refresh_validity(self, *_) -> None:
         if self._switching_solver:
@@ -2536,20 +2760,21 @@ class RustMechDialog(QDialog):
             except (ValueError,RuntimeError) as error: errors.append(str(error))
             try: controller.require("mesh",settings)
             except (ValueError,RuntimeError) as error: remote_error = str(error)
-        self.geometry_apply_button.setEnabled(not validate_geometry(settings))
+        geometry_valid = not validate_geometry(settings, include_mesh=False)
+        self.geometry_apply_button.setEnabled(geometry_valid)
         self.structure_apply_button.setEnabled(self.geometry_apply_button.isEnabled())
-        self.mesh_apply_button.setEnabled(self.geometry_apply_button.isEnabled())
+        self.mesh_apply_button.setEnabled(not validate_geometry(settings))
         if remote_error:
             for button in (self.geometry_apply_button,self.structure_apply_button,self.mesh_apply_button): button.setEnabled(False)
         current = (
             self.preview
             and self.preview.key == preview_key(self.collect())
         )
-        mesh_errors = self.preview.mesh.solve_errors if current else []
+        mesh_errors = self.preview.mesh.solve_errors if current and self.preview.mesh is not None else []
         pending = self.has_pending_geometry()
-        self.add_to_doe_button.setEnabled(bool(current and not pending))
+        self.doe_studio.use_model_btn.setEnabled(geometry_valid)
         self.apply_button.setEnabled(
-            self.analysis_job is None and
+            self.analysis_job is None and self.future is None and
             bool(current and not pending and not errors and not mesh_errors)
         )
         if self.analysis_job is not None:
@@ -2581,14 +2806,16 @@ class RustMechDialog(QDialog):
         if current:
             self.status.setText(
                 f"Run analysis reuses this FE mesh and starts {self.solver_capabilities.display_name}."
+                if self.preview.mesh is not None else
+                "Geometry ready. FE Mesh builds the analysis mesh; Run analysis builds it before solving."
             )
             self._update_status_visuals("ready", "● READY TO SOLVE", False)
 
     def schedule_preview(self, *_) -> None:
         self.failed_key = None
         self.apply_button.setEnabled(False)
-        self.add_to_doe_button.setEnabled(False)
-        self.status.setText("Settings changed — updating exact FE preview...")
+        self.doe_studio.use_model_btn.setEnabled(not validate_geometry(self.collect(), include_mesh=False))
+        self.status.setText("Settings changed — updating geometry preview...")
         self._update_status_visuals(
             "working", "● UPDATING PREVIEW", self.has_pending_geometry()
         )
@@ -2600,11 +2827,11 @@ class RustMechDialog(QDialog):
         settings = self.preview_settings()
         controller = getattr(self,"remote_controller",None)
         if controller is not None and controller.requested:
-            try: controller.require("mesh",settings)
+            try: controller.require("mesh",settings if self._mesh_requested else None)
             except (RuntimeError,ValueError) as error:
                 self.status.setText(str(error))
                 return
-        errors = validate_geometry(settings)
+        errors = validate_geometry(settings, include_mesh=self._mesh_requested)
         if errors:
             self.status.setText("\n".join(errors))
             self.apply_button.setEnabled(False)
@@ -2615,15 +2842,15 @@ class RustMechDialog(QDialog):
         key = preview_key(settings)
         if self.future is not None or key == self.failed_key:
             return
-        if self.preview and self.preview.key == key:
+        if self.preview and self.preview.key == key and (not getattr(self, '_mesh_requested', False) or self.preview.mesh is not None):
             self.refresh_validity()
             return
         self.worker_key = key
         self.status.setText(
-            "Building exact FE mesh in background; you can rotate the current view."
+            "Building FE mesh in background…" if getattr(self, '_mesh_requested', False) else "Preparing geometry preview…"
         )
         self._update_status_visuals(
-            "working", "● BUILDING FE MESH", self.has_pending_geometry()
+            "working", "● BUILDING FE MESH" if getattr(self, '_mesh_requested', False) else "● BUILDING GEOMETRY", self.has_pending_geometry()
         )
         self.mesh_progress_updates = SimpleQueue()
         self.mesh_cancelled = Event()
@@ -2631,17 +2858,19 @@ class RustMechDialog(QDialog):
         self._preview_is_remote = bool(controller is not None and controller.requested)
         if controller is not None and controller.requested:
             from truba_remote import run_remote_preview
-            context,auth = controller.require("mesh",settings)
+            context,auth = controller.require("mesh",settings if self._mesh_requested else None)
             self.cancel_mesh_button.setEnabled(True)
             self.cancel_mesh_button.show()
             self.future = self.executor.submit(run_remote_preview,settings,context,auth,
-                                               self.mesh_progress_updates.put,self.mesh_cancelled)
+                                               self.mesh_progress_updates.put,self.mesh_cancelled,
+                                               include_mesh=getattr(self, '_mesh_requested', False))
         elif self.builder is build_preview:
             self.cancel_mesh_button.setEnabled(True)
             self.cancel_mesh_button.show()
             self.future = self.executor.submit(
                 run_mesh_preview, settings, self.preview, self.mesh_progress_updates.put,
                 self.mesh_cancelled,
+                include_mesh=getattr(self, '_mesh_requested', False),
             )
         else:
             self.future = self.executor.submit(self.builder, settings, self.preview)
@@ -2650,6 +2879,7 @@ class RustMechDialog(QDialog):
         if self.future is None:
             return
         self.mesh_cancelled.set()
+        self._analysis_after_mesh = None
         self.debounce.stop()
         self.cancel_mesh_button.setEnabled(False)
         self.status.setText("Cancelling mesh generation…")
@@ -2700,7 +2930,13 @@ class RustMechDialog(QDialog):
                 self.preview = preview
                 self.render_preview(reset=first)
                 self.refresh_validity()
+                requested = getattr(self, '_analysis_after_mesh', None)
+                if requested is not None and preview.mesh is not None:
+                    self._analysis_after_mesh = None
+                    if self.collect() == requested and not self.has_pending_geometry():
+                        self.apply()
         except Exception as exc:
+            self._analysis_after_mesh = None
             if self.worker_key == key:
                 self.failed_key = key
                 self.status.setText(f"Preview error: {exc}")
@@ -2709,6 +2945,8 @@ class RustMechDialog(QDialog):
                     "error", "● PREVIEW ERROR", self.has_pending_geometry()
                 )
         if self.worker_key != key and not self.debounce.isActive():
+            self.start_preview()
+        elif self.preview is not None and self.preview.mesh is None and getattr(self, '_mesh_requested', False) and self.failed_key != key:
             self.start_preview()
 
     def render_preview(self, *_, reset: bool = False) -> None:
@@ -2719,7 +2957,7 @@ class RustMechDialog(QDialog):
         self.plotter.enable_lightkit()
         self.plotter.set_background("#f0f0f0", top="#ffffff")
         mode = self.mode.currentIndex()
-        if mode in (0, 2):
+        if mode in (0, 2) or self.preview.mesh is None:
             self.plotter.add_mesh(
                 self.preview.surface,
                 color="#4ea8de",
@@ -2729,7 +2967,7 @@ class RustMechDialog(QDialog):
                 specular_power=20,
                 opacity=0.35 if mode == 2 else 1,
             )
-        if mode in (1, 2):
+        if mode in (1, 2) and self.preview.mesh is not None:
             self.plotter.add_mesh(
                 self.preview.mesh.grid,
                 color="#60a5fa",
@@ -2739,7 +2977,7 @@ class RustMechDialog(QDialog):
                 smooth_shading=False,
                 name=MESH_PREVIEW_ACTOR,
             )
-        removed = self.preview.mesh.removed_grid
+        removed = self.preview.mesh.removed_grid if self.preview.mesh is not None else pv.UnstructuredGrid()
         if self.preview_settings().imported_geometry_path and mode in (0, 2):
             faces = self.preview.surface.cell_data.get('compression_face')
             if faces is not None:
@@ -2808,6 +3046,11 @@ class RustMechDialog(QDialog):
             self.plotter.render()
 
         mesh = self.preview.mesh
+        if mesh is None:
+            for name in ("elements", "nodes", "fraction", "spacing"):
+                self._kpi_labels[name].setText("—")
+            self.stats.setText(f"Geometry: {self.preview.surface.n_cells:,} triangles | FE mesh has not been generated.")
+            return
         self._kpi_labels["elements"].setText(f"{mesh.grid.n_cells:,}")
         self._kpi_labels["nodes"].setText(f"{mesh.grid.n_points:,}")
         self._kpi_labels["fraction"].setText(f"{mesh.fraction:.2f}%")
@@ -2835,12 +3078,64 @@ class RustMechDialog(QDialog):
     def _show_geometry_workspace(self) -> None:
         self.workspace_tabs.setCurrentIndex(0)
         self.setup_tabs.setCurrentIndex(0)
+        self.raise_()
+        self.activateWindow()
+
+    def _show_doe_workspace(self) -> None:
+        self.refresh_validity()
+        self.doe_window.open_workspace()
+
+    def _show_design_pool(self):
+        if self.design_pool is None:
+            from design_pool import DesignPoolDialog
+            self.design_pool = DesignPoolDialog(self)
+            self.design_pool.geometry_prepared.connect(self._load_pool_geometry)
+        self.design_pool.open_pool()
+
+    def _load_pool_geometry(self, path, height, name):
+        settings = replace(self.collect(), imported_geometry_path=path,
+                           imported_geometry_name=name, size=height, test_profile="custom",
+                           mesh_type="TET4", tetra_strategy="netgen",
+                           compression=min(self.controls["compression"].value(), height * 0.1))
+        self.controls['size'].setRange(min(self.controls['size'].minimum(), height),
+                                       max(self.controls['size'].maximum(), height))
+        self.load_from_doe_row(settings)
+        self.status.setText(f"{name}: configure material, mesh and solver; Designs > Add current model to analysis queue.")
+
+    def _ensure_analysis_queue(self):
+        if self.analysis_queue_widget is None:
+            from analysis_queue import AnalysisQueueWidget, AnalysisQueueWindow
+            self.analysis_queue_widget = AnalysisQueueWidget(
+                self.collect, generate_volume_mesh, run_batch_experiment, self)
+            self.analysis_queue_widget.remote_controller = self.remote_controller
+            self.analysis_queue_widget.preview_requested.connect(self.load_from_doe_row)
+            self.analysis_queue_window = AnalysisQueueWindow(self.analysis_queue_widget, self)
+            self.analysis_queue_window.setStyleSheet(STUDIO_STYLESHEET)
+
+    def _show_analysis_queue(self):
+        self._ensure_analysis_queue()
+        self.analysis_queue_window.open_workspace()
+
+    def _enqueue_current_model(self):
+        if self.workspace_tabs.currentIndex() != 0:
+            QMessageBox.information(self, "Analysis queue", "Select the Mechanic workspace and configure the model first.")
+            return
+        try:
+            self._ensure_analysis_queue()
+            row = self.analysis_queue_widget.add_snapshot(self.collect())
+        except (OSError, ValueError) as error:
+            QMessageBox.warning(self, "Analysis queue", str(error))
+            return
+        self.status.setText(f"{row.exp_id} added to the analysis queue. Analysis has not started.")
+        if self.design_pool is not None and self.design_pool.pending:
+            self.design_pool.prepare_next()
+        else:
+            self.analysis_queue_window.open_workspace()
 
     def _add_current_design(self) -> None:
         self.refresh_validity()
-        if self.add_to_doe_button.isEnabled():
+        if self.doe_studio.use_model_btn.isEnabled():
             self.doe_studio.add_design(self.collect())
-            self.workspace_tabs.setCurrentIndex(1)
 
     def _show_doe_bounds(self, label: str, cases: dict[str, Settings]) -> None:
         surface_builder = make_surface
@@ -2879,6 +3174,7 @@ class RustMechDialog(QDialog):
             max(0, self.family_combo.findData(row_settings.structure_family))
         )
         self.family_combo.blockSignals(False)
+        self._sync_import_controls()
         self._populate_structure_items(
             row_settings.structure_family, row_settings.structure_name
         )
@@ -2909,6 +3205,8 @@ class RustMechDialog(QDialog):
                 self.controls[field_name].blockSignals(True)
                 self.controls[field_name].setValue(getattr(row_settings, field_name))
                 self.controls[field_name].blockSignals(False)
+        self.stl_resolution_input.setText(
+            "auto" if row_settings.stl_resolution is None else f"{row_settings.stl_resolution:.12g}")
         self._sync_structure_ui_visibility()
         self._sync_mesh_type()
         self._show_geometry_workspace()
@@ -2922,6 +3220,13 @@ class RustMechDialog(QDialog):
         settings = self.collect()
         self.refresh_validity()
         if not self.apply_button.isEnabled():
+            return
+        if self.preview.mesh is None:
+            self._analysis_after_mesh = settings
+            self._mesh_requested = True
+            self.failed_key = None
+            self.start_preview()
+            self.refresh_validity()
             return
         try:
             save_settings(settings)
@@ -3008,6 +3313,10 @@ class RustMechDialog(QDialog):
             record=self.analysis_job.remote_status()
             if record:
                 self.status.setText(f"TRUBA job {record.get('job_id','—')} · {record.get('state','preparing')}")
+            elif hasattr(self.analysis_job, "progress_status"):
+                stage = self.analysis_job.progress_status()
+                if stage:
+                    self.status.setText(stage)
             return
         job, self.analysis_job = self.analysis_job, None
         self.analysis_poll.stop()
@@ -3060,6 +3369,8 @@ class RustMechDialog(QDialog):
             self._update_status_visuals("ready", "● COMPLETED", False)
 
     def _stop_remote_for_close(self):
+        if self.disposed:
+            return True
         # Keep the job handle available for retry if remote cancellation cannot
         # be confirmed. Never label a disconnected, still-running job cancelled.
         job = self.analysis_job
@@ -3073,21 +3384,31 @@ class RustMechDialog(QDialog):
                 if workspace.job is not None:
                     self.status.setText("Remote cancellation is not confirmed. Reconnect and retry Stop before closing.")
                     return False
-        doe = self.doe_studio
-        if doe._active_future is not None and getattr(doe._active_future,"_generic_remote_target",False) is True:
-            doe.stop_active_queue()
-            if doe._active_future is not None:
-                self.status.setText("Remote batch cancellation is not confirmed. Reconnect and retry Stop before closing.")
-                return False
-        return True
+        for doe in (self.doe_studio, self.analysis_queue_widget):
+            if doe is not None and doe._active_future is not None and getattr(doe._active_future,"_generic_remote_target",False) is True:
+                doe.stop_active_queue()
+                if doe._active_future is not None:
+                    self.status.setText("Remote batch cancellation is not confirmed. Reconnect and retry Stop before closing.")
+                    return False
+        controller = getattr(self, 'remote_controller', None)
+        return controller is None or controller.request_close()
 
     def reject(self):
         if self._stop_remote_for_close(): super().reject()
+
+    def done(self, result):
+        if not self._stop_remote_for_close():
+            return
+        # QDialog.done hides its native children before emitting finished.
+        # Release WGL resources while their native window handles still exist.
+        self.dispose()
+        super().done(result)
 
     def closeEvent(self,event):
         if not self._stop_remote_for_close():
             event.ignore()
             return
+        self.dispose()
         super().closeEvent(event)
 
     def dispose(self, *_) -> None:
@@ -3106,8 +3427,17 @@ class RustMechDialog(QDialog):
         self.mesh_progress.hide()
         self.cancel_mesh_button.hide()
         shutdown_mesh_preview()
+        if self._kratos_result_dialog is not None:
+            self._kratos_result_dialog.close()
         if hasattr(self, "doe_studio"):
             self.doe_studio.dispose()
+            self.doe_window.close()
+        if self.analysis_queue_widget is not None:
+            self.analysis_queue_widget.dispose()
+            self.analysis_queue_window.close()
+        if self.design_pool is not None:
+            self.design_pool.close()
+            self.design_pool.dispose()
         if hasattr(self, "flow_workspace"):
             self.flow_workspace.dispose()
         if hasattr(self, "thermal_workspace"):
@@ -3163,8 +3493,8 @@ def main() -> int:
         offline_check(settings, images=not args.no_images)
         return 0
     app = QApplication.instance() or QApplication([sys.argv[0]])
-    app.setApplicationName("RustMech")
-    app.setApplicationDisplayName("RustMech")
+    from app_identity import configure_application
+    configure_application(app)
     profiles = SolverProfileStore()
     settings = profiles.restore(settings)
     dialog = RustMechDialog(settings, solver_profile_store=profiles)

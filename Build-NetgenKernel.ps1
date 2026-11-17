@@ -49,6 +49,6 @@ if ($Install) {
         Copy-Item -LiteralPath (Join-Path $build "runtime\$filename") -Destination $destination -Force
     }
     Copy-Item -LiteralPath (Join-Path $source 'LICENSE.Netgen'),(Join-Path $source 'LICENSE.zlib') -Destination $destination -Force
-    & $Python -c 'import hashlib,json,sys; from pathlib import Path; folder=Path(sys.argv[1]); data=dict(revision="96e5682f-rustmech-atlas-5",upstream_commit="96e5682f6ea43ba77ba3bb2ae4bb4bd1791f506e",sha256={name:hashlib.sha256((folder/name).read_bytes()).hexdigest() for name in ("rustmech_netgen.dll","rustmech_ngcore.dll")}); (folder/"build.json").write_text(json.dumps(data,indent=2)+"\n",encoding="utf-8")' $destination
+    & $Python -c 'import hashlib,json,sys; from pathlib import Path; folder=Path(sys.argv[1]); data=dict(revision="96e5682f-rustmech-atlas-6",upstream_commit="96e5682f6ea43ba77ba3bb2ae4bb4bd1791f506e",sha256={name:hashlib.sha256((folder/name).read_bytes()).hexdigest() for name in ("rustmech_netgen.dll","rustmech_ngcore.dll")}); (folder/"build.json").write_text(json.dumps(data,indent=2)+"\n",encoding="utf-8")' $destination
     if ($LASTEXITCODE -ne 0) { throw 'Cannot write Netgen kernel metadata.' }
 }

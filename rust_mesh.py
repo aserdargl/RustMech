@@ -14,13 +14,13 @@ from pathlib import Path
 
 import numpy as np
 import pyvista as pv
+from mesh_resources import require_memory
 
 
 _U8_PTR = ct.POINTER(ct.c_uint8)
 _F64_PTR = ct.POINTER(ct.c_double)
 _I64_PTR = ct.POINTER(ct.c_int64)
 _I32_PTR = ct.POINTER(ct.c_int32)
-MAX_AXIS = 150
 
 
 @lru_cache(maxsize=1)
@@ -48,7 +48,7 @@ def _kernel():
         library = ct.CDLL(str(path.resolve()))
         library.rustmech_core_abi_version.argtypes = []
         library.rustmech_core_abi_version.restype = ct.c_uint32
-        if library.rustmech_core_abi_version() != 4:
+        if library.rustmech_core_abi_version() != 5:
             raise RuntimeError(
                 "Unsupported Rust mesh ABI; rebuild with .\\Build-MeshKernel.ps1."
             )
@@ -213,10 +213,10 @@ def _kernel():
 
 
 def _require_shape(array):
-    if array.ndim != 3 or any(not 1 <= n <= MAX_AXIS for n in array.shape):
-        raise ValueError(
-            f"Voxel input must have three dimensions, each between 1 and {MAX_AXIS}."
-        )
+    if array.ndim != 3 or any(n < 1 for n in array.shape):
+        raise ValueError("Voxel input must have three nonempty dimensions.")
+    if array.size >= np.iinfo(np.uint32).max:
+        raise ValueError("Voxel buffer exceeds the native 32-bit voxel index format.")
 
 
 def _native_error(library):
@@ -229,6 +229,7 @@ def select_voxels(values: np.ndarray, count: int) -> tuple[np.ndarray, np.ndarra
     """Select a stable solid fraction and keep its largest face-connected part."""
     values = np.require(values, dtype=np.float64, requirements=["C", "A"])
     _require_shape(values)
+    require_memory(values.size * 14, "Voxel connectivity selection")
     if (
         isinstance(count, (bool, np.bool_))
         or not isinstance(count, (int, np.integer))
@@ -267,6 +268,15 @@ def build_hex_grid(
     _require_shape(solid)
     if not np.isfinite(spacing) or spacing <= 0:
         raise ValueError("Mesh spacing must be a positive finite number.")
+    nx, ny, nz = map(int, solid.shape)
+    nodes = ((nx + 1) * (ny + 1) * (nz + 1) if not quadratic else
+             (nx + 1) * (ny + 1) * (nz + 1) + nx * (ny + 1) * (nz + 1)
+             + (nx + 1) * ny * (nz + 1) + (nx + 1) * (ny + 1) * nz)
+    selected = int(np.count_nonzero(solid))
+    width = 20 if quadratic else 8
+    if selected:
+        require_memory(nodes * 4 + selected * (4 + width * 8 + 4)
+                       + min(nodes, selected * width) * 28, "HEX mesh assembly")
     library = _kernel()
     counts = (ct.c_size_t * 4)()
     plan = library.rustmech_hex_plan_new(
@@ -562,6 +572,9 @@ def quadratic_tetra_arrays(points, corners):
         or corners.shape[1] != 4
     ):
         raise ValueError("Expected points (n,3) and tetrahedra (m,4).")
+    # Include the native edge lookup, expanded connectivity and output arrays.
+    # Six distinct edges per tetrahedron is the conservative upper estimate.
+    require_memory(len(corners) * 640 + len(points) * 24, "TET10 assembly")
     library = _kernel()
     counts = (ct.c_size_t * 2)()
     plan = library.rustmech_tet_plan_new(

@@ -140,17 +140,17 @@ class PersistentPreviewTests(unittest.TestCase):
         try:
             worker.warmup()
             prewarmed_pid = worker._process.pid
-            first = worker.build(settings, None, None, cancelled)
+            first = worker.build(settings, None, None, cancelled, include_mesh=True)
             pid = worker._process.pid
             self.assertEqual(pid, prewarmed_pid)
             second = worker.build(
-                replace(settings, mesh_resolution=0.05), first, None, cancelled
+                replace(settings, mesh_resolution=0.05), first, None, cancelled, include_mesh=True
             )
             self.assertEqual(worker._process.pid, pid)
             self.assertIs(second.surface, first.surface)
             self.assertIsNot(second.mesh, first.mesh)
             third = worker.build(
-                replace(settings, mesh_resolution=0.05), second, None, cancelled
+                replace(settings, mesh_resolution=0.05), second, None, cancelled, include_mesh=True
             )
             self.assertIs(third.mesh, second.mesh)
             self.assertIs(third.surface, second.surface)
@@ -163,7 +163,7 @@ class PersistentPreviewTests(unittest.TestCase):
                 )
             self.assertIsNone(worker._process)
             cancelled.clear()
-            restarted = worker.build(settings, None, None, cancelled)
+            restarted = worker.build(settings, None, None, cancelled, include_mesh=True)
             self.assertEqual(restarted.key, first.key)
             self.assertNotEqual(worker._process.pid, pid)
         finally:

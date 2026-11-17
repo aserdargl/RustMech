@@ -342,8 +342,8 @@ pub unsafe extern "C" fn rustmech_tet_metrics(
             || determinants.is_null()
             || ratios.is_null()
             || ![4, 10].contains(&width)
-            || count > 2_000_000
-            || point_count > 30_000_000
+            || !crate::fits_buffer(count, width, 8)
+            || !crate::fits_buffer(point_count, 3, 8)
         {
             return Err("Invalid tetrahedral metric buffers".into());
         }
@@ -393,7 +393,7 @@ pub unsafe extern "C" fn rustmech_von_mises(
     output: *mut f64,
 ) -> i32 {
     let result = guarded(|| {
-        if tensors.is_null() || output.is_null() || count > 30_000_000 {
+        if tensors.is_null() || output.is_null() || !crate::fits_buffer(count, 6, 8) {
             return Err("Invalid stress tensor buffers".into());
         }
         let tensors = unsafe { slice::from_raw_parts(tensors, count * 6) };
@@ -512,8 +512,8 @@ pub unsafe extern "C" fn rustmech_write_apdl(
             || node_ids.is_null()
             || connectivity.is_null()
             || element_ids.is_null()
-            || point_count > 30_000_000
-            || cell_count > 2_000_000
+            || !crate::fits_buffer(point_count, 3, 8)
+            || !crate::fits_buffer(cell_count, width, 8)
         {
             return Err("Invalid APDL mesh buffers".into());
         }
