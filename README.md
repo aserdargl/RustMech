@@ -1167,6 +1167,34 @@ dosyalarındadır. Proje git deposundadır; kullanıcı sonuçları (`HumanResul
 tutulur. Eski kök günlükleri `build/logs/2026-11-kok-arsivi/` altına taşındı;
 `RustMech.log` çalışma günlüğü olarak kökte kalır.
 
+### Malzeme kütüphanesi
+
+Model > Material bölümünde **Library / Kütüphane** düğmesi hazır kartları açar.
+Soldaki listeden veya arama alanından malzemeyi seçin; sağda SI birimleriyle
+özellikler, üretim koşulu, referans sıcaklığı ve tıklanabilir teknik föy/kaynak
+bağlantıları görünür. Kaynaklar ayrı bir panelde her zaman erişilebilirdir.
+**Add / Ekle**, kartı malzeme açılır listesine ekleyip seçer; analiz başlatmaz.
+Aynı kart iki kez eklenmez. Eklenen seçenekler kullanıcıya özel saklanır;
+etkin malzeme ve kaynak bilgisi mevcut ayar/proje/malzeme dosyasıyla taşınır.
+Malzemeler arasında geçiş, oturumdaki düzenlenmiş değerleri korur.
+
+Başlangıç kataloğu: 316L, Ti-6Al-4V Grade 5, AlSi10Mg, 6061-T6, S355,
+Cu-ETP/C11000, Prusament PLA, EOS PA 2200/PA12, **Inconel 625 ve 718**,
+**Anycubic ABS-Like Resin 3.0 (SLA/MSLA)**, su ve kuru hava.
+Akışkan kartları Flow/Thermal bölümündeki akışkan Library düğmesinden;
+ısıl katı kartları Thermal bölümündeki katı Library düğmesinden seçilir.
+
+Kartlar sabit referans özellikleri kullanır; katılar doğrusal elastiktir.
+Mühendislik tahminleri özellik tablosunda işaretlenir ve açıklanır. Reçinenin
+elastisite modülü üreticinin ürün sayfasındaki aralığın orta değeridir;
+yoğunluğunun kürlenmiş numuneye ait olduğu TDS'de belirtilmediği için yoğunluk
+ve Poisson oranı tahmin olarak işaretlenir. Eksik termal özellikler başka
+malzemenin değerleriyle doldurulmaz; gerekli özellikleri eksik kartın termal
+atanması engellenir. Katalog `material_catalog.py` içinde çevrimdışı bulunur;
+kütüphaneyi açmak ağ isteği yapmaz. Pencere ve iki bölücünün yerleşimi saklanır.
+
+Odaklı kontrol: `python -m unittest tests.test_material_catalog_ui tests.test_material_units tests.test_material_library tests.test_workspace_materials`.
+
 ### Test grupları
 
 `python tools/run_tests.py core` ekran gerektirmeyen testleri (Qt offscreen), `gui`

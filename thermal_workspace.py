@@ -17,7 +17,7 @@ from analysis_process import AnalysisProcess
 from flow_workspace import FlowWorkspace
 from flow_analysis import FlowSettings
 from model import ROOT
-from studio_style import CompactSpinBox, CompactDoubleSpinBox,configure_form,field_label,CONTROL_HEIGHT
+from studio_style import ActionFlowLayout, CompactSpinBox, CompactDoubleSpinBox,configure_form,field_label,CONTROL_HEIGHT
 from thermal_analysis import ThermalSettings,execute_thermal_case,export_thermal_case
 
 
@@ -80,7 +80,16 @@ class ThermalWorkspace(FlowWorkspace):
         self.load_solid_button.setDefault(False)
         self.load_solid_button.setObjectName("secondaryActionBtn")
         self.load_solid_button.clicked.connect(self.load_solid_material)
-        form.addRow(self.load_solid_button)
+        solid_actions = ActionFlowLayout(equal_width=True)
+        self.solid_library_button = QPushButton("Library")
+        self.solid_library_button.setAutoDefault(False)
+        self.solid_library_button.setDefault(False)
+        self.solid_library_button.setObjectName("secondaryActionBtn")
+        self.solid_library_button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        self.solid_library_button.clicked.connect(self.show_solid_library)
+        solid_actions.addWidget(self.load_solid_button)
+        solid_actions.addWidget(self.solid_library_button)
+        form.addRow(solid_actions)
         self.use_model_material_button = QPushButton("Use Model material")
         self.use_model_material_button.setAutoDefault(False)
         self.use_model_material_button.setDefault(False)
@@ -90,7 +99,8 @@ class ThermalWorkspace(FlowWorkspace):
         material_width = max(self.fontMetrics().horizontalAdvance(label) for label in
                              ("Load fluid material...", "Load solid material...", "Use Model material",
                               "Akışkan malzemesi yükle...", "Katı malzemesi yükle...", "Model malzemesini kullan"))+24
-        for button in (self.load_fluid_button,self.load_solid_button,self.use_model_material_button):
+        for button in (self.load_fluid_button,self.fluid_library_button,self.load_solid_button,
+                       self.solid_library_button,self.use_model_material_button):
             button.setSizePolicy(QSizePolicy.Policy.Fixed,QSizePolicy.Policy.Fixed)
             button.setFixedSize(material_width,CONTROL_HEIGHT)
         self.panel.layout().insertWidget(3,self.thermal_panel)
@@ -162,6 +172,22 @@ class ThermalWorkspace(FlowWorkspace):
     def load_solid_material_path(self,path):
         from material_library import read_material_card
         self.apply_solid_card(read_material_card(path,kind="solid"))
+
+    def show_solid_library(self):
+        from material_library_dialog import MaterialLibraryDialog
+        from window_state import show_restored_window
+        if not hasattr(self, "solid_library_dialog"):
+            self.solid_library_dialog = MaterialLibraryDialog(self,
+                required=("density", "heat_capacity", "conductivity"))
+            self.solid_library_dialog.setObjectName("thermalSolidMaterialLibrary")
+            self.solid_library_dialog.material_added.connect(self.apply_solid_library_card)
+        show_restored_window(self.solid_library_dialog)
+
+    def apply_solid_library_card(self, card):
+        try:
+            self.apply_solid_card(card)
+        except (ValueError, TypeError) as error:
+            self.status.setText(str(error))
 
     def use_model_material(self):
         from material_library import MaterialCard

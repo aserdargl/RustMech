@@ -136,13 +136,7 @@ class ProjectWorkspace:
             w.solver_combo.setCurrentIndex(w.solver_combo.findData(settings.solver_backend))
             w._apply_solver_profile(settings)
             editor = w.material_editor
-            editor.name.setText(settings.material_name)
-            editor.material_card = settings.material_card
-            editor.set_numeric_values(asdict(settings))
-            editor.fill_curve(settings.hardening_curve)
-            editor.model.setCurrentIndex(editor.model.findData(settings.material_model))
-            editor.set_active_path(None)
-            editor.update_model()
+            editor.set_current_material(asdict(settings))
             w.active_geometry = settings
             if settings.test_profile == "custom":
                 w._custom_experiment = settings

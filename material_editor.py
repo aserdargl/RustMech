@@ -2,10 +2,13 @@
 from __future__ import annotations
 
 import csv
+import json
+from copy import deepcopy
+from dataclasses import asdict
 from pathlib import Path
 
 from studio_style import CompactComboBox
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QSettings, QSignalBlocker, Qt, Signal
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
@@ -26,7 +29,7 @@ from PySide6.QtWidgets import (
 
 from studio_style import ActionFlowLayout, CompactDoubleSpinBox, SidebarGroupBox, configure_form, field_label
 from model import (
-    MATERIAL_MODELS, ROOT, Settings, load_material, save_material,
+    MATERIAL_FIELDS, MATERIAL_MODELS, ROOT, Settings, load_material, save_material,
     plastic_curve_from_total_true_strain, validate_hardening_curve,
 )
 
@@ -58,7 +61,7 @@ class MaterialEditor(SidebarGroupBox):
 
     changed = Signal()
 
-    def __init__(self, settings: Settings, parent=None):
+    def __init__(self, settings: Settings, parent=None, *, library_settings=None):
         super().__init__(parent)
         self.setObjectName("materialGroup")
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
@@ -70,6 +73,9 @@ class MaterialEditor(SidebarGroupBox):
         self.material_card = settings.material_card
         self.controls = {}
         self._stress_factor = 1.0
+        self.library_settings = library_settings if library_settings is not None else QSettings("RustMech", "RustMech")
+        self._selection_values = {}
+        self._selection_key = "current"
         content_layout = QVBoxLayout(self.content)
         content_layout.setContentsMargins(5, 4, 5, 4)
         content_layout.setSpacing(2)
@@ -77,6 +83,12 @@ class MaterialEditor(SidebarGroupBox):
         name_form = QFormLayout()
         configure_form(name_form)
         content_layout.addLayout(name_form)
+        self.material_selector = NoWheelComboBox()
+        self.material_selector.setAccessibleName("Material selection")
+        self.material_selector.addItem("Current / custom material", "current")
+        name_form.addRow(field_label("Select material", self.material_selector), self.material_selector)
+        self.material_selector.setFixedWidth(180)
+        self.material_selector.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         self.name = QLineEdit(settings.material_name)
         self.name.setPlaceholderText("e.g. Ti-6Al-4V ELI / 316L SS")
         name_lbl = field_label("Material name", self.name)
@@ -84,6 +96,9 @@ class MaterialEditor(SidebarGroupBox):
 
         actions = ActionFlowLayout(equal_width=True)
         actions.setAlignment(Qt.AlignmentFlag.AlignRight)
+        self.library_button = QPushButton("Library")
+        self.library_button.setToolTip("Browse material properties and source datasheets")
+        self.library_button.clicked.connect(self.show_library)
         self.load_button = QPushButton("Load")
         self.load_button.setToolTip("Load material file")
         self.load_button.clicked.connect(self.load_file)
@@ -95,7 +110,7 @@ class MaterialEditor(SidebarGroupBox):
         self.help_button = QPushButton("Help")
         self.help_button.setToolTip("Tangent modulus guide and approximate datasheet calculator")
         self.help_button.clicked.connect(self.show_tangent_help)
-        for button in (self.load_button, self.save_button, self.edit_button, self.delete_button, self.help_button):
+        for button in (self.library_button, self.load_button, self.save_button, self.edit_button, self.delete_button, self.help_button):
             button.setAutoDefault(False)
             button.setDefault(False)
             button.setObjectName("secondaryActionBtn")
@@ -221,6 +236,88 @@ class MaterialEditor(SidebarGroupBox):
         self.stress_unit.currentIndexChanged.connect(self.change_stress_unit)
         self.update_unit_labels()
         self.set_expanded(True)
+        self.restore_library_choices()
+        restored_index = self.material_selector.findText(settings.material_name)
+        if restored_index > 0:
+            self._selection_values["current"] = (
+                {key: deepcopy(getattr(Settings(), key)) for key in MATERIAL_FIELDS}, None, False)
+            self._selection_key = self.material_selector.itemData(restored_index)
+            self._selection_values[self._selection_key] = (
+                {key: deepcopy(getattr(settings, key)) for key in MATERIAL_FIELDS}, None, False)
+            self.material_selector.setCurrentIndex(restored_index)
+        self.material_selector.currentIndexChanged.connect(self.select_material)
+
+    def restore_library_choices(self):
+        from material_catalog import builtin_materials
+        try:
+            identifiers = json.loads(self.library_settings.value("materials/addedLibraryIds", "[]"))
+        except (ValueError, TypeError):
+            identifiers = []
+        if not isinstance(identifiers, list):
+            identifiers = []
+        for entry in builtin_materials():
+            if entry.kind == "solid" and entry.identifier in identifiers:
+                self.material_selector.addItem(entry.name, entry.identifier)
+                self._selection_values[entry.identifier] = (entry.card().mechanical_values(), None, False)
+
+    def cache_current_material(self):
+        settings = self.material_settings()
+        self._selection_values[self._selection_key] = (
+            {key: deepcopy(getattr(settings, key)) for key in MATERIAL_FIELDS},
+            self.active_path, self.edit_button.isChecked())
+
+    def set_current_material(self, values, path=None):
+        self.cache_current_material()
+        with QSignalBlocker(self.material_selector):
+            self.material_selector.setCurrentIndex(0)
+        self._selection_key = "current"
+        self.apply_material_values(values, path)
+
+    def select_material(self, index):
+        key = self.material_selector.itemData(index)
+        if key == self._selection_key or key not in self._selection_values:
+            return
+        self.cache_current_material()
+        self._selection_key = key
+        values, path, editable = self._selection_values[key]
+        self.apply_material_values(values, path, editable)
+
+    def apply_material_values(self, values, path=None, editable=False):
+        values = {**asdict(Settings()), **deepcopy(values)}
+        blockers = [QSignalBlocker(control) for control in
+                    (self.name, self.model, self.edit_button, *self.controls.values())]
+        self.name.setText(values["material_name"])
+        self.name.setCursorPosition(0)
+        self.set_numeric_values(values)
+        self.fill_curve(values["hardening_curve"])
+        self.material_card = values["material_card"]
+        self.model.setCurrentIndex(self.model.findData(values["material_model"]))
+        self.set_active_path(path)
+        self.edit_button.setChecked(editable)
+        self.set_editable(editable)
+        del blockers
+        self.update_model()
+
+    def show_library(self, *_):
+        from material_library_dialog import MaterialLibraryDialog
+        from window_state import show_restored_window
+        if not hasattr(self, "library_dialog"):
+            self.library_dialog = MaterialLibraryDialog(self, selected_name=self.name.text())
+            self.library_dialog.material_added.connect(self.add_library_material)
+        show_restored_window(self.library_dialog)
+
+    def add_library_material(self, card):
+        from material_catalog import builtin_materials
+        entry = next(entry for entry in builtin_materials() if entry.kind == "solid" and entry.name == card.name)
+        index = self.material_selector.findData(entry.identifier)
+        if index < 0:
+            self._selection_values[entry.identifier] = (card.mechanical_values(), None, False)
+            self.material_selector.addItem(card.name, entry.identifier)
+            index = self.material_selector.count() - 1
+        self.material_selector.setCurrentIndex(index)
+        identifiers = [self.material_selector.itemData(i) for i in range(1, self.material_selector.count())]
+        self.library_settings.setValue("materials/addedLibraryIds", json.dumps(identifiers))
+        self.library_settings.sync()
 
     def show_tangent_help(self, *_) -> None:
         from tangent_modulus_help import TangentModulusHelpDialog
@@ -345,11 +442,44 @@ class MaterialEditor(SidebarGroupBox):
             if len(converted) == 2 and isinstance(converted[1], float):
                 converted[1] *= self._stress_factor
             rows.append(tuple(converted))
+        card = deepcopy(self.material_card)
+        if card is not None:
+            # The original thermal data/source survive, while edited mechanical
+            # values must also reach Model -> CHT and saved material cards.
+            from math import isclose
+            numeric = self.numeric_values()
+            updates = {"density": numeric["material_density"] * 1000,
+                       "young_modulus": numeric["young_modulus"] * 1e6,
+                       "poisson_ratio": numeric["poisson_ratio"]}
+            changed = card.get("name") != self.name.text().strip() or card.get("constitutive_law") != self.model.currentData()
+            if self.model.currentData() == "bilinear_isotropic":
+                updates.update(yield_stress=numeric["yield_stress"] * 1e6,
+                               tangent_modulus=numeric["tangent_modulus"] * 1e6)
+            properties = card.setdefault("properties", {})
+            for key, value in updates.items():
+                previous = properties.get(key)
+                if isinstance(previous, (int, float)) and isclose(previous, value, rel_tol=1e-10):
+                    continue
+                # Keep imported temperature tables intact when their reference
+                # value has not been edited in the mechanical workspace.
+                if isinstance(previous, dict):
+                    from material_library import MaterialCard
+                    if isclose(MaterialCard.from_dict(card).evaluate(293.15)[key], value, rel_tol=1e-10):
+                        continue
+                properties[key] = value
+                changed = True
+            curve = [[strain, stress * 1e6] for strain, stress in rows] if all(
+                isinstance(strain, (int, float)) and isinstance(stress, (int, float)) for strain, stress in rows) else []
+            changed |= card.get("hardening_curve", []) != curve
+            card.update(name=self.name.text().strip(), constitutive_law=self.model.currentData(), hardening_curve=curve)
+            note = "User-modified mechanical properties; original reference data is not a calibration of these edits."
+            if changed and note not in card.get("source", ""):
+                card["source"] = card.get("source", "") + "\n" + note
         return {
             "material_name": self.name.text().strip(),
             "material_model": self.model.currentData(),
             "hardening_curve": tuple(rows),
-            "material_card": self.material_card,
+            "material_card": card,
         }
 
     def material_settings(self) -> Settings:
@@ -431,14 +561,8 @@ class MaterialEditor(SidebarGroupBox):
         card = read_material_card(path)
         legacy = path.suffix.lower() == ".json" and json.loads(path.read_text(encoding="utf-8-sig")).get("units") == "mm-N-MPa"
         values = {**asdict(Settings()), **(load_material(path) if legacy else card.mechanical_values())}
-        self.name.setText(values["material_name"])
-        self.set_numeric_values(values)
-        self.fill_curve(values["hardening_curve"])
-        self.material_card = values["material_card"] if legacy else card.to_dict()
-        self.model.setCurrentIndex(self.model.findData(values["material_model"]))
-        self.set_active_path(path)
-        self.edit_button.setChecked(False)
-        self.changed.emit()
+        values["material_card"] = values["material_card"] if legacy else card.to_dict()
+        self.set_current_material(values, path)
 
     def load_file(self, *_) -> None:
         filename, _ = QFileDialog.getOpenFileName(
@@ -481,10 +605,4 @@ class MaterialEditor(SidebarGroupBox):
             QMessageBox.warning(self, "Cannot delete material", str(exc))
             return
         defaults = Settings()
-        self.name.setText(defaults.material_name)
-        self.set_numeric_values(vars(defaults))
-        self.fill_curve(defaults.hardening_curve)
-        self.model.setCurrentIndex(self.model.findData(defaults.material_model))
-        self.set_active_path(None)
-        self.edit_button.setChecked(False)
-        self.changed.emit()
+        self.apply_material_values(asdict(defaults))

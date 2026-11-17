@@ -18,7 +18,7 @@ from analysis_process import AnalysisProcess
 from flow_analysis import FlowSettings, export_flow_case, export_geometry_inspection, execute_flow_case, stop_flow_case
 from model import ROOT
 from preview_viewport import create_preview_viewport
-from studio_style import CompactDoubleSpinBox, CONTROL_HEIGHT, configure_form, field_label
+from studio_style import ActionFlowLayout, CompactDoubleSpinBox, CONTROL_HEIGHT, configure_form, field_label
 
 
 class FlowWorkspace(QWidget):
@@ -125,7 +125,20 @@ class FlowWorkspace(QWidget):
         self.load_fluid_button.setObjectName("secondaryActionBtn")
         self.load_fluid_button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         self.load_fluid_button.clicked.connect(self.load_fluid_material)
-        form.addRow(self.load_fluid_button)
+        fluid_actions = ActionFlowLayout(equal_width=True)
+        self.fluid_library_button = QPushButton("Library")
+        self.fluid_library_button.setAutoDefault(False)
+        self.fluid_library_button.setDefault(False)
+        self.fluid_library_button.setObjectName("secondaryActionBtn")
+        self.fluid_library_button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        material_action_width = max(self.fontMetrics().horizontalAdvance(label) for label in
+                                    ("Load fluid material...", "Akışkan malzemesi yükle...")) + 24
+        for button in (self.load_fluid_button, self.fluid_library_button):
+            button.setFixedSize(material_action_width, CONTROL_HEIGHT)
+        self.fluid_library_button.clicked.connect(self.show_fluid_library)
+        fluid_actions.addWidget(self.load_fluid_button)
+        fluid_actions.addWidget(self.fluid_library_button)
+        form.addRow(fluid_actions)
         self.distribution = QLineEdit(defaults.distribution)
         self.bashrc = QLineEdit(defaults.foam_bashrc)
         self.bashrc.setToolTip("Absolute Linux path to the OpenCFD OpenFOAM environment (simpleFoam).")
@@ -224,7 +237,25 @@ class FlowWorkspace(QWidget):
 
     def load_fluid_material_path(self, path):
         from material_library import read_material_card
-        card = read_material_card(path,kind="fluid")
+        self.apply_fluid_card(read_material_card(path,kind="fluid"))
+
+    def show_fluid_library(self):
+        from material_library_dialog import MaterialLibraryDialog
+        from window_state import show_restored_window
+        if not hasattr(self, "fluid_library_dialog"):
+            self.fluid_library_dialog = MaterialLibraryDialog(self, kind="fluid",
+                required=("density", "dynamic_viscosity", "heat_capacity", "conductivity"))
+            self.fluid_library_dialog.setObjectName("fluidMaterialLibrary")
+            self.fluid_library_dialog.material_added.connect(self.apply_fluid_library_card)
+        show_restored_window(self.fluid_library_dialog)
+
+    def apply_fluid_library_card(self, card):
+        try:
+            self.apply_fluid_card(card)
+        except (ValueError, TypeError) as error:
+            self.status.setText(str(error))
+
+    def apply_fluid_card(self, card):
         if card.kind != "fluid":
             raise ValueError("Select a fluid material card.")
         thermal = getattr(self,"thermal_controls",{})
