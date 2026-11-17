@@ -1130,14 +1130,33 @@ sarıdır. Yalnız SSH bağlantısı yeşil READY sayılmaz.
 Hazır olma bildirimi üretim başlatmaz. **Apply** geometriyi aynı kaynağın
 `surface` adımında (büyükse otomatik chunked/periyodik yolla) üretir; VTP sonucu
 indirilip yerel ekranda çizilir. FE Mesh isteği ayrıca hacim ağını üretir.
-Ağ üretimi ve analizler, yeni `sbatch` tahsisi açmadan aynı kaynağın
-`srun` adımları olarak sırayla yürütülür. Önceki analiz çalışıyorsa yeni analiz
-uygulamanın oturum kuyruğunda bekler. Kaynak ayarları oturum boyunca sabittir.
+Ağ üretimi ve analizler aynı kaynağın `srun` adımları olarak yürütülür.
+Tahsis öncesinde **Parallel analyses** ile DoE ve analiz kuyruğunda aynı anda
+çalışabilecek analiz sayısını seçin (varsayılan `1`). CPU ve RAM eşit paylara
+bölünür: örneğin 56 çekirdek ve 128 GiB RAM, dört analiz için analiz başına
+14 çekirdek ve 32 GiB RAM sağlar. Bellek gereksinimine göre daha az eşzamanlı
+analiz seçin. Her adım ayrı CPU/bellek sınırı ve sonuç klasörü kullanır;
+boşalan paya sıradaki analiz alınır. Tamamlanma sırası değişse de sonuçlar
+doğru satıra yazılır ve kaydedilir. Tek büyük analiz, önizleme ve ortam
+hazırlığı tüm tahsisi kullanır. Kaynak ayarları oturum boyunca sabittir.
 
-Boşta geçirilen süre de tahsis süresine dahildir. Süre bittiğinde devam eden
-hesaplama durdurulabilir; uygulama kendiliğinden yeni tahsis açmaz. Bir analizi
-iptal etmek kaynak oturumunu kapatmaz. **Release resources** oturumu ve içindeki
-işleri sonlandırır. **Normal kapanış**, bu çalıştırmada ayrılan veya açıkça
+Boşta geçirilen süre de tahsis süresine dahildir. **Prepare replacement resources
+near the time limit** varsayılan açıktır: DoE/analiz kuyruğu çalışırken son bir
+saatte (kısa tahsislerde son %10'da) aynı kaynak ayarlarıyla tek bir yedek
+tahsis istenir. Kuyruk izleyicisi açıkken bu kontrol yapılır; yalnızca boşta
+duran oturum kendiliğinden yenilenmez. Yeni analizler yedek işçi hazır olana
+kadar bekler, sonra ona yönlendirilir. Eski tahsiste çalışan analizler orada
+tamamlanır; biten analizler tekrar çalıştırılmaz. Slurm başlangıç zamanını
+belirlediğinden beklemesiz geçiş garanti edilmez. Bu özellik çalışan çözücünün
+ara hesap adımını taşımak değildir: eski tahsisin süre sınırını aşan tek bir
+analiz durabilir; tam adım devamı ayrıca çözücü checkpoint/restart desteği
+gerektirir. Yeni tahsis hazır olsa bile devam eden süreç taşınmaz. Eski tahsis
+süresi bitene veya kaynaklar bırakılana kadar ayrılmış kalabilir.
+
+Bir analizi iptal etmek diğer analizleri veya kaynak oturumunu kapatmaz.
+Kuyruğun Stop düğmesi tüm etkin kuyruk analizlerini durdurur.
+**Release resources**, hazırlanan yedek ve önceki tahsisler dahil bu oturumun
+kaynaklarını ve içindeki işleri sonlandırır. **Normal kapanış**, bu çalıştırmada ayrılan veya açıkça
 Refresh session ile bağlanılan RustMech tahsisini de otomatik bırakır; henüz
 kuyrukta bekleyen veya gönderimi tamamlanmamış istek de kapsanır. Kapanış
 arka planda iptali ve yalnız ilgili job ID'sinin sonlandığını doğrular.
