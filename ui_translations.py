@@ -2,6 +2,38 @@
 from setup_help import GEOMETRY_HELP
 
 _TEXT = '''
+Inspect geometry (no solve)|Geometriyi incele (çözüm yok)
+Geometry diagnostics|Geometri kontrolleri
+Geometry inspection saved. No solver files were generated.|Geometri incelemesi kaydedildi. Çözücü dosyası üretilmedi.
+Load fluid material...|Akışkan malzemesi yükle...
+Load solid material...|Katı malzemesi yükle...
+Use Model material|Model malzemesini kullan
+Channel · Isothermal CFD|Kanal · İzotermal CFD
+Channel section|Kanal kesiti
+Cylinder|Silindir
+Square / rectangular|Kare / dikdörtgen
+Width / mm|Genişlik / mm
+Height / mm|Yükseklik / mm
+Insert section / mm|Dolgu bölgesi / mm
+Specimen X / mm|Numune X / mm
+Specimen Y / mm|Numune Y / mm
+Specimen Z / mm|Numune Z / mm
+Rotation X / °|Dönme X / °
+Rotation Y / °|Dönme Y / °
+Rotation Z / °|Dönme Z / °
+Cells / narrow side|Hücre / kısa kenar
+Allow intentional bypass|Numune çevresinde boşluğa izin ver
+Import geometry for flow / thermal...|Akış / termal için geometri içe aktar...
+Use for flow / thermal|Akış / termal için kullan
+Transient water + specimen heat transfer|Zamana bağlı su + numune ısı transferi
+Project|Proje
+Analysis project|Analiz projesi
+Open project...|Proje aç...
+Save project|Projeyi kaydet
+Save project as...|Projeyi farklı kaydet...
+No case loaded|Yüklenmiş vaka yok
+Project inputs restored. Build or open results explicitly.|Proje girdileri geri yüklendi. Ağ üretimini veya sonuç açmayı açıkça başlatın.
+Project opened. Use Apply to preview; run analysis explicitly.|Proje açıldı. Önizleme için Apply kullanın; analizi açıkça başlatın.
 Sample Settings|Numune Ayarları
 Automatic naming|Otomatik isimlendirme
 Combination Matrix|Kombinasyon Matrisi

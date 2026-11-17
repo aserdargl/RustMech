@@ -5,7 +5,8 @@ The first mesh is explicitly a stair-step, body-fitted Cartesian approximation.
 """
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
+from functools import lru_cache
 import json
 import math
 from pathlib import Path
@@ -17,7 +18,7 @@ import numpy as np
 import pyvista as pv
 from scipy import ndimage
 
-from model import Settings
+from model import Settings, validate_geometry
 from mesh_engine import geometry_threshold
 from structure_library import evaluate_priority_field
 
@@ -36,23 +37,56 @@ class FlowSettings:
     empty_pipe: bool = False
     distribution: str = "Ubuntu"
     foam_bashrc: str = "/usr/lib/openfoam/openfoam2606/etc/bashrc"
+    channel_shape: str = "cylinder"
+    width_mm: float = 6.0
+    height_mm: float = 6.0
+    section_length_mm: float = 0.0  # zero preserves the legacy cube-length section
+    specimen_offset_x_mm: float = 0.0
+    specimen_offset_y_mm: float = 0.0
+    specimen_offset_z_mm: float = 0.0
+    specimen_rotation_x_deg: float = 0.0
+    specimen_rotation_y_deg: float = 0.0
+    specimen_rotation_z_deg: float = 0.0
+    allow_bypass: bool = False
+    fluid_material_card: dict | None = None
+
+    @property
+    def cross_section(self):
+        return (self.diameter_mm, self.diameter_mm) if self.channel_shape == "cylinder" else (self.width_mm, self.height_mm)
+
+    @property
+    def hydraulic_diameter_mm(self):
+        return self.diameter_mm if self.channel_shape == "cylinder" else 2*self.width_mm*self.height_mm/(self.width_mm+self.height_mm)
+
+    @property
+    def cell_size_mm(self):
+        return min(self.cross_section)/self.cells_across
+
+    def section_length(self, specimen):
+        return self.section_length_mm or specimen.size
+
+    @property
+    def section_label(self):
+        return f"Ø {self.diameter_mm:g} mm" if self.channel_shape == "cylinder" else f"{self.width_mm:g} × {self.height_mm:g} mm"
 
     @property
     def reynolds(self):
-        return self.density * self.inlet_speed * self.diameter_mm * 0.001 / self.dynamic_viscosity
+        return self.density * self.inlet_speed * self.hydraulic_diameter_mm * 0.001 / self.dynamic_viscosity
 
     def validate(self, specimen: Settings):
         if specimen.test_profile != 'custom':
             raise ValueError('Standard test profiles define mechanical fixtures. Select Özel deney / Custom experiment for flow and thermal analysis.')
-        if specimen.imported_geometry_path:
-            raise ValueError('Imported geometry is currently supported in mechanical compression. Use a generated structure for flow and thermal analysis.')
-        for name in ("size", "cell_size", "solid_fraction"):
+        for name in (("size",) if specimen.imported_geometry_path else ("size", "cell_size", "solid_fraction")):
             value = getattr(specimen,name)
             if isinstance(value,bool) or not isinstance(value,(int,float)) or not math.isfinite(value) or value <= 0:
                 raise ValueError(f"Specimen {name} must be finite and positive.")
-        if specimen.solid_fraction >= 100 or specimen.cell_size > specimen.size:
+        if not specimen.imported_geometry_path and (specimen.solid_fraction >= 100 or specimen.cell_size > specimen.size):
             raise ValueError("Select a solid fraction below 100% and a TPMS period no larger than the specimen.")
-        for name in ("diameter_mm", "inlet_length_mm", "outlet_length_mm", "inlet_speed", "density", "dynamic_viscosity"):
+        if self.channel_shape not in ("cylinder", "rectangular"):
+            raise ValueError("Select a cylindrical or rectangular channel.")
+        if type(self.allow_bypass) is not bool:
+            raise ValueError("Bypass selection must be a boolean.")
+        for name in ("diameter_mm", "width_mm", "height_mm", "inlet_length_mm", "outlet_length_mm", "inlet_speed", "density", "dynamic_viscosity"):
             value = getattr(self, name)
             if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
                 raise ValueError(f"{name} must be finite and positive.")
@@ -60,15 +94,25 @@ class FlowSettings:
             value = getattr(self, name)
             if isinstance(value, bool) or not isinstance(value, int) or not lo <= value <= hi:
                 raise ValueError(f"{name} must be an integer between {lo} and {hi}.")
-        if specimen.structure_family != "tpms" and not self.empty_pipe:
-            raise ValueError("Select a TPMS geometry in the Model workspace first.")
-        if self.diameter_mm > specimen.size + 1e-9:
-            raise ValueError("Channel diameter must not exceed specimen cube size; this would leave bypass gaps.")
+        if not self.empty_pipe:
+            errors = validate_geometry(specimen, include_mesh=False)
+            if errors:
+                raise ValueError("\n".join(errors))
+        for name in ("section_length_mm", "specimen_offset_x_mm", "specimen_offset_y_mm", "specimen_offset_z_mm",
+                     "specimen_rotation_x_deg", "specimen_rotation_y_deg", "specimen_rotation_z_deg"):
+            value = getattr(self, name)
+            if type(value) not in (int, float) or not math.isfinite(value):
+                raise ValueError(f"{name} must be finite.")
+        if self.section_length_mm < 0:
+            raise ValueError("Section length must be positive, or zero for the Model cube length.")
+        if not self.empty_pipe and not self.allow_bypass and max(self.cross_section) > specimen.size + 1e-9:
+            raise ValueError("Channel section exceeds specimen cube size; enable intentional bypass to leave gaps.")
         if self.turbulence not in ("laminar", "kOmegaSST"):
             raise ValueError("Unsupported flow model.")
-        h = self.diameter_mm / self.cells_across
-        nz = sum(math.ceil(length / h) for length in (self.inlet_length_mm, specimen.size, self.outlet_length_mm))
-        if self.cells_across ** 2 * nz > 700000:
+        h = self.cell_size_mm
+        nx, ny = (math.ceil(value/h) for value in self.cross_section)
+        nz = sum(math.ceil(length / h) for length in (self.inlet_length_mm, self.section_length(specimen), self.outlet_length_mm))
+        if nx * ny * nz > 700000:
             raise ValueError("Mesh exceeds the first-version limit of 700,000 background cells. Reduce resolution or extension lengths.")
         if min(self.inlet_length_mm, self.outlet_length_mm) < 2 * h:
             raise ValueError("Each extension must contain at least two cells.")
@@ -78,62 +122,154 @@ class FlowSettings:
             raise ValueError("Select a WSL distribution and an absolute OpenFOAM bashrc path.")
 
 
-def build_flow_grid(specimen, flow):
+def build_flow_grid(specimen, flow, *, inspection=False):
     flow.validate(specimen)
-    n = flow.cells_across
-    d = flow.diameter_mm
-    h = d / n
-    x = np.linspace((specimen.size-d)/2, (specimen.size+d)/2, n+1)
+    width, height = flow.cross_section
+    h = flow.cell_size_mm
+    nx, ny = (math.ceil(value/h) for value in (width, height))
+    length = flow.section_length(specimen)
+    x = np.linspace((specimen.size-width)/2, (specimen.size+width)/2, nx+1)
+    y = np.linspace((specimen.size-height)/2, (specimen.size+height)/2, ny+1)
     zparts = [np.linspace(a, b, math.ceil((b-a)/h)+1) for a,b in
-              ((-flow.inlet_length_mm, 0), (0, specimen.size), (specimen.size, specimen.size+flow.outlet_length_mm))]
+              ((-flow.inlet_length_mm, 0), (0, length), (length, length+flow.outlet_length_mm))]
     z = np.concatenate([zparts[0], zparts[1][1:], zparts[2][1:]])
-    xc, zc = (x[:-1]+x[1:])/2, (z[:-1]+z[1:])/2
-    radius = (xc[:,None]-specimen.size/2)**2 + (xc[None,:]-specimen.size/2)**2
-    fluid = np.broadcast_to((radius < (d/2)**2)[:,:,None], (n,n,len(zc))).copy()
+    xc, yc, zc = (x[:-1]+x[1:])/2, (y[:-1]+y[1:])/2, (z[:-1]+z[1:])/2
+    radius = (xc[:,None]-specimen.size/2)**2 + (yc[None,:]-specimen.size/2)**2
+    section = radius < (width/2)**2 if flow.channel_shape == "cylinder" else np.ones((nx, ny), dtype=bool)
+    fluid = np.broadcast_to(section[:,:,None], (nx,ny,len(zc))).copy()
     solid = np.zeros_like(fluid)
-    inside = (zc > 0) & (zc < specimen.size)
+    bypass = np.zeros_like(fluid)
+    geometry_errors = []
+    inside = (zc > 0) & (zc < length)
+    bypass_cells = 0
     if not flow.empty_pipe:
-        # Reuse the established TPMS phase and threshold; do not retune geometry to the CFD mesh.
-        field = evaluate_priority_field(specimen, xc[:,None,None], xc[None,:,None], zc[inside][None,None,:])
-        solid[:,:,inside] = (field <= geometry_threshold(specimen)) & fluid[:,:,inside]
+        coordinates = np.stack(np.broadcast_arrays(xc[:,None,None], yc[None,:,None], zc[inside][None,None,:]), axis=-1)
+        sampled, envelope = sample_channel_solid(specimen, flow, coordinates.reshape(-1,3))
+        sampled, envelope = sampled.reshape(nx,ny,-1), envelope.reshape(nx,ny,-1)
+        bypass_cells = int((~envelope & fluid[:,:,inside]).sum())
+        bypass[:,:,inside] = ~envelope & fluid[:,:,inside]
+        if bypass_cells and not flow.allow_bypass and not inspection:
+            raise ValueError("Placement leaves channel cells outside the specimen envelope. Enable intentional bypass or change placement/section length.")
+        solid[:,:,inside] = sampled & fluid[:,:,inside]
         fluid &= ~solid
+        if not solid.any() and not inspection:
+            raise ValueError("Mesh does not resolve any specimen solid. Refine the channel mesh.")
         if not solid.any():
-            raise ValueError("Mesh does not resolve any TPMS solid. Increase cells across the diameter.")
+            geometry_errors.append("No specimen solid is resolved; inspect placement and refine thin features.")
     labels, count = ndimage.label(fluid)
     entrances = set(np.unique(labels[:,:,0])) - {0}
     exits = set(np.unique(labels[:,:,-1])) - {0}
     through = entrances & exits
+    if not through and not inspection:
+        raise ValueError("No face-connected fluid path from inlet to outlet. Refine the mesh or change the structure.")
     if not through:
-        raise ValueError("No face-connected water path from inlet to outlet. Refine the mesh or change TPMS geometry.")
+        geometry_errors.append("No face-connected fluid path from inlet to outlet.")
     # Blind but connected pores are retained. Only completely isolated cavities are excluded.
     isolated = fluid & ~np.isin(labels, list(through))
-    fluid &= ~isolated
+    isolated_ids = np.unique(labels[isolated])
+    counts = np.bincount(labels.ravel())
+    markers = []
+    for identifier in sorted(isolated_ids, key=lambda key:int(counts[key]), reverse=True)[:64]:
+        centres = np.argwhere(labels == identifier)
+        markers.append({"component":int(identifier),"cells":int(counts[identifier]),
+                        "centre_mm":[float(xc[centres[:,0]].mean()),float(yc[centres[:,1]].mean()),float(zc[centres[:,2]].mean())]})
+    if not inspection:
+        fluid &= ~isolated
     cells = np.argwhere(fluid)
-    point_shape = (n+1,n+1,len(z))
+    point_shape = (nx+1,ny+1,len(z))
     corners = np.array(((0,0,0),(1,0,0),(1,1,0),(0,1,0),(0,0,1),(1,0,1),(1,1,1),(0,1,1)))
     indices = cells[:,None,:] + corners[None,:,:]
     original = np.ravel_multi_index(indices.transpose(2,0,1), point_shape)
     unique, inverse = np.unique(original, return_inverse=True)
     ii,jj,kk = np.unravel_index(unique, point_shape)
-    points = np.column_stack((x[ii],x[jj],z[kk])) * .001
+    points = np.column_stack((x[ii],y[jj],z[kk])) * .001
     conn = inverse.reshape(-1,8)
     vtk_cells = np.column_stack((np.full(len(cells),8),conn)).ravel()
     grid = pv.UnstructuredGrid(vtk_cells, np.full(len(cells),pv.CellType.HEXAHEDRON), points)
     grid.cell_data["grid_i"] = cells[:,0]
     grid.cell_data["grid_j"] = cells[:,1]
     grid.cell_data["grid_k"] = cells[:,2]
+    grid.cell_data["GeometryIssue"] = np.where(isolated[tuple(cells.T)],2,
+                                                np.where(bypass[tuple(cells.T)],1,0)).astype(np.uint8)
+    dx, dy = width/nx, height/ny
     metadata = dict(fluid_cells=len(cells), isolated_cells=int(isolated.sum()), solid_cells=int(solid.sum()),
-                    effective_diameter_mm=2*math.sqrt(float(fluid[:,:,0].sum())*h*h/math.pi),
-                    inlet_area_m2=float(fluid[:,:,0].sum())*(h*.001)**2,
-                    specimen_solid_fraction=float(solid[:,:,inside].sum())/float((radius<(d/2)**2).sum()*inside.sum()),
-                    nominal_cell_mm=h, specimen_start_mm=0., specimen_end_mm=specimen.size,
+                    effective_diameter_mm=2*math.sqrt(float(fluid[:,:,0].sum())*dx*dy/math.pi),
+                    hydraulic_diameter_mm=flow.hydraulic_diameter_mm, channel_shape=flow.channel_shape,
+                    bypass_envelope_cells=bypass_cells,
+                    solid_components=int(ndimage.label(solid)[1]),
+                    isolated_fluid_components=len(isolated_ids), isolated_component_markers=markers,
+                    geometry_errors=geometry_errors, geometry_valid_for_flow=not geometry_errors,
+                    geometry_valid_for_cht=not geometry_errors and not isolated.any(),
+                    inlet_area_m2=float(fluid[:,:,0].sum())*dx*dy*1e-6,
+                    specimen_solid_fraction=float(solid[:,:,inside].sum())/float(section.sum()*inside.sum()),
+                    nominal_cell_mm=h, specimen_start_mm=0., specimen_end_mm=length,
                     z_centres_mm=zc.tolist(), warnings=[])
-    if not flow.empty_pipe and h > specimen.cell_size * min(specimen.solid_fraction,100-specimen.solid_fraction)/100/6:
-        metadata["warnings"].append("Thin TPMS walls/pores may be under-resolved. Compare finer meshes before interpreting pressure loss.")
+    if specimen.imported_geometry_path:
+        metadata["warnings"].append("Imported surface sampled at cell centres; refine to preserve thin walls, pore openings and connectivity.")
+    elif not flow.empty_pipe and h > specimen.cell_size * min(specimen.solid_fraction,100-specimen.solid_fraction)/100/6:
+        metadata["warnings"].append("Thin specimen walls/pores may be under-resolved. Compare finer meshes before interpreting pressure loss.")
     if flow.turbulence == "laminar" and flow.reynolds > 2000:
         metadata["warnings"].append("High pipe Reynolds number with laminar model; evaluate turbulence and pore-scale Reynolds numbers.")
-    metadata["warnings"].append("Cartesian stair-step cylinder and TPMS surfaces; no fitted boundary layers. Mesh independence is required.")
+    metadata["warnings"].append("Cartesian stair-step channel and specimen surfaces; no fitted boundary layers. Mesh independence is required.")
+    if bypass_cells:
+        metadata["warnings"].append(f"Intentional bypass: {bypass_cells} cells lie outside the placed specimen envelope.")
     return grid, metadata
+
+
+def export_geometry_inspection(specimen, flow, directory):
+    """Export all sampled fluid regions for inspection, without solver files."""
+    directory = Path(directory)
+    if directory.exists() and any(directory.iterdir()):
+        raise ValueError("Choose a new or empty inspection directory.")
+    grid, metadata = build_flow_grid(specimen, replace(flow,allow_bypass=True),inspection=True)
+    if metadata["bypass_envelope_cells"] and not flow.allow_bypass:
+        metadata["geometry_errors"].append("Specimen envelope leaves bypass gaps; reposition or explicitly allow them before solving.")
+    metadata["geometry_valid_for_flow"] = not metadata["geometry_errors"]
+    metadata["geometry_valid_for_cht"] = metadata["geometry_valid_for_flow"] and not metadata["isolated_cells"]
+    if metadata["isolated_cells"]:
+        metadata["warnings"].append("Isolated fluid cells are retained for inspection (red); they are excluded from CFD and unsupported in current CHT.")
+    metadata["warnings"].append("Inspection tests sampled connectivity; sub-cell walls, pores and self-intersections need surface/mesh refinement checks.")
+    directory.mkdir(parents=True,exist_ok=True)
+    grid.save(directory/"fluid_mesh.vtu")
+    manifest = dict(specimen=asdict(specimen),flow=asdict(flow),mesh=metadata,inspection_only=True,
+                    geometry_issue_legend={"0":"regular fluid","1":"outside specimen envelope","2":"not connected to both ends"})
+    (directory/"flow_case.json").write_text(json.dumps(manifest,indent=2,allow_nan=False),encoding="utf-8")
+    return manifest
+
+
+def sample_channel_solid(specimen, flow, points_mm):
+    """Sample the same finite cube in a translated/rotated channel section.
+
+    Rotations are extrinsic X, then Y, then Z, about the specimen centre.
+    Changing section length clips the specimen; it never stretches its cells.
+    """
+    ax, ay, az = np.radians([flow.specimen_rotation_x_deg, flow.specimen_rotation_y_deg,
+                            flow.specimen_rotation_z_deg])
+    cx, sx, cy, sy, cz, sz = np.cos(ax), np.sin(ax), np.cos(ay), np.sin(ay), np.cos(az), np.sin(az)
+    rotation = np.array([[cz,-sz,0],[sz,cz,0],[0,0,1]]) @ np.array([[cy,0,sy],[0,1,0],[-sy,0,cy]]) @ np.array([[1,0,0],[0,cx,-sx],[0,sx,cx]])
+    centre = np.array([specimen.size/2+flow.specimen_offset_x_mm,
+                       specimen.size/2+flow.specimen_offset_y_mm,
+                       flow.section_length(specimen)/2+flow.specimen_offset_z_mm])
+    local = (np.asarray(points_mm)-centre) @ rotation + specimen.size/2
+    envelope = ((local >= 0) & (local <= specimen.size)).all(axis=1)
+    solid = np.zeros(len(local), dtype=bool)
+    if envelope.any():
+        p = local[envelope]
+        if specimen.imported_geometry_path:
+            path = Path(specimen.imported_geometry_path).resolve()
+            stat = path.stat()
+            surface = _flow_surface(str(path), stat.st_mtime_ns, stat.st_size)
+            selected = pv.PolyData(p).select_interior_points(surface, method="signed_distance", check_surface=True)
+            solid[envelope] = np.asarray(selected.point_data["selected_points"], dtype=bool)
+        else:
+            solid[envelope] = evaluate_priority_field(specimen, p[:,0], p[:,1], p[:,2]) <= geometry_threshold(specimen)
+    return solid, envelope
+
+
+@lru_cache(maxsize=8)
+def _flow_surface(path, modified_ns, file_size):
+    from imported_geometry import read_surface
+    return read_surface(path, require_single=False)
 
 
 def _header(kind, name):
@@ -206,7 +342,7 @@ def export_flow_case(specimen, flow, directory):
     field("p","volScalarField","0 2 -2 0 0 0 0","0","type zeroGradient;","type fixedValue; value uniform 0;","type zeroGradient;")
     if flow.turbulence != "laminar":
         k = 1.5*(.05*flow.inlet_speed)**2
-        omega = math.sqrt(k)/(.09**.25*.07*flow.diameter_mm*.001)
+        omega = math.sqrt(k)/(.09**.25*.07*flow.hydraulic_diameter_mm*.001)
         for name,dim,value,wall in (("k","0 2 -2 0 0 0 0",k,"kqRWallFunction"),("omega","0 0 -1 0 0 0 0",omega,"omegaWallFunction"),("nut","0 2 -1 0 0 0 0",0,"nutkWallFunction")):
             inlet = "type calculated; value uniform 0;" if name=="nut" else f"type fixedValue; value uniform {value:.14g};"
             field(name,"volScalarField",dim,f"{value:.14g}",inlet,"type zeroGradient;",f"type {wall}; value uniform {value:.14g};")
@@ -220,7 +356,7 @@ def export_flow_case(specimen, flow, directory):
     _write(directory/"case.foam", "")
     manifest = dict(specimen=asdict(specimen),flow=asdict(flow),mesh=metadata,
                     pressure_units="Pa (OpenFOAM p multiplied by density)",velocity_units="m/s",
-                    geometry="TPMS phase clipped to a concentric cylinder, Z flow; specimen length = cube size",
+                    geometry=f"Placed finite specimen clipped to {flow.channel_shape} channel; +Z flow; section {flow.section_length(specimen):g} mm",
                     discretization="Cartesian stair-step finite volumes; no-slip walls; uniform velocity inlet; zero gauge pressure outlet")
     (directory/"flow_case.json").write_text(json.dumps(manifest,indent=2),encoding="utf-8")
     _write(directory/"Allrun", "#!/bin/bash\nset -eo pipefail\necho $$ > .runner.pid\ntrap 'rm -f .runner.pid' EXIT\ntest ! -f .cancel-request\ncheckMesh > log.checkMesh 2>&1\ngrep -q 'Mesh OK' log.checkMesh\ntest ! -f .cancel-request\nsimpleFoam > log.simpleFoam 2>&1\n")
@@ -321,7 +457,7 @@ def summarize_flow_case(directory):
         residuals[name] = float(value)
     centres = grid.cell_centers().points[:,2]*1000
     z = np.asarray(manifest["mesh"]["z_centres_mm"])
-    before,after = z[z<0][-1],z[z>manifest["specimen"]["size"]][0]
+    before,after = z[z<0][-1],z[z>manifest["mesh"].get("specimen_end_mm", manifest["specimen"]["size"])][0]
     def section(at):
         mask = np.isclose(centres,at,rtol=0,atol=1e-5)
         if not mask.any(): raise RuntimeError("Cannot locate pressure measurement section.")

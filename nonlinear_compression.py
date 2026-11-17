@@ -839,6 +839,7 @@ class RustMechDialog(QDialog):
         self._custom_experiment = settings if settings.test_profile == 'custom' else Settings()
         self.imported_geometry_path = settings.imported_geometry_path
         self.imported_geometry_name = settings.imported_geometry_name
+        self.imported_geometry_role = settings.imported_geometry_role
         self.imported_geometry_height = settings.size if settings.imported_geometry_path else None
         self.executor = ThreadPoolExecutor(
             max_workers=1, thread_name_prefix="gyroid-preview"
@@ -1507,10 +1508,25 @@ class RustMechDialog(QDialog):
         self.designs_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         designs_menu = QMenu(self.designs_button)
         designs_menu.addAction("Design Pool (Gitterburg)...", self._show_design_pool)
+        designs_menu.addAction("Import geometry for flow / thermal...", self.import_flow_geometry)
         designs_menu.addAction("Add current model to analysis queue", self._enqueue_current_model)
         designs_menu.addAction("Analysis queue...", self._show_analysis_queue)
         self.designs_button.setMenu(designs_menu)
         navigation.addWidget(self.designs_button)
+
+        from project_workspace import ProjectWorkspace
+        self.project_workspace = ProjectWorkspace(self)
+        self.project_button = QToolButton()
+        self.project_button.setObjectName("headerMenu")
+        self.project_button.setText("Project")
+        self.project_button.setAccessibleName("Analysis project")
+        self.project_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        project_menu = QMenu(self.project_button)
+        project_menu.addAction("Open project...", self.project_workspace.open)
+        project_menu.addAction("Save project", lambda: self.project_workspace.save())
+        project_menu.addAction("Save project as...", lambda: self.project_workspace.save(save_as=True))
+        self.project_button.setMenu(project_menu)
+        navigation.addWidget(self.project_button)
 
         self.display_mode_group = QFrame()
         self.display_mode_group.setObjectName("displayModeGroup")
@@ -1799,6 +1815,7 @@ class RustMechDialog(QDialog):
             self.display_mode_group.setVisible(not flow_active)
             self.show_platens_cb.setVisible(not flow_active)
             camera_controls.setVisible(not flow_active)
+        self._sync_workspace_context = sync_workspace_context
         self.workspace_tabs.currentChanged.connect(sync_workspace_context)
         self.workspace_tabs.tabBar().hide()
         layout.addWidget(toolbar_frame)
@@ -1828,7 +1845,7 @@ class RustMechDialog(QDialog):
         self.sidebar_toggle.setFixedWidth(
             max(self.sidebar_toggle.fontMetrics().horizontalAdvance(name)
                 for name in self.method_names) + 32)
-        navigation_buttons = (self.workspace_button, self.doe_button, self.designs_button)
+        navigation_buttons = (self.workspace_button, self.doe_button, self.designs_button, self.project_button)
         navigation_width = max(
             max(button.sizeHint().width() for button in navigation_buttons),
             max(self.workspace_button.fontMetrics().horizontalAdvance(name)
@@ -1898,7 +1915,7 @@ class RustMechDialog(QDialog):
         self.language_manager.localize_tree(self)
         self.sidebar_toggle.setFixedWidth(max(self.sidebar_toggle.fontMetrics().horizontalAdvance(translate(name))
                                              for name in self.method_names) + 32)
-        navigation = (self.workspace_button, self.doe_button, self.designs_button)
+        navigation = (self.workspace_button, self.doe_button, self.designs_button, self.project_button)
         width = max(button.fontMetrics().horizontalAdvance(button.text()) + 32 for button in navigation)
         for button in navigation:
             button.setFixedSize(width, CONTROL_HEIGHT)
@@ -1910,6 +1927,8 @@ class RustMechDialog(QDialog):
             if plotter is not None:
                 self.language_manager.localize_plotter(plotter)
         figure = getattr(self.thermal_workspace, 'figure', None)
+        self.flow_workspace.size_action_buttons()
+        self.thermal_workspace.size_action_buttons()
         if figure is not None:
             self.language_manager.localize_figure(figure)
 
@@ -2600,6 +2619,7 @@ class RustMechDialog(QDialog):
             specimen_architecture=self.architecture_combo.currentData(),
             imported_geometry_path=self.imported_geometry_path,
             imported_geometry_name=self.imported_geometry_name,
+            imported_geometry_role=self.imported_geometry_role,
             automatic_contact_parameters=self.automatic_contact.isChecked(),
             automatic_cores=self.automatic_cores.isChecked(),
             loading_mode=self.loading_mode_combo.currentData(),
@@ -2648,6 +2668,7 @@ class RustMechDialog(QDialog):
             path, height, name = result
             self.imported_geometry_path = path
             self.imported_geometry_name = name
+            self.imported_geometry_role = "compression"
             self.imported_geometry_height = height
             self.import_geometry_label.setText(name + ' | support / compression faces selected')
             size_control = self.controls['size']
@@ -2664,6 +2685,7 @@ class RustMechDialog(QDialog):
     def clear_imported_geometry(self):
         self.imported_geometry_path = ''
         self.imported_geometry_name = ''
+        self.imported_geometry_role = 'compression'
         self.imported_geometry_height = None
         self.import_geometry_label.setText('No imported geometry')
         self.controls['size'].setEnabled(True)
@@ -3090,17 +3112,52 @@ class RustMechDialog(QDialog):
             from design_pool import DesignPoolDialog
             self.design_pool = DesignPoolDialog(self)
             self.design_pool.geometry_prepared.connect(self._load_pool_geometry)
+            self.design_pool.flow_geometry_prepared.connect(self._load_flow_geometry)
         self.design_pool.open_pool()
 
     def _load_pool_geometry(self, path, height, name):
         settings = replace(self.collect(), imported_geometry_path=path,
-                           imported_geometry_name=name, size=height, test_profile="custom",
+                           imported_geometry_name=name, imported_geometry_role="compression", size=height, test_profile="custom",
                            mesh_type="TET4", tetra_strategy="netgen",
                            compression=min(self.controls["compression"].value(), height * 0.1))
         self.controls['size'].setRange(min(self.controls['size'].minimum(), height),
                                        max(self.controls['size'].maximum(), height))
         self.load_from_doe_row(settings)
         self.status.setText(f"{name}: configure material, mesh and solver; Designs > Add current model to analysis queue.")
+
+    def import_flow_geometry(self):
+        from PySide6.QtWidgets import QFileDialog
+        from imported_geometry import read_surface, prepare_general_surface, store_surface
+        if self.project_workspace.busy():
+            QMessageBox.information(self, "Geometry import", "Wait for the current operation to finish before replacing geometry.")
+            return
+        filename, _ = QFileDialog.getOpenFileName(self, "Import flow / thermal geometry (mm)", "",
+                                                 "Surface geometry (*.stl *.obj *.ply *.vtp)")
+        if not filename:
+            return
+        try:
+            surface, size = prepare_general_surface(read_surface(filename, require_single=False))
+            self._load_flow_geometry(store_surface(surface), size, Path(filename).name)
+        except (OSError, ValueError, RuntimeError) as error:
+            QMessageBox.warning(self, "Geometry import", str(error))
+
+    def _load_flow_geometry(self, path, size, name):
+        if self.project_workspace.busy():
+            QMessageBox.information(self,"Geometry import","Wait for the current operation to finish before replacing geometry.")
+            return
+        page = self.workspace_tabs.currentIndex()
+        settings = replace(self.collect(), imported_geometry_path=path, imported_geometry_name=name,
+                           imported_geometry_role="general", size=size, test_profile="custom",
+                           mesh_type="TET4", tetra_strategy="netgen")
+        self.controls["size"].setRange(min(self.controls["size"].minimum(), size), max(self.controls["size"].maximum(), size))
+        self.load_from_doe_row(settings, preview=False)
+        self.active_geometry = settings
+        self.preview = None
+        self._analysis_after_mesh = None
+        self._mesh_requested = False
+        self.plotter.clear()
+        self.workspace_tabs.setCurrentIndex(3 if page == 3 else 2)
+        self.status.setText(f"{name}: imported for flow/thermal. Set channel dimensions and placement; build or run explicitly.")
 
     def _ensure_analysis_queue(self):
         if self.analysis_queue_widget is None:
@@ -3156,7 +3213,7 @@ class RustMechDialog(QDialog):
         dialog.exec()
         dialog.deleteLater()
 
-    def load_from_doe_row(self, row_settings: Settings) -> None:
+    def load_from_doe_row(self, row_settings: Settings, *, preview=True) -> None:
         for combo,value in ((self.test_profile_combo,row_settings.test_profile),(self.architecture_combo,row_settings.specimen_architecture)):
             combo.blockSignals(True)
             combo.setCurrentIndex(max(0,combo.findData(value)))
@@ -3166,6 +3223,7 @@ class RustMechDialog(QDialog):
         self.controls['core_fraction'].blockSignals(False)
         self.imported_geometry_path = row_settings.imported_geometry_path
         self.imported_geometry_name = row_settings.imported_geometry_name
+        self.imported_geometry_role = row_settings.imported_geometry_role
         self.imported_geometry_height = row_settings.size if row_settings.imported_geometry_path else None
         self.import_geometry_label.setText(self.imported_geometry_name or 'No imported geometry')
         self._sync_import_controls()
@@ -3211,7 +3269,8 @@ class RustMechDialog(QDialog):
         self._sync_mesh_type()
         self._show_geometry_workspace()
         self._sync_test_profile_ui()
-        self.apply_geometry()
+        if preview:
+            self.apply_geometry()
 
     def reset_view(self, *_) -> None:
         self._set_camera_preset("iso")

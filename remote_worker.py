@@ -221,13 +221,15 @@ def _run_operation(request,output):
         make_surface(settings, on_progress=_stage).save(output/"surface.vtp")
         return dict(surface="surface.vtp")
     if operation.startswith(("flow_","thermal_")):
-        from flow_analysis import FlowSettings,export_flow_case,summarize_flow_case
+        from flow_analysis import FlowSettings,export_flow_case,export_geometry_inspection,summarize_flow_case
         from thermal_analysis import ThermalSettings,export_thermal_case,summarize_thermal_case
         flow = FlowSettings(**request["flow"])
         case = Path.cwd()/"solver_case"
         if operation.startswith("thermal_"):
             thermal = ThermalSettings(**request["thermal"])
             export_thermal_case(settings,flow,thermal,case)
+        elif operation == "flow_export" and request.get("inspection"):
+            export_geometry_inspection(settings,flow,case)
         else: export_flow_case(settings,flow,case)
         if operation.endswith("solve"):
             result = subprocess.run(["bash","Allrun"],cwd=case)

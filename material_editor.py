@@ -67,6 +67,7 @@ class MaterialEditor(SidebarGroupBox):
         self.setAccessibleName("Material")
         self.setTitle("Material")
         self.active_path = None
+        self.material_card = settings.material_card
         self.controls = {}
         self._stress_factor = 1.0
         content_layout = QVBoxLayout(self.content)
@@ -348,6 +349,7 @@ class MaterialEditor(SidebarGroupBox):
             "material_name": self.name.text().strip(),
             "material_model": self.model.currentData(),
             "hardening_curve": tuple(rows),
+            "material_card": self.material_card,
         }
 
     def material_settings(self) -> Settings:
@@ -423,10 +425,16 @@ class MaterialEditor(SidebarGroupBox):
                 QMessageBox.warning(self, "Cannot import curve", str(exc))
 
     def load_path(self, path: Path) -> None:
-        values = load_material(path)
+        from dataclasses import asdict
+        from material_library import read_material_card
+        import json
+        card = read_material_card(path)
+        legacy = path.suffix.lower() == ".json" and json.loads(path.read_text(encoding="utf-8-sig")).get("units") == "mm-N-MPa"
+        values = {**asdict(Settings()), **(load_material(path) if legacy else card.mechanical_values())}
         self.name.setText(values["material_name"])
         self.set_numeric_values(values)
         self.fill_curve(values["hardening_curve"])
+        self.material_card = values["material_card"] if legacy else card.to_dict()
         self.model.setCurrentIndex(self.model.findData(values["material_model"]))
         self.set_active_path(path)
         self.edit_button.setChecked(False)
@@ -434,7 +442,7 @@ class MaterialEditor(SidebarGroupBox):
 
     def load_file(self, *_) -> None:
         filename, _ = QFileDialog.getOpenFileName(
-            self, "Load material", str(ROOT / "materials"), "JSON (*.json)"
+            self, "Load material", str(ROOT / "materials"), "Material card (*.json *.csv)"
         )
         if filename:
             try:

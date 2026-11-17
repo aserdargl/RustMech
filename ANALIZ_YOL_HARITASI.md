@@ -8,6 +8,9 @@ Bu çalışma kaynak kod ve internet araştırmasına dayalı geliştirme planı
 
 ## Mevcut durum ve kod kanıtı
 
+Aşağıdaki envanter uygulama öncesi araştırma durumudur. Uygulama ilerlemesi
+son bölümde ayrıca tutulur.
+
 | Alan | Kaynakta bulunan durum | Hedef açısından sınır | Kanıt |
 | --- | --- | --- | --- |
 | Mekanik | MAPDL ve TRUBA/Kratos adaptörleri; basma, çekme ve üç nokta eğilme profilleri; doğrusal ve plastik malzeme modelleri | Genel montaj, çok malzemeli bölge ataması ve termal/akış yük aktarımı ortak sözleşmede yok | [solver_api.py](solver_api.py), [standard_tests.py](standard_tests.py), [model.py](model.py) |
@@ -129,6 +132,41 @@ Kaynaklara 17 Kasım 2026’da başvuruldu. Belgelerdeki araç yeteneği RustMec
 - **K6 — Etkin porous direnç:** OpenCFD’nin [DarcyForchheimer API belgesi](https://api.openfoam.com/2412/classFoam_1_1porosityModels_1_1DarcyForchheimer.html) hacimsel gözenekli direnç modelini tanımlar. RustMech’te kullanılacak katsayıların numune, yön ve akış rejimine göre kalibrasyonu ayrıca yapılmalıdır.
 - **K7 — İleri bağlaşım:** [preCICE OpenFOAM yapılandırması](https://precice.org/docs/adapters/openfoam/config/) ve [CalculiX adaptörü](https://precice.org/docs/adapters/calculix/) ayrık çözücü bağlaşımı için adaydır. CalculiX adaptör belgesinde desteklenen CalculiX sürümü 2.20 olarak belirtilir; güncel CalculiX sürümüyle otomatik uyum varsayılmamalıdır. Mevcut CHT’yi tamamlamak için bu yeni bağımlılık gerekli değildir.
 
-## Bu çalışmanın doğrulama kapsamı
+## İlk araştırmanın doğrulama kapsamı
 
-Uygulama kodu ve arayüz değiştirilmedi; bu teslim bir araştırma ve planlama belgesidir. Kaynak kanıtları, bağımlılık numaraları, tablo yapıları ve depo farkı gözden geçirildi. Canlı MAPDL/OpenFOAM/TRUBA analizi çalıştırılmadı. `C:/temp_test/full-suite-last-RustMech.txt` içindeki tarih 2026-11-17 olduğundan günlük tam test paketi tekrar çalıştırılmadı. Bu iş için yeni çalışma zamanı testi gerekli görülmedi.
+İlk araştırma tesliminde uygulama kodu ve arayüz değiştirilmedi. Kaynak kanıtları, bağımlılık numaraları, tablo yapıları ve depo farkı gözden geçirildi. O teslimde canlı MAPDL/OpenFOAM/TRUBA analizi çalıştırılmadı. `C:/temp_test/full-suite-last-RustMech.txt` içindeki tarih 2026-11-17 olduğundan günlük tam test paketi tekrar çalıştırılmadı.
+
+## Uygulama ilerlemesi
+
+17 Kasım 2026, sıralı uygulamanın ilk bölümü:
+
+| Madde | Uygulanan kapsam | Kalan sınır |
+| --- | --- | --- |
+| 01 | Ortak proje, kararlı geometri/bölge/malzeme/çalışma kimlikleri; mekanik, CFD ve CHT taslakları; eski dosyalardan göç; açık kaydet/aç | Bağımsız termal çalışma 10. adımla, genel yüzey atama 09. adımla genişleyecek |
+| 02 | Silindir/kare/dikdörtgen, bağımsız kesit ve dolgu bölgesi uzunluğu, giriş/çıkış uzantıları, 3B öteleme/dönme, açık bypass seçimi | Ağ halen basamaklı; kanal akış ekseni +Z |
+| 03 | TPMS, lattice, porous için ortak CFD/CHT örnekleme; seed tekrarlanabilirliği | İzole akışkan cepleri CHT'de desteklenmiyor |
+| 04 | Genel kapalı yüzey importu; birden fazla kapalı bileşen; aynı yüzeyden CFD ve CHT katı/akışkan ayrımı | STEP/BREP sonraki adım; mekanik için yüzey hazırlama ayrıca gerekli |
+| 05 | Gitterburg havuzunda tek tasarımı yüzey seçmeden akış/termale yükleme | Çok bölgeli paket ve tüm fiziklere ortak kuyruk 14/23. adımlarda |
+| 06 | Ortak SI katı/akışkan kartları, eski JSON uyumu, CSV sıcaklık tabloları, açık Model→CHT malzeme kullanımı; kaynak kartın proje/vakada saklanması | Tablo referans sıcaklıkta sabit değere çevrilir; çözüm boyunca değişen özellikler 17. adımda |
+| 07 | Çözüm başlatmayan yerel/uzak geometri incelemesi; kopuk akışkan bileşenleri ve bypass için 3B işaretler; katı bileşen sayısı; tıkalı kanalın da incelenebilmesi | Minimum fiziksel duvar/gözenek kalınlığı ve yüzeyin kendiyle kesişmesi için kesin yüzey kontrolleri henüz tamamlanmadı |
+
+Gerçek OpenFOAM kontrolü `tools/verify_channel_pipeline.py` ile çalıştırıldı.
+Kare kanalda 8 ve 16 hücre/kısa kenar için analitik basınç kaybı hatası
+sırasıyla %5,55 ve %1,47; iki çözüm de yakınsadı. Dikdörtgen BCC ve silindirik
+Gaussian Random Field CHT eş sıcaklık kontrolleri tamamlandı; en büyük sıcaklık
+hataları sırasıyla 9,4e-8 ve 1,25e-7 °C oldu. Bu küçük referanslar üretim
+numunesinin ağ bağımsızlığı veya deneysel doğrulaması değildir.
+
+Genel içe aktarılan katıyla ayrıca CFD yakınsaması ve CHT eş sıcaklık kontrolü
+`tools/verify_channel_pipeline.py --imported` ile geçti; en büyük sıcaklık
+hatası 6,8e-8 °C oldu. Mekanik veya canlı TRUBA çözümü bu aşamada çalıştırılmadı.
+
+İlgili dosya, geometri, malzeme ve arayüz testleri aşama bazında çalıştırılır.
+Tam paket için mevcut 2026-11-17 günlük kaydı nedeniyle tekrar koşulmaz.
+
+İlk uygulama grubunun son kontrolünde 87 çekirdek/Qt testi ve ayrı süreçlerde
+çalıştırılan 24 masaüstü testi geçti. Yerel/uzak inceleme, eski kayıt göçü,
+genel import, malzeme tabloları ve pencere/bölücü durumu kapsandı. Dar pencere
+ve gerçek VTK geometri inceleme görünümü ayrıca render edilip gözden geçirildi.
+Yeni özellikler kaynak sürümdedir; dağıtım EXE'sinin yeniden paketlenmesi 29.
+madde kapsamında henüz yapılmadı.

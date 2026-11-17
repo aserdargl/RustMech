@@ -78,8 +78,8 @@ def make_surface(settings: Settings, *, surface_backend="flying_edges", chunked=
         return make_standard_surface(settings)
     if settings.imported_geometry_path:
         from imported_geometry import read_surface
-        surface = read_surface(settings.imported_geometry_path)
-        if not np.isclose(surface.bounds[4], 0, atol=settings.size * 1e-6) or not np.isclose(surface.bounds[5], settings.size, atol=settings.size * 1e-6):
+        surface = read_surface(settings.imported_geometry_path, require_single=settings.imported_geometry_role == 'compression')
+        if settings.imported_geometry_role == 'compression' and (not np.isclose(surface.bounds[4], 0, atol=settings.size * 1e-6) or not np.isclose(surface.bounds[5], settings.size, atol=settings.size * 1e-6)):
             raise ValueError('Imported geometry height has changed. Import it again.')
         return surface
     n = max(4, int(np.ceil(settings.size / settings.surface_resolution)))
@@ -326,6 +326,7 @@ def preview_key(settings: Settings) -> tuple:
         settings.tetra_strategy,
         settings.imported_geometry_path,
         settings.imported_geometry_name,
+        settings.imported_geometry_role,
         settings.test_profile, settings.specimen_architecture, settings.core_fraction,
     )
 

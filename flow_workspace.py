@@ -1,5 +1,5 @@
 """Compact cylindrical-channel CFD workspace using the shared Datenburg controls."""
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import datetime
 import json
 from pathlib import Path
@@ -12,10 +12,10 @@ from PySide6.QtCore import QSettings, Qt, QTimer, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QFileDialog, QFormLayout, QHBoxLayout,
                               QLabel, QLineEdit, QPushButton, QScrollArea,
-                              QSplitter, QVBoxLayout, QWidget)
+                              QSplitter, QVBoxLayout, QWidget, QSizePolicy)
 
 from analysis_process import AnalysisProcess
-from flow_analysis import FlowSettings, export_flow_case, execute_flow_case, stop_flow_case
+from flow_analysis import FlowSettings, export_flow_case, export_geometry_inspection, execute_flow_case, stop_flow_case
 from model import ROOT
 from preview_viewport import create_preview_viewport
 from studio_style import CompactDoubleSpinBox, CONTROL_HEIGHT, configure_form, field_label
@@ -53,10 +53,10 @@ class FlowWorkspace(QWidget):
         left = QVBoxLayout(self.panel)
         left.setContentsMargins(6,4,6,4)
         left.setSpacing(3)
-        heading = QLabel("Cylindrical channel · Isothermal CFD")
+        heading = QLabel("Channel · Isothermal CFD")
         heading.setWordWrap(True)
         left.addWidget(heading)
-        note = QLabel("Uses the current Model TPMS, clipped to a concentric cylinder. Flow is along +Z. Specimen length = Model cube size. Geometry: mm; water: SI units.")
+        note = QLabel("Uses the current Model specimen in a cylindrical or rectangular channel. Flow is along +Z. Section length 0 uses the Model cube size. Placement rotates the finite specimen without stretching it. Geometry: mm; fluid: SI units.")
         note.setObjectName("mutedHintLabel")
         note.setWordWrap(True)
         left.addWidget(note)
@@ -70,14 +70,30 @@ class FlowWorkspace(QWidget):
             defaults = FlowSettings(**{**asdict(defaults),**{key:value for key,value in saved.items() if key in asdict(defaults)}})
         except (ValueError,TypeError,AttributeError):
             pass
+        self.fluid_material_card = defaults.fluid_material_card
+        self.channel_shape = CompactComboBox()
+        self.channel_shape.addItem("Cylinder", "cylinder")
+        self.channel_shape.addItem("Square / rectangular", "rectangular")
+        self.channel_shape.setCurrentIndex(max(0, self.channel_shape.findData(defaults.channel_shape)))
+        self.channel_shape.currentIndexChanged.connect(self.inputs_changed)
+        form.addRow(field_label("Channel section", self.channel_shape), self.channel_shape)
         for name,label,lo,hi in (
             ("diameter_mm","Diameter / mm",.01,10000),
+            ("width_mm","Width / mm",.01,10000),
+            ("height_mm","Height / mm",.01,10000),
+            ("section_length_mm","Insert section / mm",0,100000),
             ("inlet_length_mm","Inlet extension / mm",.01,100000),
             ("outlet_length_mm","Outlet extension / mm",.01,100000),
+            ("specimen_offset_x_mm","Specimen X / mm",-100000,100000),
+            ("specimen_offset_y_mm","Specimen Y / mm",-100000,100000),
+            ("specimen_offset_z_mm","Specimen Z / mm",-100000,100000),
+            ("specimen_rotation_x_deg","Rotation X / °",-360,360),
+            ("specimen_rotation_y_deg","Rotation Y / °",-360,360),
+            ("specimen_rotation_z_deg","Rotation Z / °",-360,360),
             ("inlet_speed","Inlet speed / m/s",.000001,100),
             ("density","Density / kg/m³",.001,100000),
             ("dynamic_viscosity","Viscosity / Pa·s",.00000001,1000),
-            ("cells_across","Cells / diameter",8,128),
+            ("cells_across","Cells / narrow side",8,128),
             ("iterations","Max iterations",20,20000)):
             control = CompactSpinBox() if name in ("cells_across","iterations") else CompactDoubleSpinBox()
             if isinstance(control,CompactDoubleSpinBox): control.setDecimals(8)
@@ -98,6 +114,18 @@ class FlowWorkspace(QWidget):
         self.empty.setChecked(defaults.empty_pipe)
         self.empty.toggled.connect(self.inputs_changed)
         form.addRow(self.empty)
+        self.allow_bypass = QCheckBox("Allow intentional bypass")
+        self.allow_bypass.setToolTip("Allow channel cells outside the placed specimen envelope. Gaps around the specimen can strongly change pressure drop and heat transfer.")
+        self.allow_bypass.setChecked(defaults.allow_bypass)
+        self.allow_bypass.toggled.connect(self.inputs_changed)
+        form.addRow(self.allow_bypass)
+        self.load_fluid_button = QPushButton("Load fluid material...")
+        self.load_fluid_button.setAutoDefault(False)
+        self.load_fluid_button.setDefault(False)
+        self.load_fluid_button.setObjectName("secondaryActionBtn")
+        self.load_fluid_button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        self.load_fluid_button.clicked.connect(self.load_fluid_material)
+        form.addRow(self.load_fluid_button)
         self.distribution = QLineEdit(defaults.distribution)
         self.bashrc = QLineEdit(defaults.foam_bashrc)
         self.bashrc.setToolTip("Absolute Linux path to the OpenCFD OpenFOAM environment (simpleFoam).")
@@ -126,7 +154,13 @@ class FlowWorkspace(QWidget):
         self.stop.setEnabled(False)
         self.stop.clicked.connect(self.cancel)
         left.addWidget(self.stop)
-        warning = QLabel("The first CFD mesh approximates cylinder and TPMS surfaces with Cartesian steps. Refine and compare pressure loss before using results. SST uses wall functions; near-wall resolution needs separate validation. Temperature coupling will be added later.")
+        self.inspect_button = QPushButton("Inspect geometry (no solve)")
+        self.inspect_button.setAutoDefault(False)
+        self.inspect_button.setDefault(False)
+        self.inspect_button.setObjectName("secondaryActionBtn")
+        self.inspect_button.clicked.connect(lambda: self._start(False,inspection=True))
+        left.addWidget(self.inspect_button)
+        warning = QLabel("Channel and specimen surfaces use Cartesian steps. Refine and compare pressure loss before using results. SST uses wall functions; near-wall resolution needs separate validation. Use Thermal (CHT) for coupled heat transfer.")
         warning.setObjectName("mutedHintLabel")
         warning.setWordWrap(True)
         left.addWidget(warning)
@@ -140,7 +174,7 @@ class FlowWorkspace(QWidget):
         right_layout.setSpacing(2)
         bar = QHBoxLayout()
         self.view = CompactComboBox()
-        self.view.addItems(("Fluid domain cutaway","Speed · central slice","Pressure · central slice","Speed · volume cutaway","Pressure · volume cutaway","Streamlines"))
+        self.view.addItems(("Fluid domain cutaway","Speed · central slice","Pressure · central slice","Speed · volume cutaway","Pressure · volume cutaway","Streamlines","Geometry diagnostics"))
         self.view.currentIndexChanged.connect(self.render)
         bar.addWidget(self.view)
         self.case_label = QLabel("No flow case yet")
@@ -175,23 +209,67 @@ class FlowWorkspace(QWidget):
 
     def collect(self):
         return FlowSettings(**{key:control.value() for key,control in self.controls.items()},
+                            fluid_material_card=self.fluid_material_card,
+                            channel_shape=self.channel_shape.currentData(),allow_bypass=self.allow_bypass.isChecked(),
                             turbulence=self.model.currentData(),empty_pipe=self.empty.isChecked(),
                             distribution=self.distribution.text().strip(),foam_bashrc=self.bashrc.text().strip())
+
+    def load_fluid_material(self):
+        filename, _ = QFileDialog.getOpenFileName(self,"Load fluid material",str(ROOT/"materials"),"Material card (*.json *.csv)")
+        if filename:
+            try:
+                self.load_fluid_material_path(filename)
+            except (OSError, ValueError, TypeError) as error:
+                self.status.setText(str(error))
+
+    def load_fluid_material_path(self, path):
+        from material_library import read_material_card
+        card = read_material_card(path,kind="fluid")
+        if card.kind != "fluid":
+            raise ValueError("Select a fluid material card.")
+        thermal = getattr(self,"thermal_controls",{})
+        temperature = thermal["inlet_temperature_c"].value()+273.15 if thermal else 293.15
+        required = ("density","dynamic_viscosity","heat_capacity","conductivity") if thermal else ("density","dynamic_viscosity")
+        values = card.evaluate(temperature,required)
+        assignments = [(self.controls[key], values[key]) for key in ("density","dynamic_viscosity")]
+        if thermal:
+            assignments += [(thermal["water_cp"], values["heat_capacity"]),
+                            (thermal["water_conductivity"], values["conductivity"])]
+        for control, value in assignments:
+            if not control.minimum() <= value <= control.maximum():
+                raise ValueError("Material value is outside the supported input range.")
+        for control, value in assignments:
+            control.setValue(value)
+        self.fluid_material_card = card.to_dict()
+        self.inputs_changed()
+        self.status.setText(f"{card.name}: constant properties evaluated at {temperature:g} K. Source tables retained in the case.")
 
     def inputs_changed(self,*_):
         if not hasattr(self,"info"): return
         flow = self.collect()
         self.preferences.setValue(self.SETTINGS_KEY,json.dumps(asdict(flow)))
         self.preferences.sync()
-        self.info.setText(f"Pipe Reynolds ≈ {flow.reynolds:.5g}\nNominal cell: {flow.diameter_mm/flow.cells_across:.5g} mm. Inlet velocity is the mean over the discretized pipe inlet; pore velocity is solved.")
+        if hasattr(self,"inspect_button"):
+            self.size_action_buttons()
+        form = self.input_panel.layout()
+        form.setRowVisible(self.controls["diameter_mm"], flow.channel_shape == "cylinder")
+        for key in ("width_mm", "height_mm"):
+            form.setRowVisible(self.controls[key], flow.channel_shape == "rectangular")
+        self.info.setText(f"Re (hydraulic diameter) ≈ {flow.reynolds:.5g}\nDh: {flow.hydraulic_diameter_mm:.5g} mm · nominal cell: {flow.cell_size_mm:.5g} mm. Inlet velocity is the mean over the discretized inlet; pore velocity is solved.")
         if self.display_directory:
             self.status.setText("Inputs changed. The displayed case keeps its saved geometry and flow conditions; build/run to apply changes.")
 
-    def _start(self,solve):
+    def size_action_buttons(self):
+        buttons = [*self.buttons,self.stop,self.inspect_button]
+        width = max(button.fontMetrics().horizontalAdvance(button.text()) for button in buttons)+24
+        for button in buttons:
+            button.setFixedSize(width,CONTROL_HEIGHT)
+
+    def _start(self,solve,*,inspection=False):
         if self.job is not None: return
         try:
             specimen,flow = self.settings_provider(),self.collect()
-            flow.validate(specimen)
+            (replace(flow,allow_bypass=True) if inspection else flow).validate(specimen)
             directory = ROOT/"results"/("Flow_"+datetime.now().strftime("%Y%m%d_%H%M%S_")+uuid.uuid4().hex[:8])
             self.case_directory = directory
             self.submitted_flow = flow
@@ -202,15 +280,19 @@ class FlowWorkspace(QWidget):
                 from truba_remote import run_remote_operation
                 context,auth = controller.require("flow" if solve else "mesh")
                 request = dict(operation="flow_solve" if solve else "flow_export",settings=asdict(specimen),flow=asdict(flow))
+                if inspection:
+                    request["inspection"] = True
                 self.job = AnalysisProcess(run_remote_operation,request,context,remote_auth=auth)
             else:
-                self.job = AnalysisProcess(execute_flow_case if solve else export_flow_case,specimen,flow,str(directory))
+                target = export_geometry_inspection if inspection else execute_flow_case if solve else export_flow_case
+                self.job = AnalysisProcess(target,specimen,flow,str(directory))
         except Exception as error:
             self.status.setText(str(error))
             return
         self.input_panel.setEnabled(False)
         for button in self.buttons: button.setEnabled(False)
         self.stop.setEnabled(True)
+        self.inspect_button.setEnabled(False)
         self.status.setText("Checking OpenFOAM and building the channel…" if solve else "Building fluid mesh and exporting OpenFOAM case…")
         self.timer.start()
 
@@ -228,6 +310,7 @@ class FlowWorkspace(QWidget):
         controller = getattr(self,"remote_controller",None)
         if self.job is not None: return
         remote = bool(controller is not None and controller.requested)
+        self.inspect_button.setEnabled(not remote or (controller.ready and controller.capabilities.get("mesh",False)))
         for index,capability in ((0,"mesh"),(1,"thermal" if hasattr(self,"thermal_controls") else "flow")):
             available = not remote or (controller.ready and controller.capabilities.get(capability,False))
             self.buttons[index].setEnabled(available)
@@ -291,7 +374,10 @@ class FlowWorkspace(QWidget):
         self.grid = pv.read(result if result.exists() else directory/"fluid_mesh.vtu")
         self.display_directory = directory
         self.manifest = manifest
-        spec,flow = manifest["specimen"],manifest["flow"]
+        spec,flow = manifest["specimen"],asdict(FlowSettings(**manifest["flow"]))
+        self.channel_shape.setCurrentIndex(self.channel_shape.findData(flow["channel_shape"]))
+        self.allow_bypass.setChecked(flow["allow_bypass"])
+        self.fluid_material_card = flow["fluid_material_card"]
         for key,control in self.controls.items():
             control.setValue(flow[key])
         self.model.setCurrentIndex(self.model.findData(flow["turbulence"]))
@@ -299,7 +385,9 @@ class FlowWorkspace(QWidget):
         self.distribution.setText(flow["distribution"])
         self.bashrc.setText(flow["foam_bashrc"])
         self.inputs_changed()
-        self.case_label.setText(f"Saved case: {'Empty pipe' if flow['empty_pipe'] else spec['structure_name']} · Ø {flow['diameter_mm']:g} × {spec['size']:g} mm · {flow['inlet_speed']:g} m/s · {flow['turbulence']}")
+        config = FlowSettings(**flow)
+        name = spec.get("imported_geometry_name") or (Path(spec["imported_geometry_path"]).name if spec.get("imported_geometry_path") else spec["structure_name"])
+        self.case_label.setText(f"Saved case: {'Empty channel' if flow['empty_pipe'] else name} · {config.section_label} · {flow['inlet_speed']:g} m/s · {flow['turbulence']}")
         self.case_label.setToolTip("Displayed results use this saved case. A new run uses the current Model workspace geometry and the flow inputs at left.")
         summary_path = directory/"flow_summary.json"
         if summary_path.exists():
@@ -317,6 +405,14 @@ class FlowWorkspace(QWidget):
             self.results.setText(f"{mesh['fluid_cells']:,} fluid cells · actual inlet-equivalent diameter: {mesh['effective_diameter_mm']:.5g} mm\nSampled cylinder solid: {mesh['specimen_solid_fraction']*100:.4g}% · isolated cavity cells excluded: {mesh['isolated_cells']}\n"+"\n".join(mesh["warnings"]))
             self.status.setText("Case exported; no CFD solve performed. "+str(directory))
             self.view.setCurrentIndex(0)
+        if manifest.get("inspection_only"):
+            mesh = manifest["mesh"]
+            self.results.setText(f"GEOMETRY INSPECTION · flow ready: {mesh['geometry_valid_for_flow']} · CHT ready: {mesh['geometry_valid_for_cht']}\n"
+                                 f"Solid components: {mesh['solid_components']} · isolated fluid components: {mesh['isolated_fluid_components']}\n"+
+                                 "Blue: regular fluid · Orange: outside specimen envelope · Red: isolated fluid\n"+
+                                 "\n".join(mesh["geometry_errors"]+mesh["warnings"]))
+            self.view.setCurrentIndex(6)
+            self.status.setText("Geometry inspection saved. No solver files were generated.")
         self.render()
         self.plotter.view_isometric()
         self.plotter.reset_camera()
@@ -326,20 +422,39 @@ class FlowWorkspace(QWidget):
         try:
             self.plotter.clear()
             self.plotter.add_axes()
-            grid = self.grid.copy()
+            view = self.view.currentIndex()
+            source = self.grid
+            if view == 6 and "GeometryIssue" not in source.cell_data:
+                path = self.display_directory/"fluid_mesh.vtu" if self.display_directory else None
+                if path is not None and path.exists():
+                    source = pv.read(path)
+                if "GeometryIssue" not in source.cell_data:
+                    self.status.setText("Rebuild or inspect this case to obtain geometry diagnostics.")
+                    return
+            grid = source.copy()
             grid.points *= 1000
             centre = np.asarray(grid.center)
-            diameter = self.manifest["flow"]["diameter_mm"]
+            config = FlowSettings(**self.manifest["flow"])
+            width, height = config.cross_section
             specimen = self.manifest["specimen"]
             # Mark the specimen interval even when long entrance/exit sections dominate the view.
             angles = np.linspace(0,2*np.pi,65)
-            for z in (0,specimen["size"]):
-                points = np.column_stack((specimen["size"]/2+diameter/2*np.cos(angles),
-                                          specimen["size"]/2+diameter/2*np.sin(angles),np.full_like(angles,z)))
+            for z in (0,self.manifest["mesh"].get("specimen_end_mm",specimen["size"])):
+                if config.channel_shape == "cylinder":
+                    points = np.column_stack((specimen["size"]/2+width/2*np.cos(angles),
+                                              specimen["size"]/2+height/2*np.sin(angles),np.full_like(angles,z)))
+                else:
+                    points = np.array([[specimen["size"]/2+sx*width/2,specimen["size"]/2+sy*height/2,z]
+                                       for sx,sy in ((-1,-1),(1,-1),(1,1),(-1,1),(-1,-1))])
                 self.plotter.add_mesh(pv.lines_from_points(points),color="#c47b28",line_width=2)
-            view = self.view.currentIndex()
             has_result = "Speed_m_s" in grid.cell_data
-            if view==0 or not has_result:
+            if view==6 and "GeometryIssue" in grid.cell_data:
+                self.plotter.add_mesh(grid,scalars="GeometryIssue",cmap=["#93c5fd","#f59e0b","#dc2626"],
+                                      clim=(0,2),opacity=.65,show_scalar_bar=False)
+                markers = self.manifest["mesh"].get("isolated_component_markers",[])
+                if markers:
+                    self.plotter.add_mesh(pv.PolyData(np.asarray([m["centre_mm"] for m in markers])),color="#dc2626",point_size=12,render_points_as_spheres=True)
+            elif view==0 or not has_result:
                 self.plotter.add_mesh(grid.clip(normal="x",origin=centre),color="#8aafc8",show_edges=True,edge_color="#526174",opacity=.5)
             else:
                 scalar = "Pressure_Pa" if view in (2,4) else "Speed_m_s"
@@ -348,7 +463,8 @@ class FlowWorkspace(QWidget):
                     # Trace in SI coordinates so integration lengths remain physical.
                     data = self.grid.cell_data_to_point_data()
                     z = data.bounds[4]+self.manifest["mesh"]["nominal_cell_mm"]*.001
-                    d = self.manifest["flow"]["diameter_mm"]*.001
+                    config = FlowSettings(**self.manifest["flow"])
+                    d = min(config.cross_section)*.001
                     c = data.center
                     seeds = pv.Disc(center=(c[0],c[1],z),inner=0,outer=d*.4,normal=(0,0,1),r_res=3,c_res=16)
                     traces = data.streamlines_from_source(seeds,vectors="Velocity_m_s",integration_direction="forward",max_length=data.length*5)

@@ -8,18 +8,19 @@ from PySide6.QtWidgets import (QAbstractItemView, QApplication, QDialog,
                               QTableWidget, QTableWidgetItem, QVBoxLayout)
 
 from design_exchange import list_designs, pool_directory, read_design
-from imported_geometry import read_surface, store_surface
+from imported_geometry import read_surface, store_surface, prepare_general_surface
 from studio_style import ActionFlowLayout, STUDIO_STYLESHEET
 from window_state import install_window_state
 
 
-def load_pool_surface(identifier):
+def load_pool_surface(identifier, require_single=True):
     data, path = read_design(identifier, verify=True)
-    return data, read_surface(path)
+    return data, read_surface(path, require_single=require_single)
 
 
 class DesignPoolDialog(QDialog):
     geometry_prepared = Signal(str, float, str)
+    flow_geometry_prepared = Signal(str, float, str)
 
     def __init__(self, parent=None):
         super().__init__(parent, Qt.WindowType.Window)
@@ -34,6 +35,7 @@ class DesignPoolDialog(QDialog):
         self.executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="design-pool")
         self.future = None
         self.pending = []
+        self.preparation_mode = "mechanical"
         self.entries = []
         self._listing = None
         layout = QVBoxLayout(self)
@@ -55,11 +57,13 @@ class DesignPoolDialog(QDialog):
         actions = ActionFlowLayout()
         self.prepare = QPushButton("Configure selected...")
         self.prepare.clicked.connect(self.prepare_selected)
+        self.prepare_flow = QPushButton("Use for flow / thermal")
+        self.prepare_flow.clicked.connect(self.prepare_flow_selected)
         self.refresh_button = QPushButton("Refresh")
         self.refresh_button.clicked.connect(self.refresh)
         close = QPushButton("Close")
         close.clicked.connect(self.close)
-        for button in (self.prepare, self.refresh_button, close):
+        for button in (self.prepare, self.prepare_flow, self.refresh_button, close):
             button.setAutoDefault(False)
             button.setDefault(False)
             actions.addWidget(button)
@@ -120,6 +124,7 @@ class DesignPoolDialog(QDialog):
     def _selection_changed(self):
         selected = self.selected_ids()
         self.prepare.setEnabled(bool(selected) and self.future is None)
+        self.prepare_flow.setEnabled(len(selected) == 1 and self.future is None)
         self.details.setText(f"{len(selected)} selected. Each design is configured separately; the next opens after adding the current one to the queue."
                              if selected else "No design selected.")
 
@@ -127,7 +132,18 @@ class DesignPoolDialog(QDialog):
         if self.future is not None:
             return
         self.pending = self.selected_ids()
+        self.preparation_mode = "mechanical"
         self.prepare_next()
+
+    def prepare_flow_selected(self):
+        selected = self.selected_ids()
+        if self.future is not None or len(selected) != 1:
+            return
+        self.pending.clear()
+        self.preparation_mode = "flow"
+        self.status.setText("Checking geometry and transfer integrity...")
+        self.future = self.executor.submit(load_pool_surface, selected[0], False)
+        self._selection_changed()
 
     def prepare_next(self):
         if not self.pending or self.future is not None:
@@ -135,6 +151,7 @@ class DesignPoolDialog(QDialog):
         identifier = self.pending.pop(0)
         self.status.setText("Checking geometry and transfer integrity...")
         self.prepare.setEnabled(False)
+        self.prepare_flow.setEnabled(False)
         self.future = self.executor.submit(load_pool_surface, identifier)
 
     def _poll(self):
@@ -143,6 +160,12 @@ class DesignPoolDialog(QDialog):
         future, self.future = self.future, None
         try:
             data, surface = future.result()
+            if self.preparation_mode == "flow":
+                surface, size = prepare_general_surface(surface)
+                path = store_surface(surface)
+                self.hide()
+                self.flow_geometry_prepared.emit(path, size, data["name"])
+                return
             from geometry_import_dialog import GeometryImportDialog
             picker = GeometryImportDialog(surface, data["name"], self)
             picker.setStyleSheet(STUDIO_STYLESHEET)

@@ -52,6 +52,21 @@ class DesignPoolTests(unittest.TestCase):
     def send(self, name="Gitter specimen"):
         return publish_design(name, lambda path: self.mesh.save(path), {"source_mode": "Normal"})
 
+    def test_flow_preparation_emits_general_geometry_without_mechanical_picker(self):
+        data = self.send()
+        dialog = DesignPoolDialog()
+        self.windows.append(dialog)
+        spy = QSignalSpy(dialog.flow_geometry_prepared)
+        future = Future()
+        future.set_result(load_pool_surface(data["id"], False))
+        dialog.preparation_mode = "flow"
+        dialog.future = future
+        with patch("geometry_import_dialog.GeometryImportDialog", side_effect=AssertionError("mechanical picker")), patch("design_pool.store_surface", return_value="general.vtp"):
+            dialog._poll()
+        self.assertEqual(spy.count(), 1)
+        self.assertEqual(spy.at(0), ["general.vtp",6.0,data["name"]])
+        self.assertFalse(dialog.pending)
+
     def settings(self):
         data = self.send()
         _, surface = load_pool_surface(data["id"])

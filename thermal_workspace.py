@@ -11,10 +11,11 @@ from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
 from PySide6.QtCore import Qt,QTimer
 from PySide6.QtWidgets import (QFileDialog,QFormLayout,QHBoxLayout,QLabel,QPushButton,
-                              QSlider,QSplitter,QWidget)
+                              QSlider,QSplitter,QWidget,QSizePolicy)
 
 from analysis_process import AnalysisProcess
 from flow_workspace import FlowWorkspace
+from flow_analysis import FlowSettings
 from model import ROOT
 from studio_style import CompactSpinBox, CompactDoubleSpinBox,configure_form,field_label,CONTROL_HEIGHT
 from thermal_analysis import ThermalSettings,execute_thermal_case,export_thermal_case
@@ -31,9 +32,10 @@ class ThermalWorkspace(FlowWorkspace):
         self.solid_grid = None
         super().__init__(settings_provider,parent,preferences,viewport_factory=viewport_factory)
         self.setObjectName("thermalWorkspace")
+        self.inspect_button.hide()
         self.splitter.setObjectName("thermalWorkspaceSplitter")
-        self.panel.layout().itemAt(0).widget().setText("Transient water + TPMS heat transfer")
-        self.panel.layout().itemAt(1).widget().setText("Hot water heats the initially cooler TPMS. Insulated channel exterior; perfect water–solid thermal contact. Flow +Z. Temperatures: °C; time: s.")
+        self.panel.layout().itemAt(0).widget().setText("Transient water + specimen heat transfer")
+        self.panel.layout().itemAt(1).widget().setText("Water and the specimen exchange heat in the selected channel. Insulated exterior; perfect water–solid contact. Flow +Z. Temperatures: °C; time: s.")
         self.input_panel.layout().setRowVisible(self.controls["iterations"],False)
         self.model.setCurrentIndex(0)
         self.model.setEnabled(False)
@@ -47,6 +49,7 @@ class ThermalWorkspace(FlowWorkspace):
             saved = json.loads(self.preferences.value("thermal/settings","{}"))
             defaults = ThermalSettings(**{**asdict(defaults),**{k:v for k,v in saved.items() if k in asdict(defaults)}})
         except (ValueError,TypeError,AttributeError): pass
+        self.solid_material_card = defaults.solid_material_card
         for name,label,lo,hi in (
             ("inlet_temperature_c","Inlet water / °C",0,95),
             ("initial_water_c","Initial water / °C",0,95),
@@ -72,6 +75,24 @@ class ThermalWorkspace(FlowWorkspace):
         self.thermal_controls["outer_correctors"].setToolTip("Fluid/solid coupling exchanges per time step. Increase this or reduce the time step if the reported interface heat imbalance is high.")
         self.thermal_controls["time_step_s"].setToolTip("Maximum physical time step. OpenFOAM may reduce it to satisfy Courant and diffusion limits. Compare a smaller step to check temporal accuracy.")
         self.thermal_controls["output_interval_s"].setToolTip("Physical time between saved 3D frames; this does not set the solver's time step.")
+        self.load_solid_button = QPushButton("Load solid material...")
+        self.load_solid_button.setAutoDefault(False)
+        self.load_solid_button.setDefault(False)
+        self.load_solid_button.setObjectName("secondaryActionBtn")
+        self.load_solid_button.clicked.connect(self.load_solid_material)
+        form.addRow(self.load_solid_button)
+        self.use_model_material_button = QPushButton("Use Model material")
+        self.use_model_material_button.setAutoDefault(False)
+        self.use_model_material_button.setDefault(False)
+        self.use_model_material_button.setObjectName("secondaryActionBtn")
+        self.use_model_material_button.clicked.connect(self.use_model_material)
+        form.addRow(self.use_model_material_button)
+        material_width = max(self.fontMetrics().horizontalAdvance(label) for label in
+                             ("Load fluid material...", "Load solid material...", "Use Model material",
+                              "Akışkan malzemesi yükle...", "Katı malzemesi yükle...", "Model malzemesini kullan"))+24
+        for button in (self.load_fluid_button,self.load_solid_button,self.use_model_material_button):
+            button.setSizePolicy(QSizePolicy.Policy.Fixed,QSizePolicy.Policy.Fixed)
+            button.setFixedSize(material_width,CONTROL_HEIGHT)
         self.panel.layout().insertWidget(3,self.thermal_panel)
         material_note = QLabel("Thermal properties are independent of the mechanical material. Initial values are a steel-like example; enter the actual material data. Water properties are constant: set them for your experiment.")
         material_note.setObjectName("mutedHintLabel")
@@ -120,14 +141,54 @@ class ThermalWorkspace(FlowWorkspace):
         self.inputs_changed()
 
     def collect_thermal(self):
-        return ThermalSettings(**{key:control.value() for key,control in self.thermal_controls.items()})
+        return ThermalSettings(solid_material_card=getattr(self,"solid_material_card",None),
+                               **{key:control.value() for key,control in self.thermal_controls.items()})
 
     def inputs_changed(self,*_):
         super().inputs_changed(*_)
-        if len(self.thermal_controls)==len(ThermalSettings.__dataclass_fields__):
+        if len(self.thermal_controls)==len(ThermalSettings.__dataclass_fields__)-1:
             thermal = self.collect_thermal()
             self.preferences.setValue("thermal/settings",json.dumps(asdict(thermal)))
             self.preferences.sync()
+
+    def load_solid_material(self):
+        filename,_ = QFileDialog.getOpenFileName(self,"Load solid material",str(ROOT/"materials"),"Material card (*.json *.csv)")
+        if filename:
+            try:
+                self.load_solid_material_path(filename)
+            except (OSError,ValueError,TypeError) as error:
+                self.status.setText(str(error))
+
+    def load_solid_material_path(self,path):
+        from material_library import read_material_card
+        self.apply_solid_card(read_material_card(path,kind="solid"))
+
+    def use_model_material(self):
+        from material_library import MaterialCard
+        try:
+            data = self.settings_provider().material_card
+            if not data:
+                raise ValueError("Load a Model material card with density, heat capacity and conductivity first.")
+            self.apply_solid_card(MaterialCard.from_dict(data))
+        except (ValueError,TypeError) as error:
+            self.status.setText(str(error))
+
+    def apply_solid_card(self,card):
+        if card.kind != "solid":
+            raise ValueError("Select a solid material card.")
+        temperature = self.thermal_controls["initial_solid_c"].value()+273.15
+        values = card.evaluate(temperature,("density","heat_capacity","conductivity"))
+        assignments = {"solid_density":values["density"],"solid_cp":values["heat_capacity"],
+                       "solid_conductivity":values["conductivity"]}
+        for key,value in assignments.items():
+            control = self.thermal_controls[key]
+            if not control.minimum() <= value <= control.maximum():
+                raise ValueError("Material value is outside the supported thermal input range.")
+        for key,value in assignments.items():
+            self.thermal_controls[key].setValue(value)
+        self.solid_material_card = card.to_dict()
+        self.inputs_changed()
+        self.status.setText(f"{card.name}: constant solid properties evaluated at {temperature:g} K. Source tables retained in the case.")
 
     def _start(self,solve):
         if self.job is not None: return
@@ -174,13 +235,20 @@ class ThermalWorkspace(FlowWorkspace):
         directory = Path(directory)
         manifest = json.loads((directory/"thermal_case.json").read_text())
         self.display_directory,self.manifest = directory,manifest
-        for key,control in self.controls.items(): control.setValue(manifest["flow"][key])
+        flow = FlowSettings(**manifest["flow"])
+        self.channel_shape.setCurrentIndex(self.channel_shape.findData(flow.channel_shape))
+        self.allow_bypass.setChecked(flow.allow_bypass)
+        self.fluid_material_card = flow.fluid_material_card
+        for key,control in self.controls.items(): control.setValue(getattr(flow, key))
         self.empty.setChecked(manifest["flow"]["empty_pipe"])
         self.distribution.setText(manifest["flow"]["distribution"])
         self.bashrc.setText(manifest["flow"]["foam_bashrc"])
         for key,control in self.thermal_controls.items(): control.setValue(manifest["thermal"][key])
+        self.solid_material_card = manifest["thermal"].get("solid_material_card")
         self.inputs_changed()
-        self.case_label.setText(f"Saved thermal case: {manifest['specimen']['structure_name']} · Ø {manifest['flow']['diameter_mm']:g} mm · inlet {manifest['thermal']['inlet_temperature_c']:g} °C")
+        spec = manifest["specimen"]
+        name = spec.get("imported_geometry_name") or (Path(spec["imported_geometry_path"]).name if spec.get("imported_geometry_path") else spec["structure_name"])
+        self.case_label.setText(f"Saved thermal case: {name} · {flow.section_label} · inlet {manifest['thermal']['inlet_temperature_c']:g} °C")
         summary = directory/"thermal_summary.json"
         self.thermal_report = json.loads(summary.read_text()) if summary.exists() else None
         if self.thermal_report:

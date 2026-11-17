@@ -16,14 +16,13 @@ import pyvista as pv
 from scipy import ndimage
 from scipy.spatial import cKDTree
 
-from flow_analysis import FlowSettings, build_flow_grid, write_poly_mesh, _header, _write, _wsl, linux_path
-from mesh_engine import geometry_threshold
-from model import Settings
-from structure_library import evaluate_priority_field
+from flow_analysis import FlowSettings as FlowSettings, build_flow_grid, sample_channel_solid, write_poly_mesh, _header, _write, _wsl, linux_path
+from model import Settings as Settings
 
 
 @dataclass(frozen=True)
 class ThermalSettings:
+    solid_material_card: dict | None = None
     inlet_temperature_c: float = 80.0
     initial_water_c: float = 20.0
     initial_solid_c: float = 20.0
@@ -67,10 +66,10 @@ def build_thermal_grid(specimen, flow):
     grid,metadata = build_flow_grid(specimen,replace(flow,empty_pipe=True))
     centres = grid.cell_centers().points*1000
     solid = np.zeros(grid.n_cells,dtype=bool)
-    inside = (centres[:,2]>0)&(centres[:,2]<specimen.size)
+    inside = (centres[:,2]>0)&(centres[:,2]<flow.section_length(specimen))
     if not flow.empty_pipe:
         p = centres[inside]
-        solid[inside] = evaluate_priority_field(specimen,p[:,0],p[:,1],p[:,2])<=geometry_threshold(specimen)
+        solid[inside], _ = sample_channel_solid(specimen, flow, p)
     grid.cell_data["Solid"] = solid.astype(np.uint8)
     metadata.update(flow_meta)
     metadata["total_cells"] = grid.n_cells

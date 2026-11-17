@@ -63,8 +63,7 @@ class GeometryImportTests(unittest.TestCase):
         self.assertTrue(validate_geometry(replace(settings, mesh_type='HEX8')))
         self.assertTrue(validate_geometry(replace(settings, imported_geometry_path='absent.vtp')))
         from flow_analysis import FlowSettings
-        with self.assertRaisesRegex(ValueError, 'mechanical compression'):
-            FlowSettings().validate(settings)
+        FlowSettings(diameter_mm=3).validate(settings)
 
     def test_real_tetra_mesh_and_cache_switch(self):
         settings = self.imported()

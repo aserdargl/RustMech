@@ -6,7 +6,7 @@ import numpy as np
 import pyvista as pv
 
 
-def read_surface(path):
+def read_surface(path, *, require_single=True):
     path = Path(path)
     if path.suffix.lower() not in ('.stl', '.obj', '.ply', '.vtp'):
         raise ValueError('Supported geometry files: STL, OBJ, PLY and VTP (coordinates in mm).')
@@ -18,9 +18,21 @@ def read_surface(path):
         raise ValueError('Geometry is empty or contains non-finite coordinates.')
     if surface.n_open_edges or not surface.is_manifold:
         raise ValueError('Geometry must be a closed, manifold solid. Repair gaps before importing.')
-    if surface.connectivity().cell_data['RegionId'].max() != 0:
+    if require_single and surface.connectivity().cell_data['RegionId'].max() != 0:
         raise ValueError('Import one connected solid at a time.')
     return surface.compute_normals(auto_orient_normals=True, split_vertices=False)
+
+
+def prepare_general_surface(surface):
+    """Centre an unscaled, mm solid in its containing cube for channel placement."""
+    result = surface.copy(deep=True)
+    bounds = np.asarray(result.bounds).reshape(3,2)
+    extent = bounds[:,1]-bounds[:,0]
+    size = float(extent.max())
+    if size <= 0 or not np.isfinite(size):
+        raise ValueError('Imported geometry has no finite extent.')
+    result.points = result.points-bounds[:,0]+(size-extent)/2
+    return result, size
 
 
 def plane_faces(surface, cell_id):

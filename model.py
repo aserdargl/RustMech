@@ -38,6 +38,7 @@ GEOMETRY_FIELDS = (
     "test_profile", "specimen_architecture", "core_fraction",
     "imported_geometry_path",
     "imported_geometry_name",
+    "imported_geometry_role",
     "mesh_resolution",
     "mesh_type",
     "tetra_strategy",
@@ -93,6 +94,7 @@ ANALYSIS_FIELDS = (
     "automatic_contact_parameters", "automatic_cores",
 )
 MATERIAL_FIELDS = (
+    "material_card",
     "material_name",
     "material_model",
     "material_density",
@@ -127,6 +129,7 @@ class Settings:
     minimum_substeps: int | None = None
     maximum_substeps: int | None = None
     material_name: str = "Custom material"
+    material_card: dict | None = None
     material_model: str = "bilinear_isotropic"
     hardening_curve: tuple[tuple[float, float], ...] = ()
     structure_family: str = "tpms"
@@ -165,6 +168,7 @@ class Settings:
     truba_memory_mb: int = 4096
     imported_geometry_path: str = ""
     imported_geometry_name: str = ""
+    imported_geometry_role: str = "compression"
 
     @property
     def substep_limits(self) -> tuple[int, int]:
@@ -215,6 +219,8 @@ def validate_geometry(settings: Settings, *, include_mesh: bool = True) -> list[
     ):
         errors.append('STL surface resolution must be positive and finite (mm).')
     if settings.imported_geometry_path:
+        if settings.imported_geometry_role not in ("compression", "general"):
+            errors.append('Unsupported imported geometry role.')
         if not isinstance(settings.imported_geometry_path, str) or not Path(settings.imported_geometry_path).is_file():
             errors.append('Imported geometry file is missing. Import the geometry again.')
         if include_mesh and settings.mesh_type not in TETRAHEDRAL_MESH_TYPES:
@@ -300,6 +306,8 @@ def validate_geometry(settings: Settings, *, include_mesh: bool = True) -> list[
 
 def validate_settings(settings: Settings) -> list[str]:
     errors = validate_geometry(settings) + validate_material(settings)
+    if settings.imported_geometry_path and settings.imported_geometry_role == "general":
+        errors.append("General imported geometry needs support/loading-face preparation before mechanical analysis.")
     for name in ("automatic_contact_parameters", "automatic_cores"):
         if getattr(settings, name) is not None and not isinstance(getattr(settings, name), bool):
             errors.append(f"{name} must be a boolean or null.")

@@ -1,5 +1,94 @@
 # RustMech
 
+## Ortak analiz projesi
+
+Üst çubuktaki **Project / Proje** menüsünden **Save project** ile
+`.rustmech.json` dosyası oluşturulur. Dosya aynı numunenin geometrisini,
+mekanik malzemesini ve analiz ayarlarını, Flow ve Thermal (CHT) girdilerini,
+bölge/malzeme referanslarını ve kaydedilmiş sonuç klasörü bağlantılarını saklar.
+İlk proje modeli mevcut üç çalışma alanını kapsar; bağımsız katı termal
+çözümü sonraki yol haritası adımıdır. Termal ve mekanik malzemelerin bugün
+ayrı tanımlandığı bilgisi dosyada korunur; otomatik eşitlenmez.
+
+**Open project** eski `settings.json`, `flow_case.json` ve
+`thermal_case.json` dosyalarını da proje taslağına dönüştürerek açar.
+Açma, analiz veya önizleme başlatmaz; geometriyi görmek için **Apply**,
+çözmek için ilgili açık analiz komutu kullanılır. Bozuk dosya mevcut
+çalışmayı değiştirmez. Çalışan analiz/ağ veya toplu iş sırasında proje
+değiştirme engellenir. Menülü açma, kaydedilmemiş girdileri korumak için
+Save/Discard/Cancel seçimi sunar.
+
+Geometri ve sonuç dosyaları projeye gömülmez; dosya/klasör bağlantıları saklanır.
+Göreli yollar proje dosyasının klasörüne göre çözülür. Pencere ve bölücü
+tercihleri kullanıcıya özel mevcut kayıtlarında kalır; proje bunları değiştirmez.
+
+İlgili kontroller: `python -m unittest tests.test_analysis_project tests.test_project_workspace`.
+
+## Kanal ve yapı seçenekleri
+
+Flow ve Thermal (CHT) çalışma alanlarında silindir yanında **Square / rectangular**
+kesit seçilebilir. Width ve Height kesit ölçüleridir. **Insert section / mm**
+sıfırken dolgu bölgesi Model küp boyunu kullanır; pozitif değer bu bölgenin
+uzunluğunu belirler. Giriş/çıkış uzantıları ayrıca ayarlanır. Numune X/Y/Z
+ötelemeleri ve X, sonra Y, sonra Z sırasındaki dönmeler numune merkezine göre
+uygulanır. Geometri uzatılıp ölçeklenmez; sonlu numune kanal/dolgu bölgesine
+kırpılır. Numune zarfının dışında boşluk varsa **Allow intentional bypass**
+açıkça seçilmelidir. Bu boşluk akış ve ısı geçişini önemli ölçüde değiştirebilir.
+
+Üretilmiş TPMS, Truss Lattice ve Porous aileleri bu iki çalışma alanında
+kullanılabilir. Porous rastgeleliği Model seed'i ile korunur. İnce gözeneklerin
+ağda kapanması veya kopuk akışkan cepleri yine analiz ön kontrollerine tabidir;
+her ailedeki her geometri için çözüm garantisi verilmez.
+
+Flow alanındaki **Inspect geometry (no solve)**, tıkalı akış yolunu veya izin
+verilmemiş bypass boşluğunu da incelemek için kullanılır. **Geometry diagnostics**
+görünümünde zarf dışındaki akışkan turuncu, iki uca bağlı olmayan bileşenler
+kırmızı gösterilir; en büyük 64 kopuk bileşenin merkezleri işaretlenir. İnceleme
+ayrı dosyaya kaydedilir, çözücü komutu veya OpenFOAM çalıştırma dosyaları üretmez.
+TRUBA modunda aynı inceleme mevcut mesh yeteneğiyle uzakta yürür. Bu kontrol
+örneklenmiş bağlantıyı gösterir; alt hücre boyutundaki duvar/gözenekleri veya
+yüzeyin kendiyle kesişmesini kesin olarak doğrulamaz.
+
+**Designs > Import geometry for flow / thermal** STL/OBJ/PLY/VTP dosyasını
+mm olarak alır. Kapalı, manifold yüzey gerekir; ayrı kapalı bileşenler kabul
+edilir. Ölçek değiştirilmeden kapsayan küpe ortalanır. Mekanik basma yüzeyi
+seçimi istenmez. Gitterburg havuzunda tek tasarım seçip **Use for flow / thermal**
+ile aynı yol kullanılabilir. Bu genel numuneyi mekanik çözümde kullanmak için
+mekanik import yolunda destek/yükleme yüzeyleri ayrıca hazırlanmalıdır.
+
+Mevcut ağ basamaklı Kartezyen ağdır; yüzeye oturan sınır tabakalı ağ sonraki
+yol haritası adımıdır. Analitik kare kanal ve gerçek OpenFOAM kontrolleri:
+`python tools/verify_channel_pipeline.py`. 17 Kasım 2026 kontrolünde 8/16 hücrelik
+kare kanal ağlarında basınç kaybı hatası %5,55/%1,47 oldu. BCC dikdörtgen ve
+Gaussian Random Field silindir CHT eş sıcaklık örnekleri tamamlandı. Bunlar
+numunelerin genel ağ bağımsızlığını veya deneysel performansını kanıtlamaz.
+Kare kanal referansı [gelişmiş laminer akışın seri çözümüdür](https://doi.org/10.1063/1.4794500).
+
+## Ortak SI malzeme kartları
+
+Mekanik Material **Load**, eski mekanik JSON yanında sürüm 2 SI kartlarını
+ve sıcaklık tablosu CSV dosyalarını okuyabilir. Flow/CHT'de **Load fluid material**,
+CHT'de ayrıca **Load solid material** bulunur. **Use Model material**, mekanikte
+yüklü kartın termal özelliklerini açık komutla kullanır; mekanik kartta k/cp
+yoksa tahmini değer eklemek yerine hata gösterilir. Başlangıç örnekleri
+`materials/examples/solid-si.json` ve `materials/examples/fluid-si.json` içindedir;
+bunlar gerçek malzeme için doğrulanmış veri tabloları değildir.
+
+Kart `format: rustmech-material`, `schema_version: 2`, `units: SI`, `kind:
+solid/fluid`, `name` ve `properties` alanlarını taşır. Özellik adları/birimleri:
+`density` kg/m³, `young_modulus`/`yield_stress`/`tangent_modulus` Pa,
+`poisson_ratio` boyutsuz, `conductivity` W/(m·K), `heat_capacity` J/(kg·K),
+`thermal_expansion` 1/K, `dynamic_viscosity` Pa·s. Mekanik editördeki g/cm³ ve
+MPa dönüşümleri otomatik yapılır. Plastik eğride gerinim boyutsuz, gerilme Pa'dır.
+
+Bir özellik tek sayı veya `{ "temperature_K": [293.15, 353.15], "values": [...] }`
+tablosu olabilir. CSV başlıkları `temperature_K,density,conductivity,...`
+biçimindedir; sıcaklıklar artan sırada olmalıdır. Tablo dışında ekstrapolasyon
+yapılmaz. Mevcut sabit özellikli çözümlerde mekanik/izotermal akış için 293,15 K,
+CHT akışkanı için giriş sıcaklığı, katı için başlangıç sıcaklığı kullanılır.
+Kaynak kart ve tablolar proje/vaka dosyalarında korunur. Sıcaklığa bağlı
+özelliklerin çözüm boyunca güncellenmesi yol haritasının 17. adımıdır.
+
 ## Arayüz dili ve TRUBA bağlantısı
 
 Sağ üst köşedeki **English / Türkçe** seçicisinden arayüz dili değiştirilir.
