@@ -554,8 +554,12 @@ ve isteğe bağlı k–ω SST bulunur. SST giriş türbülans şiddeti %5, uzunl
 yakınındaki çözünürlük ayrıca değerlendirilmelidir. Çap üzerinden Reynolds
 sayısı bilgi amaçlıdır; TPMS gözeneklerindeki akış rejimini tek başına belirlemez.
 
-Akış ağı **basamaklı Kartezyen hacimlerden** oluşur; silindir ve ince TPMS
-duvarları yaklaşık temsil edilir, yüzeye oturan sınır tabakası ağı yoktur.
+Varsayılan akış ağı **duvara oturan O-grid hekzahedral** ağdır (aşağıya bakın);
+boru duvarı tam daire olarak temsil edilir. TPMS yüzeyleri ise **basamaklıdır**:
+hücre merkezindeki TPMS alan değeri eşiğe göre katı/akışkan seçilir ve katı
+hücreler çıkarılır, TPMS'ye oturan sınır tabakası ağı yoktur. Eski basamaklı
+Kartezyen ağ (`Mesh style`) uyumluluk için korunur; termal (CHT) alanı yalnız
+bu ağı kullanır.
 Katı sınırı mevcut TPMS eşik değerinden alınır, CFD ağına göre tekrar
 ayarlanmaz. Silindire kırpma ve ayrıklaştırma nedeniyle gerçek katı oranı
 küp hedefinden farklı olabilir; örneklenen oran sonuçta gösterilir. İnce duvar
@@ -586,6 +590,45 @@ oldu. İnce ağda parabolik hız profili, TPMS'nin ek basınç kaybı, yakınsam
 kaybının ağdan bağımsız olduğunu veya türbülans modelinin deneysel doğruluğunu
 kanıtlamaz. Arayüz, süreç iptali ve ilgili davranışlar için 17 test geçti.
 Ekran görüntüsü: `design/cylindrical-flow/pressure.png`.
+
+### Boru içi akış analizi, Kratos çözücüsü ve ağ bağımsızlığı (GCI)
+
+- **Boru ağı:** `Wall-fitted O-grid`, kare çekirdek ve dört eğri bloktan oluşur.
+  Duvara doğru radyal sıklaştırma (`Wall cell grading`) ve eksenel hücre oranı
+  (`Axial cell aspect`) ayarlanır. `Empty pipe reference` seçiliyken `Pipe length`
+  ile serbest boru boyu verilir (0 = küp boyu).
+- **Analitik karşılaştırma:** Boş boruda Hagen–Poiseuille (laminer) ve Colebrook
+  (türbülanslı) Darcy sürtünme faktörü, giriş uzunluğu, tahmini y+ ve gelişmiş
+  bölümden uyarlanan basınç gradyanı kıyaslanır. TPMS dolgulu boruda görünür
+  Darcy geçirgenliği ve geçirgenlik Reynolds sayısı verilir. Sonuç klasörüne
+  `radial_profile.csv` ve `residuals.csv` yazılır.
+- **Çözücü seçimi:** `Flow solver` ile OpenFOAM (sonlu hacim) veya **Kratos
+  (sonlu eleman)** seçilir. Kratos aynı ağın her hekzahedrasını altı tetrahedraya
+  bölüp kararlı (steady) stabilize VMS Navier–Stokes elemanlarıyla WSL içinde
+  çözer. Yalnız laminer akış desteklenir, TRUBA'da çalışmaz. WSL Python'unda
+  `pip install KratosMultiphysics-all` gerekir; yorumlayıcı adı `WSL Python
+  (Kratos)` alanındadır. Giriş düğümlerinin duvar kenarı sıfır kaldığı için giriş
+  hızı debiyi koruyacak şekilde ölçeklenir (`flow_case.json`'da
+  `inlet_velocity_scale`). Kratos'ta debi dengesizliği ölçütü %3'tür; OpenFOAM'da %1.
+- **GCI:** `Grid convergence study (GCI)` düğmesi (veya
+  `grid_convergence.run_flow_gci`) aynı vakayı yaklaşık 1,5 oranıyla seyreltilen
+  üç ağda çözer; Celik ve diğ. (2008) yöntemiyle gözlenen mertebeyi, Richardson
+  ekstrapolasyonunu ve GCI'yi `gci.json` / `gci.csv` olarak yazar. Boş boruda
+  sürtünme faktörü, TPMS dolgusunda numune basınç kaybı kullanılır. Seri
+  salınımlı, ıraksak veya asimptotik değilse sonuç bunu belirtir.
+
+Gerçek çözücü doğrulaması (D = 4 mm, Re ≈ 199, laminer, boş boru): teorik
+Darcy sürtünme faktörü 64/Re ≈ 0,3215'tir. OpenFOAM'da 16 hücre/çapta fark %0,35,
+Kratos'ta 12 hücre/çapta %0,84 bulundu. 20/14/10 hücre/çap serisinde OpenFOAM
+için p = 1,86, GCI = %0,61, ekstrapole değer 0,3264; Kratos için p = 2,38,
+GCI = %0,38, ekstrapole değer 0,3222. OpenFOAM'ın ekstrapole değeri teoriden
+%1,5 yüksektir ve GCI bu farkı kapsamaz; GCI yalnız ayrıklaştırma belirsizliğini
+ölçer, sürtünme faktörünü çıkarmak için seçilen gelişmiş bölüm penceresi gibi
+farkları içermez. Aynı seri TPMS dolgulu boruda (Kratos) **salınımlı** çıktı:
+basamaklı TPMS yüzeyi her ağda gözenekliliği değiştirdiği için bu basınç kaybı
+ağdan bağımsız sayılamaz. Türbülanslı kOmegaSST testinde (Re ≈ 5960) Colebrook'a
+göre %7,9 fark ve y+ ≈ 5 görüldü; duvar fonksiyonu için y+ < 1 veya y+ > 30
+sağlayan bir ağ gerekir.
 
 ## Tekrarlayan yapılarda mesh optimizasyonu
 

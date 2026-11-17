@@ -16,6 +16,7 @@ from PyQt6.QtWidgets import (QCheckBox, QComboBox, QFileDialog, QFormLayout, QHB
 
 from analysis_process import AnalysisProcess
 from flow_analysis import FlowSettings, export_flow_case, execute_flow_case, stop_flow_case
+from grid_convergence import refined_cells, run_flow_gci_job
 from model import ROOT
 from preview_viewport import create_preview_viewport
 from studio_style import CompactDoubleSpinBox, CONTROL_HEIGHT, configure_form, field_label
@@ -91,6 +92,12 @@ class FlowWorkspace(QWidget):
             self.controls[name] = control
             control.valueChanged.connect(self.inputs_changed)
             form.addRow(field_label(label,control),control)
+        self.solver = CompactComboBox()
+        self.solver.addItem("OpenFOAM · finite volume","openfoam")
+        self.solver.addItem("Kratos · finite element (laminar)","kratos")
+        self.solver.setCurrentIndex(max(0,self.solver.findData(defaults.solver)))
+        self.solver.currentIndexChanged.connect(self.inputs_changed)
+        form.addRow(field_label("Flow solver",self.solver),self.solver)
         self.model = CompactComboBox()
         self.model.addItem("Laminar","laminar")
         self.model.addItem("Turbulent · k–ω SST","kOmegaSST")
@@ -118,15 +125,20 @@ class FlowWorkspace(QWidget):
         self.bashrc.setToolTip("Absolute Linux path to the OpenCFD OpenFOAM environment (simpleFoam).")
         form.addRow(field_label("WSL distribution",self.distribution),self.distribution)
         form.addRow(field_label("OpenFOAM bashrc",self.bashrc),self.bashrc)
+        self.kratos_python = QLineEdit(defaults.kratos_python)
+        self.kratos_python.setToolTip("Python interpreter inside the WSL distribution that has KratosMultiphysics (pip install KratosMultiphysics-all).")
+        form.addRow(field_label("WSL Python (Kratos)",self.kratos_python),self.kratos_python)
         self.distribution.editingFinished.connect(self.inputs_changed)
         self.bashrc.editingFinished.connect(self.inputs_changed)
+        self.kratos_python.editingFinished.connect(self.inputs_changed)
         left.addWidget(self.input_panel)
         self.info = QLabel()
         self.info.setWordWrap(True)
         left.addWidget(self.info)
         self.buttons = []
         for title,slot in (("Build channel / export case",self.export), ("Run flow analysis",self.run),
-                           ("Open saved flow case",self.open_case),("Open case folder",self.open_folder)):
+                           ("Open saved flow case",self.open_case),("Open case folder",self.open_folder),
+                           ("Grid convergence study (GCI)",self.gci)):
             button = QPushButton(title)
             button.setAutoDefault(False)
             button.setDefault(False)
@@ -134,6 +146,8 @@ class FlowWorkspace(QWidget):
             button.clicked.connect(slot)
             left.addWidget(button)
             self.buttons.append(button)
+        self.gci_button = self.buttons[-1]
+        self.gci_button.setToolTip("Solves the current case on three systematically refined meshes and reports the Grid Convergence Index of the pressure drop (or friction factor for an empty pipe).")
         self.stop = QPushButton("Stop flow analysis")
         self.stop.setAutoDefault(False)
         self.stop.setDefault(False)
@@ -192,10 +206,20 @@ class FlowWorkspace(QWidget):
         return FlowSettings(**{key:control.value() for key,control in self.controls.items()},
                             turbulence=self.model.currentData(),empty_pipe=self.empty.isChecked(),
                             mesh_style=self.mesh_style.currentData(),convection=self.convection.currentData(),
+                            solver=self.solver.currentData(),kratos_python=self.kratos_python.text().strip() or "python3",
                             distribution=self.distribution.text().strip(),foam_bashrc=self.bashrc.text().strip())
 
     def inputs_changed(self,*_):
         if not hasattr(self,"info"): return
+        kratos = self.solver.currentData() == "kratos"
+        if not hasattr(self,"thermal_controls"):
+            # The Kratos FEM path is laminar only; thermal CHT keeps its own fixed laminar model.
+            if kratos and self.model.currentData() != "laminar":
+                self.model.blockSignals(True)
+                self.model.setCurrentIndex(self.model.findData("laminar"))
+                self.model.blockSignals(False)
+            self.model.setEnabled(not kratos)
+        self.convection.setEnabled(not kratos)
         flow = self.collect()
         self.preferences.setValue(self.SETTINGS_KEY,json.dumps(asdict(flow)))
         self.preferences.sync()
@@ -209,6 +233,7 @@ class FlowWorkspace(QWidget):
         except Exception:
             pass
         self.info.setText(text)
+        self.update_execution_availability()
         if self.display_directory:
             self.status.setText("Inputs changed. The displayed case keeps its saved geometry and flow conditions; build/run to apply changes.")
 
@@ -223,6 +248,8 @@ class FlowWorkspace(QWidget):
             self.solving = solve
             controller = getattr(self,"remote_controller",None)
             self._remote_job = bool(controller is not None and controller.requested)
+            if flow.solver == "kratos" and self._remote_job:
+                raise ValueError("Kratos runs locally in WSL; TRUBA flow jobs use OpenFOAM. Switch the solver to OpenFOAM or turn TRUBA off.")
             if self._remote_job:
                 from truba_remote import run_remote_operation
                 context,auth = controller.require("flow" if solve else "mesh")
@@ -236,7 +263,33 @@ class FlowWorkspace(QWidget):
         self.input_panel.setEnabled(False)
         for button in self.buttons: button.setEnabled(False)
         self.stop.setEnabled(True)
-        self.status.setText("Checking OpenFOAM and building the channel…" if solve else "Building fluid mesh and exporting OpenFOAM case…")
+        engine = "Kratos" if flow.solver == "kratos" else "OpenFOAM"
+        self.status.setText(f"Checking {engine} and building the channel…" if solve else f"Building fluid mesh and exporting {engine} case…")
+        self.timer.start()
+
+    def gci(self):
+        if self.job is not None: return
+        try:
+            specimen,flow = self.settings_provider(),self.collect()
+            flow.validate(specimen)
+            controller = getattr(self,"remote_controller",None)
+            if controller is not None and controller.requested:
+                raise ValueError("The grid-convergence study runs locally; turn TRUBA off.")
+            levels = refined_cells(flow.cells_across)
+            directory = ROOT/"results"/("GCI_"+datetime.now().strftime("%Y%m%d_%H%M%S_")+uuid.uuid4().hex[:8])
+            self.case_directory = directory
+            self.submitted_flow = flow
+            self.solving = True
+            self._remote_job = False
+            self.job = AnalysisProcess(run_flow_gci_job,specimen,flow,str(directory))
+            self._gci_job = True
+        except Exception as error:
+            self.status.setText(str(error))
+            return
+        self.input_panel.setEnabled(False)
+        for button in self.buttons: button.setEnabled(False)
+        self.stop.setEnabled(True)
+        self.status.setText("Grid convergence study on "+" / ".join(map(str,levels))+" cells across the diameter…")
         self.timer.start()
 
     def export(self): self._start(False)
@@ -257,8 +310,10 @@ class FlowWorkspace(QWidget):
             available = not remote or (controller.ready and controller.capabilities.get(capability,False))
             self.buttons[index].setEnabled(available)
             self.buttons[index].setToolTip("" if available else "TRUBA runtime/solver is not verified as available. Check capabilities in the TRUBA panel; local fallback is disabled.")
+        kratos = self.solver.currentData() == "kratos"
         self.distribution.setEnabled(not remote)
-        self.bashrc.setEnabled(not remote)
+        self.bashrc.setEnabled(not remote and not kratos)
+        self.kratos_python.setEnabled(not remote and kratos)
 
     def poll(self):
         if self.job is None: return
@@ -270,18 +325,24 @@ class FlowWorkspace(QWidget):
             stage = self.job.progress_status() if hasattr(self.job, "progress_status") else None
             if stage:
                 self.status.setText(stage)
-            path = self.case_directory/self.LOG_NAME
-            if path.exists() and (not stage or stage.startswith(("Checking mesh and solving", "Splitting regions"))):
+            kratos_run = getattr(self.submitted_flow,"solver","openfoam") == "kratos" and self.LOG_NAME == "log.simpleFoam"
+            path = self.case_directory/("log.kratos" if kratos_run else self.LOG_NAME)
+            if path.exists() and (not stage or stage.startswith(("Checking mesh and solving", "Solving flow with Kratos", "Splitting regions"))):
                 with path.open("rb") as stream:
                     stream.seek(max(0,path.stat().st_size-2000))
                     lines = stream.read().decode(errors="replace").splitlines()
-                iterations = [line for line in lines if line.startswith("Time =")]
+                iterations = [line for line in lines if line.startswith(("Time =","STEP "))]
                 self.status.setText("Solving · "+(iterations[-1] if iterations else self.ITERATION_LABEL)+" · logs in case folder")
             return
         job,self.job = self.job,None
+        gci,self._gci_job = getattr(self,"_gci_job",False),False
         self._unlock()
         try:
             result = job.result()
+            if gci:
+                self.results.setText(result)
+                self.status.setText("Grid convergence study saved (gci.json, gci.csv, level cases). "+str(self.case_directory))
+                return
             if getattr(self,"_remote_job",False): self.case_directory = Path(result)
             self.load_directory(self.case_directory)
         except Exception as error:
@@ -290,12 +351,15 @@ class FlowWorkspace(QWidget):
     def cancel(self):
         if self.job is None: return
         try:
-            if not getattr(self,"_remote_job",False): stop_flow_case(self.submitted_flow,self.case_directory)
+            if getattr(self,"_gci_job",False):
+                for level in self.case_directory.glob("gci_level*"): stop_flow_case(self.submitted_flow,level)
+            elif not getattr(self,"_remote_job",False): stop_flow_case(self.submitted_flow,self.case_directory)
             self.job.force_stop()
         except Exception as error:
             self.status.setText("Cannot stop flow job: "+str(error))
             return
         self.job = None
+        self._gci_job = False
         self._unlock()
         self.status.setText("Flow operation stopped. Incomplete case files and logs are retained.")
 
@@ -322,6 +386,8 @@ class FlowWorkspace(QWidget):
         # Cases saved before the O-grid mesh existed were stair-step meshes with first-order convection.
         self.mesh_style.setCurrentIndex(max(0,self.mesh_style.findData(flow.get("mesh_style","cartesian"))))
         self.convection.setCurrentIndex(max(0,self.convection.findData(flow.get("convection","upwind"))))
+        self.solver.setCurrentIndex(max(0,self.solver.findData(flow.get("solver","openfoam"))))
+        self.kratos_python.setText(flow.get("kratos_python","python3"))
         self.model.setCurrentIndex(self.model.findData(flow["turbulence"]))
         self.empty.setChecked(flow["empty_pipe"])
         self.distribution.setText(flow["distribution"])
@@ -332,7 +398,7 @@ class FlowWorkspace(QWidget):
         summary_path = directory/"flow_summary.json"
         if summary_path.exists():
             summary = json.loads(summary_path.read_text())
-            self.results.setText(f"{summary['status'].upper()} · Re = {summary['reynolds_diameter']:.5g} · {self.grid.n_cells:,} fluid cells\n"
+            self.results.setText(f"{summary['status'].upper()} · {'Kratos FEM' if summary.get('solver') == 'kratos' else 'OpenFOAM'} · Re = {summary['reynolds_diameter']:.5g} · {self.grid.n_cells:,} fluid cells\n"
                 f"Static Δp, channel: {summary['pressure_drop_total_Pa']:.6g} Pa · TPMS section: {summary['pressure_drop_specimen_Pa']:.6g} Pa\n"
                 f"Q inlet / outlet: {summary['inlet_flow_m3_s']*6e7:.6g} / {summary['outlet_flow_m3_s']*6e7:.6g} mL/min · mass imbalance: {summary['mass_imbalance_fraction']*100:.4g}%\n"
                 f"Maximum speed: {summary['maximum_speed_m_s']:.6g} m/s · sampled cylinder solid: {summary['mesh']['specimen_solid_fraction']*100:.4g}%\n"

@@ -602,6 +602,11 @@ Cartesian stair-step (legacy)|Kartezyen basamaklı (eski)
 Momentum scheme|Momentum şeması
 Linear upwind (2nd order)|Doğrusal upwind (2. derece)
 Upwind (1st order, robust)|Upwind (1. derece, sağlam)
+Flow solver|Akış çözücüsü
+OpenFOAM · finite volume|OpenFOAM · sonlu hacim
+Kratos · finite element (laminar)|Kratos · sonlu eleman (laminer)
+WSL Python (Kratos)|WSL Python (Kratos)
+Grid convergence study (GCI)|Ağ yakınsama çalışması (GCI)
 '''
 
 TURKISH = dict(line.split('|', 1) for line in _TEXT.splitlines() if '|' in line)

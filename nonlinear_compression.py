@@ -1791,7 +1791,7 @@ class RustMechDialog(QDialog):
             self.brand_title_label.setText("Transient Heat Transfer" if index==3 else "Isothermal Flow" if flow_active else "Nonlinear Compression")
             unit_badge.setText("Units: mm  °C  s  Pa" if index==3 else "Units: mm  m/s  Pa" if flow_active else "Units: mm  N  MPa")
             remote = getattr(self,"remote_controller",None)
-            self.brand_subtitle_lbl.setText("TRUBA · remote compute" if remote is not None and remote.requested else "OpenFOAM · WSL" if flow_active else self.solver_capabilities.display_name)
+            self.brand_subtitle_lbl.setText("TRUBA · remote compute" if remote is not None and remote.requested else self._flow_runtime_label() if flow_active else self.solver_capabilities.display_name)
             if remote is not None:
                 self._update_remote_banner()
             self.sidebar_toggle.setVisible(not flow_active)
@@ -1800,6 +1800,8 @@ class RustMechDialog(QDialog):
             self.show_platens_cb.setVisible(not flow_active)
             camera_controls.setVisible(not flow_active)
         self.workspace_tabs.currentChanged.connect(sync_workspace_context)
+        self.flow_workspace.solver.currentIndexChanged.connect(
+            lambda *_: sync_workspace_context(self.workspace_tabs.currentIndex()) if self.workspace_tabs.currentIndex() == 2 else None)
         self.workspace_tabs.tabBar().hide()
         layout.addWidget(toolbar_frame)
         layout.addWidget(self.workspace_tabs, 1)
@@ -2023,8 +2025,13 @@ class RustMechDialog(QDialog):
             if controller.ready and self.future is None and self.preview is None and not controller.closing:
                 self.status.setText('TRUBA ready. Click Apply to generate the geometry remotely.')
         else:
-            self.brand_subtitle_lbl.setText("OpenFOAM · WSL" if self.workspace_tabs.currentIndex() in (2,3) else self.solver_capabilities.display_name)
+            self.brand_subtitle_lbl.setText(self._flow_runtime_label() if self.workspace_tabs.currentIndex() in (2,3) else self.solver_capabilities.display_name)
         self._update_remote_banner()
+
+    def _flow_runtime_label(self):
+        flow = getattr(self, "flow_workspace", None)
+        kratos = flow is not None and self.workspace_tabs.currentIndex() == 2 and flow.solver.currentData() == "kratos"
+        return "Kratos \u00b7 WSL" if kratos else "OpenFOAM \u00b7 WSL"
 
     def _update_remote_banner(self):
         controller = getattr(self, 'remote_controller', None)
@@ -2056,7 +2063,7 @@ class RustMechDialog(QDialog):
         elif session.get('ready') and controller.session_watch:
             state, text = 'pending', 'Local mode · TRUBA resources reserved'
         else:
-            local_name = 'OpenFOAM · WSL' if self.workspace_tabs.currentIndex() in (2, 3) else self.solver_capabilities.display_name
+            local_name = self._flow_runtime_label() if self.workspace_tabs.currentIndex() in (2, 3) else self.solver_capabilities.display_name
             text = f'SSH connected · {local_name}' if self.truba_dialog.connected else local_name
         self.brand_subtitle_lbl.setText(text)
         self.brand_header.setToolTip(

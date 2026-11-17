@@ -42,6 +42,8 @@ class FlowSettings:
     axial_aspect: float = 2.0        # axial / cross-section cell size, empty pipe only
     wall_grading: float = 1.0        # first-to-last radial cell size ratio (1 = uniform)
     convection: str = "linearUpwind" # momentum convection scheme: "linearUpwind" or "upwind"
+    solver: str = "openfoam"         # "openfoam": finite volume; "kratos": finite element (stabilised VMS), both run in WSL
+    kratos_python: str = "python3"   # Python interpreter with KratosMultiphysics inside the WSL distribution
 
     @property
     def reynolds(self):
@@ -103,6 +105,13 @@ class FlowSettings:
             raise ValueError("Unsupported mesh style.")
         if self.convection not in ("linearUpwind", "upwind"):
             raise ValueError("Unsupported convection scheme.")
+        if self.solver not in ("openfoam", "kratos"):
+            raise ValueError("Unsupported flow solver.")
+        if self.solver == "kratos":
+            if self.turbulence != "laminar":
+                raise ValueError("The Kratos FEM solver currently supports the laminar model only; use OpenFOAM for kOmegaSST.")
+            if not re.fullmatch(r"[A-Za-z0-9_./~-]+", self.kratos_python):
+                raise ValueError("Enter the WSL Python interpreter name or absolute path (for example python3).")
         for name, lo, hi in (("pipe_length_mm", 0.0, 1e6), ("axial_aspect", 1.0, 20.0), ("wall_grading", 1.0, 20.0)):
             value = getattr(self, name)
             if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or not lo <= value <= hi:
@@ -114,7 +123,7 @@ class FlowSettings:
             raise ValueError("Each extension must contain at least two cells.")
 
     def validate_local_runtime(self):
-        if not self.distribution.strip() or not self.foam_bashrc.startswith("/") or "\n" in self.foam_bashrc:
+        if not self.distribution.strip() or (self.solver == "openfoam" and (not self.foam_bashrc.startswith("/") or "\n" in self.foam_bashrc)):
             raise ValueError("Select a WSL distribution and an absolute OpenFOAM bashrc path.")
 
 
@@ -335,6 +344,8 @@ def export_flow_case(specimen, flow, directory):
     report_analysis_step("Exporting OpenFOAM mesh and case files…")
     directory.mkdir(parents=True,exist_ok=True)
     grid.save(directory/"fluid_mesh.vtu")
+    if flow.solver == "kratos":
+        return _export_kratos_case(specimen, flow, directory, grid, metadata)
     write_poly_mesh(grid,directory/"constant"/"polyMesh")
     nu = flow.dynamic_viscosity/flow.density
     _write(directory/"constant"/"transportProperties",_header("dictionary","transportProperties")+f"transportModel Newtonian;\nnu [0 2 -1 0 0 0 0] {nu:.14g};\n")
@@ -370,6 +381,19 @@ def export_flow_case(specimen, flow, directory):
     return manifest
 
 
+def _export_kratos_case(specimen, flow, directory, grid, metadata):
+    from kratos_flow import export_kratos_flow_case
+    report = export_kratos_flow_case(grid, flow, directory, _write)
+    metadata["warnings"].append("Kratos FEM: each hexahedron is split into 6 tetrahedra (P1/P1 stabilised VMS, steady pseudo-time). Compare against a finer mesh before trusting pressure loss.")
+    manifest = dict(specimen=asdict(specimen), flow=asdict(flow), mesh=metadata, kratos=report,
+                    pressure_units="Pa", velocity_units="m/s",
+                    geometry=("Empty circular pipe" if flow.empty_pipe else "TPMS phase clipped to a concentric cylinder")+f", Z flow; test length {flow.test_length_mm(specimen):g} mm",
+                    discretization=("Wall-fitted O-grid hexahedra split into tetrahedra" if flow.mesh_style=="ogrid" else "Cartesian stair-step hexahedra split into tetrahedra")
+                    +"; Kratos stabilised VMS finite elements, steady pseudo-time; no-slip walls; uniform velocity inlet; zero gauge pressure outlet")
+    (Path(directory)/"flow_case.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    return manifest
+
+
 def _wsl(flow, script, **kwargs):
     return subprocess.run(["wsl.exe","-d",flow.distribution,"--","bash","-c",script],
                           creationflags=getattr(subprocess,"CREATE_NO_WINDOW",0),**kwargs)
@@ -384,6 +408,12 @@ def linux_path(path):
 
 def check_flow_runtime(flow):
     flow.validate_local_runtime()
+    if flow.solver == "kratos":
+        python = shlex.quote(flow.kratos_python)
+        result = _wsl(flow, f"{python} -c 'import KratosMultiphysics.FluidDynamicsApplication' >/dev/null 2>&1 && command -v {python}", capture_output=True, timeout=120)
+        if result.returncode:
+            raise RuntimeError("Kratos FluidDynamicsApplication unavailable in the WSL Python. Install with: pip install KratosMultiphysics-all. "+result.stderr.decode(errors="replace")[-500:])
+        return result.stdout.decode(errors="replace").strip()
     result = _wsl(flow, f"source {shlex.quote(flow.foam_bashrc)} >/dev/null 2>&1 && command -v simpleFoam && command -v checkMesh",capture_output=True,timeout=30)
     if result.returncode:
         raise RuntimeError("OpenFOAM simpleFoam/checkMesh unavailable. Check the WSL distribution and OpenFOAM bashrc. "+result.stderr.decode(errors="replace")[-1000:])
@@ -402,19 +432,20 @@ def stop_flow_case(flow, directory):
 
 def execute_flow_case(specimen,flow,directory):
     from analysis_process import report_analysis_step
-    report_analysis_step("Checking OpenFOAM runtime…")
+    report_analysis_step("Checking Kratos runtime…" if flow.solver == "kratos" else "Checking OpenFOAM runtime…")
     check_flow_runtime(flow)
     export_flow_case(specimen,flow,directory)
     case = shlex.quote(linux_path(directory))
-    script = f"source {shlex.quote(flow.foam_bashrc)} >/dev/null 2>&1 && cd {case} && exec setsid --wait bash Allrun"
-    report_analysis_step("Checking mesh and solving flow…")
+    prefix = "" if flow.solver == "kratos" else f"source {shlex.quote(flow.foam_bashrc)} >/dev/null 2>&1 && "
+    script = f"{prefix}cd {case} && exec setsid --wait bash Allrun"
+    report_analysis_step("Solving flow with Kratos…" if flow.solver == "kratos" else "Checking mesh and solving flow…")
     result = _wsl(flow,script,capture_output=True)
     if result.returncode:
         details = ""
-        for filename in ("log.checkMesh","log.simpleFoam"):
+        for filename in ("log.checkMesh","log.simpleFoam","log.kratos"):
             path = Path(directory)/filename
             if path.exists(): details += "\n"+filename+"\n"+path.read_text(errors="replace")[-3500:]
-        raise RuntimeError("OpenFOAM failed; inspect the case logs. "+result.stderr.decode(errors="replace")[-1000:]+details)
+        raise RuntimeError(("Kratos" if flow.solver == "kratos" else "OpenFOAM")+" failed; inspect the case logs. "+result.stderr.decode(errors="replace")[-1000:]+details)
     report_analysis_step("Processing flow results…")
     return summarize_flow_case(directory)
 
@@ -426,42 +457,68 @@ def _last_monitor(directory,name):
     return float(rows[-1][0]),float(rows[-1][1])
 
 
-def summarize_flow_case(directory):
-    directory = Path(directory)
-    manifest = json.loads((directory/"flow_case.json").read_text())
-    flow = FlowSettings(**manifest["flow"])
+def _openfoam_fields(directory, flow):
     reader = pv.OpenFOAMReader(directory/"case.foam")
     if max(reader.time_values) <= 0:
         raise RuntimeError("No solved time step exists; initial fields are not CFD results.")
     reader.set_active_time_value(max(reader.time_values))
     reader.disable_all_patch_arrays()
     reader.enable_patch_array("internalMesh")
-    blocks = reader.read()
-    grid = blocks["internalMesh"]
+    grid = reader.read()["internalMesh"]
     if grid is None or "U" not in grid.cell_data or "p" not in grid.cell_data:
         raise RuntimeError("OpenFOAM did not write velocity and pressure fields.")
     velocity = np.asarray(grid.cell_data["U"])
     pressure = np.asarray(grid.cell_data["p"])*flow.density
     if not np.isfinite(velocity).all() or not np.isfinite(pressure).all():
         raise RuntimeError("Non-finite CFD result. Inspect mesh and solver settings.")
-    grid.cell_data["Velocity_m_s"] = velocity
-    grid.cell_data["Speed_m_s"] = np.linalg.norm(velocity,axis=1)
-    grid.cell_data["Pressure_Pa"] = pressure
-    grid.save(directory/"flow_result.vtu")
-    ti,pi = _last_monitor(directory,"inlet_p")
-    to,po = _last_monitor(directory,"outlet_p")
-    tq,qi = _last_monitor(directory,"inlet_phi")
+    _,pi = _last_monitor(directory,"inlet_p")
+    _,po = _last_monitor(directory,"outlet_p")
+    _,qi = _last_monitor(directory,"inlet_phi")
     _,qo = _last_monitor(directory,"outlet_phi")
-    imbalance = abs(qi+qo)/max(abs(qi),abs(qo),1e-30)
     log = (directory/"log.simpleFoam").read_text(errors="replace")
     if not re.search(r"^End\s*$",log,re.MULTILINE):
         raise RuntimeError("OpenFOAM did not end cleanly; inspect log.simpleFoam.")
     if not np.isfinite([pi,po,qi,qo]).all():
         raise RuntimeError("Non-finite boundary pressure or flow monitor.")
-    converged = "SIMPLE solution converged" in log and imbalance < .01
     residuals = {}
     for name,value in re.findall(r"Solving for (\w+), Initial residual = ([\deE+.\-]+)",log):
         residuals[name] = float(value)
+    return dict(grid=grid,velocity=velocity,pressure=pressure,p_in=pi*flow.density,p_out=po*flow.density,q_in=-qi,q_out=qo,
+                log=log,time=max(reader.time_values),solver_converged="SIMPLE solution converged" in log,residuals=residuals)
+
+
+def _kratos_fields(directory, flow):
+    from kratos_flow import read_kratos_fields
+    log = (directory/"log.kratos").read_text(errors="replace")
+    if "KRATOS_DONE" not in log:
+        raise RuntimeError("Kratos did not finish cleanly; inspect log.kratos.")
+    grid = pv.read(directory/"fluid_mesh.vtu")
+    fields = read_kratos_fields(directory,grid,flow)
+    last = re.findall(r"^STEP \d+ dU=([\deE+.\-]+) dP=([\deE+.\-]+)",log,re.MULTILINE)
+    residuals = {"dU":float(last[-1][0]),"dP":float(last[-1][1])} if last else {}
+    return dict(grid=grid,velocity=fields["velocity"],pressure=fields["pressure"],p_in=fields["p_in"],p_out=fields["p_out"],
+                q_in=fields["q_in"],q_out=fields["q_out"],log=log,time=float(fields["steps"]),
+                solver_converged=fields["converged"],residuals=residuals)
+
+
+def summarize_flow_case(directory):
+    directory = Path(directory)
+    manifest = json.loads((directory/"flow_case.json").read_text())
+    flow = FlowSettings(**manifest["flow"])
+    fields = _kratos_fields(directory,flow) if flow.solver == "kratos" else _openfoam_fields(directory,flow)
+    grid,velocity,pressure,log = fields["grid"],fields["velocity"],fields["pressure"],fields["log"]
+    if not np.isfinite(velocity).all() or not np.isfinite(pressure).all():
+        raise RuntimeError("Non-finite CFD result. Inspect mesh and solver settings.")
+    grid.cell_data["Velocity_m_s"] = velocity
+    grid.cell_data["Speed_m_s"] = np.linalg.norm(velocity,axis=1)
+    grid.cell_data["Pressure_Pa"] = pressure
+    grid.save(directory/"flow_result.vtu")
+    qi,qo = fields["q_in"],fields["q_out"]
+    imbalance = abs(qi-qo)/max(abs(qi),abs(qo),1e-30)
+    # Equal-order stabilised FEM enforces continuity weakly, so its inlet/outlet flux match is looser than a finite-volume one.
+    balance_limit = .03 if flow.solver == "kratos" else .01
+    converged = fields["solver_converged"] and imbalance < balance_limit
+    residuals = fields["residuals"]
     volume = np.asarray(grid.compute_cell_sizes(length=False,area=False,volume=True).cell_data["Volume"])
     cell_centres = grid.cell_centers().points
     centres = cell_centres[:,2]*1000
@@ -486,18 +543,22 @@ def summarize_flow_case(directory):
                 writer.writerow((at,profile_p[-1],mean(velocity[:,2],mask),float(np.linalg.norm(velocity[mask],axis=1).max())))
     analysis = _pipe_analysis(flow,manifest,directory,velocity,volume,cell_centres,centres,z,profile_z,profile_p,
                               section(before)-section(after),after-before)
-    _write_residual_history(directory,log)
-    summary = dict(status="converged" if converged else "not_converged",time=max(reader.time_values),
-                   reynolds_diameter=flow.reynolds,pressure_drop_total_Pa=(pi-po)*flow.density,
+    if flow.solver == "kratos":
+        from kratos_flow import write_kratos_residuals
+        write_kratos_residuals(directory,log)
+    else:
+        _write_residual_history(directory,log)
+    summary = dict(status="converged" if converged else "not_converged",solver=flow.solver,time=fields["time"],
+                   reynolds_diameter=flow.reynolds,pressure_drop_total_Pa=fields["p_in"]-fields["p_out"],
                    pressure_drop_specimen_Pa=section(before)-section(after),
                    specimen_pressure_planes_mm=[float(before),float(after)],
                    pressure_definition="Static, area-averaged gauge pressure. Specimen value uses the adjacent empty-channel cell-centre planes, including entrance/exit effects.",
-                   inlet_flow_m3_s=-qi,outlet_flow_m3_s=qo,mass_imbalance_fraction=imbalance,
+                   inlet_flow_m3_s=qi,outlet_flow_m3_s=qo,mass_imbalance_fraction=imbalance,
                    maximum_speed_m_s=float(np.linalg.norm(velocity,axis=1).max()),
                    final_initial_residuals=residuals,mesh=manifest["mesh"],warnings=manifest["mesh"]["warnings"])
     summary["pipe_analysis"] = analysis
     summary["warnings"] = list(summary["warnings"]) + list(analysis.get("notes",[]))
-    if not converged: summary["warnings"].append("SIMPLE residual criteria and/or 1% mass-balance criterion not satisfied; these are provisional results.")
+    if not converged: summary["warnings"].append(("Kratos pseudo-time change criterion" if flow.solver == "kratos" else "SIMPLE residual criteria")+f" and/or {balance_limit:.0%} mass-balance criterion not satisfied; these are provisional results.")
     (directory/"flow_summary.json").write_text(json.dumps(summary,indent=2),encoding="utf-8")
     return summary
 

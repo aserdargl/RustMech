@@ -36,8 +36,9 @@ class ThermalWorkspace(FlowWorkspace):
         self.panel.layout().itemAt(1).widget().setText("Hot water heats the initially cooler TPMS. Insulated channel exterior; perfect water–solid thermal contact. Flow +Z. Temperatures: °C; time: s.")
         self.input_panel.layout().setRowVisible(self.controls["iterations"],False)
         # The CHT regions use the structured stair-step grid; pipe-flow mesh controls do not apply here.
-        for hidden in (self.controls["pipe_length_mm"],self.controls["wall_grading"],self.controls["axial_aspect"],self.mesh_style,self.convection):
+        for hidden in (self.controls["pipe_length_mm"],self.controls["wall_grading"],self.controls["axial_aspect"],self.mesh_style,self.convection,self.solver,self.kratos_python):
             self.input_panel.layout().setRowVisible(hidden,False)
+        self.gci_button.setVisible(False)
         self.model.setCurrentIndex(0)
         self.model.setEnabled(False)
         self.model.setToolTip("This initial transient CHT model supports laminar flow.")
