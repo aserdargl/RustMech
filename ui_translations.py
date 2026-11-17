@@ -921,6 +921,39 @@ FIELD_LABELS = {key: TURKISH.pop(key) for key in (
     'cores', 'substeps', 'minimum_substeps', 'maximum_substeps')}
 
 # Full-message templates preserve numerical values, paths and solver names.
+TURKISH.update({
+    'Library': 'Kütüphane',
+    'Material library': 'Malzeme kütüphanesi',
+    'Select material': 'Malzeme seç',
+    'Material selection': 'Malzeme seçimi',
+    'Current / custom material': 'Mevcut / özel malzeme',
+    'Browse material properties and source datasheets': 'Malzeme özelliklerini ve kaynak teknik föylerini incele',
+    'Search materials...': 'Malzeme ara...',
+    'Search materials': 'Malzeme ara',
+    'Materials': 'Malzemeler',
+    'Material properties and sources': 'Malzeme özellikleri ve kaynakları',
+    'No matching materials.': 'Eşleşen malzeme yok.',
+    'Reference temperature': 'Referans sıcaklığı',
+    'Constant properties. Solids use linear elasticity; no plastic curve is supplied.': 'Sabit özellikler. Katılarda doğrusal elastik model kullanılır; plastik eğri sağlanmaz.',
+    'Properties': 'Özellikler',
+    'Not supplied': 'Sağlanmamış',
+    'Engineering assumptions': 'Mühendislik varsayımları',
+    'Conditions and limitations': 'Koşullar ve sınırlamalar',
+    'Datasheets and references': 'Teknik föyler ve kaynaklar',
+    'Required properties not supplied:': 'Gerekli özellikler sağlanmamış:',
+    'Add selects this material. Analysis does not start.': 'Ekle, bu malzemeyi seçer. Analiz başlatılmaz.',
+    'Includes engineering estimates; see marked values and assumptions below.': 'Mühendislik tahminleri içerir; işaretli değerleri ve aşağıdaki varsayımları inceleyin.',
+    'estimate': 'tahmin',
+    'Density': 'Yoğunluk',
+    "Young's modulus": 'Elastisite modülü',
+    'Yield stress': 'Akma gerilmesi',
+    'Tangent modulus': 'Teğet modülü',
+    'Thermal conductivity': 'Isıl iletkenlik',
+    'Specific heat capacity': 'Özgül ısı kapasitesi',
+    'Thermal expansion': 'Isıl genleşme',
+    'Dynamic viscosity': 'Dinamik viskozite',
+})
+
 TEMPLATES = {
     '{name} must be a positive finite number.': '{name} pozitif ve sonlu olmalıdır.',
     '{name} must be positive and finite.': '{name} pozitif ve sonlu olmalıdır.',
