@@ -38,7 +38,8 @@ class FlowAnalysisTests(unittest.TestCase):
 
     def test_tpms_removes_solid_and_keeps_inlet_and_outlet(self):
         flow = FlowSettings(cells_across=12)
-        empty,_ = build_flow_grid(Settings(),replace(flow,empty_pipe=True))
+        # Same axial resolution: the empty-pipe default (aspect 2) would otherwise use half as many layers.
+        empty,_ = build_flow_grid(Settings(),replace(flow,empty_pipe=True,axial_aspect=1.0))
         tpms,mesh = build_flow_grid(Settings(),flow)
         self.assertLess(tpms.n_cells,empty.n_cells)
         self.assertGreater(mesh["solid_cells"],0)

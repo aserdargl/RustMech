@@ -593,6 +593,15 @@ Units: mm  °C  s  Pa|Birimler: mm  °C  s  Pa
 ● SOLVER INACTIVE|● ÇÖZÜCÜ ETKİN DEĞİL
 ● UPDATING PREVIEW|● ÖNİZLEME GÜNCELLENİYOR
 ● VALIDATION ERROR|● DOĞRULAMA HATASI
+Pipe length / mm (0 = cube size)|Boru uzunluğu / mm (0 = küp boyutu)
+Wall cell grading|Duvar hücre derecelendirmesi
+Axial cell aspect|Eksenel hücre oranı
+Mesh style|Ağ stili
+Wall-fitted O-grid|Duvara oturan O-grid
+Cartesian stair-step (legacy)|Kartezyen basamaklı (eski)
+Momentum scheme|Momentum şeması
+Linear upwind (2nd order)|Doğrusal upwind (2. derece)
+Upwind (1st order, robust)|Upwind (1. derece, sağlam)
 '''
 
 TURKISH = dict(line.split('|', 1) for line in _TEXT.splitlines() if '|' in line)

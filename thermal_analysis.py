@@ -61,6 +61,7 @@ class ThermalSettings:
 
 def build_thermal_grid(specimen, flow):
     """A conformal full cylinder, with exactly the same TPMS phase as flow CFD."""
+    flow = replace(flow,mesh_style="cartesian")  # CHT regions need the structured i/j/k grid
     _,flow_meta = build_flow_grid(specimen,flow)
     if flow_meta["isolated_cells"]:
         raise ValueError("This mesh has isolated water cavities. Refine/change the TPMS: disconnected fluid pressure regions are not supported by this CHT version.")
@@ -86,6 +87,7 @@ def build_thermal_grid(specimen, flow):
 def export_thermal_case(specimen, flow, thermal, directory):
     from analysis_process import report_analysis_step
     report_analysis_step("Building water and solid region meshes…")
+    flow = replace(flow,mesh_style="cartesian")
     thermal.validate(specimen,flow)
     directory = Path(directory)
     if directory.exists() and any(directory.iterdir()):

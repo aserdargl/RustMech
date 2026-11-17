@@ -35,6 +35,9 @@ class ThermalWorkspace(FlowWorkspace):
         self.panel.layout().itemAt(0).widget().setText("Transient water + TPMS heat transfer")
         self.panel.layout().itemAt(1).widget().setText("Hot water heats the initially cooler TPMS. Insulated channel exterior; perfect water–solid thermal contact. Flow +Z. Temperatures: °C; time: s.")
         self.input_panel.layout().setRowVisible(self.controls["iterations"],False)
+        # The CHT regions use the structured stair-step grid; pipe-flow mesh controls do not apply here.
+        for hidden in (self.controls["pipe_length_mm"],self.controls["wall_grading"],self.controls["axial_aspect"],self.mesh_style,self.convection):
+            self.input_panel.layout().setRowVisible(hidden,False)
         self.model.setCurrentIndex(0)
         self.model.setEnabled(False)
         self.model.setToolTip("This initial transient CHT model supports laminar flow.")
@@ -174,7 +177,8 @@ class ThermalWorkspace(FlowWorkspace):
         directory = Path(directory)
         manifest = json.loads((directory/"thermal_case.json").read_text())
         self.display_directory,self.manifest = directory,manifest
-        for key,control in self.controls.items(): control.setValue(manifest["flow"][key])
+        for key,control in self.controls.items():
+            if key in manifest["flow"]: control.setValue(manifest["flow"][key])
         self.empty.setChecked(manifest["flow"]["empty_pipe"])
         self.distribution.setText(manifest["flow"]["distribution"])
         self.bashrc.setText(manifest["flow"]["foam_bashrc"])

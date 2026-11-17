@@ -72,12 +72,15 @@ class FlowWorkspace(QWidget):
             pass
         for name,label,lo,hi in (
             ("diameter_mm","Diameter / mm",.01,10000),
+            ("pipe_length_mm","Pipe length / mm (0 = cube size)",0,100000),
             ("inlet_length_mm","Inlet extension / mm",.01,100000),
             ("outlet_length_mm","Outlet extension / mm",.01,100000),
             ("inlet_speed","Inlet speed / m/s",.000001,100),
             ("density","Density / kg/m³",.001,100000),
             ("dynamic_viscosity","Viscosity / Pa·s",.00000001,1000),
             ("cells_across","Cells / diameter",8,128),
+            ("wall_grading","Wall cell grading",1,20),
+            ("axial_aspect","Axial cell aspect",1,20),
             ("iterations","Max iterations",20,20000)):
             control = CompactSpinBox() if name in ("cells_across","iterations") else CompactDoubleSpinBox()
             if isinstance(control,CompactDoubleSpinBox): control.setDecimals(8)
@@ -94,6 +97,18 @@ class FlowWorkspace(QWidget):
         self.model.setCurrentIndex(max(0,self.model.findData(defaults.turbulence)))
         self.model.currentIndexChanged.connect(self.inputs_changed)
         form.addRow(field_label("Flow model",self.model),self.model)
+        self.mesh_style = CompactComboBox()
+        self.mesh_style.addItem("Wall-fitted O-grid","ogrid")
+        self.mesh_style.addItem("Cartesian stair-step (legacy)","cartesian")
+        self.mesh_style.setCurrentIndex(max(0,self.mesh_style.findData(defaults.mesh_style)))
+        self.mesh_style.currentIndexChanged.connect(self.inputs_changed)
+        form.addRow(field_label("Mesh style",self.mesh_style),self.mesh_style)
+        self.convection = CompactComboBox()
+        self.convection.addItem("Linear upwind (2nd order)","linearUpwind")
+        self.convection.addItem("Upwind (1st order, robust)","upwind")
+        self.convection.setCurrentIndex(max(0,self.convection.findData(defaults.convection)))
+        self.convection.currentIndexChanged.connect(self.inputs_changed)
+        form.addRow(field_label("Momentum scheme",self.convection),self.convection)
         self.empty = QCheckBox("Empty pipe reference")
         self.empty.setChecked(defaults.empty_pipe)
         self.empty.toggled.connect(self.inputs_changed)
@@ -176,6 +191,7 @@ class FlowWorkspace(QWidget):
     def collect(self):
         return FlowSettings(**{key:control.value() for key,control in self.controls.items()},
                             turbulence=self.model.currentData(),empty_pipe=self.empty.isChecked(),
+                            mesh_style=self.mesh_style.currentData(),convection=self.convection.currentData(),
                             distribution=self.distribution.text().strip(),foam_bashrc=self.bashrc.text().strip())
 
     def inputs_changed(self,*_):
@@ -183,7 +199,16 @@ class FlowWorkspace(QWidget):
         flow = self.collect()
         self.preferences.setValue(self.SETTINGS_KEY,json.dumps(asdict(flow)))
         self.preferences.sync()
-        self.info.setText(f"Pipe Reynolds ≈ {flow.reynolds:.5g}\nNominal cell: {flow.diameter_mm/flow.cells_across:.5g} mm. Inlet velocity is the mean over the discretized pipe inlet; pore velocity is solved.")
+        ogrid = flow.mesh_style == "ogrid"
+        self.controls["wall_grading"].setEnabled(ogrid)
+        self.controls["axial_aspect"].setEnabled(ogrid and flow.empty_pipe)
+        self.controls["pipe_length_mm"].setEnabled(ogrid and flow.empty_pipe)
+        text = f"Pipe Reynolds ≈ {flow.reynolds:.5g} · entrance length ≈ {flow.developing_length_mm():.4g} mm\nNominal cell: {flow.diameter_mm/flow.cells_across:.5g} mm. Inlet velocity is the mean over the discretized pipe inlet; pore velocity is solved."
+        try:
+            text += f"\nEstimated mesh: {flow.estimated_cells(self.settings_provider()):,} cells"
+        except Exception:
+            pass
+        self.info.setText(text)
         if self.display_directory:
             self.status.setText("Inputs changed. The displayed case keeps its saved geometry and flow conditions; build/run to apply changes.")
 
@@ -293,13 +318,16 @@ class FlowWorkspace(QWidget):
         self.manifest = manifest
         spec,flow = manifest["specimen"],manifest["flow"]
         for key,control in self.controls.items():
-            control.setValue(flow[key])
+            if key in flow: control.setValue(flow[key])
+        # Cases saved before the O-grid mesh existed were stair-step meshes with first-order convection.
+        self.mesh_style.setCurrentIndex(max(0,self.mesh_style.findData(flow.get("mesh_style","cartesian"))))
+        self.convection.setCurrentIndex(max(0,self.convection.findData(flow.get("convection","upwind"))))
         self.model.setCurrentIndex(self.model.findData(flow["turbulence"]))
         self.empty.setChecked(flow["empty_pipe"])
         self.distribution.setText(flow["distribution"])
         self.bashrc.setText(flow["foam_bashrc"])
         self.inputs_changed()
-        self.case_label.setText(f"Saved case: {'Empty pipe' if flow['empty_pipe'] else spec['structure_name']} · Ø {flow['diameter_mm']:g} × {spec['size']:g} mm · {flow['inlet_speed']:g} m/s · {flow['turbulence']}")
+        self.case_label.setText(f"Saved case: {'Empty pipe' if flow['empty_pipe'] else spec['structure_name']} · Ø {flow['diameter_mm']:g} × {manifest['mesh'].get('specimen_end_mm',spec['size']):g} mm · {flow['inlet_speed']:g} m/s · {flow['turbulence']}")
         self.case_label.setToolTip("Displayed results use this saved case. A new run uses the current Model workspace geometry and the flow inputs at left.")
         summary_path = directory/"flow_summary.json"
         if summary_path.exists():
@@ -309,7 +337,7 @@ class FlowWorkspace(QWidget):
                 f"Q inlet / outlet: {summary['inlet_flow_m3_s']*6e7:.6g} / {summary['outlet_flow_m3_s']*6e7:.6g} mL/min · mass imbalance: {summary['mass_imbalance_fraction']*100:.4g}%\n"
                 f"Maximum speed: {summary['maximum_speed_m_s']:.6g} m/s · sampled cylinder solid: {summary['mesh']['specimen_solid_fraction']*100:.4g}%\n"
                 f"TPMS pressure planes: {summary['specimen_pressure_planes_mm'][0]:.5g} / {summary['specimen_pressure_planes_mm'][1]:.5g} mm (includes entrance/exit effects).\n"+
-                "\n".join(summary["warnings"]))
+                self.analysis_text(summary.get("pipe_analysis"))+"\n".join(summary["warnings"]))
             self.status.setText("Results and axial_profile.csv saved. "+str(directory))
             self.view.setCurrentIndex(1)
         else:
@@ -320,6 +348,25 @@ class FlowWorkspace(QWidget):
         self.render()
         self.plotter.view_isometric()
         self.plotter.reset_camera()
+
+    @staticmethod
+    def analysis_text(analysis):
+        """Pipe-flow reference check (empty pipe) or apparent permeability (TPMS fill)."""
+        if not analysis: return ""
+        if analysis.get("kind") == "empty_pipe":
+            lines = [f"Pipe check · {analysis['regime']} · entrance length ≈ {analysis['developing_length_mm']:.4g} mm"]
+            if "friction_factor_cfd" in analysis:
+                theory = analysis.get("friction_factor_theory")
+                lines.append(f"Friction factor (Darcy): CFD {analysis['friction_factor_cfd']:.5g}"+
+                             (f" · theory {theory:.5g} · difference {analysis['friction_factor_error_pct']:+.3g}%" if theory else " · no closed-form value in transition"))
+                lines.append(f"Δp/L: CFD {analysis['gradient_cfd_Pa_m']:.5g} Pa/m"+
+                             (f" · theory {analysis['gradient_theory_Pa_m']:.5g} Pa/m" if "gradient_theory_Pa_m" in analysis else "")+
+                             f" · wall shear {analysis['wall_shear_stress_Pa']:.4g} Pa")
+            return "\n".join(lines)+"\n"
+        lines = [f"TPMS-filled pipe · porosity {analysis['porosity']*100:.4g}%"]
+        if "darcy_permeability_m2" in analysis:
+            lines.append(f"Apparent Darcy permeability {analysis['darcy_permeability_m2']:.4g} m² · permeability Re {analysis['permeability_reynolds']:.3g} · Δp/L {analysis['pressure_gradient_Pa_m']:.5g} Pa/m")
+        return "\n".join(lines)+"\n"
 
     def render(self,*_):
         if self.grid is None: return
@@ -333,7 +380,7 @@ class FlowWorkspace(QWidget):
             specimen = self.manifest["specimen"]
             # Mark the specimen interval even when long entrance/exit sections dominate the view.
             angles = np.linspace(0,2*np.pi,65)
-            for z in (0,specimen["size"]):
+            for z in (0,self.manifest["mesh"].get("specimen_end_mm",specimen["size"])):
                 points = np.column_stack((specimen["size"]/2+diameter/2*np.cos(angles),
                                           specimen["size"]/2+diameter/2*np.sin(angles),np.full_like(angles,z)))
                 self.plotter.add_mesh(pv.lines_from_points(points),color="#c47b28",line_width=2)

@@ -36,10 +36,43 @@ class FlowSettings:
     empty_pipe: bool = False
     distribution: str = "Ubuntu"
     foam_bashrc: str = "/usr/lib/openfoam/openfoam2606/etc/bashrc"
+    # Pipe-flow mesh controls. Defaults keep older saved cases and presets valid.
+    mesh_style: str = "ogrid"        # "ogrid": wall-fitted circular pipe; "cartesian": legacy stair-step
+    pipe_length_mm: float = 0.0      # empty pipe test length; 0 = Model cube size
+    axial_aspect: float = 2.0        # axial / cross-section cell size, empty pipe only
+    wall_grading: float = 1.0        # first-to-last radial cell size ratio (1 = uniform)
+    convection: str = "linearUpwind" # momentum convection scheme: "linearUpwind" or "upwind"
 
     @property
     def reynolds(self):
         return self.density * self.inlet_speed * self.diameter_mm * 0.001 / self.dynamic_viscosity
+
+    def test_length_mm(self, specimen):
+        """Length of the instrumented section: own pipe length for an empty pipe, otherwise the TPMS block."""
+        own = self.empty_pipe and self.mesh_style == "ogrid" and self.pipe_length_mm > 0
+        return self.pipe_length_mm if own else specimen.size
+
+    def axial_cell_mm(self):
+        return self.diameter_mm / self.cells_across * (self.axial_aspect if self.empty_pipe and self.mesh_style == "ogrid" else 1.0)
+
+    def layers(self, specimen):
+        hz = self.axial_cell_mm()
+        return sum(max(1, math.ceil(length / hz - 1e-9)) for length in
+                   (self.inlet_length_mm, self.test_length_mm(specimen), self.outlet_length_mm))
+
+    def cells_per_layer(self):
+        if self.mesh_style == "ogrid":
+            from pipe_mesh import split_cells_across
+            core, radial = split_cells_across(self.cells_across)
+            return core * core + 4 * core * radial
+        return self.cells_across ** 2
+
+    def estimated_cells(self, specimen):
+        return self.cells_per_layer() * self.layers(specimen)
+
+    def developing_length_mm(self):
+        from pipe_flow_theory import developing_length_mm
+        return developing_length_mm(self.reynolds, self.diameter_mm)
 
     def validate(self, specimen: Settings):
         if specimen.test_profile != 'custom':
@@ -62,15 +95,22 @@ class FlowSettings:
                 raise ValueError(f"{name} must be an integer between {lo} and {hi}.")
         if specimen.structure_family != "tpms" and not self.empty_pipe:
             raise ValueError("Select a TPMS geometry in the Model workspace first.")
-        if self.diameter_mm > specimen.size + 1e-9:
+        if self.diameter_mm > specimen.size + 1e-9 and not self.empty_pipe:
             raise ValueError("Channel diameter must not exceed specimen cube size; this would leave bypass gaps.")
         if self.turbulence not in ("laminar", "kOmegaSST"):
             raise ValueError("Unsupported flow model.")
-        h = self.diameter_mm / self.cells_across
-        nz = sum(math.ceil(length / h) for length in (self.inlet_length_mm, specimen.size, self.outlet_length_mm))
-        if self.cells_across ** 2 * nz > 700000:
+        if self.mesh_style not in ("ogrid", "cartesian"):
+            raise ValueError("Unsupported mesh style.")
+        if self.convection not in ("linearUpwind", "upwind"):
+            raise ValueError("Unsupported convection scheme.")
+        for name, lo, hi in (("pipe_length_mm", 0.0, 1e6), ("axial_aspect", 1.0, 20.0), ("wall_grading", 1.0, 20.0)):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or not lo <= value <= hi:
+                raise ValueError(f"{name} must be between {lo:g} and {hi:g}.")
+        hz = self.axial_cell_mm()
+        if self.estimated_cells(specimen) > 700000:
             raise ValueError("Mesh exceeds the first-version limit of 700,000 background cells. Reduce resolution or extension lengths.")
-        if min(self.inlet_length_mm, self.outlet_length_mm) < 2 * h:
+        if min(self.inlet_length_mm, self.outlet_length_mm) < 2 * hz:
             raise ValueError("Each extension must contain at least two cells.")
 
     def validate_local_runtime(self):
@@ -79,7 +119,108 @@ class FlowSettings:
 
 
 def build_flow_grid(specimen, flow):
+    """Fluid mesh for the selected style; both styles return ``(grid, metadata)`` in SI metres."""
     flow.validate(specimen)
+    return _build_ogrid_grid(specimen, flow) if flow.mesh_style == "ogrid" else _build_cartesian_grid(specimen, flow)
+
+
+def _segment_edges(flow, test_length, hz):
+    parts = [np.linspace(a, b, max(1, math.ceil((b - a) / hz - 1e-9)) + 1) for a, b in
+             ((-flow.inlet_length_mm, 0.0), (0.0, test_length), (test_length, test_length + flow.outlet_length_mm))]
+    return np.concatenate([parts[0], parts[1][1:], parts[2][1:]])
+
+
+def _through_cells(fluid, quads):
+    """Mask of fluid cells face-connected from inlet to outlet; ``fluid`` is (layers, quads)."""
+    from scipy.sparse import coo_matrix
+    from scipy.sparse.csgraph import connected_components
+    from pipe_mesh import quad_adjacency
+    nz, nq = fluid.shape
+    ids = np.arange(nz * nq).reshape(nz, nq)
+    pairs = quad_adjacency(quads)
+    ok = fluid[:, pairs[:, 0]] & fluid[:, pairs[:, 1]]
+    axial = fluid[:-1] & fluid[1:]
+    rows = np.concatenate((ids[:, pairs[:, 0]][ok], ids[:-1][axial]))
+    cols = np.concatenate((ids[:, pairs[:, 1]][ok], ids[1:][axial]))
+    graph = coo_matrix((np.ones(len(rows), dtype=np.int8), (rows, cols)), shape=(nz * nq, nz * nq))
+    _, labels = connected_components(graph, directed=False)
+    labels = labels.reshape(nz, nq)
+    through = np.intersect1d(labels[0][fluid[0]], labels[-1][fluid[-1]])
+    return fluid & np.isin(labels, through)
+
+
+def _build_ogrid_grid(specimen, flow):
+    """Wall-fitted circular pipe. Only TPMS surfaces are stair-stepped; the pipe wall is exact."""
+    from pipe_mesh import cross_section
+    d = flow.diameter_mm
+    length = flow.test_length_mm(specimen)
+    h, hz = d / flow.cells_across, flow.axial_cell_mm()
+    z = _segment_edges(flow, length, hz)
+    xy, quads, section = cross_section(d, flow.cells_across, flow.wall_grading)
+    areas = section.pop("areas_mm2")
+    centre = (specimen.size / 2, specimen.size / 2)
+    nq, nz = len(quads), len(z) - 1
+    zc = (z[:-1] + z[1:]) / 2
+    dz = np.diff(z)
+    inside = (zc > 0) & (zc < length)
+    solid = np.zeros((nz, nq), dtype=bool)
+    if not flow.empty_pipe:
+        qc = xy[quads].mean(axis=1) + centre
+        # Same TPMS phase and threshold as the mechanical model; the CFD mesh never retunes geometry.
+        field = evaluate_priority_field(specimen, qc[None, :, 0], qc[None, :, 1], zc[inside][:, None])
+        solid[inside] = np.broadcast_to(field, (int(inside.sum()), nq)) <= geometry_threshold(specimen)
+        if not solid.any():
+            raise ValueError("Mesh does not resolve any TPMS solid. Increase cells across the diameter.")
+    fluid = ~solid
+    keep = _through_cells(fluid, quads)
+    if not keep[0].any() or not keep[-1].any() or not (keep.any(axis=1)).all():
+        raise ValueError("No face-connected water path from inlet to outlet. Refine the mesh or change TPMS geometry.")
+    isolated = fluid & ~keep
+    layer, quad = np.nonzero(keep)
+    conn_full = np.concatenate((quads[quad] + layer[:, None] * len(xy), quads[quad] + (layer[:, None] + 1) * len(xy)), axis=1)
+    used, inverse = np.unique(conn_full.ravel(), return_inverse=True)
+    pts = np.column_stack((xy[used % len(xy), 0] + centre[0], xy[used % len(xy), 1] + centre[1], z[used // len(xy)])) * .001
+    conn = inverse.reshape(-1, 8)
+    cells = np.column_stack((np.full(len(conn), 8), conn)).ravel()
+    grid = pv.UnstructuredGrid(cells, np.full(len(conn), pv.CellType.HEXAHEDRON), pts)
+    grid.cell_data["grid_i"] = quad
+    grid.cell_data["grid_j"] = np.zeros(len(quad), dtype=int)
+    grid.cell_data["grid_k"] = layer
+    inlet_area = float(areas[keep[0]].sum())
+    zone = inside[:, None] & np.ones((1, nq), dtype=bool)
+    weight = dz[:, None] * areas[None, :]
+    metadata = dict(fluid_cells=len(quad), isolated_cells=int(isolated.sum()), solid_cells=int(solid.sum()),
+                    effective_diameter_mm=2 * math.sqrt(inlet_area / math.pi), inlet_area_m2=inlet_area * 1e-6,
+                    specimen_solid_fraction=float(weight[zone & solid].sum() / weight[zone].sum()),
+                    nominal_cell_mm=h, axial_cell_mm=hz, specimen_start_mm=0., specimen_end_mm=float(length),
+                    z_centres_mm=zc.tolist(), mesh_style="ogrid", layers=nz, wall_grading=flow.wall_grading,
+                    developing_length_mm=flow.developing_length_mm(), warnings=[], **section)
+    section_warnings(metadata, flow, specimen)
+    return grid, metadata
+
+
+def section_warnings(metadata, flow, specimen):
+    warnings = metadata["warnings"]
+    if not flow.empty_pipe and metadata["nominal_cell_mm"] > specimen.cell_size * min(specimen.solid_fraction, 100 - specimen.solid_fraction) / 100 / 6:
+        warnings.append("Thin TPMS walls/pores may be under-resolved. Compare finer meshes before interpreting pressure loss.")
+    if flow.turbulence == "laminar" and flow.reynolds > 2000:
+        warnings.append("High pipe Reynolds number with laminar model; evaluate turbulence and pore-scale Reynolds numbers.")
+    if metadata["min_angle_deg"] < 40:
+        warnings.append(f"Poor cross-section cells (minimum angle {metadata['min_angle_deg']:.1f}°); increase cells across the diameter.")
+    from pipe_flow_theory import estimate_y_plus
+    y_plus = estimate_y_plus(flow.reynolds, flow.density, flow.inlet_speed, flow.dynamic_viscosity, metadata["first_cell_centre_mm"])
+    metadata["estimated_y_plus"] = y_plus
+    if flow.turbulence != "laminar" and not 30 <= y_plus <= 300 and y_plus > 5:
+        warnings.append(f"Estimated wall y+ ≈ {y_plus:.3g}. The ω wall function is least reliable for 5 < y+ < 30; adjust cells across or wall grading.")
+    total = flow.inlet_length_mm + flow.test_length_mm(specimen) + flow.outlet_length_mm
+    if flow.empty_pipe and total < 1.2 * metadata["developing_length_mm"]:
+        warnings.append(f"Pipe ({total:.4g} mm) is shorter than ~1.2 entrance lengths ({1.2 * metadata['developing_length_mm']:.4g} mm); flow will not be fully developed, so the friction check is not a fully developed comparison.")
+    if metadata.get("mesh_style") == "ogrid":
+        warnings.append("Body-fitted O-grid pipe wall. Mesh independence is still required." if flow.empty_pipe else
+                        "Body-fitted O-grid pipe wall; TPMS surfaces remain stair-stepped. Mesh independence is still required.")
+
+
+def _build_cartesian_grid(specimen, flow):
     n = flow.cells_across
     d = flow.diameter_mm
     h = d / n
@@ -215,13 +356,15 @@ def export_flow_case(specimen, flow, directory):
         for op,fields in (("areaAverage","p"),("sum","phi")):
             functions += f"{patch}_{fields} {{ type surfaceFieldValue; libs (\"libfieldFunctionObjects.so\"); writeControl timeStep; writeInterval 1; regionType patch; name {patch}; operation {op}; fields ({fields}); writeFields false; }}\n"
     _write(directory/"system"/"controlDict",_header("dictionary","controlDict")+f"application simpleFoam; startFrom startTime; startTime 0; stopAt endTime; endTime {flow.iterations}; deltaT 1; writeControl timeStep; writeInterval {flow.iterations}; purgeWrite 1; writeFormat ascii; writePrecision 12; runTimeModifiable false; functions {{ {functions} }}\n")
-    _write(directory/"system"/"fvSchemes",_header("dictionary","fvSchemes")+"ddtSchemes { default steadyState; } gradSchemes { default Gauss linear; } divSchemes { default none; div(phi,U) bounded Gauss upwind; div(phi,k) bounded Gauss upwind; div(phi,omega) bounded Gauss upwind; div((nuEff*dev2(T(grad(U))))) Gauss linear; } laplacianSchemes { default Gauss linear corrected; } interpolationSchemes { default linear; } snGradSchemes { default corrected; } fluxRequired { default no; p; } wallDist { method meshWave; }\n")
+    momentum = "bounded Gauss linearUpwind grad(U)" if flow.convection == "linearUpwind" else "bounded Gauss upwind"
+    gradients = "default Gauss linear; grad(U) cellLimited Gauss linear 1;" if flow.convection == "linearUpwind" else "default Gauss linear;"
+    _write(directory/"system"/"fvSchemes",_header("dictionary","fvSchemes")+f"ddtSchemes {{ default steadyState; }} gradSchemes {{ {gradients} }} divSchemes {{ default none; div(phi,U) {momentum};"+" div(phi,k) bounded Gauss upwind; div(phi,omega) bounded Gauss upwind; div((nuEff*dev2(T(grad(U))))) Gauss linear; } laplacianSchemes { default Gauss linear corrected; } interpolationSchemes { default linear; } snGradSchemes { default corrected; } fluxRequired { default no; p; } wallDist { method meshWave; }\n")
     _write(directory/"system"/"fvSolution",_header("dictionary","fvSolution")+"solvers { p { solver GAMG; tolerance 1e-9; relTol 0.05; smoother GaussSeidel; } \"(U|k|omega)\" { solver smoothSolver; smoother symGaussSeidel; tolerance 1e-9; relTol 0.05; } } SIMPLE { nNonOrthogonalCorrectors 0; consistent yes; residualControl { p 1e-5; U 1e-6; \"(k|omega)\" 1e-5; } } relaxationFactors { fields { p 0.3; } equations { U 0.7; k 0.7; omega 0.7; } }\n")
     _write(directory/"case.foam", "")
     manifest = dict(specimen=asdict(specimen),flow=asdict(flow),mesh=metadata,
                     pressure_units="Pa (OpenFOAM p multiplied by density)",velocity_units="m/s",
-                    geometry="TPMS phase clipped to a concentric cylinder, Z flow; specimen length = cube size",
-                    discretization="Cartesian stair-step finite volumes; no-slip walls; uniform velocity inlet; zero gauge pressure outlet")
+                    geometry=("Empty circular pipe" if flow.empty_pipe else "TPMS phase clipped to a concentric cylinder")+f", Z flow; test length {flow.test_length_mm(specimen):g} mm",
+                    discretization=("Wall-fitted O-grid hexahedra" if flow.mesh_style=="ogrid" else "Cartesian stair-step finite volumes")+f"; {flow.convection} momentum convection; no-slip walls; uniform velocity inlet; zero gauge pressure outlet")
     (directory/"flow_case.json").write_text(json.dumps(manifest,indent=2),encoding="utf-8")
     _write(directory/"Allrun", "#!/bin/bash\nset -eo pipefail\necho $$ > .runner.pid\ntrap 'rm -f .runner.pid' EXIT\ntest ! -f .cancel-request\ncheckMesh > log.checkMesh 2>&1\ngrep -q 'Mesh OK' log.checkMesh\ntest ! -f .cancel-request\nsimpleFoam > log.simpleFoam 2>&1\n")
     return manifest
@@ -319,20 +462,31 @@ def summarize_flow_case(directory):
     residuals = {}
     for name,value in re.findall(r"Solving for (\w+), Initial residual = ([\deE+.\-]+)",log):
         residuals[name] = float(value)
-    centres = grid.cell_centers().points[:,2]*1000
-    z = np.asarray(manifest["mesh"]["z_centres_mm"])
-    before,after = z[z<0][-1],z[z>manifest["specimen"]["size"]][0]
+    volume = np.asarray(grid.compute_cell_sizes(length=False,area=False,volume=True).cell_data["Volume"])
+    cell_centres = grid.cell_centers().points
+    centres = cell_centres[:,2]*1000
+    mesh = manifest["mesh"]
+    z = np.asarray(mesh["z_centres_mm"])
+    end_mm = mesh.get("specimen_end_mm",manifest["specimen"]["size"])
+    before,after = z[z<0][-1],z[z>end_mm][0]
+    def mean(values,mask): return float(np.average(values[mask],weights=volume[mask]))
     def section(at):
         mask = np.isclose(centres,at,rtol=0,atol=1e-5)
         if not mask.any(): raise RuntimeError("Cannot locate pressure measurement section.")
-        return float(np.mean(pressure[mask]))
+        return mean(pressure,mask)
     import csv
+    profile_z,profile_p = [],[]
     with (directory/"axial_profile.csv").open("w",newline="") as stream:
         writer = csv.writer(stream)
         writer.writerow(("z_mm","mean_pressure_Pa","mean_axial_velocity_m_s","max_speed_m_s"))
         for at in z:
             mask = np.isclose(centres,at,rtol=0,atol=1e-5)
-            if mask.any(): writer.writerow((at,float(pressure[mask].mean()),float(velocity[mask,2].mean()),float(np.linalg.norm(velocity[mask],axis=1).max())))
+            if mask.any():
+                profile_z.append(float(at)); profile_p.append(mean(pressure,mask))
+                writer.writerow((at,profile_p[-1],mean(velocity[:,2],mask),float(np.linalg.norm(velocity[mask],axis=1).max())))
+    analysis = _pipe_analysis(flow,manifest,directory,velocity,volume,cell_centres,centres,z,profile_z,profile_p,
+                              section(before)-section(after),after-before)
+    _write_residual_history(directory,log)
     summary = dict(status="converged" if converged else "not_converged",time=max(reader.time_values),
                    reynolds_diameter=flow.reynolds,pressure_drop_total_Pa=(pi-po)*flow.density,
                    pressure_drop_specimen_Pa=section(before)-section(after),
@@ -341,6 +495,56 @@ def summarize_flow_case(directory):
                    inlet_flow_m3_s=-qi,outlet_flow_m3_s=qo,mass_imbalance_fraction=imbalance,
                    maximum_speed_m_s=float(np.linalg.norm(velocity,axis=1).max()),
                    final_initial_residuals=residuals,mesh=manifest["mesh"],warnings=manifest["mesh"]["warnings"])
+    summary["pipe_analysis"] = analysis
+    summary["warnings"] = list(summary["warnings"]) + list(analysis.get("notes",[]))
     if not converged: summary["warnings"].append("SIMPLE residual criteria and/or 1% mass-balance criterion not satisfied; these are provisional results.")
     (directory/"flow_summary.json").write_text(json.dumps(summary,indent=2),encoding="utf-8")
     return summary
+
+
+def _pipe_analysis(flow,manifest,directory,velocity,volume,cell_centres,centres,z,profile_z,profile_p,specimen_drop,specimen_span_mm):
+    """Analytical comparison (empty pipe) or apparent permeability (TPMS fill) plus radial_profile.csv."""
+    import csv
+    from pipe_flow_theory import analyze_empty_pipe, analyze_porous, radial_profile
+    mesh = manifest["mesh"]
+    d_eff = mesh.get("effective_diameter_mm",flow.diameter_mm)
+    if not flow.empty_pipe:
+        return analyze_porous(flow,1-mesh["specimen_solid_fraction"],specimen_span_mm,specimen_drop,d_eff)
+    margin = 2*mesh.get("axial_cell_mm",mesh["nominal_cell_mm"])
+    analysis = analyze_empty_pipe(flow,d_eff,profile_z,profile_p,margin)
+    at = z[z<z.max()-margin][-1]
+    mask = np.isclose(centres,at,rtol=0,atol=1e-5)
+    middle = manifest["specimen"]["size"]/2
+    r = np.hypot(cell_centres[mask,0]-middle*.001,cell_centres[mask,1]-middle*.001)*1000
+    rows = radial_profile(r,velocity[mask,2],volume[mask],d_eff/2)
+    laminar = analysis["regime"] == "laminar"
+    with (directory/"radial_profile.csv").open("w",newline="") as stream:
+        writer = csv.writer(stream)
+        writer.writerow(("r_mm","r_over_R","axial_velocity_m_s","poiseuille_velocity_m_s"))
+        for radius,speed in rows:
+            writer.writerow((float(radius),float(radius/(d_eff/2)),float(speed),
+                             float(2*flow.inlet_speed*(1-(radius/(d_eff/2))**2)) if laminar else ""))
+    analysis["profile_plane_mm"] = float(at)
+    analysis["centreline_to_mean_velocity"] = float(rows[:3,1].mean()/flow.inlet_speed)
+    return analysis
+
+
+def _write_residual_history(directory,log):
+    import csv
+    history,order,iteration = {},[],0
+    for line in log.splitlines():
+        step = re.match(r"^Time = (\d+(?:\.\d+)?)\s*$",line)
+        if step:
+            iteration = float(step.group(1))
+            continue
+        solved = re.search(r"Solving for (\w+), Initial residual = ([\deE+.\-]+)",line)
+        if solved and iteration:
+            name = solved.group(1)
+            row = history.setdefault(iteration,{})
+            if name not in row: row[name] = float(solved.group(2))
+            if name not in order: order.append(name)
+    with (Path(directory)/"residuals.csv").open("w",newline="") as stream:
+        writer = csv.writer(stream)
+        writer.writerow(("iteration",*order))
+        for number in sorted(history):
+            writer.writerow((number,*(history[number].get(name,"") for name in order)))
