@@ -124,6 +124,13 @@ class FlowSettings:
 
 def build_flow_grid(specimen, flow, *, inspection=False):
     flow.validate(specimen)
+    if specimen.imported_geometry_path and not flow.empty_pipe and not inspection:
+        path = Path(specimen.imported_geometry_path).resolve()
+        stat = path.stat()
+        check = _imported_intersections(str(path),stat.st_mtime_ns,stat.st_size)
+        if check["status"] != "clear":
+            raise ValueError(f"Imported surface is invalid: {check['intersecting_pairs']} intersecting triangle pairs; "
+                             f"{check['degenerate_triangles']} degenerate triangles. Use Inspect geometry before solving.")
     width, height = flow.cross_section
     h = flow.cell_size_mm
     nx, ny = (math.ceil(value/h) for value in (width, height))
@@ -230,6 +237,33 @@ def export_geometry_inspection(specimen, flow, directory):
         metadata["warnings"].append("Isolated fluid cells are retained for inspection (red); they are excluded from CFD and unsupported in current CHT.")
     metadata["warnings"].append("Inspection tests sampled connectivity; sub-cell walls, pores and self-intersections need surface/mesh refinement checks.")
     directory.mkdir(parents=True,exist_ok=True)
+    if not flow.empty_pipe:
+        from analysis_process import report_analysis_step
+        from surface_audit import audit_surface
+        from mesh_engine import make_surface
+        report_analysis_step("Checking surface intersections and sampled wall/pore resolution…")
+        surface = make_surface(specimen)
+        audit, annotated = audit_surface(surface,flow.cell_size_mm,progress=report_analysis_step)
+        rotation,centre = specimen_transform(specimen,flow)
+        annotated.points = (annotated.points-specimen.size/2) @ rotation.T + centre
+        for check in (audit["intersection"],audit.get("chords")):
+            if check:
+                for marker in check["markers"]:
+                    marker["centre_mm"] = ((np.asarray(marker["centre_mm"])-specimen.size/2) @ rotation.T+centre).tolist()
+        annotated.save(directory/"surface_audit.vtp")
+        metadata["surface_audit"] = audit
+        if audit["intersection"]["status"] == "invalid":
+            metadata["geometry_errors"].append("The specimen surface has intersecting or degenerate triangles; repair it before analysis.")
+        elif audit["intersection"]["status"] == "incomplete":
+            metadata["warnings"].append("Surface intersection search reached its candidate budget; surface validity is unconfirmed.")
+        if audit.get("chords"):
+            for kind in ("wall","pore"):
+                ratio = audit["chords"][kind+"_minimum_cells"]
+                if ratio is not None and ratio<audit["chords"]["required_cells"]:
+                    metadata["warnings"].append(f"Sampled {kind} normal chord spans only {ratio:.3g} cells; refine and compare meshes.")
+        metadata["surface_validity_confirmed"] = audit["intersection"]["status"] == "clear"
+        metadata["geometry_valid_for_flow"] = not metadata["geometry_errors"] and metadata["surface_validity_confirmed"]
+        metadata["geometry_valid_for_cht"] = metadata["geometry_valid_for_flow"] and not metadata["isolated_cells"]
     grid.save(directory/"fluid_mesh.vtu")
     manifest = dict(specimen=asdict(specimen),flow=asdict(flow),mesh=metadata,inspection_only=True,
                     geometry_issue_legend={"0":"regular fluid","1":"outside specimen envelope","2":"not connected to both ends"})
@@ -243,13 +277,7 @@ def sample_channel_solid(specimen, flow, points_mm):
     Rotations are extrinsic X, then Y, then Z, about the specimen centre.
     Changing section length clips the specimen; it never stretches its cells.
     """
-    ax, ay, az = np.radians([flow.specimen_rotation_x_deg, flow.specimen_rotation_y_deg,
-                            flow.specimen_rotation_z_deg])
-    cx, sx, cy, sy, cz, sz = np.cos(ax), np.sin(ax), np.cos(ay), np.sin(ay), np.cos(az), np.sin(az)
-    rotation = np.array([[cz,-sz,0],[sz,cz,0],[0,0,1]]) @ np.array([[cy,0,sy],[0,1,0],[-sy,0,cy]]) @ np.array([[1,0,0],[0,cx,-sx],[0,sx,cx]])
-    centre = np.array([specimen.size/2+flow.specimen_offset_x_mm,
-                       specimen.size/2+flow.specimen_offset_y_mm,
-                       flow.section_length(specimen)/2+flow.specimen_offset_z_mm])
+    rotation,centre = specimen_transform(specimen,flow)
     local = (np.asarray(points_mm)-centre) @ rotation + specimen.size/2
     envelope = ((local >= 0) & (local <= specimen.size)).all(axis=1)
     solid = np.zeros(len(local), dtype=bool)
@@ -266,10 +294,29 @@ def sample_channel_solid(specimen, flow, points_mm):
     return solid, envelope
 
 
+def specimen_transform(specimen, flow):
+    """Rigid local-to-channel transform shared by sampling and diagnostic markers."""
+    ax, ay, az = np.radians([flow.specimen_rotation_x_deg, flow.specimen_rotation_y_deg,
+                            flow.specimen_rotation_z_deg])
+    cx, sx, cy, sy, cz, sz = np.cos(ax), np.sin(ax), np.cos(ay), np.sin(ay), np.cos(az), np.sin(az)
+    rotation = np.array([[cz,-sz,0],[sz,cz,0],[0,0,1]]) @ np.array([[cy,0,sy],[0,1,0],[-sy,0,cy]]) @ np.array([[1,0,0],[0,cx,-sx],[0,sx,cx]])
+    centre = np.array([specimen.size/2+flow.specimen_offset_x_mm,
+                       specimen.size/2+flow.specimen_offset_y_mm,
+                       flow.section_length(specimen)/2+flow.specimen_offset_z_mm])
+    return rotation,centre
+
+
 @lru_cache(maxsize=8)
 def _flow_surface(path, modified_ns, file_size):
     from imported_geometry import read_surface
     return read_surface(path, require_single=False)
+
+
+@lru_cache(maxsize=8)
+def _imported_intersections(path, modified_ns, file_size):
+    from analysis_process import report_analysis_step
+    from surface_audit import intersection_report
+    return intersection_report(_flow_surface(path,modified_ns,file_size),progress=report_analysis_step)
 
 
 def _header(kind, name):

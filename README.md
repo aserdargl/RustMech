@@ -47,7 +47,22 @@ kırmızı gösterilir; en büyük 64 kopuk bileşenin merkezleri işaretlenir. 
 ayrı dosyaya kaydedilir, çözücü komutu veya OpenFOAM çalıştırma dosyaları üretmez.
 TRUBA modunda aynı inceleme mevcut mesh yeteneğiyle uzakta yürür. Bu kontrol
 örneklenmiş bağlantıyı gösterir; alt hücre boyutundaki duvar/gözenekleri veya
-yüzeyin kendiyle kesişmesini kesin olarak doğrulamaz.
+yüzeyin sürekli minimum kalınlığını kesin olarak doğrulamaz.
+
+İnceleme ayrıca üçgenlerin kendiyle kesişmesini toleranslı geometrik testlerle
+denetler. Ortak kenar/köşe tek başına hata sayılmaz. Mor üçgenler kesişen veya
+dejenere yüzeyleri, sarı noktalar önerilen üç hücreden daha ince örneklenmiş
+duvar/boşluk konumlarını gösterir. Sonuçlar `surface_audit.vtp` içinde saklanır
+ve uzaktaki incelemelerden de indirilir. Kesişme arama bütçesi dolarsa sonuç
+**incomplete** olur; yüzey doğrulanmış sayılmaz. İçe aktarılan geometrilerin
+CFD/CHT ön kontrolünde tam kesişme taraması uygulanır; hatalı yüzey çözüme
+gönderilmez.
+
+Kalınlık göstergesi, seçilen üçgen merkezlerinden normale doğru ilk yüzey
+vuruşunun mesafesidir. Örnek sayısı ve toplam yüz sayısı görünür; bu değerler
+kesin global minimum duvar/gözenek boyutu değildir. Kanal kırpılmasından önceki
+sonlu numune yüzeyi ölçülür; dışarı doğru yüzey vuruşu yoksa gözenek mesafesi
+sıfır kabul edilmez. Ölçüm geometriyi veya seçilmiş ağ boyutunu değiştirmez.
 
 **Designs > Import geometry for flow / thermal** STL/OBJ/PLY/VTP dosyasını
 mm olarak alır. Kapalı, manifold yüzey gerekir; ayrı kapalı bileşenler kabul

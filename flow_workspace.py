@@ -407,9 +407,22 @@ class FlowWorkspace(QWidget):
             self.view.setCurrentIndex(0)
         if manifest.get("inspection_only"):
             mesh = manifest["mesh"]
+            audit = mesh.get("surface_audit")
+            audit_text = ""
+            if audit:
+                check = audit["intersection"]
+                audit_text = f"Surface intersections: {check['status']} · intersecting pairs: {check['intersecting_pairs']} · degenerate triangles: {check['degenerate_triangles']}\n"
+                chords = audit.get("chords")
+                if chords:
+                    for kind in ("wall","pore"):
+                        value = chords[kind+"_minimum_sampled_mm"]
+                        if value is not None:
+                            audit_text += f"Sampled {kind} minimum normal chord: {value:.5g} mm ({chords[kind+'_minimum_cells']:.3g} cells)\n"
+                    audit_text += f"Sampled faces: {chords['sampled_faces']}/{chords['total_faces']}; this is not a global minimum thickness proof.\n"
             self.results.setText(f"GEOMETRY INSPECTION · flow ready: {mesh['geometry_valid_for_flow']} · CHT ready: {mesh['geometry_valid_for_cht']}\n"
                                  f"Solid components: {mesh['solid_components']} · isolated fluid components: {mesh['isolated_fluid_components']}\n"+
                                  "Blue: regular fluid · Orange: outside specimen envelope · Red: isolated fluid\n"+
+                                 audit_text+
                                  "\n".join(mesh["geometry_errors"]+mesh["warnings"]))
             self.view.setCurrentIndex(6)
             self.status.setText("Geometry inspection saved. No solver files were generated.")
@@ -454,6 +467,16 @@ class FlowWorkspace(QWidget):
                 markers = self.manifest["mesh"].get("isolated_component_markers",[])
                 if markers:
                     self.plotter.add_mesh(pv.PolyData(np.asarray([m["centre_mm"] for m in markers])),color="#dc2626",point_size=12,render_points_as_spheres=True)
+                audit = self.manifest["mesh"].get("surface_audit")
+                if audit:
+                    audit_path = self.display_directory/"surface_audit.vtp"
+                    if audit_path.exists():
+                        surface = pv.read(audit_path)
+                        if np.any(surface.cell_data["SurfaceIssue"]):
+                            self.plotter.add_mesh(surface.extract_cells(surface.cell_data["SurfaceIssue"]>0),color="#a855f7",opacity=.9)
+                    chord_markers = (audit.get("chords") or {}).get("markers",[])
+                    if chord_markers:
+                        self.plotter.add_mesh(pv.PolyData(np.asarray([m["centre_mm"] for m in chord_markers])),color="#facc15",point_size=9,render_points_as_spheres=True)
             elif view==0 or not has_result:
                 self.plotter.add_mesh(grid.clip(normal="x",origin=centre),color="#8aafc8",show_edges=True,edge_color="#526174",opacity=.5)
             else:

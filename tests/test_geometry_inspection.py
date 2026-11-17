@@ -40,7 +40,7 @@ class GeometryInspectionTests(unittest.TestCase):
         self.assertFalse((self.root/"inspection/constant/polyMesh").exists())
 
     def test_disallowed_bypass_can_be_seen_without_changing_permission(self):
-        settings = Settings()
+        settings = self.settings
         flow = replace(self.flow,width_mm=8,height_mm=6)
         report = export_geometry_inspection(settings,flow,self.root/"bypass")
         self.assertFalse(report["flow"]["allow_bypass"])
@@ -74,6 +74,33 @@ class GeometryInspectionTests(unittest.TestCase):
         self.assertEqual(result["case"],".")
         self.assertTrue((output/"fluid_mesh.vtu").exists())
         self.assertTrue((output/"flow_case.json").exists())
+        self.assertTrue((output/"surface_audit.vtp").exists())
+
+    def test_intersecting_surface_is_inspectable_but_cannot_be_solved(self):
+        a = pv.Box(bounds=(1,3,1,3,1,3)).triangulate()
+        b = pv.Box(bounds=(2,4,2,4,2,4)).triangulate()
+        path = self.root/"overlap.vtp"
+        (a+b).save(path)
+        settings = replace(self.settings,imported_geometry_path=str(path))
+        with self.assertRaisesRegex(ValueError,"intersecting triangle"):
+            build_flow_grid(settings,self.flow)
+        report = export_geometry_inspection(settings,self.flow,self.root/"overlap-inspection")
+        self.assertFalse(report["mesh"]["geometry_valid_for_flow"])
+        self.assertEqual(report["mesh"]["surface_audit"]["intersection"]["status"],"invalid")
+        self.assertTrue((self.root/"overlap-inspection/surface_audit.vtp").exists())
+
+    def test_surface_defect_markers_follow_specimen_placement(self):
+        from flow_analysis import specimen_transform
+        flow = replace(self.flow,specimen_offset_x_mm=.4,specimen_rotation_z_deg=90)
+        report = export_geometry_inspection(self.settings,flow,self.root/"rotated")
+        surface = pv.read(self.root/"rotated/surface_audit.vtp")
+        original = pv.read(self.settings.imported_geometry_path)
+        rotation,centre = specimen_transform(self.settings,flow)
+        from scipy.spatial import cKDTree
+        expected = (original.points-3)@rotation.T+centre
+        self.assertLess(cKDTree(expected).query(surface.points)[0].max(),1e-6)
+        self.assertLess(cKDTree(surface.points).query(expected)[0].max(),1e-6)
+        self.assertIn("surface_audit",report["mesh"])
 
 
 if __name__ == "__main__": unittest.main()

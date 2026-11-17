@@ -239,7 +239,7 @@ def _run_operation(request,output):
             if operation.startswith("thermal_"): summarize_thermal_case(case)
             else: summarize_flow_case(case)
         # Numerical cases and raw OpenFOAM time directories stay on TRUBA.
-        for pattern in ("*_case.json","*_summary.json","*.vtu","*.csv","log.*"):
+        for pattern in ("*_case.json","*_summary.json","*.vtu","*.vtp","*.csv","log.*"):
             for path in case.glob(pattern): shutil.copy2(path,output/path.name)
         if (case/"frames").is_dir(): shutil.copytree(case/"frames",output/"frames")
         return dict(case=".",remote_solver_case=str(case.resolve()))

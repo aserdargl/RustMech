@@ -148,7 +148,7 @@ Kaynaklara 17 Kasım 2026’da başvuruldu. Belgelerdeki araç yeteneği RustMec
 | 04 | Genel kapalı yüzey importu; birden fazla kapalı bileşen; aynı yüzeyden CFD ve CHT katı/akışkan ayrımı | STEP/BREP sonraki adım; mekanik için yüzey hazırlama ayrıca gerekli |
 | 05 | Gitterburg havuzunda tek tasarımı yüzey seçmeden akış/termale yükleme | Çok bölgeli paket ve tüm fiziklere ortak kuyruk 14/23. adımlarda |
 | 06 | Ortak SI katı/akışkan kartları, eski JSON uyumu, CSV sıcaklık tabloları, açık Model→CHT malzeme kullanımı; kaynak kartın proje/vakada saklanması | Tablo referans sıcaklıkta sabit değere çevrilir; çözüm boyunca değişen özellikler 17. adımda |
-| 07 | Çözüm başlatmayan yerel/uzak geometri incelemesi; kopuk akışkan bileşenleri ve bypass için 3B işaretler; katı bileşen sayısı; tıkalı kanalın da incelenebilmesi | Minimum fiziksel duvar/gözenek kalınlığı ve yüzeyin kendiyle kesişmesi için kesin yüzey kontrolleri henüz tamamlanmadı |
+| 07 | Yerel/uzak geometri incelemesi; kopuk bölgeler/bypass için işaretler; toleranslı üçgen kesişme ve dejenere yüzey denetimi; örneklenen normal doğrultusunda duvar/boşluk ölçüleri; hatalı import için CFD/CHT engeli | Işın ölçüleri örneklenen minimumdur, sürekli yüzeyin kesin global minimumu değildir. Sınırlı kesişme taraması tamamlanmazsa yüzey doğrulanmış sayılmaz. |
 
 Gerçek OpenFOAM kontrolü `tools/verify_channel_pipeline.py` ile çalıştırıldı.
 Kare kanalda 8 ve 16 hücre/kısa kenar için analitik basınç kaybı hatası
@@ -170,3 +170,16 @@ genel import, malzeme tabloları ve pencere/bölücü durumu kapsandı. Dar penc
 ve gerçek VTK geometri inceleme görünümü ayrıca render edilip gözden geçirildi.
 Yeni özellikler kaynak sürümdedir; dağıtım EXE'sinin yeniden paketlenmesi 29.
 madde kapsamında henüz yapılmadı.
+
+7. maddenin yüzey denetimi VTK üçgen testleri ve ortak kenar/köşe ayrımıyla
+genişletildi. İnceleme çıktısındaki `surface_audit.vtp` hatalı üçgenleri ve
+örneklenen duvar/boşluk uzunluklarını saklar; dosya TRUBA'dan da geri alınır.
+İçe aktarılan yüzeyin tam kesişme taraması CFD/CHT öncesinde çalışır. Açıklıklar
+ve hatalı üçgenler otomatik onarılmaz. Kesin aritmetik yerine açık geometrik
+tolerans kullanılır; araştırma raporu bu sınırı korur.
+
+Analitik 0,2 mm plaka ve 0,3 mm aralıklı iki katıda ölçüler doğrulandı.
+Yaklaşık eş düzlemli ortak köşeler için yanlış pozitif regresyonu, örtüşen
+kapalı katılar, yinelenen/dejenere üçgenler, bütçe tükenmesi ve dönüşümle
+taşınan işaretler test edildi. İnce bir duvarın kaç hücreye denk geldiği ayrıca
+raporlanır; bu gösterge ağ bağımsızlığı kontrolünün yerini tutmaz.
