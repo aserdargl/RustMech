@@ -88,8 +88,12 @@ class ProjectWorkspace:
                 raise ValueError("Unknown flow model.")
             if area.channel_shape.findData(config.channel_shape) < 0:
                 raise ValueError("Unknown channel section.")
+            if area.mesh_method.findData(config.mesh_method)<0:
+                raise ValueError("Unknown fluid mesh method.")
         if cht_flow.turbulence != "laminar":
             raise ValueError("The CHT workspace currently requires laminar flow.")
+        if cht_flow.mesh_method != "cartesian":
+            raise ValueError("The CHT workspace currently requires Cartesian regions.")
         for key, control in w.thermal_workspace.thermal_controls.items():
             if not control.minimum() <= getattr(thermal, key) <= control.maximum():
                 raise ValueError(f"{key} is outside the supported workspace range.")
@@ -145,6 +149,7 @@ class ProjectWorkspace:
             w.plotter.clear()
             for area, config in ((w.flow_workspace, flow), (w.thermal_workspace, cht_flow)):
                 area.channel_shape.setCurrentIndex(area.channel_shape.findData(config.channel_shape))
+                area.mesh_method.setCurrentIndex(area.mesh_method.findData(config.mesh_method))
                 area.allow_bypass.setChecked(config.allow_bypass)
                 area.fluid_material_card = config.fluid_material_card
                 for key, control in area.controls.items():

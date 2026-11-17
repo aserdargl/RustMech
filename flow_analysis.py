@@ -49,6 +49,10 @@ class FlowSettings:
     specimen_rotation_z_deg: float = 0.0
     allow_bypass: bool = False
     fluid_material_card: dict | None = None
+    mesh_method: str = "cartesian"
+    surface_refinement: int = 1
+    boundary_layers: int = 3
+    max_fitted_cells: int = 2000000
 
     @property
     def cross_section(self):
@@ -84,6 +88,11 @@ class FlowSettings:
             raise ValueError("Select a solid fraction below 100% and a TPMS period no larger than the specimen.")
         if self.channel_shape not in ("cylinder", "rectangular"):
             raise ValueError("Select a cylindrical or rectangular channel.")
+        if self.mesh_method not in ("cartesian","snappy"):
+            raise ValueError("Select Cartesian or fitted OpenFOAM meshing.")
+        for name,low,high in (("surface_refinement",0,4),("boundary_layers",0,8),("max_fitted_cells",1000,10000000)):
+            if type(getattr(self,name)) is not int or not low<=getattr(self,name)<=high:
+                raise ValueError(f"{name} must be an integer between {low} and {high}.")
         if type(self.allow_bypass) is not bool:
             raise ValueError("Bypass selection must be a boolean.")
         for name in ("diameter_mm", "width_mm", "height_mm", "inlet_length_mm", "outlet_length_mm", "inlet_speed", "density", "dynamic_viscosity"):
@@ -383,7 +392,8 @@ def export_flow_case(specimen, flow, directory):
     turbulence = "simulationType laminar;" if flow.turbulence=="laminar" else "simulationType RAS; RAS { RASModel kOmegaSST; turbulence on; printCoeffs on; }"
     _write(directory/"constant"/"turbulenceProperties",_header("dictionary","turbulenceProperties")+turbulence)
     def field(name,kind,dimensions,initial,inlet,outlet,wall):
-        _write(directory/"0"/name,_header(kind,name)+f"dimensions [{dimensions}];\ninternalField uniform {initial};\nboundaryField\n{{ inlet {{ {inlet} }} outlet {{ {outlet} }} walls {{ {wall} }} }}\n")
+        wall_patch = '"(walls|insert)"' if flow.mesh_method=="snappy" else "walls"
+        _write(directory/"0"/name,_header(kind,name)+f"dimensions [{dimensions}];\ninternalField uniform {initial};\nboundaryField\n{{ inlet {{ {inlet} }} outlet {{ {outlet} }} {wall_patch} {{ {wall} }} }}\n")
     velocity = f"(0 0 {flow.inlet_speed:.14g})"
     field("U","volVectorField","0 1 -1 0 0 0 0",velocity,f"type fixedValue; value uniform {velocity};","type zeroGradient;","type noSlip;")
     field("p","volScalarField","0 2 -2 0 0 0 0","0","type zeroGradient;","type fixedValue; value uniform 0;","type zeroGradient;")
@@ -394,6 +404,8 @@ def export_flow_case(specimen, flow, directory):
             inlet = "type calculated; value uniform 0;" if name=="nut" else f"type fixedValue; value uniform {value:.14g};"
             field(name,"volScalarField",dim,f"{value:.14g}",inlet,"type zeroGradient;",f"type {wall}; value uniform {value:.14g};")
     functions = ""
+    if flow.mesh_method=="snappy" and flow.turbulence=="kOmegaSST":
+        functions += 'yPlus { type yPlus; libs ("libfieldFunctionObjects.so"); executeControl timeStep; executeInterval 1; writeControl writeTime; }\n'
     for patch in ("inlet","outlet"):
         for op,fields in (("areaAverage","p"),("sum","phi")):
             functions += f"{patch}_{fields} {{ type surfaceFieldValue; libs (\"libfieldFunctionObjects.so\"); writeControl timeStep; writeInterval 1; regionType patch; name {patch}; operation {op}; fields ({fields}); writeFields false; }}\n"
@@ -407,6 +419,15 @@ def export_flow_case(specimen, flow, directory):
                     discretization="Cartesian stair-step finite volumes; no-slip walls; uniform velocity inlet; zero gauge pressure outlet")
     (directory/"flow_case.json").write_text(json.dumps(manifest,indent=2),encoding="utf-8")
     _write(directory/"Allrun", "#!/bin/bash\nset -eo pipefail\necho $$ > .runner.pid\ntrap 'rm -f .runner.pid' EXIT\ntest ! -f .cancel-request\ncheckMesh > log.checkMesh 2>&1\ngrep -q 'Mesh OK' log.checkMesh\ntest ! -f .cancel-request\nsimpleFoam > log.simpleFoam 2>&1\n")
+    if flow.mesh_method=="snappy":
+        from fitted_mesh import fit_fluid_case
+        fitted = fit_fluid_case(specimen,flow,directory)
+        metadata["cartesian_precheck_cells"] = metadata["fluid_cells"]
+        metadata.update({key:value for key,value in fitted.items() if key!="warnings"})
+        metadata["precheck_warnings"] = list(metadata["warnings"])
+        metadata["warnings"] = ["Cartesian precheck: "+warning for warning in metadata["warnings"]]+fitted["warnings"]
+        manifest["discretization"] = "Body-fitted OpenFOAM finite volumes; requested surface refinement and boundary layers. See fitted mesh diagnostics."
+        (directory/"flow_case.json").write_text(json.dumps(manifest,indent=2),encoding="utf-8")
     return manifest
 
 
@@ -505,25 +526,53 @@ def summarize_flow_case(directory):
     centres = grid.cell_centers().points[:,2]*1000
     z = np.asarray(manifest["mesh"]["z_centres_mm"])
     before,after = z[z<0][-1],z[z>manifest["mesh"].get("specimen_end_mm", manifest["specimen"]["size"])][0]
-    def section(at):
+    fitted = flow.mesh_method=="snappy"
+    interpolated = grid.cell_data_to_point_data() if fitted else None
+    def section_values(at):
+        if fitted:
+            plane = interpolated.slice(normal="z",origin=(0,0,at*.001))
+            if not plane.n_cells:
+                raise RuntimeError("Cannot locate fitted-mesh pressure measurement plane.")
+            weights = plane.compute_cell_sizes(length=False,volume=False).cell_data["Area"]
+            values = plane.point_data_to_cell_data()
+            if not np.isfinite(weights).all() or weights.sum()<=0:
+                raise RuntimeError("Invalid fitted-mesh measurement plane area.")
+            return (float(np.average(values.cell_data["Pressure_Pa"],weights=weights)),
+                    float(np.average(values.cell_data["Velocity_m_s"][:,2],weights=weights)),
+                    float(np.max(values.cell_data["Speed_m_s"])))
         mask = np.isclose(centres,at,rtol=0,atol=1e-5)
         if not mask.any(): raise RuntimeError("Cannot locate pressure measurement section.")
-        return float(np.mean(pressure[mask]))
+        return float(pressure[mask].mean()),float(velocity[mask,2].mean()),float(np.linalg.norm(velocity[mask],axis=1).max())
     import csv
     with (directory/"axial_profile.csv").open("w",newline="") as stream:
         writer = csv.writer(stream)
         writer.writerow(("z_mm","mean_pressure_Pa","mean_axial_velocity_m_s","max_speed_m_s"))
         for at in z:
             mask = np.isclose(centres,at,rtol=0,atol=1e-5)
-            if mask.any(): writer.writerow((at,float(pressure[mask].mean()),float(velocity[mask,2].mean()),float(np.linalg.norm(velocity[mask],axis=1).max())))
+            if mask.any() or fitted:
+                writer.writerow((at,*section_values(at)))
     summary = dict(status="converged" if converged else "not_converged",time=max(reader.time_values),
                    reynolds_diameter=flow.reynolds,pressure_drop_total_Pa=(pi-po)*flow.density,
-                   pressure_drop_specimen_Pa=section(before)-section(after),
+                   pressure_drop_specimen_Pa=section_values(before)[0]-section_values(after)[0],
                    specimen_pressure_planes_mm=[float(before),float(after)],
                    pressure_definition="Static, area-averaged gauge pressure. Specimen value uses the adjacent empty-channel cell-centre planes, including entrance/exit effects.",
                    inlet_flow_m3_s=-qi,outlet_flow_m3_s=qo,mass_imbalance_fraction=imbalance,
                    maximum_speed_m_s=float(np.linalg.norm(velocity,axis=1).max()),
                    final_initial_residuals=residuals,mesh=manifest["mesh"],warnings=manifest["mesh"]["warnings"])
     if not converged: summary["warnings"].append("SIMPLE residual criteria and/or 1% mass-balance criterion not satisfied; these are provisional results.")
+    if fitted:
+        summary["pressure_definition"] = "Static, area-averaged pressure on interpolated planes adjacent to the insert section; includes entrance/exit effects."
+        paths = list((directory/"postProcessing/yPlus").glob("*/*.dat"))
+        summary["y_plus_files"] = [path.relative_to(directory).as_posix() for path in paths]
+        summary["y_plus"] = {}
+        for path in paths:
+            for line in path.read_text().splitlines():
+                if line.strip() and not line.lstrip().startswith("#"):
+                    parts = line.split()
+                    if len(parts)>=5:
+                        values = [float(value) for value in parts[2:5]]
+                        if not np.isfinite(values).all():
+                            raise RuntimeError("Non-finite y+ output.")
+                        summary["y_plus"][parts[1]] = dict(minimum=values[0],maximum=values[1],average=values[2])
     (directory/"flow_summary.json").write_text(json.dumps(summary,indent=2),encoding="utf-8")
     return summary

@@ -77,6 +77,13 @@ class FlowWorkspace(QWidget):
         self.channel_shape.setCurrentIndex(max(0, self.channel_shape.findData(defaults.channel_shape)))
         self.channel_shape.currentIndexChanged.connect(self.inputs_changed)
         form.addRow(field_label("Channel section", self.channel_shape), self.channel_shape)
+        self.mesh_method = CompactComboBox()
+        self.mesh_method.addItem("Cartesian", "cartesian")
+        self.mesh_method.addItem("Fitted · OpenFOAM", "snappy")
+        self.mesh_method.setFixedWidth(160)
+        self.mesh_method.setCurrentIndex(max(0,self.mesh_method.findData(defaults.mesh_method)))
+        self.mesh_method.currentIndexChanged.connect(self.inputs_changed)
+        form.addRow(field_label("Fluid mesh",self.mesh_method),self.mesh_method)
         for name,label,lo,hi in (
             ("diameter_mm","Diameter / mm",.01,10000),
             ("width_mm","Width / mm",.01,10000),
@@ -94,8 +101,11 @@ class FlowWorkspace(QWidget):
             ("density","Density / kg/m³",.001,100000),
             ("dynamic_viscosity","Viscosity / Pa·s",.00000001,1000),
             ("cells_across","Cells / narrow side",8,128),
-            ("iterations","Max iterations",20,20000)):
-            control = CompactSpinBox() if name in ("cells_across","iterations") else CompactDoubleSpinBox()
+            ("iterations","Max iterations",20,20000),
+            ("surface_refinement","Surface refinement",0,4),
+            ("boundary_layers","Wall layers",0,8),
+            ("max_fitted_cells","Fitted cell budget",1000,10000000)):
+            control = CompactSpinBox() if name in ("cells_across","iterations","surface_refinement","boundary_layers","max_fitted_cells") else CompactDoubleSpinBox()
             if isinstance(control,CompactDoubleSpinBox): control.setDecimals(8)
             control.setRange(lo,hi)
             control.setValue(getattr(defaults,name))
@@ -174,6 +184,7 @@ class FlowWorkspace(QWidget):
         self.inspect_button.clicked.connect(lambda: self._start(False,inspection=True))
         left.addWidget(self.inspect_button)
         warning = QLabel("Channel and specimen surfaces use Cartesian steps. Refine and compare pressure loss before using results. SST uses wall functions; near-wall resolution needs separate validation. Use Thermal (CHT) for coupled heat transfer.")
+        self.mesh_warning = warning
         warning.setObjectName("mutedHintLabel")
         warning.setWordWrap(True)
         left.addWidget(warning)
@@ -222,6 +233,7 @@ class FlowWorkspace(QWidget):
 
     def collect(self):
         return FlowSettings(**{key:control.value() for key,control in self.controls.items()},
+                            mesh_method=self.mesh_method.currentData(),
                             fluid_material_card=self.fluid_material_card,
                             channel_shape=self.channel_shape.currentData(),allow_bypass=self.allow_bypass.isChecked(),
                             turbulence=self.model.currentData(),empty_pipe=self.empty.isChecked(),
@@ -283,10 +295,15 @@ class FlowWorkspace(QWidget):
         if hasattr(self,"inspect_button"):
             self.size_action_buttons()
         form = self.input_panel.layout()
+        for key in ("surface_refinement","boundary_layers","max_fitted_cells"):
+            form.setRowVisible(self.controls[key],flow.mesh_method=="snappy")
         form.setRowVisible(self.controls["diameter_mm"], flow.channel_shape == "cylinder")
         for key in ("width_mm", "height_mm"):
             form.setRowVisible(self.controls[key], flow.channel_shape == "rectangular")
         self.info.setText(f"Re (hydraulic diameter) ≈ {flow.reynolds:.5g}\nDh: {flow.hydraulic_diameter_mm:.5g} mm · nominal cell: {flow.cell_size_mm:.5g} mm. Inlet velocity is the mean over the discretized inlet; pore velocity is solved.")
+        if hasattr(self,"mesh_warning") and not hasattr(self,"thermal_controls"):
+            self.mesh_warning.setText("Fitted OpenFOAM mesh. Surface refinement and wall layers may be limited by local geometry; review actual coverage and y+ in results. Mesh independence is required."
+                                      if flow.mesh_method=="snappy" else "Cartesian stair-step surfaces. Refine and compare pressure loss; SST near-wall resolution needs separate validation.")
         if self.display_directory:
             self.status.setText("Inputs changed. The displayed case keeps its saved geometry and flow conditions; build/run to apply changes.")
 
@@ -407,6 +424,7 @@ class FlowWorkspace(QWidget):
         self.manifest = manifest
         spec,flow = manifest["specimen"],asdict(FlowSettings(**manifest["flow"]))
         self.channel_shape.setCurrentIndex(self.channel_shape.findData(flow["channel_shape"]))
+        self.mesh_method.setCurrentIndex(self.mesh_method.findData(flow["mesh_method"]))
         self.allow_bypass.setChecked(flow["allow_bypass"])
         self.fluid_material_card = flow["fluid_material_card"]
         for key,control in self.controls.items():
@@ -424,16 +442,25 @@ class FlowWorkspace(QWidget):
         if summary_path.exists():
             summary = json.loads(summary_path.read_text())
             self.results.setText(f"{summary['status'].upper()} · Re = {summary['reynolds_diameter']:.5g} · {self.grid.n_cells:,} fluid cells\n"
-                f"Static Δp, channel: {summary['pressure_drop_total_Pa']:.6g} Pa · TPMS section: {summary['pressure_drop_specimen_Pa']:.6g} Pa\n"
+                f"Static Δp, channel: {summary['pressure_drop_total_Pa']:.6g} Pa · Insert section: {summary['pressure_drop_specimen_Pa']:.6g} Pa\n"
                 f"Q inlet / outlet: {summary['inlet_flow_m3_s']*6e7:.6g} / {summary['outlet_flow_m3_s']*6e7:.6g} mL/min · mass imbalance: {summary['mass_imbalance_fraction']*100:.4g}%\n"
-                f"Maximum speed: {summary['maximum_speed_m_s']:.6g} m/s · sampled cylinder solid: {summary['mesh']['specimen_solid_fraction']*100:.4g}%\n"
-                f"TPMS pressure planes: {summary['specimen_pressure_planes_mm'][0]:.5g} / {summary['specimen_pressure_planes_mm'][1]:.5g} mm (includes entrance/exit effects).\n"+
+                f"Maximum speed: {summary['maximum_speed_m_s']:.6g} m/s · Cartesian precheck solid fraction: {summary['mesh']['specimen_solid_fraction']*100:.4g}%\n"
+                f"Insert pressure planes: {summary['specimen_pressure_planes_mm'][0]:.5g} / {summary['specimen_pressure_planes_mm'][1]:.5g} mm (includes entrance/exit effects).\n"+
                 "\n".join(summary["warnings"]))
             self.status.setText("Results and axial_profile.csv saved. "+str(directory))
+            if summary.get("mesh",{}).get("method")=="snappyHexMesh":
+                layers = summary["mesh"].get("layers",{})
+                fraction = layers.get("face_coverage_fraction")
+                text = f"\nFitted layer face coverage: {fraction*100:.3g}%" if fraction is not None else "\nFitted mesh: no wall layers requested."
+                for name,patch in layers.get("patches",{}).items():
+                    text += f" · {name}: {patch['average_layers']:g}/{patch['requested_layers']} average layers"
+                for name,values in summary.get("y_plus",{}).items():
+                    text += f"\ny+ {name}: min {values['minimum']:.4g}, max {values['maximum']:.4g}, average {values['average']:.4g}"
+                self.results.setText(self.results.text()+text)
             self.view.setCurrentIndex(1)
         else:
             mesh = manifest["mesh"]
-            self.results.setText(f"{mesh['fluid_cells']:,} fluid cells · actual inlet-equivalent diameter: {mesh['effective_diameter_mm']:.5g} mm\nSampled cylinder solid: {mesh['specimen_solid_fraction']*100:.4g}% · isolated cavity cells excluded: {mesh['isolated_cells']}\n"+"\n".join(mesh["warnings"]))
+            self.results.setText(f"{mesh['fluid_cells']:,} fluid cells · actual inlet-equivalent diameter: {mesh['effective_diameter_mm']:.5g} mm\nCartesian precheck solid fraction: {mesh['specimen_solid_fraction']*100:.4g}% · isolated cavity cells excluded: {mesh['isolated_cells']}\n"+"\n".join(mesh["warnings"]))
             self.status.setText("Case exported; no CFD solve performed. "+str(directory))
             self.view.setCurrentIndex(0)
         if manifest.get("inspection_only"):

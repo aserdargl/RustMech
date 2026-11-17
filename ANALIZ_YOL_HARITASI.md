@@ -143,12 +143,14 @@ Kaynaklara 17 Kasım 2026’da başvuruldu. Belgelerdeki araç yeteneği RustMec
 | Madde | Uygulanan kapsam | Kalan sınır |
 | --- | --- | --- |
 | 01 | Ortak proje, kararlı geometri/bölge/malzeme/çalışma kimlikleri; mekanik, CFD ve CHT taslakları; eski dosyalardan göç; açık kaydet/aç | Bağımsız termal çalışma 10. adımla, genel yüzey atama 09. adımla genişleyecek |
-| 02 | Silindir/kare/dikdörtgen, bağımsız kesit ve dolgu bölgesi uzunluğu, giriş/çıkış uzantıları, 3B öteleme/dönme, açık bypass seçimi | Ağ halen basamaklı; kanal akış ekseni +Z |
+| 02 | Silindir/kare/dikdörtgen, bağımsız kesit ve dolgu bölgesi uzunluğu, giriş/çıkış uzantıları, 3B öteleme/dönme, açık bypass seçimi | CHT ağı halen basamaklı; CFD için 08 kapsamında yüzeye oturan seçenek eklendi; kanal akış ekseni +Z |
 | 03 | TPMS, lattice, porous için ortak CFD/CHT örnekleme; seed tekrarlanabilirliği | İzole akışkan cepleri CHT'de desteklenmiyor |
 | 04 | Genel kapalı yüzey importu; birden fazla kapalı bileşen; aynı yüzeyden CFD ve CHT katı/akışkan ayrımı | STEP/BREP sonraki adım; mekanik için yüzey hazırlama ayrıca gerekli |
 | 05 | Gitterburg havuzunda tek tasarımı yüzey seçmeden akış/termale yükleme | Çok bölgeli paket ve tüm fiziklere ortak kuyruk 14/23. adımlarda |
 | 06 | Ortak SI katı/akışkan kartları, eski JSON uyumu, CSV sıcaklık tabloları, açık Model→CHT malzeme kullanımı; kaynak kartın proje/vakada saklanması | Tablo referans sıcaklıkta sabit değere çevrilir; çözüm boyunca değişen özellikler 17. adımda |
 | 07 | Yerel/uzak geometri incelemesi; kopuk bölgeler/bypass için işaretler; toleranslı üçgen kesişme ve dejenere yüzey denetimi; örneklenen normal doğrultusunda duvar/boşluk ölçüleri; hatalı import için CFD/CHT engeli | Işın ölçüleri örneklenen minimumdur, sürekli yüzeyin kesin global minimumu değildir. Sınırlı kesişme taraması tamamlanmazsa yüzey doğrulanmış sayılmaz. |
+
+| 08 (kısmi) | CFD için blockMesh/snappyHexMesh: boru O-grid, dikdörtgen kanal, kapalı dolgu yüzeyi, yüzey inceltmesi, duvar katmanları, checkMesh ve gerçek katman/y+ raporu | Çok bölgeli yüzeye oturan CHT ağı henüz yok; CHT Kartezyen ağ kullanır. Kısmi katman oluşumu açıkça raporlanır; üretim numunesi için ağ bağımsızlığı gerekir. |
 
 Gerçek OpenFOAM kontrolü `tools/verify_channel_pipeline.py` ile çalıştırıldı.
 Kare kanalda 8 ve 16 hücre/kısa kenar için analitik basınç kaybı hatası
@@ -183,3 +185,19 @@ Yaklaşık eş düzlemli ortak köşeler için yanlış pozitif regresyonu, ört
 kapalı katılar, yinelenen/dejenere üçgenler, bütçe tükenmesi ve dönüşümle
 taşınan işaretler test edildi. İnce bir duvarın kaç hücreye denk geldiği ayrıca
 raporlanır; bu gösterge ağ bağımsızlığı kontrolünün yerini tutmaz.
+
+8. maddenin CFD bölümü: **Fluid mesh → Fitted · OpenFOAM** seçeneği eklendi.
+Eski projeler varsayılan Kartezyen ağla açılır. Hücre bütçesi, gerçekleşen dolgu
+yüzeyi inceltmesi ve pozitif hücre hacimleri denetlenir; sağlanmayan inceltme
+ve hiç oluşmayan istenmiş katmanlar çözümü engeller. Kısmi katman oluşumunda
+gerçek yüz kapsamı ve her sınırın ortalama katman sayısı uyarıyla gösterilir.
+SST çözümü ayrıca y+ dosyalarını ve sınır istatistiklerini saklar.
+
+`tools/verify_fitted_flow.py --output-root D:/MySoftware/RustMech/build`
+ile gerçek OpenFOAM referansları geçti: kare kanalda 8/16 hücre-kısa kenar
+analitik basınç kaybı hatası %2,90/%0,807; boruda 8 hücre-çap hatası %2,03.
+İçe aktarılan dolgulu kanal ve y+ raporlayan SST örneği yakınsadı. SST örneği
+türbülans doğruluğunun doğrulaması değildir. 53 odaklı test ve ayrı süreçlerde
+11 masaüstü testi geçti; gerçek VTK sonuç görünümü gözden geçirildi.
+Çok bölgeli CHT bu yeni ağla henüz doğrulanmadığı için seçenek CHT'de
+kapalıdır. Bu teslim 08'in tamamını veya kalan yol haritasını bitirmez.

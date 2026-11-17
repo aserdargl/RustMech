@@ -33,6 +33,8 @@ class ThermalWorkspace(FlowWorkspace):
         super().__init__(settings_provider,parent,preferences,viewport_factory=viewport_factory)
         self.setObjectName("thermalWorkspace")
         self.inspect_button.hide()
+        self.mesh_method.model().item(self.mesh_method.findData("snappy")).setEnabled(False)
+        self.mesh_method.setToolTip("Fitted meshing is currently qualified for Flow only. CHT uses Cartesian regions.")
         self.splitter.setObjectName("thermalWorkspaceSplitter")
         self.panel.layout().itemAt(0).widget().setText("Transient water + specimen heat transfer")
         self.panel.layout().itemAt(1).widget().setText("Water and the specimen exchange heat in the selected channel. Insulated exterior; perfect water–solid contact. Flow +Z. Temperatures: °C; time: s.")
@@ -263,6 +265,7 @@ class ThermalWorkspace(FlowWorkspace):
         self.display_directory,self.manifest = directory,manifest
         flow = FlowSettings(**manifest["flow"])
         self.channel_shape.setCurrentIndex(self.channel_shape.findData(flow.channel_shape))
+        self.mesh_method.setCurrentIndex(self.mesh_method.findData(flow.mesh_method))
         self.allow_bypass.setChecked(flow.allow_bypass)
         self.fluid_material_card = flow.fluid_material_card
         for key,control in self.controls.items(): control.setValue(getattr(flow, key))

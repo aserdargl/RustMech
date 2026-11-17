@@ -1168,8 +1168,8 @@ apply to the two platens. Imported parts use their bounding rectangle for nomina
 stress and their bounding volume for relative density. TRUBA requests include
 the imported surface. **Use generated structure** returns to the structure generator.
 The import window remembers its size, position and maximized state.
-This import workflow applies to mechanical compression; flow and thermal analyses
-continue to require generated structures.
+This planar-face import workflow applies to mechanical compression. Flow and
+CHT also accept closed imported surfaces through their shared geometry workflow.
 
 
 ## Bağımlılıklar ve sürüm kontrolü
@@ -1218,3 +1218,29 @@ ise VTK/OpenGL penceresi açan testleri gerçek masaüstü oturumunda çalışt�
 tümü başarılıysa çıkış kodu 0'dır. `RUSTMECH_OFFLINE=1` varsayılandır (loopback SSH
 testi atlanır). Yeni bir pencere testi offscreen modda VTK pixel-format hatasıyla
 düşerse `tools/run_tests.py` içindeki `GUI` listesine eklenmelidir.
+
+### CFD için yüzeye oturan OpenFOAM ağı
+
+Flow bölümünde **Fluid mesh → Fitted · OpenFOAM** seçin. Boruda dairesel
+O-grid, kare/dikdörtgen kanalda blok ağ kullanılır; dolgu snappyHexMesh ile
+yakalanır. **Surface refinement** dolgu yüzeyinin inceltme seviyesini,
+**Wall layers** istenen katman sayısını, **Fitted cell budget** üst hücre
+bütçesini belirler. **Build** yalnız ağı üretip kontrol eder; **Run** ayrıca
+akışı çözer. Eski kayıtların varsayılanı Kartezyen ağdır.
+
+Sonuçta gerçek hücre sayısı, katman yüz kapsamı ve sınır başına ortalama
+katman sayısı görünür. İnce/karmaşık dolguda bazı yüzlerde katman oluşmayabilir;
+uyarıları ve `log.snappyHexMesh` dosyasını inceleyin. İstenen katmanların hiçbiri
+oluşmazsa veya dolgu inceltmesi sağlanmazsa çözüm durur. SST için gerçek y+
+istatistikleri ve `postProcessing/yPlus` çıktısı saklanır. checkMesh geçmesi
+ağ bağımsızlığı veya fiziksel doğruluk garantisi değildir. Sonuçtaki katı
+hacim oranı hâlâ Kartezyen ön kontrolün örneklemesidir.
+
+Yerelde OpenCFD/WSL ortamında blockMesh, snappyHexMesh, checkMesh ve simpleFoam
+gerekir; uzak çalışmada mevcut OpenFOAM modülü kullanılır. OpenFOAM vaka
+klasörünün yolunda boşluk bulunmamalıdır. Canlı TRUBA çözümü bu teslimde
+çalıştırılmadı. CHT için yüzeye oturan çok bölgeli ağ henüz desteklenmez;
+CHT Kartezyen ağla devam eder. Dağıtım EXE'si yeniden paketlenmedi.
+
+Tekrarlanabilir küçük çözücü kontrolleri:
+`python tools/verify_fitted_flow.py --output-root D:/MySoftware/RustMech/build`.

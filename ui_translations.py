@@ -2,6 +2,12 @@
 from setup_help import GEOMETRY_HELP
 
 _TEXT = '''
+Fluid mesh|Akış ağı
+Cartesian|Kartezyen
+Fitted · OpenFOAM|Yüzeye oturan · OpenFOAM
+Surface refinement|Yüzey inceltmesi
+Wall layers|Duvar katmanları
+Fitted cell budget|Ağ hücresi bütçesi
 Inspect geometry (no solve)|Geometriyi incele (çözüm yok)
 Geometry diagnostics|Geometri kontrolleri
 Geometry inspection saved. No solver files were generated.|Geometri incelemesi kaydedildi. Çözücü dosyası üretilmedi.

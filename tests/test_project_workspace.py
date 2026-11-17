@@ -48,7 +48,7 @@ class ProjectWorkspaceTests(unittest.TestCase):
         return AnalysisProject.capture(Settings(size=9, material_name="Titanium", young_modulus=110000,
             material_density=4.43, loading_mode="force", applied_force=125),
             FlowSettings(inlet_speed=.02,channel_shape="rectangular",width_mm=4,height_mm=2,
-                         specimen_rotation_z_deg=30,allow_bypass=True),
+                         specimen_rotation_z_deg=30,allow_bypass=True,mesh_method="snappy",surface_refinement=2,boundary_layers=4),
             FlowSettings(inlet_speed=.04), ThermalSettings(solid_cp=720))
 
     def test_open_restores_all_workspaces_without_computation(self):
@@ -67,6 +67,9 @@ class ProjectWorkspaceTests(unittest.TestCase):
         self.assertEqual(self.window.flow_workspace.collect().channel_shape, "rectangular")
         self.assertEqual(self.window.flow_workspace.collect().specimen_rotation_z_deg, 30)
         self.assertTrue(self.window.flow_workspace.collect().allow_bypass)
+        self.assertEqual(self.window.flow_workspace.collect().mesh_method,"snappy")
+        self.assertEqual(self.window.flow_workspace.collect().surface_refinement,2)
+        self.assertEqual(self.window.flow_workspace.collect().boundary_layers,4)
         self.assertEqual(self.window.thermal_workspace.collect().inlet_speed, .04)
         self.assertEqual(self.window.thermal_workspace.collect_thermal().solid_cp, 720)
         self.assertEqual(self.window.workspace_tabs.currentIndex(), 3)

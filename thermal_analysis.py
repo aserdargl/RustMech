@@ -38,6 +38,8 @@ class ThermalSettings:
 
     def validate(self, specimen, flow):
         flow.validate(specimen)
+        if flow.mesh_method != "cartesian":
+            raise ValueError("Fitted meshing is currently qualified for Flow only. Select Cartesian for CHT.")
         if flow.turbulence != "laminar":
             raise ValueError("The initial transient CHT implementation supports laminar flow only.")
         for name in ("inlet_temperature_c","initial_water_c","initial_solid_c"):
