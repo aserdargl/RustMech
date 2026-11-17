@@ -8,6 +8,10 @@ Fitted · OpenFOAM|Yüzeye oturan · OpenFOAM
 Surface refinement|Yüzey inceltmesi
 Wall layers|Duvar katmanları
 Fitted cell budget|Ağ hücresi bütçesi
+Parallel analyses|Paralel analizler
+Prepare replacement resources near the time limit|Süre dolmadan yedek kaynak hazırla
+Maximum simultaneous DoE / analysis queue jobs. CPU cores and RAM are divided equally between jobs; each job has separate results. Limited by the allocated cores and memory. Set 1 for a single large analysis.|Aynı anda çalışan DoE / analiz kuyruğu işi üst sınırı. CPU ve RAM işler arasında eşit bölünür; sonuçlar ayrı kaydedilir. Tahsis edilen çekirdek ve bellekle sınırlıdır. Tek büyük analiz için 1 seçin.
+Batch queues: request a replacement within the final hour (10% for shorter sessions). New analyses wait for it; running analyses finish on their original resource. This does not restart a solver from a saved calculation step.|Toplu analizlerde son bir saatte (kısa oturumlarda son %10'da) yedek kaynak istenir. Yeni analizler yedeği bekler; çalışanlar eski kaynakta tamamlanır. Çözücü kaydedilmiş bir hesap adımından yeniden başlatılmaz.
 Inspect geometry (no solve)|Geometriyi incele (çözüm yok)
 Geometry diagnostics|Geometri kontrolleri
 Geometry inspection saved. No solver files were generated.|Geometri incelemesi kaydedildi. Çözücü dosyası üretilmedi.

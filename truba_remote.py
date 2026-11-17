@@ -35,8 +35,14 @@ class RemoteContext:
     transport: str = "auto"
     winscp_site: str = ""
     session_id: str = ""
+    parallel_jobs: int = 1
+    auto_renew: bool = True
 
     def validate(self):
+        if type(self.parallel_jobs) is not int or not 1 <= self.parallel_jobs <= 224:
+            raise ValueError("Use 1..224 parallel analyses.")
+        if type(self.auto_renew) is not bool:
+            raise ValueError("Invalid automatic resource renewal setting.")
         if self.session_id and not re.fullmatch(r"[0-9]+", self.session_id):
             raise ValueError("Invalid resource session ID.")
         from truba_resources import BASELINES
@@ -169,6 +175,7 @@ def slurm_script(context,username,request):
     python_load = "module load "+shlex.quote(context.python_module) if context.python_module else ":"
     needs_foam = request['operation'] in ('probe', 'prepare', 'flow_export', 'flow_solve', 'thermal_export', 'thermal_solve')
     foam_load = "module load "+shlex.quote(context.foam_module)+" >/dev/null 2>&1 || true" if context.foam_module and needs_foam else ":"
+    step_cores, _ = request_resources(context, request['operation'])
     return f'''#!/bin/bash -l
 #SBATCH --job-name=RustMech-remote
 #SBATCH --partition={partition}
@@ -185,7 +192,7 @@ rustmech_stage() {{ printf '%s\n' "$1" > progress.txt; printf '%s\n' "$1"; }}
 rustmech_stage 'Preparing request sources'
 export TERM=dumb
 export QT_API=pyside6 QT_QPA_PLATFORM=offscreen MPLBACKEND=Agg
-export OMP_NUM_THREADS={context.cores} RUSTMECH_THREADS={context.cores} OPENBLAS_NUM_THREADS=1
+export OMP_NUM_THREADS={step_cores} RUSTMECH_THREADS={step_cores} OPENBLAS_NUM_THREADS=1
 mkdir -p output engine
 trap 'tar -czf result.tar.gz output' EXIT
 echo "{request['source_sha256']}  engine.tar.gz" | sha256sum -c -
@@ -212,6 +219,11 @@ def _write_paths(paths,record):
     for path in paths: write_record(path,record)
 
 
+def request_resources(context, operation):
+    slots = min(context.parallel_jobs, context.cores, context.memory_mb) if operation in ('doe_mesh', 'doe_solve') else 1
+    return max(1, context.cores // slots), max(1, context.memory_mb // slots)
+
+
 def _rebase_paths(directory,result):
     """Relocate the known reporting paths; never reuse a remote absolute path locally."""
     remote_output = result.get("remote_output","")
@@ -232,6 +244,9 @@ def run_remote_job(request,context,auth=None,marker=None,*,directory=None,resume
     if not resume_record:
         required_capability(request)
     context.validate()
+    if context.session_id and not resume_record and request.get('operation') in ('doe_mesh', 'doe_solve'):
+        from truba_handover import context_for_request
+        context = context_for_request(context, auth, cancelled=cancelled, marker=marker, on_progress=on_progress)
     transport = RemoteTransport(context,auth,resume_record)
     if resume_record:
         record = dict(resume_record)
@@ -247,7 +262,9 @@ def run_remote_job(request,context,auth=None,marker=None,*,directory=None,resume
         if geometry_path:
             import base64
             request = {**request, 'imported_geometry_vtp': base64.b64encode(Path(geometry_path).read_bytes()).decode('ascii')}
-        request = {**request,"schema_version":1,"request_id":uuid.uuid4().hex,"source_sha256":source_hash,"native_sha256":native_hash,"remote_context":asdict(context)}
+        step_cores, step_memory = request_resources(context, request['operation'])
+        execution_context = dict(asdict(context), cores=step_cores, memory_mb=step_memory)
+        request = {**request,"schema_version":1,"request_id":uuid.uuid4().hex,"source_sha256":source_hash,"native_sha256":native_hash,"remote_context":execution_context}
         write_record(directory/"request.json",request)
         record = dict(schema_version=1,kind="rustmech_remote",host=HOST,username=transport.username,
                       transport="winscp" if isinstance(transport.delegate,WinSCPJobs) else "ssh",
@@ -315,7 +332,9 @@ printf 'RUSTMECH_JOB_ID=%s\n' "$(cat job.id)"
             from truba_session import validate_session
             session_remote = validate_session(record["session"], transport)
             job_id = record["session"]["job_id"]
-            payload = json.dumps(dict(directory=remote))
+            operation = record.get('operation', '')
+            step_cores, step_memory = request_resources(context, operation)
+            payload = json.dumps(dict(directory=remote, cores=step_cores, memory_mb=step_memory))
             inbox = session_remote+"/inbox/"+PurePosixPath(remote).name+".json"
             script = ("cd "+shlex.quote(remote)+"\nset -euo pipefail\n"+
                       "test ! -e cancel.request\n"+
@@ -330,11 +349,21 @@ printf 'RUSTMECH_JOB_ID=%s\n' "$(cat job.id)"
         if record.get("job_id") and record["job_id"]!=match.group(1): raise RuntimeError("The resumed SLURM job ID changed; refusing to attach another job.")
         record["job_id"] = match.group(1)
         update("submitted")
+        next_renewal_check = 0.0
         while True:
             if is_cancelled():
                 cancel_remote(paths[0],auth)
                 from concurrent.futures import CancelledError
                 raise CancelledError
+            if (context.auto_renew and record.get('session') and record.get('operation') in ('doe_mesh', 'doe_solve')
+                    and time.monotonic() >= next_renewal_check):
+                from truba_handover import prepare_if_needed
+                next_renewal_check = time.monotonic() + 60
+                try:
+                    prepare_if_needed(record['session'], auth)
+                except (OSError, RuntimeError, ValueError) as error:
+                    # A renewal error must never interrupt a healthy running solver.
+                    if on_progress: on_progress('TRUBA · resource renewal: ' + str(error))
             if record.get("session"):
                 from truba_session import QUEUE_FUNCTION
                 reply = transport.command("cd "+shlex.quote(remote)+
@@ -458,6 +487,9 @@ run_remote_level.remote_job_target = True
 
 
 def run_remote_doe(index,settings,context,solve,remote_auth=None,job_marker=None):
+    from dataclasses import replace
+    cores, _ = request_resources(context, 'doe_solve' if solve else 'doe_mesh')
+    settings = replace(settings, cores=min(settings.cores, cores), automatic_cores=False)
     result,_ = run_remote_job(dict(operation="doe_solve" if solve else "doe_mesh",settings=asdict(settings),row=index),context,remote_auth,job_marker)
     return result["row"]
 run_remote_doe.remote_job_target = True

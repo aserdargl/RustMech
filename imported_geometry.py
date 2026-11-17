@@ -90,3 +90,45 @@ def store_surface(surface):
         surface.save(path)
     return str(path)
 
+
+def compression_direction(surface, bottom_cell, top_cell):
+    """A reusable direction in source coordinates, never triangle identities."""
+    _, origin, normal = plane_faces(surface, bottom_cell)
+    _, target, _ = plane_faces(surface, top_cell)
+    align_compression_surface(surface, bottom_cell, top_cell)
+    return normal if np.dot(target - origin, normal) > 0 else -normal
+
+
+def automatic_compression_faces(surface, direction):
+    """Find planar triangles at both global extrema along a chosen direction.
+
+    All coplanar patches are marked by align_compression_surface, including
+    disconnected contact patches on one connected lattice. Curved ends and
+    planes inside the specimen are deliberately not guessed.
+    """
+    direction = np.asarray(direction, dtype=float)
+    if direction.shape != (3,) or not np.isfinite(direction).all() or np.linalg.norm(direction) < 1e-12:
+        raise ValueError('Choose a finite, nonzero compression direction.')
+    direction = direction / np.linalg.norm(direction)
+    triangles = surface.points[surface.faces.reshape(-1, 4)[:, 1:]]
+    projections = triangles @ direction
+    low, high = float(projections.min()), float(projections.max())
+    tolerance = max(surface.length * 1e-6, 1e-9)
+    if high - low <= tolerance:
+        raise ValueError('No compression height along this direction.')
+    cells = []
+    for level in (low, high):
+        candidates = np.flatnonzero(np.max(np.abs(projections - level), axis=1) < tolerance)
+        for cell in candidates:
+            try:
+                _, _, normal = plane_faces(surface, int(cell))
+            except ValueError:
+                continue
+            if abs(np.dot(normal, direction)) >= 1 - 1e-6:
+                cells.append(int(cell))
+                break
+        else:
+            raise ValueError('No planar end face at the specimen boundary; select faces manually or repair the end geometry.')
+    aligned, height = align_compression_surface(surface, *cells)
+    return aligned, height, tuple(cells)
+

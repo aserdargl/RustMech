@@ -259,10 +259,11 @@ class RunPaths:
     raw: Path
 
     @classmethod
-    def create(cls, offline: bool = False) -> RunPaths:
+    def create(cls, offline: bool = False, output_directory=None) -> RunPaths:
         stamp = datetime.now().astimezone().strftime("%Y%m%d_%H%M%S_%f")
         tag = ("OfflineCheck_" if offline else "Run_") + stamp
-        paths = cls(ROOT / "HumanResults" / tag, ROOT / "results" / tag)
+        paths = (cls(Path(output_directory) / tag, Path(output_directory) / tag / "Raw")
+                 if output_directory else cls(ROOT / "HumanResults" / tag, ROOT / "results" / tag))
         for path in [
             paths.raw,
             *(
@@ -605,6 +606,7 @@ def run_analysis(
     mesh: FEMesh,
     backend: SolverBackend,
     images: bool = True,
+    output_directory=None,
 ) -> Path:
     from analysis_process import report_analysis_step
     report_analysis_step("Validating analysis settings and mesh…")
@@ -612,7 +614,7 @@ def run_analysis(
     errors = backend.capabilities.validate(settings) + mesh.solve_errors
     if errors:
         raise ValueError("\n".join(errors))
-    paths = RunPaths.create()
+    paths = RunPaths.create(output_directory=output_directory) if output_directory else RunPaths.create()
     report = {
         "status": "preparing",
         "licensed_solve_executed": False,
@@ -709,10 +711,12 @@ def run_batch_experiment(
     settings: Settings,
     mesh: FEMesh,
     backend_factory=None,
+    output_directory=None,
 ) -> dict:
     if backend_factory is None:
         backend_factory = lambda: create_solver_backend(settings.solver_backend)
-    human_path = run_analysis(settings, mesh, backend_factory(), images=False)
+    options = {"output_directory": output_directory} if output_directory else {}
+    human_path = run_analysis(settings, mesh, backend_factory(), images=False, **options)
     summary_data = json.loads(
         (human_path / "summary.json").read_text(encoding="utf-8")
     )
@@ -1511,6 +1515,7 @@ class RustMechDialog(QDialog):
         designs_menu.addAction("Import geometry for flow / thermal...", self.import_flow_geometry)
         designs_menu.addAction("Add current model to analysis queue", self._enqueue_current_model)
         designs_menu.addAction("Analysis queue...", self._show_analysis_queue)
+        designs_menu.addAction("Batch analysis from folder...", self._show_folder_batch)
         self.designs_button.setMenu(designs_menu)
         navigation.addWidget(self.designs_button)
 
@@ -3173,6 +3178,14 @@ class RustMechDialog(QDialog):
         self._ensure_analysis_queue()
         self.analysis_queue_window.open_workspace()
 
+    def _show_folder_batch(self):
+        from folder_batch import FolderBatchDialog
+        self._ensure_analysis_queue()
+        if not hasattr(self, "folder_batch_dialog"):
+            self.folder_batch_dialog = FolderBatchDialog(self.collect, self.analysis_queue_widget, self)
+        from window_state import show_restored_window
+        show_restored_window(self.folder_batch_dialog)
+
     def _enqueue_current_model(self):
         if self.workspace_tabs.currentIndex() != 0:
             QMessageBox.information(self, "Analysis queue", "Select the Mechanic workspace and configure the model first.")
@@ -3494,6 +3507,9 @@ class RustMechDialog(QDialog):
         if self.analysis_queue_widget is not None:
             self.analysis_queue_widget.dispose()
             self.analysis_queue_window.close()
+        if hasattr(self, "folder_batch_dialog"):
+            self.folder_batch_dialog.dispose()
+            self.folder_batch_dialog.close()
         if self.design_pool is not None:
             self.design_pool.close()
             self.design_pool.dispose()

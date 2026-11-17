@@ -43,14 +43,21 @@ def validate_session(record, transport):
     return validated_remote_path(record['remote_directory'], transport.username)
 
 
-def create_session(context, auth=None):
+def create_session(context, auth=None, *, successor_of=None):
     from truba_remote import RemoteTransport, _source_root, slurm_script
     context.validate()
     if context.session_id:
         raise ValueError('Release the existing resource session first.')
     previous = saved_session()
-    if previous and previous.get('state') not in ('released', 'ended'):
+    if not successor_of and previous and previous.get('state') not in ('released', 'ended'):
         raise RuntimeError('An existing resource request is saved. Refresh or release it first.')
+    destination = session_path()
+    if successor_of:
+        from truba_handover import successor_path
+        validate_session(successor_of, RemoteTransport(context, auth))
+        destination = successor_path()
+        if destination.exists():
+            raise RuntimeError('A replacement resource request is already saved.')
     transport = RemoteTransport(context, auth)
     remote = f'/arf/scratch/{transport.username}/RustMech/{uuid.uuid4().hex}'
     validated_remote_path(remote, transport.username)
@@ -64,18 +71,27 @@ def create_session(context, auth=None):
                   remote_directory=remote, context=asdict(context), state='submitting',
                   transport='winscp' if transport.delegate.__class__.__name__ == 'WinSCPJobs' else 'ssh')
     if record['transport'] == 'winscp': record['winscp_site'] = transport.delegate.site
-    write_record(session_path(), record)
+    if successor_of:
+        record['renewal_parent_id'] = successor_of['job_id']
+    write_record(destination, record)
     transport.command('mkdir -p -- ' + shlex.quote(remote + '/inbox'))
     with tempfile.TemporaryDirectory(prefix='rustmech-session-') as temporary:
         local = Path(temporary) / 'session.slurm'
         local.write_text(script, encoding='utf-8', newline='\n')
         transport.put(local, remote + '/session.slurm')
         transport.put(_source_root() / 'truba_session_worker.py', remote + '/session_worker.py')
-    return refresh_session(record, auth, submit=True)
+    return refresh_session(record, auth, submit=True, save_path=destination)
 
 
-def refresh_session(record, auth=None, *, submit=False):
+def refresh_session(record, auth=None, *, submit=False, save_path=None):
     from truba_remote import RemoteContext, RemoteTransport
+    if save_path is None:
+        # A UI refresh launched before promotion must not restore the old parent.
+        current = saved_session()
+        if (current and current.get('username') == record.get('username')
+                and any(item.get('job_id') == record.get('job_id') for item in current.get('previous_sessions', []))):
+            record = current
+    destination = save_path or session_path()
     transport = RemoteTransport(RemoteContext(**record['context']), auth, record)
     remote = validated_remote_path(record['remote_directory'], transport.username)
     if record.get('host') != HOST or record.get('username') != transport.username:
@@ -98,14 +114,18 @@ fi
 job=$(cat job.id)
 [[ "$job" =~ ^[0-9]+$ ]] || exit 2
 printf 'SESSION_ID=%s\\n' "$job"
-printf 'SESSION_QUEUE='
-rustmech_queue "$job" '%T|%L|%r|%P|%N'
+queue=$(rustmech_queue "$job" '%T|%L|%r|%P|%N')
+printf 'SESSION_QUEUE=%s\\n' "$queue"
+if [ -z "$queue" ]; then
+ printf 'SESSION_TERMINAL='
+ sacct -n -X -j "$job" --format=State -P | head -n 1
+fi
 if [ -s ready ]; then printf 'SESSION_READY=%s\\n' "$(cat ready)"; fi
 ''')
     if 'SESSION_REJECTED=' in reply:
         record = dict(record, state='ended', ready=False,
                       reason=reply.split('SESSION_REJECTED=',1)[1].strip())
-        write_record(session_path(), record)
+        write_record(destination, record)
         return record
     match = re.search(r'^SESSION_ID=(\d+)\s*$', reply, re.M)
     if not match: raise RuntimeError('Resource submission is unconfirmed; refresh the saved session.')
@@ -119,18 +139,34 @@ if [ -s ready ]; then printf 'SESSION_READY=%s\\n' "$(cat ready)"; fi
     record.update(state=fields[0] if value else 'ended', remaining=fields[1] if len(fields)>1 else '',
                   reason=fields[2] if len(fields)>2 else '',
                   ready=fields[0]=='RUNNING' and f'SESSION_READY={match[1]}' in reply.splitlines())
+    terminal = re.search(r'^SESSION_TERMINAL=(.*)$', reply, re.M)
+    if terminal:
+        record['terminal_state'] = terminal[1].strip().rstrip('|')
+    from truba_handover import renewal_due
+    if renewal_due(record):
+        record['renewal_due_seen'] = True
     if len(fields) > 3:
         record['allocated_partition'] = fields[3]
     if len(fields) > 4:
         record['allocated_nodes'] = fields[4]
-    write_record(session_path(), record)
+    if save_path is None:
+        current = saved_session()
+        if (current and current.get('username') == record.get('username')
+                and any(item.get('job_id') == record.get('job_id') for item in current.get('previous_sessions', []))):
+            return current
+        if current and current.get('job_id') == record.get('job_id') and current.get('renewal_disabled'):
+            if current.get('state') == 'released':
+                return current
+            record['renewal_disabled'] = True
+    write_record(destination, record)
     return record
 
 
-def save_released_session(record):
+def save_released_session(record, *, persist=True):
     """Keep requests belonging to the confirmed stopped allocation out of active jobs."""
     record = dict(record, state='released', ready=False)
-    write_record(session_path(), record)
+    if persist:
+        write_record(session_path(), record)
     terminal = {'downloaded', 'cancelled', 'completed', 'failed', 'timeout',
                 'node_fail', 'out_of_memory', 'preempted', 'boot_fail',
                 'deadline', 'revoked', 'released', 'ended'}
@@ -157,16 +193,22 @@ def save_released_session(record):
     return record
 
 
-def release_session(record, auth=None):
+def release_session(record, auth=None, *, _related=True):
     from truba_remote import RemoteContext, RemoteTransport
+    # Release a prepared replacement as well as draining parents, even if their
+    # allocation IDs were never attached to a new analysis on the desktop.
+    from truba_handover import release_related
+    if _related:
+        record = release_related(record, auth)
     if record.get('state') == 'released':
         return record
     if record.get('state') == 'ended':
-        return save_released_session(record)
+        return save_released_session(record, persist=_related)
     if not record.get('job_id'):
-        record = refresh_session(record, auth)
+        from truba_handover import successor_path
+        record = refresh_session(record, auth, save_path=None if _related else successor_path())
         if record.get('state') == 'ended':
-            return save_released_session(record)
+            return save_released_session(record, persist=_related)
     transport = RemoteTransport(RemoteContext(**record['context']), auth, record)
     validate_session(record, transport)
     # scancel acceptance is not proof the allocation has stopped. Check Slurm
@@ -191,7 +233,7 @@ echo 'Resource release is still unconfirmed; reconnect and retry.' >&2
 exit 3
 ''')
     if 'SESSION_RELEASED' not in reply.splitlines(): raise RuntimeError('Resource release was not confirmed.')
-    return save_released_session(record)
+    return save_released_session(record, persist=_related)
 
 
 def cancel_session_request(record, auth=None):

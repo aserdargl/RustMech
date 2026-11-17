@@ -151,6 +151,63 @@ class AnalysisQueueWidget(DoEStudioWidget):
         self.table.selectRow(len(self._rows) - 1)
         return row
 
+    def add_folder_snapshots(self, snapshots):
+        """Publish the whole prepared batch atomically; never start a solver here."""
+        if self._active_mode is not None or self._active_future is not None:
+            raise ValueError("Stop the analysis queue before adding jobs.")
+        if not self._storage_ready or self.storage_error:
+            raise ValueError(self.storage_error or "Analysis queue is not writable.")
+        known = {row.folder_job['key'] for row in self._rows if row.folder_job}
+        added = []
+        for settings, metadata in snapshots:
+            if metadata['key'] in known:
+                continue
+            from solver_api import get_solver_capabilities
+            errors = validate_settings(settings) + get_solver_capabilities(settings.solver_backend).validate(settings)
+            if errors:
+                raise ValueError(settings.imported_geometry_name + ': ' + '\n'.join(errors))
+            snapshot = settings_from_dict(asdict(settings))
+            row = generate_doe_rows([snapshot], {}, "grid", 1, 42)[0]
+            row.exp_id = "JOB-" + uuid4().hex[:10].upper()
+            row.folder_job = dict(metadata)
+            row.folder_job['destination'] = str(Path(metadata['destination']) / row.exp_id)
+            added.append(row)
+            known.add(metadata['key'])
+        self.store.save([*self._rows, *added])
+        self._rows.extend(added)
+        self._refresh_table_view()
+        self._write_folder_reports()
+        return added
+
+    def _write_folder_reports(self):
+        from folder_batch_results import write_folder_reports
+        try:
+            write_folder_reports(self._rows)
+        except (OSError, ValueError, TypeError) as error:
+            self._report_persistence_problem('Folder results could not be saved: ' + str(error))
+
+    def _persist_progress(self):
+        super()._persist_progress()
+        self._write_folder_reports()
+
+    def _apply_payload(self, payload):
+        row = self._rows[payload['r_idx']]
+        if row.folder_job:
+            if not payload.get('run_folder') and self._active_mode == 'solve':
+                payload = dict(payload, run_folder=row.folder_job['destination'])
+            from folder_batch_results import collect_folder_output
+            try:
+                if payload.get('folder_export_error'):
+                    row.folder_job['export_error'] = payload['folder_export_error']
+                else:
+                    payload = collect_folder_output(row, payload)
+                    row.folder_job.pop('export_error', None)
+            except (OSError, ValueError) as error:
+                row.folder_job['export_error'] = 'Output copy failed; original retained: ' + str(error)
+        super()._apply_payload(payload)
+        if row.folder_job and row.folder_job.get('export_error'):
+            self._report_persistence_problem(row.folder_job['export_error'])
+
     def _write_row_cells(self, index, row):
         super()._write_row_cells(index, row)
         settings = row.design_settings
@@ -177,6 +234,7 @@ class AnalysisQueueWidget(DoEStudioWidget):
             self._queue.clear()
         super()._launch_next_in_queue()
         self.save_queue()
+        self._write_folder_reports()
 
     def _on_table_item_changed(self, item):
         if self._updating_table:

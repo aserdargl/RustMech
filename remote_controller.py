@@ -158,9 +158,10 @@ class RemoteController(QObject):
         advanced_layout.addLayout(advanced_form)
         for name,label in (("partition","Queue"),("account","Account"),
                            ("walltime","Wall time"),("cores","CPU cores"),("gpus","GPUs"),("memory_mb","RAM / GiB"),
+                           ("parallel_jobs","Parallel analyses"),
                            ("runtime_python","Runtime Python"),("python_module","Python module"),("foam_module","OpenCFD module"),
                            ("winscp_site","WinSCP site (optional)")):
-            if name in ("memory_mb", "cores", "gpus"):
+            if name in ("memory_mb", "cores", "gpus", "parallel_jobs"):
                 control = CompactDoubleSpinBox() if name == 'memory_mb' else CompactSpinBox()
                 control.setFixedWidth(88)
                 control.setRange(1 / 1024, 4096) if name == 'memory_mb' else control.setRange(0 if name == 'gpus' else 1, 8 if name == 'gpus' else 224)
@@ -184,6 +185,8 @@ class RemoteController(QObject):
                 control.setFixedWidth(120 if name == 'walltime' else 360 if name == 'runtime_python' else 240)
                 control.editingFinished.connect(self.configuration_changed)
             self.controls[name] = control
+            if name == 'parallel_jobs':
+                control.setToolTip('Maximum simultaneous DoE / analysis queue jobs. CPU cores and RAM are divided equally between jobs; each job has separate results. Limited by the allocated cores and memory. Set 1 for a single large analysis.')
             if name in ('cores', 'gpus', 'memory_mb'):
                 row = QHBoxLayout()
                 row.setContentsMargins(0, 0, 0, 0)
@@ -202,6 +205,11 @@ class RemoteController(QObject):
                 target.addRow(label,control)
         self.transport = defaults.transport
         layout.addLayout(form)
+        self.auto_renew = QCheckBox('Prepare replacement resources near the time limit')
+        self.auto_renew.setChecked(defaults.auto_renew)
+        self.auto_renew.setToolTip('Batch queues: request a replacement within the final hour (10% for shorter sessions). New analyses wait for it; running analyses finish on their original resource. This does not restart a solver from a saved calculation step.')
+        self.auto_renew.toggled.connect(self.configuration_changed)
+        layout.addWidget(self.auto_renew)
         self.queue_hint = QLabel()
         self.queue_hint.setWordWrap(True)
         self.queue_hint.setObjectName('mutedHintLabel')
@@ -313,7 +321,8 @@ class RemoteController(QObject):
     def context(self):
         if self.controls['partition'].currentData() == 'auto' and not (self.session and self.session.get('state') not in ('released', 'ended')):
             self.apply_queue_limits()
-        values = {key:control.currentData() if key == 'partition' else control.value() if key in ('cores', 'gpus', 'memory_mb') else control.text().strip() for key,control in self.controls.items()}
+        values = {key:control.currentData() if key == 'partition' else control.value() if key in ('cores', 'gpus', 'memory_mb', 'parallel_jobs') else control.text().strip() for key,control in self.controls.items()}
+        values['auto_renew'] = self.auto_renew.isChecked()
         values['memory_mb'] = round(values['memory_mb'] * 1024)
         active = self.session and (self.session.get("state") not in ("released","ended") or
                                    self.session.get("state") == "ended" and self.session.get("job_id"))
@@ -432,6 +441,7 @@ class RemoteController(QObject):
         allocating = self.session_future is not None and self.session_action == 'allocate'
         self.session_release.setEnabled(bool(active or allocating) and not self.closing and self.release_future is None)
         for control in self.controls.values(): control.setEnabled(not active and not busy and self.future is None)
+        self.auto_renew.setEnabled(not active and not busy and self.future is None)
         if self.controls['partition'].currentData() == 'auto':
             for key in ('cores', 'gpus', 'memory_mb'):
                 self.controls[key].setEnabled(False)
@@ -457,12 +467,23 @@ class RemoteController(QObject):
             state, explanation = 'SUBMITTING', 'Checking the request and submitting to Slurm…'
         self.session_state.setText('Slurm: ' + state + ' · ' + explanation)
         if self.session:
+            replacement = ''
+            try:
+                from truba_handover import successor_path
+                if successor_path().exists():
+                    successor = json.loads(successor_path().read_text(encoding='utf-8'))
+                    if (successor.get('renewal_parent_id') == self.session.get('job_id')
+                            and successor.get('username') == self.session.get('username')):
+                        replacement = ' · replacement: ' + str(successor.get('job_id', 'submitting')) + ' · ' + successor.get('state', 'unknown')
+            except (OSError, ValueError):
+                pass
             self.session_status.setText("Resource session " + str(self.session.get("job_id", "unconfirmed")) +
                 " · " + self.session.get("state", "unknown") +
                 (" · ready" if self.session.get("ready") and self.session_watch else "") +
                 (" · " + self.session['allocated_partition'] if self.session.get('allocated_partition') else '') +
                 (" · " + self.session['allocated_nodes'] if self.session.get('allocated_nodes') else '') +
                 " · remaining: " + (self.session.get("remaining") or "—") +
+                replacement +
                 (" · " + self.session["reason"] if self.session.get("reason") else "") +
                 (" · refresh to verify" if active and not self.session_watch else ""))
         self.session_status.setToolTip(self.session_status.text())
@@ -611,6 +632,7 @@ class RemoteController(QObject):
     def _physics_busy(self):
         window = self.window
         return bool(window.analysis_job or getattr(window.doe_studio,"_active_future",None) or
+                    getattr(getattr(window, 'analysis_queue_widget', None), '_active_future', None) or
                     window.flow_workspace.job or window.thermal_workspace.job or
                     any(getattr(child,"future",None) is not None for child in window.findChildren(QWidget) if type(child).__name__=="MeshConvergenceWidget"))
 
@@ -738,10 +760,13 @@ class RemoteController(QObject):
         self.stop.setEnabled(False)
         self.status.setText("Cancelling the remote check/setup job…")
 
-    def require(self,capability,settings=None):
+    def require(self,capability,settings=None, *, allow_handover=False):
         if self.closing: raise RuntimeError('TRUBA resources are being released for closing.')
-        if (not self.session or self.session.get("state") != "RUNNING"
-                or not self.session_watch or not self.session.get("ready")):
+        can_renew = (allow_handover and self.session and self.session.get('state') == 'ended'
+                     and self.session.get('context', {}).get('auto_renew', True)
+                     and not self.session.get('renewal_disabled'))
+        if (not self.session or not self.session_watch or
+                (not can_renew and (self.session.get("state") != "RUNNING" or not self.session.get("ready")))):
             raise RuntimeError("Allocate or refresh the resource session and wait until it is ready before computing.")
         if not self.requested: raise ValueError("TRUBA computation mode is not enabled.")
         if not self.ready:

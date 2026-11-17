@@ -17,6 +17,7 @@ import math
 import os
 import time
 from analysis_process import AnalysisProcess
+from truba_parallel import TrubaParallelMixin
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime
 from pathlib import Path
@@ -106,6 +107,7 @@ class ExperimentRow:
     started_at: str = ""
     duration_s: float | None = None
     attempts: int = 0
+    folder_job: dict | None = None
 
     def dataset_columns(self) -> list:
         """Return stable geometry grouping and analysis metadata for CSV export."""
@@ -374,7 +376,7 @@ class DoEStudioWindow(QMainWindow):
         show_restored_window(self)
 
 
-class DoEStudioWidget(QWidget):
+class DoEStudioWidget(TrubaParallelMixin, QWidget):
     """Interactive Excel-like Design of Experiments (DoE) table & Batch Solver."""
 
     preview_requested = Signal(object)  # Existing table-row preview.
@@ -1428,7 +1430,7 @@ class DoEStudioWidget(QWidget):
             target_settings = self._rows[row_index].to_settings(base)
             self.preview_requested.emit(target_settings)
 
-    def stop_active_queue(self) -> None:
+    def _stop_serial(self) -> None:
         if self._active_future is not None:
             try:
                 self._active_future.force_stop()
@@ -1449,7 +1451,7 @@ class DoEStudioWidget(QWidget):
         self._launch_next_in_queue()
 
     def start_mesh_precheck(self) -> None:
-        if self._active_future is not None or not self._rows:
+        if self._active_future is not None or self._active_mode is not None or not self._rows:
             return
         self._queue = [i for i, r in enumerate(self._rows) if r.enabled]
         if not self._queue:
@@ -1466,7 +1468,7 @@ class DoEStudioWidget(QWidget):
         self._launch_next_in_queue()
 
     def start_batch_solve(self) -> None:
-        if self._active_future is not None or not self._rows:
+        if self._active_future is not None or self._active_mode is not None or not self._rows:
             return
         if self._batch_solver_runner is None:
             QMessageBox.information(
@@ -1571,7 +1573,7 @@ class DoEStudioWidget(QWidget):
         hours, minutes = divmod(minutes, 60)
         return f"ETA ~{hours}h {minutes:02d}m" if hours else f"ETA ~{minutes}m {seconds:02d}s"
 
-    def _launch_next_in_queue(self) -> None:
+    def _launch_next_serial(self) -> None:
         if self._stop_requested or not self._queue:
             self._frozen_base = None
             self._active_mode = None
@@ -1595,7 +1597,8 @@ class DoEStudioWidget(QWidget):
         self._row_started = time.monotonic()
 
         s = row.to_settings(self._run_base())
-        worker = ExperimentWorker(self._mesh_generator, self._batch_solver_runner)
+        worker = ExperimentWorker(self._mesh_generator, self._batch_solver_runner,
+                                  (row.folder_job or {}).get("destination"))
         try:
             controller = getattr(self,"remote_controller",None)
             if controller is not None and controller.requested:
@@ -1603,10 +1606,18 @@ class DoEStudioWidget(QWidget):
                 # Design snapshots retain geometry/materials, but execution follows
                 # the currently selected solver (the remote mode selects Kratos).
                 execution = self._run_base()
+                if row.folder_job and s.solver_backend != execution.solver_backend:
+                    raise ValueError('Folder job solver differs from the current TRUBA solver. Select the saved solver before running.')
                 s = replace(s, **{key: value for key, value in asdict(execution).items()
                                   if key.startswith('kratos_') or key in ('solver_backend', 'cores', 'automatic_cores')})
-                context,auth = controller.require("mesh" if self._active_mode=="check" else s.solver_backend,s)
-                self._active_future = AnalysisProcess(run_remote_doe,r_idx,s,context,self._active_mode!="check",remote_auth=auth)
+                context,auth = controller.require("mesh" if self._active_mode=="check" else s.solver_backend,s,allow_handover=True)
+                if row.folder_job:
+                    from folder_batch_results import run_remote_folder_doe
+                    self._active_future = AnalysisProcess(run_remote_folder_doe, r_idx, s, context,
+                                                          self._active_mode != "check", row.folder_job['destination'],
+                                                          remote_auth=auth)
+                else:
+                    self._active_future = AnalysisProcess(run_remote_doe,r_idx,s,context,self._active_mode!="check",remote_auth=auth)
             elif self._active_mode == "check":
                 self._active_future = AnalysisProcess(worker._evaluate_row_mesh, r_idx, s)
             else:
@@ -1617,7 +1628,7 @@ class DoEStudioWidget(QWidget):
             self._apply_payload({"r_idx": r_idx, "status": f"Failed to start: {exc}"})
             self._launch_next_in_queue()
 
-    def _operation_state(self):
+    def _serial_operation_state(self):
         if self._active_future is None or not self._queue:
             panel = self.planner.geometry_panel
             if panel._future is not None:
@@ -1638,7 +1649,7 @@ class DoEStudioWidget(QWidget):
             message += f" · {eta}"
         return True, message, self._total_queued - len(self._queue), self._total_queued
 
-    def _poll_worker(self) -> None:
+    def _poll_serial(self) -> None:
         if self._active_future is None:
             return
         if not self._active_future.done():
@@ -1932,9 +1943,10 @@ class DoEStudioWidget(QWidget):
 class ExperimentWorker:
     """Picklable job context; no UI objects cross the process boundary."""
 
-    def __init__(self, mesh_generator, batch_solver_runner):
+    def __init__(self, mesh_generator, batch_solver_runner, output_directory=None):
         self._mesh_generator = mesh_generator
         self._batch_solver_runner = batch_solver_runner
+        self._output_directory = output_directory
 
     def _evaluate_row_mesh(
         self, r_idx: int, settings: Settings
@@ -1985,7 +1997,10 @@ class ExperimentWorker:
                     "hex8_elements": int(mesh.grid.n_cells),
                     "status": "Mesh Disconnected",
                 }
-            summary = self._batch_solver_runner(settings, mesh)
+            if self._output_directory:
+                summary = self._batch_solver_runner(settings, mesh, output_directory=self._output_directory)
+            else:
+                summary = self._batch_solver_runner(settings, mesh)
             graphs = summary.get("graphs", {})
             fields = summary.get("fields", {})
             return {
