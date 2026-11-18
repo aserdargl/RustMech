@@ -1,12 +1,14 @@
 """Exercise window preferences with an isolated per-test settings file."""
+import ctypes
 import tempfile
 import unittest
+from ctypes import wintypes
 from pathlib import Path
 
 from PySide6.QtCore import QSettings, Qt
 from PySide6.QtWidgets import QApplication, QDialog, QFileDialog, QMainWindow, QMenu, QSplitter, QVBoxLayout, QWidget
 
-from window_caption import CAPTION_PROPERTY, CaptionButton, install_window_captions
+from window_caption import CAPTION_PROPERTY, CaptionButton, MonitorInfo, install_window_captions
 from window_state import WindowStateStore
 
 
@@ -154,6 +156,19 @@ class WindowStateTests(unittest.TestCase):
             self.addCleanup(self.app.removeNativeEventFilter, service._native_frame)
         self.addCleanup(service.deleteLater)
 
+        def assert_native_work_area(window):
+            frame = service._native_frame
+            if frame is None:
+                return
+            hwnd = int(window.winId())
+            bounds = wintypes.RECT()
+            monitor = MonitorInfo(size=ctypes.sizeof(MonitorInfo))
+            self.assertTrue(frame._is_zoomed(hwnd))
+            self.assertTrue(ctypes.windll.user32.GetWindowRect(hwnd, ctypes.byref(bounds)))
+            self.assertTrue(frame._monitor_info(frame._monitor_from_window(hwnd, 2), ctypes.byref(monitor)))
+            self.assertEqual((bounds.left, bounds.top, bounds.right, bounds.bottom),
+                             (monitor.work.left, monitor.work.top, monitor.work.right, monitor.work.bottom))
+
         main = QMainWindow()
         main.setCentralWidget(QWidget())
         main.resize(640, 440)
@@ -167,6 +182,8 @@ class WindowStateTests(unittest.TestCase):
         self.assertEqual([button.x() for button in buttons], list(range(caption.width() - 100, caption.width(), 25)))
         self.assertTrue(all(button.width() == button.height() == 25 for button in buttons))
         self.assertGreaterEqual(main.centralWidget().y(), caption.geometry().bottom() + 1)
+        self.assertTrue(caption.outline.isVisible())
+        self.assertTrue(caption.outline.testAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents))
         normal = main.geometry()
         buttons[1].click()
         self.app.processEvents()
@@ -185,6 +202,7 @@ class WindowStateTests(unittest.TestCase):
         dialog_caption = dialog.property(CAPTION_PROPERTY)
         dialog_buttons = dialog_caption.findChildren(CaptionButton)
         self.assertEqual([button.action for button in dialog_buttons], ["pin", "close"])
+        self.assertTrue(dialog_caption.outline.isVisible())
         dialog_caption.pin.click()
         self.assertTrue(dialog_caption.pin.isChecked())
         self.assertFalse(caption.pin.isChecked())
@@ -196,15 +214,20 @@ class WindowStateTests(unittest.TestCase):
         self.app.processEvents()
         self.assertTrue(main.isMaximized())
         self.assertTrue(caption.isVisible())
+        self.assertFalse(caption.outline.isVisible())
+        assert_native_work_area(main)
         main.hide()
         restored = QMainWindow()
         self.windows.append(restored)
         restored.show()
         self.app.processEvents()
         self.assertTrue(restored.isMaximized())
-        restored.property(CAPTION_PROPERTY).maximize.click()
+        assert_native_work_area(restored)
+        restored_caption = restored.property(CAPTION_PROPERTY)
+        restored_caption.maximize.click()
         self.app.processEvents()
         self.assertEqual(restored.geometry(), normal)
+        self.assertTrue(restored_caption.outline.isVisible())
 
         picker = QFileDialog(restored)
         self.windows.append(picker)
