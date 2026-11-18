@@ -4,8 +4,9 @@ import unittest
 from pathlib import Path
 
 from PySide6.QtCore import QSettings, Qt
-from PySide6.QtWidgets import QApplication, QDialog, QSplitter, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QApplication, QDialog, QFileDialog, QMainWindow, QMenu, QSplitter, QVBoxLayout, QWidget
 
+from window_caption import CAPTION_PROPERTY, CaptionButton, install_window_captions
 from window_state import WindowStateStore
 
 
@@ -140,6 +141,79 @@ class WindowStateTests(unittest.TestCase):
         self.app.processEvents()
         self.assertEqual(restored.orientation(), Qt.Orientation.Horizontal)
         self.assertEqual(restored.sizes(), expected)
+
+    def test_caption_preserves_window_actions_modality_and_saved_geometry(self):
+        attribute = Qt.ApplicationAttribute.AA_DontUseNativeDialogs
+        native_dialogs_disabled = self.app.testAttribute(attribute)
+        install_window_captions(self.app)
+        service = self.app._rustmech_caption_service
+        self.addCleanup(self.app.setAttribute, attribute, native_dialogs_disabled)
+        self.addCleanup(delattr, self.app, "_rustmech_caption_service")
+        self.addCleanup(self.app.removeEventFilter, service)
+        if service._native_frame is not None:
+            self.addCleanup(self.app.removeNativeEventFilter, service._native_frame)
+        self.addCleanup(service.deleteLater)
+
+        main = QMainWindow()
+        main.setCentralWidget(QWidget())
+        main.resize(640, 440)
+        main.move(80, 90)
+        self.windows.append(main)
+        main.show()
+        self.app.processEvents()
+        caption = main.property(CAPTION_PROPERTY)
+        buttons = caption.findChildren(CaptionButton)
+        self.assertEqual([button.action for button in buttons], ["pin", "minimize", "maximize", "close"])
+        self.assertEqual([button.x() for button in buttons], list(range(caption.width() - 100, caption.width(), 25)))
+        self.assertTrue(all(button.width() == button.height() == 25 for button in buttons))
+        self.assertGreaterEqual(main.centralWidget().y(), caption.geometry().bottom() + 1)
+        normal = main.geometry()
+        buttons[1].click()
+        self.app.processEvents()
+        self.assertTrue(main.isMinimized())
+        main.showNormal()
+        self.app.processEvents()
+        self.assertEqual(main.geometry(), normal)
+
+        dialog = QDialog(main)
+        dialog.setWindowModality(Qt.WindowModality.WindowModal)
+        dialog_layout = QVBoxLayout(dialog)
+        dialog_layout.addWidget(QWidget())
+        self.windows.append(dialog)
+        dialog.show()
+        self.app.processEvents()
+        dialog_caption = dialog.property(CAPTION_PROPERTY)
+        dialog_buttons = dialog_caption.findChildren(CaptionButton)
+        self.assertEqual([button.action for button in dialog_buttons], ["pin", "close"])
+        dialog_caption.pin.click()
+        self.assertTrue(dialog_caption.pin.isChecked())
+        self.assertFalse(caption.pin.isChecked())
+        self.assertEqual(dialog.windowModality(), Qt.WindowModality.WindowModal)
+        dialog_buttons[-1].click()
+        self.assertFalse(dialog.isVisible())
+
+        caption.maximize.click()
+        self.app.processEvents()
+        self.assertTrue(main.isMaximized())
+        self.assertTrue(caption.isVisible())
+        main.hide()
+        restored = QMainWindow()
+        self.windows.append(restored)
+        restored.show()
+        self.app.processEvents()
+        self.assertTrue(restored.isMaximized())
+        restored.property(CAPTION_PROPERTY).maximize.click()
+        self.app.processEvents()
+        self.assertEqual(restored.geometry(), normal)
+
+        picker = QFileDialog(restored)
+        self.windows.append(picker)
+        picker.show()
+        self.app.processEvents()
+        self.assertTrue(picker.property(CAPTION_PROPERTY).isVisible())
+        menu = QMenu(restored)
+        menu.ensurePolished()
+        self.assertIsNone(menu.property(CAPTION_PROPERTY))
 
 
 if __name__ == "__main__":
