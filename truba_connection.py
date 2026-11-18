@@ -7,15 +7,66 @@ import socket
 from threading import Event
 
 import paramiko
-from PySide6.QtCore import QThread, Qt, Signal
+from PySide6.QtCore import QRectF, QThread, Qt, Signal
+from PySide6.QtGui import QColor, QPainter, QPainterPath
 from PySide6.QtWidgets import (QApplication, QCheckBox, QDialog, QFormLayout, QFrame, QGroupBox, QHBoxLayout,
                                QLabel, QLineEdit, QMessageBox, QPushButton, QScrollArea, QSplitter,
-                               QTabWidget, QVBoxLayout, QWidget)
+                               QStyle, QStyleOptionTab, QTabBar, QTabWidget, QVBoxLayout, QWidget)
 
 from studio_style import CONTROL_HEIGHT, STUDIO_STYLESHEET
 from truba_credentials import CredentialStore, state_directory
 
 HOST = "172.16.6.15"
+
+
+class TrubaTabBar(QTabBar):
+    """Paint GraphCalc's browser tab contour over Qt's native tab controls."""
+
+    def __init__(self):
+        super().__init__()
+        self.setObjectName("trubaTabBar")
+        self.setDrawBase(False)
+        self.setExpanding(False)
+        self.setElideMode(Qt.TextElideMode.ElideNone)
+        self.setUsesScrollButtons(True)
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.fillRect(self.rect(), QColor("#E8EDF4"))
+        for index in range(self.count()):
+            option = QStyleOptionTab()
+            self.initStyleOption(option, index)
+            selected = bool(option.state & QStyle.StateFlag.State_Selected)
+            enabled = bool(option.state & QStyle.StateFlag.State_Enabled)
+            focused = bool(option.state & QStyle.StateFlag.State_HasFocus)
+            hovered = bool(option.state & QStyle.StateFlag.State_MouseOver)
+            bounds = QRectF(option.rect).adjusted(0.5, 0.5, -0.5, -0.5)
+            if selected:
+                left, top, right, bottom = bounds.getCoords()
+                path = QPainterPath()
+                path.moveTo(left, bottom)
+                path.quadTo(left + 5, bottom, left + 5, bottom - 5)
+                path.lineTo(left + 5, top + 8)
+                path.quadTo(left + 5, top, left + 13, top)
+                path.lineTo(right - 13, top)
+                path.quadTo(right - 5, top, right - 5, top + 8)
+                path.lineTo(right - 5, bottom - 5)
+                path.quadTo(right - 5, bottom, right, bottom)
+                path.closeSubpath()
+                painter.setBrush(QColor("#BFDBFE" if enabled else "#E5E7EB"))
+                painter.setPen(QColor("#2563EB" if enabled else "#D5DBE2"))
+                painter.drawPath(path)
+            elif hovered and enabled:
+                painter.setBrush(QColor("#F1F5F9"))
+                painter.setPen(QColor("#93C5FD"))
+                painter.drawRoundedRect(bounds.adjusted(4, 2, -4, -2), 5, 5)
+            painter.setPen(QColor("#0F172A" if enabled else "#64748B"))
+            painter.drawText(option.rect, Qt.AlignmentFlag.AlignCenter | Qt.TextFlag.TextShowMnemonic, option.text)
+            if focused and enabled:
+                painter.setPen(QColor("#1D4ED8"))
+                edge = option.rect.adjusted(15, 0, -15, -1)
+                painter.drawLine(edge.bottomLeft(), edge.bottomRight())
 
 
 class HostKeyDeclined(paramiko.SSHException):
@@ -180,7 +231,8 @@ class TrubaConnectionDialog(QDialog):
         header_layout.addWidget(self.language_selector)
         layout.addWidget(header)
         self.tabs = QTabWidget()
-        self.tabs.tabBar().setExpanding(False)
+        self.tabs.setObjectName("trubaTabs")
+        self.tabs.setTabBar(TrubaTabBar())
         self.jobs_splitter = QSplitter(Qt.Orientation.Vertical)
         self.jobs_splitter.setObjectName('trubaJobsSplitter')
         self.jobs_splitter.setChildrenCollapsible(False)
@@ -353,8 +405,9 @@ class TrubaConnectionDialog(QDialog):
         self.settings_content.setFixedHeight(self.settings_layout.sizeHint().height())
         for section in self._remote_sections:
             # Long advanced paths must not widen the connection form.
-            section.setFixedWidth(max(width, section.layout().minimumSize().width()))
+            section.ensurePolished()
             section.layout().invalidate()
+            section.setFixedWidth(max(width, section.minimumSizeHint().width()))
             section.setFixedHeight(section.heightForWidth(section.width()) if section.hasHeightForWidth() else section.sizeHint().height())
 
     def keyPressEvent(self, event):

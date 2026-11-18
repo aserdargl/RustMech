@@ -539,6 +539,8 @@ Finish or stop current computations before changing execution mode.|Çalıştır
 Finish or stop current computations before changing the resource session.|Kaynak oturumunu değiştirmeden önce hesaplamaları bitirin veya durdurun.
 Finish or stop current computations before refreshing the remote runtime.|Uzak ortamı yenilemeden önce hesaplamaları bitirin veya durdurun.
 Finish or stop the remote mesh job before modifying its runtime.|Çalışma ortamını değiştirmeden önce uzak ağ işini bitirin veya durdurun.
+Wait for the current TRUBA resource operation to finish, then retry.|Devam eden TRUBA kaynak işlemi bitince tekrar deneyin.
+Allocate resources and wait for a ready session before checking or preparing the runtime.|Çalışma ortamını denetlemek veya hazırlamak için kaynak ayırın ve oturum hazır olana kadar bekleyin.
 Refresh the resource session and wait until it is ready before computing.|Hesaplamadan önce kaynak oturumunu yenileyip hazır olmasını bekleyin.
 Closing: stopping remote work and releasing the resource session…|Kapanıyor: Uzak işler durdurulup kaynak oturumu bırakılıyor…
 Select a supported CPU queue or Auto before allocating resources.|Kaynak ayırmadan önce desteklenen bir CPU kuyruğu veya Otomatik seçin.

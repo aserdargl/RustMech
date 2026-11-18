@@ -308,3 +308,9 @@ QTabBar::tab, QTabBar#doeMatrixTabs::tab, #setupTabs QTabBar::tab {
     border-bottom-left-radius: 0px; border-bottom-right-radius: 0px;
 }
 QTabBar::tab:selected, QTabBar#doeMatrixTabs::tab:selected, #setupTabs QTabBar::tab:selected { background: #BFDBFE; color: #0F172A; border-color: #2563EB; }
+
+#trubaTabs::pane { background: #FCFCFB; border: 1px solid #D5DBE2; border-radius: 7px; top: 0; }
+QTabBar#trubaTabBar { background: #E8EDF4; }
+QTabBar#trubaTabBar::tab, QTabBar#trubaTabBar::tab:selected {
+    min-height: 27px; padding: 0 13px; border: none; font-weight: 400;
+}

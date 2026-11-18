@@ -5,7 +5,7 @@ import json
 from threading import Event
 
 from PySide6.QtCore import QObject,QTimer,Signal,Qt
-from PySide6.QtWidgets import (QCheckBox,QFormLayout,QGroupBox,QHBoxLayout,QLabel,
+from PySide6.QtWidgets import (QCheckBox,QFormLayout,QGridLayout,QGroupBox,QHBoxLayout,QLabel,
                                QLineEdit,QPushButton,QVBoxLayout,QWidget)
 
 from truba_remote import RemoteContext,run_remote_job
@@ -251,35 +251,33 @@ class RemoteController(QObject):
         # the standard window's fold.
         self.toggle.setToolTip(hint.text())
         hint.hide()
-        self.status = QLabel("Local mode. Connecting alone does not move computations to TRUBA.")
-        self.status.setWordWrap(True)
-        self.status.setFixedHeight(64)
-        self.status.setAlignment(Qt.AlignmentFlag.AlignTop)
-        advanced_layout.addWidget(self.status)
-        buttons = QHBoxLayout()
+        buttons = QGridLayout()
+        buttons.setHorizontalSpacing(6)
+        buttons.setVerticalSpacing(4)
         self.check = QPushButton("Check remote capabilities")
         self.prepare = QPushButton("Prepare remote runtime")
         self.prepare.setToolTip("Repair the dedicated per-user Python/Rust environment manually. Resources automatically check and prepare this environment when RUNNING.")
         self.recover = QPushButton("Retrieve remote job…")
-        for button in (self.check,self.prepare,self.recover):
+        self.stop = QPushButton("Stop remote check/setup")
+        self.stop.setEnabled(False)
+        for index, button in enumerate((self.check, self.prepare, self.recover, self.stop)):
             button.setAutoDefault(False)
             button.setDefault(False)
             button.setObjectName("secondaryActionBtn")
-            buttons.addWidget(button)
-        buttons.addStretch()
+            buttons.addWidget(button, index // 2, index % 2, Qt.AlignmentFlag.AlignLeft)
+        buttons.setColumnStretch(2, 1)
         self.check.clicked.connect(lambda:self.refresh(False))
         self.prepare.clicked.connect(lambda:self.refresh(True))
         self.recover.clicked.connect(window.retrieve_truba_job)
-        advanced_layout.addLayout(buttons)
-        self.stop = QPushButton("Stop remote check/setup")
-        self.stop.setAutoDefault(False)
-        self.stop.setDefault(False)
-        self.stop.setObjectName("secondaryActionBtn")
-        self.stop.setEnabled(False)
         self.stop.clicked.connect(self.cancelled_check)
-        advanced_layout.addWidget(self.stop, 0, Qt.AlignmentFlag.AlignLeft)
-        # One fixed canvas and one scrollbar for credentials, resources and
-        # advanced setup; resizing never redistributes space between panels.
+        layout.insertLayout(1, buttons)
+        self.status = QLabel("Local mode. Connecting alone does not move computations to TRUBA.")
+        self.status.setWordWrap(True)
+        self.status.setTextFormat(Qt.TextFormat.PlainText)
+        self.status.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.status.setFixedHeight(64)
+        self.status.setAlignment(Qt.AlignmentFlag.AlignTop)
+        layout.insertWidget(2, self.status)
         self.scroll = panel
         panel.setObjectName("trubaRemoteControls")
         self.resource_panel = panel
@@ -299,18 +297,22 @@ class RemoteController(QObject):
         self.queue_hint.setAlignment(Qt.AlignmentFlag.AlignTop)
         self.session_status.setFixedHeight(36)
         self.session_status.setAlignment(Qt.AlignmentFlag.AlignTop)
-        window.truba_dialog.fit_settings_content()
         window.truba_dialog.language_manager.changed.connect(self.fit_action_buttons)
         self.fit_action_buttons()
         if not window.truba_dialog.property('preferencesRestored'):
             window.truba_dialog.resize(680, 760)
 
     def fit_action_buttons(self, *_):
+        dialog = self.window.truba_dialog
+        dialog.language_manager.localize_tree(dialog)
         for group in ((self.allocate, self.session_refresh, self.session_release),
-                      (self.check, self.prepare, self.recover), (self.limits_button,), (self.stop,)):
+                      (self.check, self.prepare, self.recover, self.stop), (self.limits_button,)):
+            for button in group:
+                button.ensurePolished()
             width = max(button.fontMetrics().horizontalAdvance(button.text()) + 24 for button in group)
             for button in group:
                 button.setFixedSize(width, CONTROL_HEIGHT)
+        dialog.fit_settings_content()
 
     @property
     def ready(self):
@@ -683,7 +685,12 @@ class RemoteController(QObject):
 
     def refresh(self,prepare=False, *, automatic=False):
         if self.closing: return
-        if self.future is not None or self.session_future is not None or self.limits_future is not None: return
+        if self.future is not None:
+            return
+        if any(future is not None for future in (self.session_future, self.limits_future, self.release_future)):
+            if not automatic:
+                self.status.setText("Wait for the current TRUBA resource operation to finish, then retry.")
+            return
         if self._physics_busy():
             self.status.setText("Finish or stop current computations before refreshing the remote runtime.")
             return
@@ -703,10 +710,10 @@ class RemoteController(QObject):
             if automatic:
                 self.future = self.executor.submit(ensure_remote_runtime, context, auth,
                     cancelled=self.cancelled, on_progress=self.runtime_progress.emit)
-                self._auto_probe_session = self.session.get('job_id')
             else:
                 self.future = self.executor.submit(run_remote_job,dict(operation="prepare" if prepare else "probe"),context,auth,
                     cancelled=self.cancelled, on_progress=self.runtime_progress.emit)
+            self._auto_probe_session = self.session.get('job_id')
         except Exception as error:
             self.status.setText(str(error))
             return

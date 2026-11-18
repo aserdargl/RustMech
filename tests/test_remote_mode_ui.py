@@ -105,6 +105,43 @@ class RemoteModeUiTests(unittest.TestCase):
             self.controller.future = None
             self.controller.timer.stop()
 
+    def test_resources_runtime_actions_fit_and_dispatch_in_both_languages(self):
+        from concurrent.futures import Future
+        panel = self.window.truba_dialog
+        controller = self.controller
+        page = controller.resource_panel.parentWidget().parentWidget()
+        panel.tabs.setCurrentWidget(page)
+        panel.show()
+        buttons = (controller.check, controller.prepare, controller.recover, controller.stop)
+        self.enable()
+        for language, button, operation in (('en', controller.check, 'probe'),
+                                            ('tr', controller.prepare, 'prepare')):
+            with self.subTest(language=language):
+                panel.language_manager.set_language(language)
+                self.app.processEvents()
+                self.assertIs(panel.tabs.currentWidget(), page)
+                self.assertTrue(page.viewport().rect().contains(
+                    button.mapTo(page.viewport(), button.rect().bottomRight())))
+                for action in buttons:
+                    self.assertEqual(action.size(), button.size())
+                    self.assertGreaterEqual(action.width(), action.sizeHint().width())
+                controller.session_future = Future()
+                with patch.object(controller.executor, 'submit') as submit:
+                    QTest.mouseClick(button, Qt.MouseButton.LeftButton)
+                    submit.assert_not_called()
+                self.assertIn('TRUBA', controller.status.text())
+                controller.session_future = None
+                pending = Future()
+                with patch.object(controller.executor, 'submit', return_value=pending) as submit:
+                    QTest.mouseClick(button, Qt.MouseButton.LeftButton)
+                    self.assertEqual(submit.call_args.args[1], {'operation': operation})
+                self.assertTrue(controller.stop.isEnabled())
+                QTest.mouseClick(controller.stop, Qt.MouseButton.LeftButton)
+                self.assertTrue(controller.cancelled.is_set())
+                pending.cancel()
+                controller.poll()
+                self.assertTrue(button.isEnabled())
+
     def test_default_session_is_72_hours_and_explicit_allocate_enables_remote_mode(self):
         from concurrent.futures import Future
         from remote_controller import allocate_with_limits
