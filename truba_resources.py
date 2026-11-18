@@ -105,7 +105,7 @@ def _gpu_count(node):
     return sum(int(n) for n in re.findall(r'gpu(?::[^:,()]+)?:(\d+)', node.get('Gres', '')))
 
 
-def parse_catalog(partitions, nodes):
+def parse_catalog(partitions, nodes, *, live_node_capacity=False):
     """Use configured capacity, never transient free RAM/idle CPU as a limit."""
     node_rows = [_fields(line) for line in nodes.splitlines() if 'NodeName=' in line]
     result = {}
@@ -124,8 +124,11 @@ def parse_catalog(partitions, nodes):
         idle = tuple((max(0, c - int(n.get('CPUAlloc', '0'))), max(0, m - int(n.get('AllocMem', '0'))))
                      for n, (c, m) in zip(members, capacities)
                      if not any(state in n.get('State', '') for state in ('DOWN', 'DRAIN', 'FAIL', 'RESERVED')))
-        max_cpu = min(base.max_cpus, max(c for c, m in capacities))
-        mem = min(base.max_memory_mb, max(m for c, m in capacities))
+        max_cpu = max(c for c, m in capacities)
+        mem = max(m for c, m in capacities)
+        if not live_node_capacity:
+            max_cpu = min(base.max_cpus, max_cpu)
+            mem = min(base.max_memory_mb, mem)
         cpu_cap = _number(row.get('MaxCPUsPerNode'))
         mem_cap = _number(row.get('MaxMemPerNode'))
         if cpu_cap:
@@ -148,14 +151,14 @@ def parse_catalog(partitions, nodes):
     return result
 
 
-def fetch_catalog(context, auth=None):
+def fetch_catalog(context, auth=None, *, live_node_capacity=False):
     from truba_remote import RemoteTransport
     transport = RemoteTransport(context, auth)
     reply = transport.command("set -e\nscontrol show partition -o\nprintf '\\nRUSTMECH_NODES\\n'\nscontrol show node -o")
     partitions, separator, nodes = reply.partition('\nRUSTMECH_NODES\n')
     if not separator:
         raise RuntimeError('Slurm returned incomplete queue limits. No request was submitted.')
-    return parse_catalog(partitions, nodes)
+    return parse_catalog(partitions, nodes, live_node_capacity=live_node_capacity)
 
 
 def automatic_options(context, catalog, *, min_cpus=1):

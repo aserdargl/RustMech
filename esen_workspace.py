@@ -2,6 +2,7 @@
 
 from concurrent.futures import ThreadPoolExecutor
 from itertools import islice
+import os
 from os.path import commonpath
 from pathlib import Path
 import re
@@ -191,43 +192,45 @@ class EsenWorkspace(QDialog):
 
         settings, layout = panel("Job settings")
         left.addWidget(settings)
-        form = QFormLayout()
+        self.job_form = form = QFormLayout()
         configure_form(form)
         layout.addLayout(form)
         self.target = compact_combo((("This computer", "local"), ("TRUBA", "remote")))
         self.ranks = CompactSpinBox()
-        self.ranks.setRange(1, 224)
+        self.ranks.setRange(1, getattr(os, "process_cpu_count", os.cpu_count)() or 1)
+        self.local_memory = CompactSpinBox()
+        self.local_memory.setRange(0, 4194304)
+        self.local_memory.setSingleStep(256)
+        self.local_memory.setSpecialValueText(translate("No limit"))
+        self.local_memory.setToolTip(translate("Total memory limit across local MPI processes."))
         self.local_exe = QLineEdit("lmp")
         self.local_mpi = QLineEdit()
         self.local_mpi.setPlaceholderText("Automatic")
         self._form_row(form, "Run on", self.target)
-        self._form_row(form, "MPI processes", self.ranks)
+        self._form_row(form, "Local CPU cores", self.ranks)
+        self._form_row(form, "Local RAM limit (MiB)", self.local_memory)
         self._form_row(form, "LAMMPS executable", self.local_exe)
         self._form_row(form, "MPI launcher", self.local_mpi)
-        self.local_fields = (self.local_exe, self.local_mpi)
+        self.local_fields = (self.ranks, self.local_memory, self.local_exe, self.local_mpi)
         self.partition = compact_combo([(name, name) for name in jobs.CPU_QUEUES])
         self.account = QLineEdit()
         self.account.setPlaceholderText("TRUBA username")
-        self.memory = CompactSpinBox()
-        self.memory.setRange(1, 4194304)
-        self.memory.setValue(4096)
         self.walltime = QLineEdit("00:30:00")
         self.module = QLineEdit(jobs.DEFAULT_MODULE)
         self.remote_exe = QLineEdit("lmp")
         self.remote_mpi = compact_combo((("mpirun", "mpirun"), ("srun", "srun")))
-        self.remote_fields = (self.partition, self.account, self.memory, self.walltime,
+        self.remote_fields = (self.partition, self.account, self.walltime,
                               self.module, self.remote_exe, self.remote_mpi)
-        for text, control in zip(("Queue", "Account", "Memory (MiB)", "Wall time (HH:MM:SS)",
+        for text, control in zip(("Queue", "Account", "Wall time (HH:MM:SS)",
                                   "LAMMPS module", "Linux executable", "MPI launcher"), self.remote_fields):
             self._form_row(form, text, control)
         self.connection = QLabel()
         layout.addWidget(self.connection)
         self.target.currentIndexChanged.connect(self._preview)
         self.ranks.valueChanged.connect(self._preview)
-        self.memory.valueChanged.connect(self._preview)
         self.partition.currentIndexChanged.connect(self._queue_changed)
         self.remote_mpi.currentIndexChanged.connect(self._preview)
-        for field in (*self.local_fields, self.account, self.walltime, self.module, self.remote_exe):
+        for field in (self.local_exe, self.local_mpi, self.account, self.walltime, self.module, self.remote_exe):
             field.editingFinished.connect(self._preview)
             field.returnPressed.connect(self._preview)
 
@@ -307,13 +310,12 @@ class EsenWorkspace(QDialog):
             field.textChanged.connect(field.setToolTip)
             field.setToolTip(field.text())
         form.addRow(label, field)
-        field.esen_label = label
 
     def _load_profiles(self):
         for key in ("local_exe", "local_mpi", "account", "walltime", "module", "remote_exe"):
             field = getattr(self, key)
             field.setText(str(self.preferences.value(f"esen/{key}", field.text())))
-        for key in ("ranks", "memory"):
+        for key in ("ranks", "local_memory"):
             field = getattr(self, key)
             try:
                 field.setValue(int(self.preferences.value(f"esen/{key}", field.value())))
@@ -330,7 +332,7 @@ class EsenWorkspace(QDialog):
     def _save_profiles(self):
         for key in ("local_exe", "local_mpi", "account", "walltime", "module", "remote_exe"):
             self.preferences.setValue(f"esen/{key}", getattr(self, key).text())
-        for key in ("ranks", "memory"):
+        for key in ("ranks", "local_memory"):
             self.preferences.setValue(f"esen/{key}", getattr(self, key).value())
         for key in ("partition", "remote_mpi", "target"):
             self.preferences.setValue(f"esen/{key}", getattr(self, key).currentData())
@@ -436,6 +438,16 @@ class EsenWorkspace(QDialog):
             self.inputs.setCurrentRow(0)
         self._preview()
 
+    def _remote_settings(self, auth):
+        return dict(
+            partition=self.partition.currentData(),
+            account=self.account.text().strip() or (auth.username if auth else "TRUBA_USER"),
+            walltime=self.walltime.text().strip(),
+            module=self.module.text().strip(),
+            executable=self.remote_exe.text().strip(),
+            launcher=self.remote_mpi.currentData(),
+        )
+
     def _command(self):
         if not self.entry:
             raise ValueError("Choose a LAMMPS input script.")
@@ -443,20 +455,15 @@ class EsenWorkspace(QDialog):
             raise ValueError("The selected input script is missing.")
         if self.target.currentData() == "local":
             return jobs.local_command(self.entry, self.ranks.value(), self.local_exe.text().strip(), self.local_mpi.text().strip())
-        auth = self.truba.analysis_auth()
-        return jobs.remote_script(
-            self.entry, self.ranks.value(), self.partition.currentData(),
-            self.account.text().strip() or (auth.username if auth else "TRUBA_USER"),
-            self.memory.value(), self.walltime.text().strip(), self.module.text().strip(),
-            self.remote_exe.text().strip(), self.remote_mpi.currentData(),
-        )
+        settings = self._remote_settings(self.truba.analysis_auth())
+        limit = jobs.BASELINES[settings["partition"]]
+        return jobs.remote_script(self.entry, limit.max_cpus, memory=limit.memory_ceiling(limit.max_cpus), **settings)
 
     def _preview(self, *_):
         remote = self.target.currentData() == "remote"
         for field in (*self.local_fields, *self.remote_fields):
             visible = (field in self.remote_fields) == remote
-            field.setVisible(visible)
-            field.esen_label.setVisible(visible)
+            self.job_form.setRowVisible(field, visible)
         self.connection.setVisible(remote)
         self.connection.setWordWrap(True)
         self.connection.setText("Connected to TRUBA" if self.truba.analysis_auth() else "Connect using the main TRUBA button.")
@@ -468,6 +475,8 @@ class EsenWorkspace(QDialog):
             self.preview.setPlainText(translate(str(error)))
             self.command_valid = False
         lines = [str(self.input_root)] if self.input_root else []
+        if remote:
+            lines.append(translate("Preview values are estimates. Slurm limits apply at submission."))
         if not self.entry:
             lines.append(translate("Select the input file and click Use as script." if self.extra else
                                    "Load files or drop them on the input list."))
@@ -535,17 +544,21 @@ class EsenWorkspace(QDialog):
             return
         try:
             invocation = self._command()
-            directory, record = jobs.new_job(self.input_root, self.entry, target, self.ranks.value(), parent=self.history_root)
+            ranks = self.ranks.value() if target == "local" else None
+            directory, record = jobs.new_job(self.input_root, self.entry, target, ranks, parent=self.history_root)
         except (OSError, ValueError) as error:
             self.input_note.setText(translate(str(error)))
             return
         files = (self.input_root, self.entry, tuple(self.extra), self.whole_folder.isChecked())
         self._save_profiles()
         if target == "remote":
-            self.remote_task = (directory, self.executor.submit(jobs.submit_remote, directory, record, files, invocation, auth))
+            future = self.executor.submit(jobs.submit_full_node, directory, record, files, self._remote_settings(auth), auth)
+            self.remote_task = (directory, future)
         else:
             self.local_stop = Event()
-            self.local_task = (directory, self.executor.submit(jobs.run_local, directory, record, files, invocation, self.local_stop))
+            future = self.executor.submit(jobs.run_local, directory, record, files, invocation, self.local_stop,
+                                          memory_mib=self.local_memory.value())
+            self.local_task = (directory, future)
         self._history_item(directory, record, prepend=True)
         self._buttons()
 

@@ -1,6 +1,7 @@
 """Focused regression coverage for ESEN file loading and job lifecycle."""
 
 import base64
+import os
 from pathlib import Path
 import sys
 import tarfile
@@ -59,6 +60,21 @@ class EsenTests(unittest.TestCase):
         self.assertEqual((directory / "inputs/data/cell.lmp").read_text(), "cell")
         self.assertIn("finished", jobs.log_tail(directory / "stdout.log"))
 
+    @unittest.skipUnless(os.name == "nt", "Windows Job Object")
+    def test_local_memory_cap_is_shared_with_child_processes(self):
+        directory, record = self.new_job("local")
+        child = "blocks = [bytearray(32 * 1024**2) for _ in range(2)]"
+        code = (
+            "import subprocess, sys; own = bytearray(64 * 1024**2); "
+            f"child = subprocess.run([sys.executable, '-c', {child!r}], capture_output=True); "
+            "assert b'MemoryError' in child.stderr, child; print('shared cap enforced')"
+        )
+        jobs.run_local(directory, record, self.files, [sys.executable, "-c", code], Event(), memory_mib=128)
+        result = jobs.read_job(directory)
+        self.assertEqual(result["state"], "Completed",
+                         result.get("detail", "") + jobs.log_tail(directory / "stderr.log"))
+        self.assertIn("shared cap enforced", jobs.log_tail(directory / "stdout.log"))
+
     def test_path_validation(self):
         for value in ("../../file", "AUX.log", "C:/data", "a\\b", "foo./bar"):
             with self.subTest(value=value), self.assertRaises(ValueError):
@@ -85,6 +101,25 @@ class EsenTests(unittest.TestCase):
             self.assertEqual(jobs.read_job(directory)["job_id"], "123")
             self.assertEqual(transport.put.call_count, 2)
             self.assertIn(f"--job-name=ESEN-{directory.name}", transport.command.call_args.args[0])
+
+    def test_full_node_submission_uses_live_partition_and_matching_node_memory(self):
+        directory, record = self.new_job()
+        settings = dict(partition="smp", account=self.auth.username, walltime="00:02:00",
+                        module=jobs.DEFAULT_MODULE, executable="lmp", launcher="srun")
+        catalog_reply = (
+            "PartitionName=smp State=UP MaxCPUsPerNode=256 MaxMemPerCPU=12000 MaxTime=3-00:00:00\n"
+            "RUSTMECH_NODES\n"
+            "NodeName=larger-cpu Partitions=smp CPUTot=288 CPUEfctv=256 RealMemory=4000000 MemSpecLimit=1000\n"
+            "NodeName=larger-ram Partitions=smp CPUTot=224 RealMemory=4500000"
+        )
+        with patch("truba_remote.RemoteTransport") as factory, patch("esen_jobs.submit_remote") as submit:
+            factory.return_value.command.return_value = catalog_reply
+            jobs.submit_full_node(directory, record, self.files, settings, self.auth)
+        script = submit.call_args.args[3]
+        self.assertIn("#SBATCH --ntasks=256", script)
+        self.assertIn("#SBATCH --mem=3072000M", script)
+        self.assertIn("exec srun -n 256", script)
+        self.assertEqual(jobs.read_job(directory)["ranks"], 256)
 
     def test_lost_submission_reply_is_recovered_without_resubmitting(self):
         directory, record = self.new_job()
@@ -146,10 +181,20 @@ class EsenTests(unittest.TestCase):
         self.assertEqual(workspace.extra, ["data/cell.lmp"])
 
         with patch("esen_jobs.run_local") as run, patch("esen_jobs.local_command", return_value=["lmp"]):
+            workspace.local_memory.setValue(1536)
             workspace._preview()
             QTest.mouseClick(workspace.start, Qt.MouseButton.LeftButton)
             workspace.local_task[1].result(timeout=5)
             self.assertEqual(run.call_args.args[2], self.files)
+            self.assertEqual(run.call_args.kwargs["memory_mib"], 1536)
+        workspace.target.setCurrentIndex(1)
+        self.assertFalse(workspace.ranks.isVisible())
+        self.assertFalse(workspace.local_memory.isVisible())
+        self.assertIn("#SBATCH --ntasks=", workspace.preview.toPlainText())
+        self.assertNotIn("#SBATCH --mem=1536M", workspace.preview.toPlainText())
+        workspace.target.setCurrentIndex(0)
+        self.assertTrue(workspace.local_memory.isVisible())
+        self.assertEqual(workspace.local_memory.value(), 1536)
 
     def test_drop_selects_unique_conventional_script_and_preserves_paths(self):
         app = QApplication.instance() or QApplication([])
@@ -185,10 +230,9 @@ class EsenTests(unittest.TestCase):
 
         with patch("esen_workspace.QSettings", return_value=preferences):
             first = EsenWorkspace(truba, history=self.history)
-            second = EsenWorkspace(truba, history=self.history)
         self.addCleanup(first.dispose)
-        self.addCleanup(second.dispose)
         first.show()
+        first.local_memory.setValue(2048)
         first.target.setCurrentIndex(1)
         first.resize(720, 680)
         first.move(25, 25)
@@ -204,8 +248,12 @@ class EsenTests(unittest.TestCase):
         expected = splitter.sizes()
         normal = first.normalGeometry()
         first.close()
+        with patch("esen_workspace.QSettings", return_value=preferences):
+            second = EsenWorkspace(truba, history=self.history)
+        self.addCleanup(second.dispose)
         second.show()
         app.processEvents()
+        self.assertEqual(second.local_memory.value(), 2048)
         self.assertTrue(second.isMaximized())
         self.assertEqual(second.normalGeometry(), normal)
         actual = store.splitters(second)[0].sizes()

@@ -2,6 +2,7 @@
 
 import base64
 from datetime import datetime
+from functools import partial
 import json
 import ntpath
 import os
@@ -14,10 +15,11 @@ import subprocess
 import tarfile
 from uuid import uuid4
 
+from esen_windows_job import limited_process
 from truba_credentials import state_directory
 from truba_jobs import SAFE_NAME, validated_remote_path, write_record
 from truba_remote import RemoteContext, RemoteTransport
-from truba_resources import BASELINES
+from truba_resources import BASELINES, candidates, fetch_catalog
 
 
 MODULES = {
@@ -160,7 +162,7 @@ def stop_process(process):
             pass
 
 
-def run_local(directory, record, files, command, stop):
+def run_local(directory, record, files, command, stop, *, memory_mib=0):
     try:
         snapshot = snapshot_inputs(directory, *files, stop=stop)
         work = directory / "work"
@@ -168,20 +170,28 @@ def run_local(directory, record, files, command, stop):
         if stop.is_set():
             raise InterruptedError("Input preparation cancelled.")
         options = {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {"start_new_session": True}
+        env = {**os.environ, "OMP_NUM_THREADS": "1"}
         with (directory / LOGS[0]).open("wb") as stdout, (directory / LOGS[1]).open("wb") as stderr:
-            with subprocess.Popen(command, cwd=work, stdin=subprocess.DEVNULL, stdout=stdout, stderr=stderr,
-                                  env={**os.environ, "OMP_NUM_THREADS": "1"}, **options) as process:
+            if memory_mib:
+                launch = limited_process(command, cwd=work, env=env, stdout=stdout, stderr=stderr,
+                                         memory_mib=memory_mib)
+            else:
+                launch = subprocess.Popen(command, cwd=work, stdin=subprocess.DEVNULL, stdout=stdout,
+                                          stderr=stderr, env=env, **options)
+            with launch as process:
+                cancel = process.kill if memory_mib else partial(stop_process, process)
                 try:
-                    save_job(directory, record, state="Running", command=command)
+                    save_job(directory, record, state="Running", command=command, memory_mib=memory_mib)
                     while process.poll() is None:
                         if stop.wait(0.25):
-                            stop_process(process)
+                            cancel()
                             process.wait()
                             save_job(directory, record, state="Cancelled")
                             return
                 finally:
                     if process.poll() is None:
-                        stop_process(process)
+                        cancel()
+                        process.wait()
         save_job(directory, record, state="Completed" if process.returncode == 0 else "Failed",
                  detail=f"Exit code: {process.returncode}")
     except InterruptedError:
@@ -193,7 +203,9 @@ def run_local(directory, record, files, command, stop):
 def remote_script(entry, ranks, partition, account, memory, walltime, module, executable, launcher):
     if partition not in CPU_QUEUES or not SAFE_NAME.fullmatch(account) or account in (".", ".."):
         raise ValueError("Select a CPU queue and enter a valid TRUBA account.")
-    RemoteContext(partition=partition, account=account, memory_mb=memory, walltime=walltime, cores=ranks).validate()
+    RemoteContext(partition=partition, account=account, walltime=walltime).validate()
+    if type(ranks) is not int or ranks < 1 or type(memory) is not int or memory < 1:
+        raise ValueError("TRUBA requires positive CPU and RAM allocations.")
     if module and not re.fullmatch(r"[A-Za-z0-9_./+\-]+", module):
         raise ValueError("Invalid LAMMPS module name.")
     if not re.fullmatch(r"(?:/|~/)?[A-Za-z0-9_.+-]+(?:/[A-Za-z0-9_.+-]+)*", executable):
@@ -218,6 +230,28 @@ set -eo pipefail
 cd work
 exec {launch}
 """
+
+
+def full_node_resources(partition, walltime, catalog):
+    limit = catalog.get(partition)
+    if not limit or not limit.available:
+        raise ValueError("The selected TRUBA queue is unavailable.")
+    ranks = limit.max_cpus
+    memory = limit.memory_ceiling(ranks)
+    candidates(partition, ranks, memory, walltime, catalog)
+    return ranks, memory
+
+
+def submit_full_node(directory, record, files, settings, auth):
+    try:
+        catalog = fetch_catalog(RemoteContext(transport="ssh"), auth, live_node_capacity=True)
+        ranks, memory = full_node_resources(settings["partition"], settings["walltime"], catalog)
+        script = remote_script(files[1], ranks, memory=memory, **settings)
+        save_job(directory, record, ranks=ranks, memory_mib=memory)
+    except Exception as error:
+        save_job(directory, record, state="Failed", detail=str(error))
+        return
+    submit_remote(directory, record, files, script, auth)
 
 
 def remote_location(directory, record, auth):

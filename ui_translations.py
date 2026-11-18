@@ -7,6 +7,13 @@ Job settings|İş ayarları
 This computer|Bu bilgisayar
 Run on|Çalıştırma hedefi
 MPI processes|MPI süreçleri
+Local CPU cores|Yerel CPU çekirdeği
+Local RAM limit (MiB)|Yerel RAM sınırı (MiB)
+No limit|Sınırsız
+Total memory limit across local MPI processes.|Yerel MPI süreçlerinin toplam bellek sınırı.
+Preview values are estimates. Slurm limits apply at submission.|Önizleme tahminidir. Gönderimde Slurm sınırları geçerlidir.
+The selected TRUBA queue is unavailable.|Seçilen TRUBA kuyruğu kullanılamıyor.
+Local memory limits are available on Windows.|Yerel bellek sınırı Windows’ta kullanılabilir.
 LAMMPS executable|LAMMPS programı
 MPI launcher|MPI başlatıcısı
 Memory (MiB)|Bellek (MiB)
