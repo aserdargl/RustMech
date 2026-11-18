@@ -1,6 +1,7 @@
 """Windowed executable entry point with persistent diagnostics."""
 
 import multiprocessing
+import signal
 import sys
 import traceback
 
@@ -116,16 +117,48 @@ def run():
     )
     log = (root / "RustMech.log").open("a", encoding="utf-8", buffering=1)
     sys.stdout = sys.stderr = log
+    gui_mode = not any(arg in sys.argv[1:] for arg in ("--offline-test", "-h", "--help"))
+    interrupted = False
+    close_requested = False
+    interrupt_timer = None
+    previous_handler = None
+
+    def request_close(_signum, _frame):
+        nonlocal interrupted, close_requested
+        # SIGINT can arrive inside a PySide callback. Keep Qt calls in its event loop.
+        interrupted = close_requested = True
+
+    def close_on_interrupt():
+        nonlocal close_requested
+        if close_requested and any(window.isVisible() for window in app.topLevelWidgets()):
+            close_requested = False
+            app.closeAllWindows()
+
     try:
+        if gui_mode:
+            previous_handler = signal.signal(signal.SIGINT, request_close)
         if "--offline-test" not in sys.argv:
             from mesh_preview_worker import warmup_mesh_preview
 
             warmup_mesh_preview()
         import nonlinear_compression as studio
 
+        if gui_mode:
+            if interrupted:
+                return 130
+            from PySide6.QtCore import QTimer
+
+            app = studio.QApplication.instance() or studio.QApplication([sys.argv[0]])
+            interrupt_timer = QTimer(app)
+            interrupt_timer.timeout.connect(close_on_interrupt)
+            interrupt_timer.start(100)
         if "--smoke-test" in sys.argv:
-            return smoke_test(studio)
-        return studio.main()
+            result = smoke_test(studio)
+        else:
+            result = studio.main()
+        return 130 if interrupted else result
+    except KeyboardInterrupt:
+        return 130
     except Exception:
         traceback.print_exc()
         if "--offline-test" not in sys.argv and "--smoke-test" not in sys.argv:
@@ -141,6 +174,10 @@ def run():
             )
         return 1
     finally:
+        if interrupt_timer is not None:
+            interrupt_timer.stop()
+        if previous_handler is not None:
+            signal.signal(signal.SIGINT, previous_handler)
         log.flush()
 
 

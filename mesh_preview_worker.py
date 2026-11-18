@@ -1,6 +1,7 @@
 """Persistent, cancellable preview worker with child-side geometry/mesh caching."""
 
 import atexit
+import signal
 import tempfile
 import sys
 from concurrent.futures import CancelledError
@@ -12,6 +13,8 @@ _CANCEL_POLL_SECONDS = 0.05
 
 
 def _serve_preview(connection, scratch):
+    # The desktop process owns cancellation and stops this worker during shutdown.
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
     from mesh_engine import build_preview
     from preview_transport import pack_preview, write_arrays
 
