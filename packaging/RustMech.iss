@@ -8,6 +8,15 @@
 #ifndef OutputDir
   #define OutputDir "..\dist-setup"
 #endif
+#ifndef PayloadDir
+  #define PayloadDir "..\dist\RustMech"
+#endif
+#ifndef SetupName
+  #define SetupName "RustMech-" + AppVersion + "-Setup"
+#endif
+#ifndef NumericVersion
+  #define NumericVersion AppVersion
+#endif
 
 [Setup]
 AppId={{6F3B8E2A-4C1D-4E7B-9A52-7D2C1B9E5A31}
@@ -25,7 +34,10 @@ PrivilegesRequiredOverridesAllowed=dialog
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 OutputDir={#OutputDir}
-OutputBaseFilename=RustMech-{#AppVersion}-Setup
+OutputBaseFilename={#SetupName}
+VersionInfoVersion={#NumericVersion}
+VersionInfoProductTextVersion={#AppVersion}
+SetupIconFile=..\assets\ui\rustmech.ico
 UninstallDisplayIcon={app}\RustMech.exe
 Compression=lzma2/max
 SolidCompression=yes
@@ -40,7 +52,7 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
 
 [Files]
-Source: "..\dist\RustMech\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "{#PayloadDir}\*"; DestDir: "{app}"; Excludes: "settings.json,RustMech.log,icuuc-poppler-unused.dll"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 Name: "{autoprograms}\RustMech"; Filename: "{app}\RustMech.exe"

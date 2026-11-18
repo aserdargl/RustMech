@@ -93,9 +93,9 @@ class WindowStateStore(QObject):
         return False
 
 
-def install_window_state(app):
+def install_window_state(app, settings=None):
     if not hasattr(app, "_rustmech_window_state"):
-        app._rustmech_window_state = WindowStateStore(app)
+        app._rustmech_window_state = WindowStateStore(app, settings)
 
 
 def show_restored_window(window):

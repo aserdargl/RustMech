@@ -1033,6 +1033,27 @@ veya yeniden derlemek için:
 .\Build-Exe.ps1
 ```
 
+### Windows kurulumu oluşturma
+
+`dist/SetupMaker.exe` dosyasını açın, hedef sürümü girin ve **Kurulum oluştur**
+düğmesine basın. Araç, her derleme için yeni bir kurulum dosyası ve SHA-256
+bilgisini `dist/SetupMaker/releases` altında, işlem günlüğünü ise
+`dist/SetupMaker/logs` altında saklar.
+
+**Kurulumdan sonra GitHub'a yükle** kutusunu işaretleyerek hedef depoda sürüm
+oluşturabilirsiniz. Bu işlem `gh auth login` ile oturum açmış bir GitHub CLI
+ve hedef deponun yayın iznini gerektirir. Varsayılan depo
+`aserdargl/RustMech-Releases`'tir.
+
+Setup Maker'ı kaynak koddan çalıştırmak veya yeniden derlemek için RustMech'in
+derleme bağımlılıklarının bulunduğu Python ortamında aşağıdaki komutları
+kullanın. Kurulum oluşturmak için Inno Setup 6.3 veya üzeri gerekir.
+
+```powershell
+python -m tools.setupmaker.main
+python -m tools.setupmaker.build
+```
+
 Proje klasörü `D:\MySoftware\RustMech` olarak adlandırılmıştır. PyCharm modül adı,
 pencere başlığı, uygulama kimliği, EXE dosyası ve Windows ürün bilgisi RustMech'tir.
 Eski dağıtımlar ve sonuçları `LegacyDistributions` altında korunur. Yeni çalışma

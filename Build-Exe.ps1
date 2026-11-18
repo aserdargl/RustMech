@@ -1,4 +1,11 @@
-param([string]$Python)
+param(
+    [string]$Python,
+    [string]$DistPath = (Join-Path $PSScriptRoot 'dist'),
+    [string]$WorkPath = (Join-Path $PSScriptRoot 'build'),
+    [string]$SpecPath = (Join-Path $PSScriptRoot 'packaging'),
+    [string]$VersionFile = (Join-Path $PSScriptRoot 'packaging\version_info.txt'),
+    [switch]$CleanRelease
+)
 
 $ErrorActionPreference = 'Stop'
 if (-not $Python) {
@@ -22,10 +29,10 @@ if ($LASTEXITCODE -ne 0) {
 if ($LASTEXITCODE -ne 0) { throw 'RustMech native build failed.' }
 $arguments = @(
     '-m', 'PyInstaller', '--noconfirm', '--onedir', '--windowed',
-    '--name', 'RustMech', '--distpath', (Join-Path $PSScriptRoot 'dist'),
-    '--workpath', (Join-Path $PSScriptRoot 'build'),
-    '--specpath', (Join-Path $PSScriptRoot 'packaging'),
-    '--version-file', (Join-Path $PSScriptRoot 'packaging\version_info.txt'),
+    '--name', 'RustMech', '--distpath', $DistPath,
+    '--workpath', $WorkPath,
+    '--specpath', $SpecPath,
+    '--version-file', $VersionFile,
     '--icon', (Join-Path $PSScriptRoot 'assets\ui\rustmech.ico'),
     '--add-data', ((Join-Path $PSScriptRoot 'assets\ui') + ';assets/ui'),
     '--add-data', ((Join-Path $PSScriptRoot 'assets\help') + ';assets/help'),
@@ -51,15 +58,16 @@ if ($LASTEXITCODE -ne 0) { throw 'RustMech executable build failed.' }
 # PySide6 expects the unversioned Windows ICU API. The build host's Poppler
 # PATH can contribute an incompatible ICU 78 DLL with version-suffixed exports.
 # Let Windows supply its ICU DLL instead of shipping that unrelated dependency.
-$packagedIcu = Join-Path $PSScriptRoot 'dist\RustMech\_internal\icuuc.dll'
+$appDirectory = Join-Path $DistPath 'RustMech'
+$packagedIcu = Join-Path $appDirectory '_internal\icuuc.dll'
 if (Test-Path -LiteralPath $packagedIcu) {
     Rename-Item -LiteralPath $packagedIcu -NewName 'icuuc-poppler-unused.dll'
 }
-& $Python (Join-Path $PSScriptRoot 'tools\finalize_distribution.py') (Join-Path $PSScriptRoot 'dist\RustMech')
+& $Python (Join-Path $PSScriptRoot 'tools\finalize_distribution.py') $appDirectory
 if ($LASTEXITCODE -ne 0) { throw 'RustMech Netgen DLL collection failed.' }
 $settings = Join-Path $PSScriptRoot 'settings.json'
-$destination = Join-Path $PSScriptRoot 'dist\RustMech\settings.json'
-if ((Test-Path -LiteralPath $settings) -and -not (Test-Path -LiteralPath $destination)) {
+$destination = Join-Path $appDirectory 'settings.json'
+if (-not $CleanRelease -and (Test-Path -LiteralPath $settings) -and -not (Test-Path -LiteralPath $destination)) {
     Copy-Item -LiteralPath $settings -Destination $destination
 }
-Write-Output ('RustMech ready: ' + (Join-Path $PSScriptRoot 'dist\RustMech\RustMech.exe'))
+Write-Output ('RustMech ready: ' + (Join-Path $appDirectory 'RustMech.exe'))
