@@ -132,9 +132,16 @@ class LanguageTests(unittest.TestCase):
             methods = window.sidebar_toggle.menu().actions()
             self.assertEqual(window.sidebar_toggle.text(), 'Sonlu Eleman')
             self.assertEqual(window.sidebar_toggle.text(), methods[0].text())
+            for index in (1, 3, 4):
+                methods[index].trigger()
+                self.assertFalse(window.apply_button.isEnabled())
             methods[2].trigger()
             self.assertEqual(window.sidebar_toggle.text(), 'FFT homojenleştirme')
             self.assertEqual(window.sidebar_toggle.text(), methods[2].text())
+            self.assertTrue(window.apply_button.isEnabled())
+            with patch.object(window, '_start_fft') as start_fft:
+                window.apply_button.click()
+                start_fft.assert_called_once_with(before)
             panel.show()
             self.app.processEvents()
             self.assertEqual(window.apply_button.text(), 'Analizi çalıştır')

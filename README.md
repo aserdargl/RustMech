@@ -430,10 +430,34 @@ komutun parçası değildir. Gerçek MAPDL, WSL/OpenFOAM ve Linux işçi doğrul
 ayrı entegrasyon kontrolleridir. Qt testleri, yerel DLL'ler ve bazı testler için
 Git Bash gerekir; eksik isteğe bağlı bileşenlerin skip gerekçelerini sonuçta okuyun.
 
-Mekanik ayarlar menüsü seçilen yöntemi gösterir. **Finite Element** mevcut
-çözüm yoludur. Kırpılmış voxel mesh, FFT Homogenization, Material Point Method
-ve Peridynamics sayfaları plan durumundadır. İlk çalışır örnekler ve doğrulama
-ölçütleri [mekanik yöntemlerin uygulama planında](MEKANIK_YONTEM_PLANI.md) yer alır.
+Mekanik ayarlar menüsünde **Finite Element** ve **FFT Homogenization** çalışır.
+Kırpılmış voxel ağı, Material Point Method ve Peridynamics plan durumundadır.
+Teslim sırası ve doğrulama ölçütleri
+[mekanik yöntemlerin uygulama planında](MEKANIK_YONTEM_PLANI.md) yer alır.
+
+### DAMASK ile FFT homojenizasyonu
+
+Windows'ta DAMASK grid çözücüsünü ve `python3-h5py` paketini WSL
+dağıtımına kurun. Ubuntu 26.04 için
+[DAMASK'ın paket kurulumu](https://damask-multiphysics.org/installation/package_manager.html)
+izlenebilir. İlk sürüm DAMASK 3.1.0 ile doğrulandı.
+
+1. Mekanik ayarlarda periyodik bir TPMS veya lattice yapısı seçin. Malzeme
+   panelindeki Young modülü ve Poisson oranı doğrusal elastik katıyı tanımlar.
+2. Yöntem menüsünde **FFT Homogenization** sayfasını açın. Izgarayı, boşluk/katı
+   rijitlik oranını ve Windows'ta WSL dağıtım adını girin. TRUBA hesaplama
+   modunu kapatın ve **Analizi çalıştır** düğmesine basın.
+3. Tamamlanan koşuda etkin 6×6 rijitlik matrisi MPa cinsinden, örneklenen katı
+   hacim oranıyla birlikte gösterilir. **FFT sonuçlarını aç** düğmesi
+   `results/FFT_DAMASK_*/` klasörünü açar. Klasörde CSV, girdi özeti, DAMASK
+   çıktıları ve her yüklemenin yakınsama kaydı bulunur.
+
+Çözücü altı bağımsız yükleme yönünün her birinde pozitif ve negatif küçük
+pertürbasyon uygular. Matris sırası `xx, yy, zz, yz, xz, xy` ve kayma
+girdileri mühendislik kayma şekil değiştirmesidir. Boşluk, seçilen oranla
+ölçeklenen yumuşak bir elastik fazdır. Raporlamadan önce sonucun ızgara
+yoğunluğuna ve boşluk rijitliğine duyarlılığını değerlendirin. Yakınsamayan
+veya iptal edilen koşulda etkin rijitlik CSV'si yayımlanmaz.
 
 ## İsteğe bağlı TRUBA hesaplama modu
 

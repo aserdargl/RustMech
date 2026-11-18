@@ -25,8 +25,8 @@ from threading import Event
 import numpy as np
 import pyvista as pv
 from studio_style import CompactSpinBox, CompactComboBox
-from PySide6.QtCore import QSize, QTimer, Qt
-from PySide6.QtGui import QActionGroup
+from PySide6.QtCore import QSize, QTimer, Qt, QUrl
+from PySide6.QtGui import QActionGroup, QDesktopServices, QFontDatabase
 from PySide6.QtWidgets import (
     QAbstractSpinBox,
     QApplication,
@@ -43,6 +43,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMenu,
     QMessageBox,
+    QPlainTextEdit,
     QPushButton,
     QScrollArea,
     QSizePolicy,
@@ -56,6 +57,7 @@ from PySide6.QtWidgets import (
 )
 
 from analysis_process import AnalysisProcess, run_single_analysis, run_resume_analysis
+from damask_fft import COMPONENTS, MAX_GRID, MIN_GRID, DamaskAnalysisProcess, validate_periodic_fft
 from studio_style import ActionFlowLayout, CompactDoubleSpinBox, CONTROL_HEIGHT, STUDIO_STYLESHEET, SidebarGroupBox, configure_form, field_label
 from sidebar_splitter import SidebarSplitter
 from setup_help import GEOMETRY_HELP
@@ -822,6 +824,7 @@ class RustMechDialog(QDialog):
         self.preview = None
         self._mesh_requested = False
         self._analysis_after_mesh = None
+        self._fft_method_index = None
         self.controls = {}
         self.solver_profile_store = solver_profile_store if solver_profile_store is not None else SolverProfileStore()
         self._persist_solver_profiles = solver_profile_store is not None
@@ -1434,7 +1437,7 @@ class RustMechDialog(QDialog):
         analysis_fields.addWidget(note)
         analysis_fields.addStretch()
 
-        self._add_planned_method_pages()
+        self._add_method_pages()
         self.setup_tabs.tabBar().hide()
 
         self.main_splitter.addWidget(panel)
@@ -1824,10 +1827,16 @@ class RustMechDialog(QDialog):
             self.workspace_button.setText(workspace_names[index])
             self.workspace_actions.actions()[index].setChecked(True)
             flow_active = index in (2,3)
-            self.brand_title_label.setText("Transient Heat Transfer" if index==3 else "Isothermal Flow" if flow_active else "Nonlinear Compression")
+            if flow_active:
+                title = "Transient Heat Transfer" if index == 3 else "Isothermal Flow"
+            else:
+                fft_selected = self.setup_tabs.currentIndex() == self._fft_method_index
+                title = "FFT Homogenization" if fft_selected else "Nonlinear Compression"
+            self.brand_title_label.setText(title)
             unit_badge.setText("Units: mm  °C  s  Pa" if index==3 else "Units: mm  m/s  Pa" if flow_active else "Units: mm  N  MPa")
             remote = getattr(self,"remote_controller",None)
-            self.brand_subtitle_lbl.setText("TRUBA · remote compute" if remote is not None and remote.requested else "OpenFOAM · WSL" if flow_active else self.solver_capabilities.display_name)
+            self.brand_subtitle_lbl.setText("TRUBA · remote compute" if remote is not None and remote.requested
+                                            else self._local_workspace_solver_name())
             if remote is not None:
                 self._update_remote_banner()
             self.sidebar_toggle.setVisible(not flow_active)
@@ -2069,7 +2078,7 @@ class RustMechDialog(QDialog):
             if controller.ready and self.future is None and self.preview is None and not controller.closing:
                 self.status.setText('TRUBA ready. Click Apply to generate the geometry remotely.')
         else:
-            self.brand_subtitle_lbl.setText("OpenFOAM · WSL" if self.workspace_tabs.currentIndex() in (2,3) else self.solver_capabilities.display_name)
+            self.brand_subtitle_lbl.setText(self._local_workspace_solver_name())
         self._update_remote_banner()
 
     def _update_remote_banner(self):
@@ -2102,7 +2111,7 @@ class RustMechDialog(QDialog):
         elif session.get('ready') and controller.session_watch:
             state, text = 'pending', 'Local mode · TRUBA resources reserved'
         else:
-            local_name = 'OpenFOAM · WSL' if self.workspace_tabs.currentIndex() in (2, 3) else self.solver_capabilities.display_name
+            local_name = self._local_workspace_solver_name()
             text = f'SSH connected · {local_name}' if self.truba_dialog.connected else local_name
         self.brand_subtitle_lbl.setText(text)
         self.brand_header.setToolTip(
@@ -2157,7 +2166,7 @@ class RustMechDialog(QDialog):
         self.setup_tabs.addTab(scroll, title)
         return layout
 
-    def _add_planned_method_pages(self) -> None:
+    def _add_method_pages(self) -> None:
         self.method_names = ["Finite Element"]
         methods = (
             ("Voxel", "Geometry-trimmed voxel mesh", "Clip boundary voxels against the reference geometry. Cut-cell element types, small cells and ANSYS compatibility require validation."),
@@ -2172,17 +2181,105 @@ class RustMechDialog(QDialog):
             heading = QLabel(name)
             heading.setObjectName("sectionSubheader")
             heading.setWordWrap(True)
-            hint = QLabel(f"Planned\n{description}")
+            hint = QLabel(description if tab == "FFT" else f"Planned\n{description}")
             hint.setObjectName("mutedHintLabel")
             hint.setWordWrap(True)
             fields.addWidget(heading)
             fields.addWidget(hint)
+            if tab == "FFT":
+                self._fft_method_index = self.setup_tabs.count() - 1
+                self._add_fft_controls(fields)
             fields.addStretch()
+
+    def _add_fft_controls(self, fields) -> None:
+        preferences = self.solver_profile_store.settings
+        self.fft_grid = CompactSpinBox()
+        self.fft_grid.setRange(MIN_GRID, MAX_GRID)
+        self.fft_grid.setValue(preferences.value("fft/grid", 24, type=int))
+        self.fft_void_ratio = CompactDoubleSpinBox()
+        self.fft_void_ratio.setRange(0.0001, 0.1)
+        self.fft_void_ratio.setSingleStep(0.001)
+        self.fft_void_ratio.setValue(preferences.value("fft/voidRatio", 0.01, type=float))
+        self.fft_distribution = QLineEdit(preferences.value("fft/distribution", "Ubuntu", type=str))
+        self.fft_distribution.setEnabled(os.name == "nt")
+        form = QFormLayout()
+        configure_form(form)
+        for title, control in (
+            ("Voxels per axis", self.fft_grid),
+            ("Void / solid stiffness", self.fft_void_ratio),
+            ("WSL distribution", self.fft_distribution),
+        ):
+            form.addRow(field_label(title, control), control)
+        fields.addLayout(form)
+        note = QLabel("DAMASK uses the current TPMS or lattice geometry and the material's E and ν. "
+                      "The void phase has the specified fraction of the solid stiffness.")
+        note.setObjectName("mutedHintLabel")
+        note.setWordWrap(True)
+        fields.addWidget(note)
+
+        self.fft_matrix = QPlainTextEdit()
+        self.fft_matrix.setReadOnly(True)
+        self.fft_matrix.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
+        matrix_font = QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont)
+        matrix_font.setPointSize(8)
+        self.fft_matrix.setFont(matrix_font)
+        self.fft_matrix.setAccessibleName("Effective stiffness matrix (MPa)")
+        self.fft_matrix.setFixedHeight(128)
+        self.fft_matrix.hide()
+        self.fft_result_heading = QLabel("Last completed FFT result")
+        self.fft_result_heading.setObjectName("sectionSubheader")
+        self.fft_result_heading.hide()
+        fields.addWidget(self.fft_result_heading)
+        self.fft_result_summary = QLabel()
+        self.fft_result_summary.setWordWrap(True)
+        fields.addWidget(self.fft_result_summary)
+        self.fft_result_summary.hide()
+        fields.addWidget(self.fft_matrix)
+        self.fft_results_button = QPushButton("Open FFT results")
+        self.fft_results_button.setAutoDefault(False)
+        self.fft_results_button.hide()
+        self.fft_results_button.clicked.connect(self._open_fft_results)
+        fields.addWidget(self.fft_results_button, alignment=Qt.AlignmentFlag.AlignLeft)
+        self.fft_result_folder = None
+        if self._persist_solver_profiles:
+            saved = preferences.value("fft/latestResultFolder", "", type=str)
+            if saved:
+                try:
+                    folder = Path(saved)
+                    result = json.loads((folder / "status.json").read_text(encoding="utf-8"))
+                    if result["state"] == "complete":
+                        self._show_fft_results(result, folder)
+                except (OSError, ValueError, TypeError, KeyError):
+                    pass
+
+    def _open_fft_results(self):
+        if self.fft_result_folder is not None:
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(self.fft_result_folder)))
+
+    def _show_fft_results(self, result, folder):
+        labels = "    " + "".join(f"{label:>8}" for label in COMPONENTS)
+        rows = [
+            f"{label:>4}" + "".join(f" {value:7.3g}" for value in row)
+            for label, row in zip(COMPONENTS, result["stiffness_mpa"])
+        ]
+        self.fft_matrix.setPlainText("\n".join([labels, *rows]))
+        geometry = (result.get("settings") or {}).get("structure_name")
+        cell = f"{geometry} · " if geometry else ""
+        self.fft_result_summary.setText(
+            f"{cell}{result['grid']}³ · ϕ = {result['solid_volume_fraction']:.1%} · "
+            f"Eᵥ/Eₛ = {result['void_stiffness_ratio']:.4g} · MPa"
+        )
+        self.fft_result_folder = folder
+        self.fft_result_heading.show()
+        self.fft_result_summary.show()
+        self.fft_matrix.show()
+        self.fft_results_button.show()
+        if self._persist_solver_profiles:
+            self.solver_profile_store.settings.setValue("fft/latestResultFolder", str(folder))
 
     def _select_settings_method(self, index: int) -> None:
         self.workspace_tabs.setCurrentIndex(0)
         self.setup_tabs.setCurrentIndex(index)
-        self._sync_settings_method(index)
         sizes = self.main_splitter.sizes()
         if sizes and sizes[0] == 0:
             self.main_splitter.toggle_sidebar()
@@ -2192,6 +2289,19 @@ class RustMechDialog(QDialog):
         self.sidebar_toggle.setText(translate(self.method_names[index]))
         for action in self.method_actions.actions():
             action.setChecked(action.data() == index)
+        if hasattr(self, "remote_controller"):
+            if index != 0:
+                self._analysis_after_mesh = None
+            if self.workspace_tabs.currentIndex() == 0:
+                self._sync_workspace_context(0)
+            self.refresh_validity()
+
+    def _local_workspace_solver_name(self):
+        if self.workspace_tabs.currentIndex() in (2, 3):
+            return "OpenFOAM · WSL"
+        if self.setup_tabs.currentIndex() == self._fft_method_index:
+            return "DAMASK · FFT"
+        return self.solver_capabilities.display_name
 
     def _update_status_visuals(
         self, state: str, badge_text: str, pending_geom: bool = False
@@ -2425,7 +2535,7 @@ class RustMechDialog(QDialog):
 
     def _sync_solver_ui(self) -> None:
         cap = self.solver_capabilities
-        self.brand_subtitle_lbl.setText(cap.display_name)
+        self.brand_subtitle_lbl.setText(self._local_workspace_solver_name())
         if "cores" in self.controls:
             cores_spin = self.controls["cores"]
             cores_spin.blockSignals(True)
@@ -2841,13 +2951,30 @@ class RustMechDialog(QDialog):
         mesh_errors = self.preview.mesh.solve_errors if current and self.preview.mesh is not None else []
         pending = self.has_pending_geometry()
         self.doe_studio.use_model_btn.setEnabled(geometry_valid)
-        self.apply_button.setEnabled(
-            self.analysis_job is None and self.future is None and
-            bool(current and not pending and not errors and not mesh_errors)
-        )
+        method = self.setup_tabs.currentIndex()
+        idle = self.analysis_job is None and self.future is None
+        if method == self._fft_method_index:
+            fft_errors = validate_periodic_fft(settings)
+            if controller is not None and controller.requested:
+                fft_errors.append("Turn off TRUBA calculation mode to run local DAMASK FFT.")
+            self.apply_button.setEnabled(idle and not fft_errors)
+        else:
+            self.apply_button.setEnabled(
+                method == 0 and idle and
+                bool(current and not pending and not errors and not mesh_errors)
+            )
         if self.analysis_job is not None:
             self._show_analysis_progress(self.analysis_job)
             self._update_status_visuals("busy", "● ANALYSING", False)
+            return
+        if method == self._fft_method_index:
+            self.status.setText("\n".join(fft_errors) if fft_errors else "Ready to run local DAMASK FFT.")
+            state, badge = ("error", "● VALIDATION ERROR") if fft_errors else ("ready", "● READY TO SOLVE")
+            self._update_status_visuals(state, badge, False)
+            return
+        if method != 0:
+            self.status.setText("Planned")
+            self._update_status_visuals("pending", "● SOLVER INACTIVE", False)
             return
         if errors or mesh_errors:
             self.status.setText("\n".join(errors + mesh_errors))
@@ -3335,6 +3462,9 @@ class RustMechDialog(QDialog):
         self.refresh_validity()
         if not self.apply_button.isEnabled():
             return
+        if self.setup_tabs.currentIndex() == self._fft_method_index:
+            self._start_fft(settings)
+            return
         if self.preview.mesh is None and not self.remote_controller.requested:
             self._analysis_after_mesh = settings
             self._mesh_requested = True
@@ -3365,6 +3495,27 @@ class RustMechDialog(QDialog):
         self.force_stop_button.setEnabled(True)
         self._show_analysis_progress(self.analysis_job)
         self._update_status_visuals("busy", "● ANALYSING", False)
+        self.analysis_poll.start()
+
+    def _start_fft(self, settings):
+        distribution = self.fft_distribution.text().strip()
+        if os.name == "nt" and not distribution:
+            self.status.setText("Enter a WSL distribution for DAMASK.")
+            return
+        grid, void_ratio = self.fft_grid.value(), self.fft_void_ratio.value()
+        try:
+            self.analysis_job = DamaskAnalysisProcess(settings, grid, void_ratio, distribution)
+        except (OSError, ValueError, RuntimeError) as exc:
+            self.status.setText(str(exc))
+            self._update_status_visuals("error", "● FAILED", False)
+            return
+        if self._persist_solver_profiles:
+            preferences = self.solver_profile_store.settings
+            preferences.setValue("fft/grid", grid)
+            preferences.setValue("fft/voidRatio", void_ratio)
+            preferences.setValue("fft/distribution", distribution)
+        self.refresh_validity()
+        self.force_stop_button.setEnabled(True)
         self.analysis_poll.start()
 
     def retrieve_truba_job(self):
@@ -3417,6 +3568,9 @@ class RustMechDialog(QDialog):
 
     def force_stop_analysis(self) -> None:
         if self.analysis_job is None:
+            return
+        if isinstance(self.analysis_job, DamaskAnalysisProcess) and self.analysis_job.done():
+            self._poll_analysis()
             return
         try:
             self.analysis_job.force_stop()
@@ -3476,6 +3630,11 @@ class RustMechDialog(QDialog):
             self.status.setText(f"Analysis failed: {exc}")
             self._update_status_visuals("error", "● FAILED", False)
         else:
+            if isinstance(job, DamaskAnalysisProcess):
+                self._show_fft_results(folder, job.folder)
+                self.status.setText(f"Analysis completed. Results: {job.folder}")
+                self._update_status_visuals("ready", "● COMPLETE", False)
+                return
             if getattr(job, "background_submission", False) is True:
                 self._latest_background_analysis = folder["request_id"]
                 self._show_background_analysis(folder)

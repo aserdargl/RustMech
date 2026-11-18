@@ -887,6 +887,19 @@ Planned|Planlanıyor
 Material Point Method|Malzeme noktası yöntemi
 Peridynamics|Peridinamik
 FFT Homogenization|FFT homojenleştirme
+Voxels per axis|Eksen başına voksel
+Void / solid stiffness|Boşluk / katı rijitliği
+DAMASK uses the current TPMS or lattice geometry and the material's E and ν. The void phase has the specified fraction of the solid stiffness.|DAMASK mevcut TPMS veya kafes geometrisini ve malzemenin E ile ν değerlerini kullanır. Boşluk fazının rijitliği, katının girilen oranı kadardır.
+Effective stiffness matrix (MPa)|Etkin rijitlik matrisi (MPa)
+Last completed FFT result|Son tamamlanan FFT sonucu
+Open FFT results|FFT sonuçlarını aç
+FFT requires a procedural periodic TPMS or lattice cell.|FFT, periyodik TPMS veya kafes birim hücresi gerektirir.
+FFT requires a positive Young's modulus.|FFT için Young modülü pozitif olmalıdır.
+FFT requires a Poisson ratio between -1 and 0.5.|FFT için Poisson oranı -1 ile 0,5 arasında olmalıdır.
+Turn off TRUBA calculation mode to run local DAMASK FFT.|Yerel DAMASK FFT için TRUBA hesaplama modunu kapatın.
+Ready to run local DAMASK FFT.|Yerel DAMASK FFT çalıştırmaya hazır.
+Enter a WSL distribution for DAMASK.|DAMASK için WSL dağıtım adını girin.
+Sampling the periodic cell…|Periyodik hücre örnekleniyor…
 Crack initiation and propagation in mechanical tests.|Mekanik deneylerde çatlak başlangıcı ve ilerlemesi.
 Effective stiffness from periodic unit-cell tests.|Periyodik birim hücre deneylerinden etkin rijitlik.
 Large-deformation platen compression and impact.|Büyük deformasyonlu plaka basması ve darbe.
