@@ -13,7 +13,7 @@ import shutil
 import signal
 import subprocess
 import tarfile
-from uuid import uuid4
+from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from esen_windows_job import limited_process
 from truba_credentials import state_directory
@@ -254,13 +254,47 @@ def submit_full_node(directory, record, files, settings, auth):
     submit_remote(directory, record, files, script, auth)
 
 
+def remote_run_directory(parent, path, auth):
+    path = path.strip().rstrip("/")
+    scratch = f"/arf/scratch/{auth.username}"
+    if (not SAFE_NAME.fullmatch(auth.username) or auth.username in (".", "..")
+            or not path.startswith(scratch + "/")):
+        raise ValueError("Choose a TRUBA run folder under your scratch directory.")
+    relative_file(path[len(scratch) + 1:])
+    return parent / uuid5(NAMESPACE_URL, f"truba:{path}").hex, path
+
+
+def attach_remote_run(directory, path, auth):
+    name = " · ".join(path.split("/")[-3:])
+    record = dict(name=name, target="remote", ranks=None, state="Waiting for results",
+                  created=datetime.now().astimezone().isoformat(timespec="seconds"),
+                  username=auth.username, remote_run=path)
+    remote_files(directory, record, auth)
+
+
+def attached_folder_check(remote, username):
+    scratch = shlex.quote(f"/arf/scratch/{username}")
+    return f"""scratch=$(realpath -- {scratch}) || exit
+base=$(realpath -- {shlex.quote(remote)}) || exit
+case "$base" in "$scratch"/*) ;; *) exit 1 ;; esac
+test -d "$base" || exit
+cd -- "$base" || exit
+"""
+
+
 def remote_location(directory, record, auth):
     if not auth or not SAFE_NAME.fullmatch(auth.username) or auth.username in (".", ".."):
         raise ValueError("Connect through RustMech's TRUBA button first.")
     if record.get("username", auth.username) != auth.username:
         raise ValueError("Connect using the TRUBA account that submitted this job.")
+    transport = RemoteTransport(RemoteContext(transport="ssh"), auth)
+    if record.get("remote_run"):
+        expected, path = remote_run_directory(directory.parent, record["remote_run"], auth)
+        if expected != directory:
+            raise ValueError("Invalid attached TRUBA run record.")
+        return transport, path
     path = f"/arf/scratch/{auth.username}/RustMech/{directory.name}"
-    return RemoteTransport(RemoteContext(transport="ssh"), auth), validated_remote_path(path, auth.username)
+    return transport, validated_remote_path(path, auth.username)
 
 
 def tagged(reply, key):
@@ -336,6 +370,10 @@ fi
 
 
 def refresh_remote(directory, record, auth, *, cancel=False):
+    if record.get("remote_run"):
+        if cancel:
+            raise ValueError("Cancel externally submitted jobs in Slurm.")
+        return remote_files(directory, record, auth)
     transport, remote = remote_location(directory, record, auth)
     job_id = record.get("job_id") or recover_id(transport, remote, directory)
     if not job_id:
@@ -373,6 +411,19 @@ done
 
 def remote_files(directory, record, auth):
     transport, remote = remote_location(directory, record, auth)
+    if record.get("remote_run"):
+        reply = transport.command(attached_folder_check(remote, auth.username) + f"""
+set -eo pipefail
+printf 'FILES='
+if [ -d results ] && [ ! -L results ]; then
+    find -P results -type f -print0 | sort -z | sed -z -n '1,{FILE_LIMIT + 1}p' | base64 -w0
+fi
+printf '\n'
+""")
+        names = decode(tagged(reply, "FILES")).split("\0")[:-1]
+        save_file_list(directory, record, names[:FILE_LIMIT], len(names) > FILE_LIMIT,
+                       state="Results available" if names else "Waiting for results")
+        return
     reply = transport.command(f"""cd {shlex.quote(remote)} || exit
 set -eo pipefail
 printf 'FILES='
@@ -386,8 +437,11 @@ done
     # Separate job logs from work files with identical basenames.
     paths = ["work/" + name for name in names[:FILE_LIMIT]]
     paths[:0] = re.findall(r"^LOG=(stdout\.log|stderr\.log)$", reply, re.MULTILINE)
+    save_file_list(directory, record, paths, len(names) > FILE_LIMIT)
+
+
+def save_file_list(directory, record, paths, omitted, **changes):
     portable = []
-    omitted = len(names) > FILE_LIMIT
     for name in paths:
         try:
             relative_file(name)
@@ -395,7 +449,7 @@ done
             omitted = True
         else:
             portable.append(name)
-    save_job(directory, record, files=portable, files_omitted=omitted)
+    save_job(directory, record, files=portable, files_omitted=omitted, **changes)
 
 
 def download_file(directory, record, name, auth):
@@ -404,8 +458,11 @@ def download_file(directory, record, name, auth):
     relative = relative_file(name)
     transport, remote = remote_location(directory, record, auth)
     source = remote + "/" + name
-    transport.command(f'''base=$(realpath -- {shlex.quote(remote)}) || exit
-file="$base"/{shlex.quote(name)}
+    if record.get("remote_run") and relative.parts[0] != "results":
+        raise ValueError("Choose a published result.")
+    check = (attached_folder_check(remote, auth.username) if record.get("remote_run")
+             else f"base=$(realpath -- {shlex.quote(remote)}) || exit\n")
+    transport.command(check + f'''file="$base"/{shlex.quote(name)}
 test -f "$file" && test "$(realpath -- "$file")" = "$file"''')
     destination = directory / "downloads" / relative
     if not destination.resolve().is_relative_to(directory.resolve()):

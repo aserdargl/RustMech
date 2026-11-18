@@ -263,6 +263,16 @@ class EsenWorkspace(QDialog):
         self.refresh = command("Refresh job", lambda: self._refresh_remote(manual=True))
         self.stop = command("Stop job", self._cancel, role="destructiveActionBtn")
         layout.addLayout(button_row(self.use_inputs, self.refresh, self.stop))
+        self.remote_folder = QLineEdit()
+        self.remote_folder.setFixedHeight(CONTROL_HEIGHT)
+        self.remote_folder.setPlaceholderText("TRUBA run folder")
+        self.remote_folder.setAccessibleName("TRUBA run folder")
+        self.remote_folder.textChanged.connect(self._buttons)
+        self.attach = command("Attach folder", self._attach_remote)
+        attachment = QHBoxLayout()
+        attachment.addWidget(self.remote_folder, 1)
+        attachment.addWidget(self.attach)
+        layout.addLayout(attachment)
         left.setSizes([470, 230])
 
         preview, layout = panel("Command preview", paper=True)
@@ -493,7 +503,7 @@ class EsenWorkspace(QDialog):
 
     def _connection_changed(self, *_):
         self._preview()
-        self._auto_refresh()
+        self._auto_refresh(manual=bool(self.record and self.record.get("remote_run")))
 
     def _load_history(self):
         records = []
@@ -567,13 +577,13 @@ class EsenWorkspace(QDialog):
         self._result_key = None
         self.log.clear()
         self._show_selected()
-        self._auto_refresh()
+        self._auto_refresh(manual=bool(self.record and self.record.get("remote_run")))
 
     def _show_selected(self):
         directory = self._selected_directory()
         if directory is None:
             self.record = None
-            self.status.setText(translate("Select an ESEN job."))
+            self.status.setText(translate(self.job_error or "Select an ESEN job."))
             self._buttons()
             return
         try:
@@ -639,14 +649,15 @@ class EsenWorkspace(QDialog):
         self.use_as_script.setEnabled(supporting_file_selected)
         self.remove_inputs.setEnabled(supporting_file_selected)
         self.open_folder.setEnabled(directory is not None)
-        self.use_inputs.setEnabled(bool(record and directory and directory not in self._active_directories()
+        self.attach.setEnabled(bool(authenticated and self.remote_folder.text().strip() and not self.remote_task))
+        self.use_inputs.setEnabled(bool(record and not record.get("remote_run") and directory and directory not in self._active_directories()
                                         and (directory / "inputs" / jobs.relative_file(record["name"])).is_file()))
         remote_ready = bool(record and record["target"] == "remote" and record.get("username")
                             and authenticated and not self.remote_task
                             and (record.get("job_id") or record["state"] not in jobs.TERMINAL))
         self.refresh.setEnabled(remote_ready)
         self.stop.setEnabled(bool((self.local_task and directory == self.local_task[0] and not self.local_stop.is_set())
-                                  or (remote_ready and record["state"] not in jobs.TERMINAL)))
+                                  or (remote_ready and not record.get("remote_run") and record["state"] not in jobs.TERMINAL)))
         result = self._result_path()
         self.open_file.setEnabled(result is not None and result.is_file())
         self.download.setEnabled(bool(remote_ready and self.results.currentItem()))
@@ -665,15 +676,39 @@ class EsenWorkspace(QDialog):
                         if item.data(Qt.ItemDataRole.UserRole) == str(directory):
                             item.setText(self._history_label(directory, record))
                             break
+                    else:
+                        self._history_item(directory, record, prepend=True)
                 except Exception as error:
-                    if directory == self._selected_directory():
+                    if field == "remote_task" or directory == self._selected_directory():
                         self.job_error = str(error)
         if self.isVisible():
             self._show_selected()
 
-    def _auto_refresh(self):
+    def _attach_remote(self):
+        auth = self.truba.analysis_auth()
+        if not auth or self.remote_task:
+            return
+        try:
+            directory, path = jobs.remote_run_directory(self.history_root, self.remote_folder.text(), auth)
+        except ValueError as error:
+            self.job_error = str(error)
+            self._show_selected()
+            return
+        for index in range(self.history.count()):
+            item = self.history.item(index)
+            if item.data(Qt.ItemDataRole.UserRole) == str(directory):
+                if self.history.currentItem() == item:
+                    self._refresh_remote(manual=True)
+                else:
+                    self.history.setCurrentItem(item)
+                return
+        self.job_error = ""
+        self.remote_task = (directory, self.executor.submit(jobs.attach_remote_run, directory, path, auth))
+        self._buttons()
+
+    def _auto_refresh(self, *, manual=False):
         if self.isVisible():
-            self._refresh_remote()
+            self._refresh_remote(manual=manual)
 
     def _refresh_remote(self, *, manual=False, cancel=False):
         directory, record = self._selected_directory(), self.record
@@ -682,6 +717,8 @@ class EsenWorkspace(QDialog):
             return
         if auth.username != record["username"]:
             self.job_error = "Connect using the TRUBA account that submitted this job."
+            return
+        if record.get("remote_run") and not manual:
             return
         if record["state"] in jobs.TERMINAL and (not record.get("job_id") or ("files" in record and not manual)):
             return

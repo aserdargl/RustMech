@@ -80,6 +80,40 @@ class EsenTests(unittest.TestCase):
             with self.subTest(value=value), self.assertRaises(ValueError):
                 jobs.relative_file(value)
 
+    def test_attach_run_and_download_published_result(self):
+        source = "/arf/scratch/test-account/ESEN/CFG/campaign-1/NiTi/TK"
+        directory, remote = jobs.remote_run_directory(self.history, source + "/", self.auth)
+        self.assertEqual(remote, source)
+        self.assertEqual(jobs.remote_run_directory(self.history, source, self.auth)[0], directory)
+        result = "results/temperature-500/NiTi_thermal_conductivity.png"
+        files = base64.b64encode((result + "\0").encode()).decode()
+        with patch("esen_jobs.RemoteTransport") as factory:
+            transport = factory.return_value
+            transport.command.side_effect = [f"FILES={files}\n", ""]
+            jobs.attach_remote_run(directory, source, self.auth)
+            record = jobs.read_job(directory)
+            self.assertEqual(record["state"], "Results available")
+            self.assertEqual(record["name"], "campaign-1 · NiTi · TK")
+            self.assertEqual(record["files"], [result])
+            list_command = transport.command.call_args.args[0]
+            self.assertIn("find -P results", list_command)
+            self.assertIn('case "$base" in "$scratch"/*)', list_command)
+            transport.get.side_effect = lambda remote, local: local.write_bytes(b"plot")
+            jobs.download_file(directory, record, result, self.auth)
+            self.assertEqual((directory / "downloads" / result).read_bytes(), b"plot")
+            self.assertEqual(transport.get.call_args.args[0], f"{source}/{result}")
+            with self.assertRaisesRegex(ValueError, "Cancel externally"):
+                jobs.refresh_remote(directory, record, self.auth, cancel=True)
+
+    def test_reject_external_run_outside_connected_scratch(self):
+        for path in (
+            "/arf/scratch/other/ESEN/CFG/run",
+            "/arf/scratch/test-account/../other/job",
+            "/arf/home/test-account/job",
+        ):
+            with self.subTest(path=path), self.assertRaises(ValueError):
+                jobs.remote_run_directory(self.history, path, self.auth)
+
     def test_remote_submit_uploads_relative_files_and_sets_mpi_tasks(self):
         directory, record = self.new_job()
         with patch("esen_jobs.RemoteTransport") as factory:

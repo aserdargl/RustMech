@@ -32,6 +32,11 @@ Job history|İş geçmişi
 ESEN job history|ESEN iş geçmişi
 Reuse inputs|Girdileri yeniden kullan
 Refresh job|İşi yenile
+TRUBA run folder|TRUBA koşu klasörü
+Attach folder|Klasörü ekle
+Waiting for results|Sonuç bekleniyor
+Results available|Sonuçlar hazır
+Choose a TRUBA run folder under your scratch directory.|Scratch alanınızdaki bir TRUBA koşu klasörünü seçin.
 Stop job|İşi durdur
 Command preview|Komut önizlemesi
 Logs and files|Günlükler ve dosyalar
