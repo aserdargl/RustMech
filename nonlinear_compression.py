@@ -934,9 +934,12 @@ class RustMechDialog(QDialog):
         self.truba_button.setToolTip("Connect to TRUBA with your own username and password")
         self.truba_button.clicked.connect(lambda: show_restored_window(self.truba_dialog))
         self.truba_dialog.connection_changed.connect(self._update_truba_button)
+        self.about_button = QPushButton("About")
+        self.about_button.setObjectName("aboutBtn")
+        self.about_button.clicked.connect(self.show_about)
         workspace_buttons = QHBoxLayout()
         workspace_buttons.setSpacing(6)
-        for button in (self.esen_button, self.truba_button):
+        for button in (self.esen_button, self.truba_button, self.about_button):
             button.setFixedSize(124, CONTROL_HEIGHT)
             button.setAutoDefault(False)
             button.setDefault(False)
@@ -2120,6 +2123,16 @@ class RustMechDialog(QDialog):
         if self.esen_workspace is None:
             self.esen_workspace = EsenWorkspace(self.truba_dialog, self)
         show_restored_window(self.esen_workspace)
+
+    def show_about(self):
+        QMessageBox.about(
+            self,
+            "About RustMech",
+            "<p><b>RustMech</b></p>"
+            "<p>Desktop workspace for mechanical, flow, and thermal simulation.</p>"
+            "<p>Licensed under GPL-3.0-or-later.</p>"
+            '<p><a href="https://github.com/aserdargl/RustMech">RustMech on GitHub</a></p>',
+        )
 
     def _update_truba_button(self, connected: bool) -> None:
         self.truba_button.setText("Connected" if connected else "TRUBA")
