@@ -453,7 +453,7 @@ class RemoteModeUiTests(unittest.TestCase):
             'Credentials and password storage',
             'CPU, RAM and resource session', 'Advanced · remote runtime'])
         self.assertEqual([panel.tabs.tabText(i) for i in range(panel.tabs.count())],
-                         ['Connection', 'Resources', 'Advanced'])
+                         ['Connection', 'Resources', 'Advanced', 'Active jobs'])
         self.assertLess(sections[0].height(), 65)
         self.assertIs(panel.connect_button.parentWidget(), panel.username.parentWidget())
         self.assertIs(self.controller.controls['cores'].parentWidget(), self.controller.resource_panel)
@@ -628,11 +628,13 @@ class RemoteModeUiTests(unittest.TestCase):
 
     def test_mechanics_cfd_and_cht_dispatch_only_remote_operations(self):
         self.enable()
+        self.window.truba_dialog.active_jobs.study_name.setText('A')
         self.window.preview=SimpleNamespace(mesh=object(),remote_source="/arf/scratch/tester/RustMech/"+"a"*32+"/output/preview")
         with patch.object(self.window,"refresh_validity"),patch("nonlinear_compression.save_settings"),patch("nonlinear_compression.AnalysisProcess") as start:
             self.window.apply_button.setEnabled(True)
             self.window.apply()
             self.assertIs(start.call_args.args[0],run_remote_mechanics)
+            self.assertEqual(start.call_args.args[2].study_name, 'A')
             self.window.force_stop_analysis()
         for workspace,module,operation in ((self.window.flow_workspace,"flow_workspace","flow_solve"),
                                             (self.window.thermal_workspace,"thermal_workspace","thermal_solve")):
@@ -640,6 +642,7 @@ class RemoteModeUiTests(unittest.TestCase):
                 workspace.run()
                 self.assertIs(start.call_args.args[0],run_remote_operation)
                 self.assertEqual(start.call_args.args[1]["operation"],operation)
+                self.assertEqual(start.call_args.args[2].study_name, 'A')
                 workspace.cancel()
                 local_cancel.assert_not_called()
 

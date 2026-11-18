@@ -37,6 +37,7 @@ class RemoteContext:
     session_id: str = ""
     parallel_jobs: int = 1
     auto_renew: bool = True
+    study_name: str = ""
 
     def validate(self):
         if type(self.parallel_jobs) is not int or not 1 <= self.parallel_jobs <= 224:
@@ -250,6 +251,7 @@ def _rebase_paths(directory,result):
 def run_remote_job(request,context,auth=None,marker=None,*,directory=None,resume_record=None,on_progress=None,cancelled=None,
                    submit_only=False, poll_once=False):
     from remote_operations import required_capability
+    study_name = context.study_name
     if not resume_record:
         required_capability(request)
     context.validate()
@@ -282,6 +284,8 @@ def run_remote_job(request,context,auth=None,marker=None,*,directory=None,resume
                       remote_directory=f"/arf/scratch/{transport.username}/RustMech/{uuid.uuid4().hex}",
                       local_directory=str(directory.resolve()),state="preparing",context=asdict(context),
                       operation=request["operation"],request_id=request["request_id"],source_sha256=source_hash)
+        if study_name and request["operation"] not in ("probe", "prepare", "preview", "surface"):
+            record["study_name"] = study_name
         if submit_only:
             record["background"] = True
             settings = request.get("settings", {})

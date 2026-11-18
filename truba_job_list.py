@@ -183,7 +183,10 @@ class TrubaJobList(QGroupBox):
         for row, (path, record) in enumerate(records):
             code = analysis_code(record)
             identity = code or str(record.get('job_id') or record.get('request_id') or path.stem)
-            title = f"{identity} · {job_description(record)}"
+            purpose = job_description(record)
+            if record.get('study_name'):
+                purpose = f"{record['study_name']} · {purpose}"
+            title = f"{identity} · {purpose}"
             item = QTableWidgetItem(title)
             job_id = record.get('job_id') or '—'
             item.setToolTip(f"{title}\nSlurm #{job_id} · {record.get('username', '')}\n"

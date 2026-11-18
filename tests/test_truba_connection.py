@@ -15,6 +15,7 @@ from PySide6.QtWidgets import QApplication, QLineEdit, QMessageBox
 
 from truba_connection import ConnectionWorker, TrubaConnectionDialog
 from truba_credentials import CredentialStore
+from truba_jobs import HOST, RemoteAuth, write_record
 from window_state import WindowStateStore
 
 
@@ -66,8 +67,13 @@ class TrubaTests(unittest.TestCase):
                 field.setFocus()
                 QTest.keyClicks(field, "test")
                 QTest.keyClick(field, Qt.Key.Key_Return)
+            dialog.tabs.setCurrentWidget(dialog.active_jobs)
+            dialog.active_jobs.study_name.setFocus()
+            QTest.keyClicks(dialog.active_jobs.study_name, "A")
+            QTest.keyClick(dialog.active_jobs.study_name, Qt.Key.Key_Return)
             self.app.processEvents()
             worker.assert_not_called()
+        self.assertEqual(dialog.active_jobs.study_name.text(), "A")
         self.assertIsNone(dialog.worker)
         self.assertTrue(dialog.isVisible())
 
@@ -224,6 +230,70 @@ class TrubaTests(unittest.TestCase):
             self.app.processEvents()
             self.assertEqual(second.jobs_splitter.sizes(), expected)
             self.assertEqual(second.size(), first.size())
+        finally:
+            self.app.removeEventFilter(store)
+
+    def test_active_jobs_group_by_submitted_name_and_show_selected_slurm_times(self):
+        dialog = self.dialog()
+        tab = dialog.active_jobs
+        for job_id, username, name in [('1', 'tester', 'A'), ('2', 'tester', 'A'), ('3', 'other', 'Private')]:
+            write_record(self.directory / 'jobs' / f'{job_id}.json',
+                         dict(host=HOST, username=username, job_id=job_id, state='RUNNING', study_name=name))
+        output = (
+            '1|RUNNING|2026-11-18T04:15:00|1-05:20:40|2:17:15|RM-1\n'
+            '2|PENDING|2026-11-18T23:15:00|0:00|8:00:00|RM-2\n'
+            '3|RUNNING|2026-11-18T05:00:00|25:40|UNLIMITED|External job\n'
+            '4|COMPLETED|2026-11-18T04:15:00|1:30|0:00|Done\n'
+        )
+        with patch.object(dialog, 'analysis_auth', return_value=RemoteAuth('tester', 'test')), patch(
+                'truba_active_jobs.RemoteTransport') as transport:
+            transport.return_value.command.return_value = output
+            dialog.show()
+            self.app.processEvents()
+            transport.assert_not_called()
+            dialog.tabs.setCurrentWidget(tab)
+            self.app.processEvents()
+            if tab.worker is not None:
+                tab.worker.wait()
+            self.app.processEvents()
+            transport.assert_called_once()
+            command = transport.return_value.command.call_args.args[0]
+            self.assertIn('--user=tester', command)
+            self.assertIn('%i|%T|%S|%M|%L|%j', command)
+            self.assertEqual([tab.works.item(i, 0).text() for i in range(tab.works.rowCount())],
+                             ['A', 'External job'])
+            self.assertEqual([tab.jobs.item(i, 0).text() for i in range(tab.jobs.rowCount())], ['1', '2'])
+            self.assertNotEqual(tab.started.text(), '—')
+            self.assertEqual(tab.elapsed.text(), '29:20:40')
+            self.assertEqual(tab.remaining.text(), '02:17:15')
+            tab.jobs.setCurrentCell(1, 0)
+            tab.show_groups(tab.groups)
+            self.assertEqual(tab.jobs.currentItem().text(), '2')
+            self.assertEqual(tab.started.text(), '—')
+            self.assertEqual(tab.remaining.text(), '—')
+            tab.works.setCurrentCell(1, 0)
+            self.assertEqual(tab.jobs.item(0, 0).text(), '3')
+            self.assertEqual(tab.elapsed.text(), '00:25:40')
+            dialog.connection_changed.emit(False)
+            self.assertEqual(tab.works.rowCount(), 0)
+            self.assertEqual(tab.jobs.rowCount(), 0)
+
+    def test_active_jobs_columns_restore_after_reopening(self):
+        store = WindowStateStore(self.app, QSettings(str(self.directory / 'active.ini'), QSettings.Format.IniFormat))
+        try:
+            first = self.dialog()
+            first.resize(690, 650)
+            first.tabs.setCurrentWidget(first.active_jobs)
+            first.show()
+            self.app.processEvents()
+            first.active_jobs.splitter.moveSplitter(250, 1)
+            expected = first.active_jobs.splitter.sizes()
+            first.hide()
+            second = self.dialog()
+            second.show()
+            second.tabs.setCurrentWidget(second.active_jobs)
+            self.app.processEvents()
+            self.assertEqual(second.active_jobs.splitter.sizes(), expected)
         finally:
             self.app.removeEventFilter(store)
 

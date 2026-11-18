@@ -265,6 +265,7 @@ class TrubaConnectionDialog(QDialog):
         # viewports scroll instead of squeezing, wrapping or relocating fields.
         self.settings_scroll.setWidget(self.settings_content)
         self._remote_sections = []
+        self._remote_tabs = []
         self.fit_settings_content()
         self.resize(500, 540)
         self.connect_button.clicked.connect(self.start_connection)
@@ -281,7 +282,10 @@ class TrubaConnectionDialog(QDialog):
         self._update_controls()
         self.language_manager.changed.connect(self._language_changed)
         from truba_job_list import TrubaJobList
+        from truba_active_jobs import TrubaActiveJobs
         self.job_list = TrubaJobList(self)
+        self.active_jobs = TrubaActiveJobs(self)
+        self.tabs.addTab(self.active_jobs, 'Active jobs')
         self.jobs_splitter.addWidget(self.job_list)
         self.jobs_splitter.setStretchFactor(0, 1)
         self.jobs_splitter.setStretchFactor(1, 1)
@@ -308,18 +312,19 @@ class TrubaConnectionDialog(QDialog):
 
     def install_remote_sections(self, resources, advanced):
         # The runtime controller owns the controls; this dialog owns presentation.
-        while self.tabs.count() > 1:
-            previous = self.tabs.widget(1)
-            self.tabs.removeTab(1)
+        for previous in self._remote_tabs:
+            self.tabs.removeTab(self.tabs.indexOf(previous))
             previous.hide()
             previous.setParent(self)
+        self._remote_tabs = []
         self._remote_sections = [resources, advanced]
         for section, title in ((resources, 'Resources'), (advanced, 'Advanced')):
             scroll = QScrollArea()
             scroll.setWidgetResizable(False)
             scroll.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
             scroll.setWidget(section)
-            self.tabs.addTab(scroll, title)
+            self.tabs.insertTab(self.tabs.indexOf(self.active_jobs), scroll, title)
+            self._remote_tabs.append(scroll)
         self.fit_settings_content()
 
     def _language_changed(self, *_):
@@ -484,5 +489,6 @@ class TrubaConnectionDialog(QDialog):
     def shutdown(self):
         self.job_list.shutdown()
         self.stop_connection()
+        self.active_jobs.shutdown()
         if self.worker is not None:
             self.worker.wait()

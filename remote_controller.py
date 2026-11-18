@@ -777,17 +777,17 @@ class RemoteController(QObject):
             raise RuntimeError(self.capabilities.get("reasons",{}).get(capability,f"{capability} is unavailable or unsupported on TRUBA."))
         if settings is not None and capability in ("mesh","kratos") and settings.mesh_type not in self.capabilities.get("mesh_types",[]):
             raise RuntimeError(f"The remote runtime does not support {settings.mesh_type} meshing.")
-        if settings is not None and capability=="kratos" and settings.cores>self.context().cores:
-            raise RuntimeError("Solver CPU count exceeds the TRUBA allocation. Increase remote CPU cores or reduce solver cores.")
+        context = self.context()
         if settings is not None and capability=="kratos":
-            from dataclasses import replace
+            if settings.cores > context.cores:
+                raise RuntimeError("Solver CPU count exceeds the TRUBA allocation. Increase remote CPU cores or reduce solver cores.")
             from solver_api import KRATOS_CAPABILITIES
-            context=self.context()
             effective=replace(settings,truba_partition=context.partition,truba_account=context.account,
                               truba_walltime=context.walltime,truba_memory_mb=context.memory_mb)
             errors=KRATOS_CAPABILITIES.validate(effective)
             if errors: raise RuntimeError("\n".join(errors))
-        return self.context(),self.auth()
+        study_name = self.window.truba_dialog.active_jobs.study_name.text().strip()
+        return replace(context, study_name=study_name), self.auth()
 
     def solver_enabled(self,identifier):
         return self.ready and bool(self.capabilities.get(identifier))

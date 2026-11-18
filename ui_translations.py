@@ -877,6 +877,23 @@ Uses each geometry's selected variables. Without variables, only its reference c
 Top platen displacement in −Z; reaction force is calculated (N).|Üst plakanın −Z yönündeki yer değiştirmesi; tepki kuvveti hesaplanır (N).
 Pending / active remote jobs|Bekleyen / Etkin uzak işler
 TRUBA jobs|TRUBA işleri
+Active jobs|Aktif işler
+Work name for new jobs|Yeni işler için çalışma adı
+Use the same work name to group multiple submissions.|Birden çok gönderimi gruplamak için aynı çalışma adını kullanın.
+Work name|Çalışma adı
+Slurm job ID|Slurm iş numarası
+Started at|Başlangıç zamanı
+Elapsed time|Geçen süre
+Time left in Slurm allocation|Slurm süre sınırına kalan
+Connect to TRUBA to see active jobs.|Aktif işleri görmek için TRUBA'ya bağlanın.
+No active Slurm jobs.|Aktif Slurm işi yok.
+Updating active jobs…|Aktif işler güncelleniyor…
+Could not update active jobs. Retrying…|Aktif işler güncellenemedi. Yeniden deneniyor…
+RUNNING|Çalışıyor
+PENDING|Kuyrukta
+CONFIGURING|Hazırlanıyor
+COMPLETING|Tamamlanıyor
+SUSPENDED|Askıda
 Analysis code / purpose|Analiz kodu / Açıklama
 No saved TRUBA jobs.|Kayıtlı TRUBA işi yok.
 Background analyses update and download automatically when connected.|TRUBA'ya bağlanınca analiz durumları güncellenir ve sonuçlar otomatik indirilir.
