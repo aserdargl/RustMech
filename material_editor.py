@@ -66,7 +66,9 @@ class MaterialEditor(SidebarGroupBox):
         self.setObjectName("materialGroup")
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setMouseTracking(True)
-        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
+        # Let wrapped action rows use their required height instead of leaving
+        # surplus layout space above and below a size-hint-capped group.
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
         self.setAccessibleName("Material")
         self.setTitle("Material")
         self.active_path = None
@@ -87,8 +89,6 @@ class MaterialEditor(SidebarGroupBox):
         self.material_selector.setAccessibleName("Material selection")
         self.material_selector.addItem("Current / custom material", "current")
         name_form.addRow(field_label("Select material", self.material_selector), self.material_selector)
-        self.material_selector.setFixedWidth(180)
-        self.material_selector.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         self.name = QLineEdit(settings.material_name)
         self.name.setPlaceholderText("e.g. Ti-6Al-4V ELI / 316L SS")
         name_lbl = field_label("Material name", self.name)
