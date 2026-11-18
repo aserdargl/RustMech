@@ -1740,9 +1740,9 @@ class RustMechDialog(QDialog):
         readout.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         kpi_row.addWidget(readout, 1)
         self.status.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        status_layout.addWidget(cancel)
-        status_layout.addWidget(self.apply_button)
-        status_layout.addWidget(self.force_stop_button)
+        self._analysis_action_buttons = (cancel, self.apply_button, self.force_stop_button)
+        for button in self._analysis_action_buttons:
+            status_layout.addWidget(button)
         from operation_progress import OperationProgress
         self.operation_progress = OperationProgress(self, provider=lambda: (
             self.future is not None or self.analysis_job is not None
@@ -1923,6 +1923,10 @@ class RustMechDialog(QDialog):
         navigation = (self.workspace_button, self.doe_button, self.designs_button, self.project_button)
         width = max(button.fontMetrics().horizontalAdvance(button.text()) + 32 for button in navigation)
         for button in navigation:
+            button.setFixedSize(width, CONTROL_HEIGHT)
+        # Allow the shared button face's focus border to grow by 1 px on each side.
+        width = max(button.sizeHint().width() for button in self._analysis_action_buttons) + 2
+        for button in self._analysis_action_buttons:
             button.setFixedSize(width, CONTROL_HEIGHT)
         for widget in self.findChildren(QWidget):
             if hasattr(widget, '_action_groups'):
