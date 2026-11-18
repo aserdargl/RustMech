@@ -138,6 +138,8 @@ def graphcalc_combo_stylesheet() -> str:
     return (
         """
         QComboBox#GraphCalcCombo {
+            /* Anchor the list below the field instead of aligning the selected row over it. */
+            combobox-popup: 0;
             background: #FFFFFF;
             border: 1px solid #CBD5E1;
             border-radius: 4px;

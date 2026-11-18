@@ -1,7 +1,7 @@
 """Interaction contracts of the real Datenburg control port."""
 import unittest
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QPoint, Qt
 from PySide6.QtTest import QSignalSpy, QTest
 from PySide6.QtWidgets import QApplication, QAbstractSpinBox, QToolButton, QWidget
 
@@ -67,26 +67,37 @@ class DatenburgControlTests(unittest.TestCase):
         parent.setStyleSheet(STUDIO_STYLESHEET)
         control = CompactComboBox(parent)
         control.addItems(['Gyroid', 'A much longer structure name', 'Diamond'])
+        control.setCurrentIndex(2)
         control.setFixedWidth(100)
+        effect = Qt.UIEffect.UI_AnimateCombo
+        animated = self.app.isEffectEnabled(effect)
+        self.app.setEffectEnabled(effect, False)
         try:
+            parent.move(parent.screen().availableGeometry().topLeft() + QPoint(40, 40))
             parent.show()
-            control.showPopup()
+            QTest.mouseClick(control, Qt.MouseButton.LeftButton)
             self.app.processEvents()
+            self.assertTrue(control.view().isVisible())
             self.assertEqual(control.height(), 25)
             self.assertEqual(control.view().gridSize().height(), 17)
             self.assertGreaterEqual(control.view().width(), control.view().sizeHintForColumn(0))
+            # Qt can share the field's bottom border with the popup's top edge.
+            field_bottom = control.mapToGlobal(QPoint(0, control.height() - 1)).y()
+            popup_top = control.view().window().frameGeometry().top()
+            self.assertIn(popup_top, (field_bottom, field_bottom + 1))
             popup = control.view().grab().toImage()
             width, height = popup.width(), popup.height()
             edges = ((0, height // 2), (width - 1, height // 2),
                      (width // 2, 0), (width // 2, height - 1))
             for x, y in edges:
                 self.assertEqual(popup.pixelColor(x, y).name(), POPUP_BORDER)
-            QTest.keyClick(control.view(), Qt.Key.Key_Down)
+            QTest.keyClick(control.view(), Qt.Key.Key_Up)
             QTest.keyClick(control.view(), Qt.Key.Key_Return)
             self.assertEqual(control.currentIndex(), 1)
         finally:
             control.hidePopup()
             parent.close()
+            self.app.setEffectEnabled(effect, animated)
 
 
 if __name__ == '__main__':
