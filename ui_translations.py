@@ -32,6 +32,11 @@ Job history|İş geçmişi
 ESEN job history|ESEN iş geçmişi
 Reuse inputs|Girdileri yeniden kullan
 Refresh job|İşi yenile
+Resume job|İşi sürdür
+Restart input|Devam girdisi
+Optional relative path|İsteğe bağlı göreli yol
+Include a restart input in the job files to enable checkpoint recovery and the 70-hour handover.|Ara kayıttan devam etmek ve 70. saatte devri açmak için devam betiğini iş dosyalarına ekleyin.
+Include the LAMMPS restart input in the job files.|LAMMPS devam betiğini iş dosyalarına ekleyin.
 TRUBA run folder|TRUBA koşu klasörü
 Attach folder|Klasörü ekle
 Waiting for results|Sonuç bekleniyor

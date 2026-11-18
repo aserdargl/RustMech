@@ -219,10 +219,13 @@ class EsenWorkspace(QDialog):
         self.module = QLineEdit(jobs.DEFAULT_MODULE)
         self.remote_exe = QLineEdit("lmp")
         self.remote_mpi = compact_combo((("mpirun", "mpirun"), ("srun", "srun")))
+        self.resume_input = QLineEdit()
+        self.resume_input.setPlaceholderText("Optional relative path")
+        self.resume_input.setToolTip(translate("Include a restart input in the job files to enable checkpoint recovery and the 70-hour handover."))
         self.remote_fields = (self.partition, self.account, self.walltime,
-                              self.module, self.remote_exe, self.remote_mpi)
+                              self.module, self.remote_exe, self.remote_mpi, self.resume_input)
         for text, control in zip(("Queue", "Account", "Wall time (HH:MM:SS)",
-                                  "LAMMPS module", "Linux executable", "MPI launcher"), self.remote_fields):
+                                  "LAMMPS module", "Linux executable", "MPI launcher", "Restart input"), self.remote_fields):
             self._form_row(form, text, control)
         self.connection = QLabel()
         layout.addWidget(self.connection)
@@ -233,6 +236,7 @@ class EsenWorkspace(QDialog):
         for field in (self.local_exe, self.local_mpi, self.account, self.walltime, self.module, self.remote_exe):
             field.editingFinished.connect(self._preview)
             field.returnPressed.connect(self._preview)
+        self.resume_input.textChanged.connect(self._preview)
 
         self.load_files = command("Load files…", self._pick_files)
         layout.addLayout(button_row(self.load_files, command("Input script…", self._pick_script),
@@ -261,8 +265,9 @@ class EsenWorkspace(QDialog):
         layout.addWidget(self.history, 1)
         self.use_inputs = command("Reuse inputs", self._reuse_inputs)
         self.refresh = command("Refresh job", lambda: self._refresh_remote(manual=True))
+        self.resume = command("Resume job", self._resume_job)
         self.stop = command("Stop job", self._cancel, role="destructiveActionBtn")
-        layout.addLayout(button_row(self.use_inputs, self.refresh, self.stop))
+        layout.addLayout(button_row(self.use_inputs, self.refresh, self.resume, self.stop))
         self.remote_folder = QLineEdit()
         self.remote_folder.setFixedHeight(CONTROL_HEIGHT)
         self.remote_folder.setPlaceholderText("TRUBA run folder")
@@ -315,7 +320,7 @@ class EsenWorkspace(QDialog):
         label.setObjectName("esenFieldLabel")
         if isinstance(field, CompactComboBox):
             field.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
-        if isinstance(field, QLineEdit):
+        if isinstance(field, QLineEdit) and not field.toolTip():
             label.setToolTip(name)
             field.textChanged.connect(field.setToolTip)
             field.setToolTip(field.text())
@@ -456,6 +461,7 @@ class EsenWorkspace(QDialog):
             module=self.module.text().strip(),
             executable=self.remote_exe.text().strip(),
             launcher=self.remote_mpi.currentData(),
+            resume_input=self.resume_input.text().strip(),
         )
 
     def _command(self):
@@ -466,6 +472,11 @@ class EsenWorkspace(QDialog):
         if self.target.currentData() == "local":
             return jobs.local_command(self.entry, self.ranks.value(), self.local_exe.text().strip(), self.local_mpi.text().strip())
         settings = self._remote_settings(self.truba.analysis_auth())
+        if settings["resume_input"]:
+            relative = jobs.relative_file(settings["resume_input"])
+            if (not (self.input_root / relative).is_file() or
+                    not (self.whole_folder.isChecked() or relative.as_posix() in [self.entry, *self.extra])):
+                raise ValueError("Include the LAMMPS restart input in the job files.")
         limit = jobs.BASELINES[settings["partition"]]
         return jobs.remote_script(self.entry, limit.max_cpus, memory=limit.memory_ceiling(limit.max_cpus), **settings)
 
@@ -656,6 +667,8 @@ class EsenWorkspace(QDialog):
                             and authenticated and not self.remote_task
                             and (record.get("job_id") or record["state"] not in jobs.TERMINAL))
         self.refresh.setEnabled(remote_ready)
+        self.resume.setEnabled(bool(remote_ready and record.get("resume_input") and record.get("has_checkpoint")
+                                    and record["state"] in {"Failed", "Cancelled", "Interrupted"}))
         self.stop.setEnabled(bool((self.local_task and directory == self.local_task[0] and not self.local_stop.is_set())
                                   or (remote_ready and not record.get("remote_run") and record["state"] not in jobs.TERMINAL)))
         result = self._result_path()
@@ -725,12 +738,21 @@ class EsenWorkspace(QDialog):
         self.job_error = ""
 
         def refresh():
-            if record["state"] not in jobs.TERMINAL:
+            if record["state"] not in jobs.TERMINAL or (manual and record.get("resume_input")):
                 jobs.refresh_remote(directory, record, auth, cancel=cancel)
             if record["state"] in jobs.TERMINAL:
                 jobs.remote_files(directory, record, auth)
 
         self.remote_task = (directory, self.executor.submit(refresh))
+        self._buttons()
+
+    def _resume_job(self):
+        directory = self._selected_directory()
+        auth = self.truba.analysis_auth()
+        if not self.resume.isEnabled() or not directory or not auth:
+            return
+        self.job_error = ""
+        self.remote_task = (directory, self.executor.submit(jobs.resume_remote, directory, self.record, auth))
         self._buttons()
 
     def _cancel(self):
@@ -745,6 +767,7 @@ class EsenWorkspace(QDialog):
         if directory and self.record:
             self.input_root = directory / "inputs"
             self.entry = self.record["name"]
+            self.resume_input.setText(self.record.get("resume_input", ""))
             self.extra = []
             self.ranks.setValue(self.record["ranks"])
             self.whole_folder.setChecked(True)

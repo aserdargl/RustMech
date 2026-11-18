@@ -15,6 +15,7 @@ import subprocess
 import tarfile
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
+import esen_restart
 from esen_windows_job import limited_process
 from truba_credentials import state_directory
 from truba_jobs import SAFE_NAME, validated_remote_path, write_record
@@ -200,7 +201,8 @@ def run_local(directory, record, files, command, stop, *, memory_mib=0):
         save_job(directory, record, state="Failed", detail=str(error))
 
 
-def remote_script(entry, ranks, partition, account, memory, walltime, module, executable, launcher):
+def remote_script(entry, ranks, partition, account, memory, walltime, module, executable, launcher,
+                  *, resume_input=""):
     if partition not in CPU_QUEUES or not SAFE_NAME.fullmatch(account) or account in (".", ".."):
         raise ValueError("Select a CPU queue and enter a valid TRUBA account.")
     RemoteContext(partition=partition, account=account, walltime=walltime).validate()
@@ -213,8 +215,19 @@ def remote_script(entry, ranks, partition, account, memory, walltime, module, ex
     target = '"$HOME"/' + shlex.quote(executable[2:]) if executable.startswith("~/") else shlex.quote(executable)
     if launcher not in ("mpirun", "srun"):
         raise ValueError("Select mpirun or srun.")
-    launch = f"{launcher} -n {ranks} {target} -nonbuf -in {shlex.quote(relative_file(entry).as_posix())}"
+    entry = relative_file(entry).as_posix()
+    launch = f"{launcher} -n {ranks} {target} -nonbuf -in {shlex.quote(entry)}"
     modules = f"module purge\nmodule load {shlex.quote(module)}\n" if module else ""
+    directives = ""
+    body = f"cd work\nexec {launch}\n"
+    if resume_input:
+        continuation = relative_file(resume_input).as_posix()
+        hours, minutes, seconds = map(int, walltime.split(":"))
+        lead_time = (hours - 70) * 3600 + minutes * 60 + seconds
+        directives = "#SBATCH --requeue\n#SBATCH --open-mode=append\n"
+        if lead_time > 0:
+            directives += f"#SBATCH --signal=B:USR1@{lead_time}\n"
+        body = esen_restart.batch_body(entry, continuation, launcher, ranks, target)
     return f"""#!/bin/bash -l
 #SBATCH --partition={partition}
 #SBATCH --account={account}
@@ -225,11 +238,9 @@ def remote_script(entry, ranks, partition, account, memory, walltime, module, ex
 #SBATCH --time={walltime}
 #SBATCH --output=stdout.log
 #SBATCH --error=stderr.log
-set -eo pipefail
+{directives}set -eo pipefail
 {modules}export OMP_NUM_THREADS=1
-cd work
-exec {launch}
-"""
+{body}"""
 
 
 def full_node_resources(partition, walltime, catalog):
@@ -247,7 +258,10 @@ def submit_full_node(directory, record, files, settings, auth):
         catalog = fetch_catalog(RemoteContext(transport="ssh"), auth, live_node_capacity=True)
         ranks, memory = full_node_resources(settings["partition"], settings["walltime"], catalog)
         script = remote_script(files[1], ranks, memory=memory, **settings)
-        save_job(directory, record, ranks=ranks, memory_mib=memory)
+        changes = dict(ranks=ranks, memory_mib=memory)
+        if settings.get("resume_input"):
+            changes["resume_input"] = settings["resume_input"]
+        save_job(directory, record, **changes)
     except Exception as error:
         save_job(directory, record, state="Failed", detail=str(error))
         return
@@ -308,6 +322,8 @@ def submit_remote(directory, record, files, script, auth):
     try:
         transport, remote = remote_location(directory, record, auth)
         snapshot = snapshot_inputs(directory, *files)
+        if record.get("resume_input") and not (snapshot / relative_file(record["resume_input"])).is_file():
+            raise ValueError("Include the LAMMPS restart input in the job files.")
         batch = directory / "run.slurm"
         batch.write_text(script, encoding="utf-8", newline="\n")
         archive = directory / "inputs.tar.gz"
@@ -375,6 +391,8 @@ def refresh_remote(directory, record, auth, *, cancel=False):
             raise ValueError("Cancel externally submitted jobs in Slurm.")
         return remote_files(directory, record, auth)
     transport, remote = remote_location(directory, record, auth)
+    if record.get("resume_input"):
+        return refresh_restartable(directory, record, transport, remote, cancel=cancel)
     job_id = record.get("job_id") or recover_id(transport, remote, directory)
     if not job_id:
         save_job(directory, record, detail="Slurm has not confirmed this submission. Refresh to check again.")
@@ -385,9 +403,51 @@ def refresh_remote(directory, record, auth, *, cancel=False):
     if cancel:
         transport.command(f"scancel {job_id}")
         save_job(directory, record, cancel_requested=True)
-    reply = transport.command(f"""cd {shlex.quote(remote)} || exit
-queue=$(squeue -h -j {job_id} -o '%T|%r') || exit
-accounting=$(sacct -n -X -j {job_id} --format=State,ExitCode -P) || exit
+    refresh_status(directory, record, transport, f"cd {shlex.quote(remote)} || exit\njob={job_id}\n")
+
+
+def refresh_restartable(directory, record, transport, remote, *, cancel):
+    name = "ESEN-" + directory.name
+    if cancel:
+        transport.command(esen_restart.control_script(remote, name, esen_restart.CANCEL))
+    setup = esen_restart.control_script(remote, name, r'''
+job=$(cat job.id 2>/dev/null || true)
+ids=$(active_jobs)
+if ! grep -Fxq -- "$job" <<< "$ids" && [[ -n "$ids" ]]; then
+    job=$(sort -nr <<< "$ids" | sed -n '1p')
+fi
+[[ -z "$job" || "$job" =~ ^[0-9]+$ ]] || exit 2
+printf 'JOB_ID=%s\n' "$job"
+for flag in completed cancelled; do
+    if [[ -e "$flag" ]]; then printf '%s=1\n' "$flag"; else printf '%s=0\n' "$flag"; fi
+done
+checkpoints=$(find checkpoints -type f -name 'step.*' -size +0c -print -quit 2>/dev/null || true)
+printf 'HAS_CHECKPOINT=%s\n' "${checkpoints:+1}"
+exec 9>&-
+''')
+    refresh_status(directory, record, transport, setup, managed=True)
+
+
+def resume_remote(directory, record, auth):
+    if not record.get("resume_input") or record.get("remote_run"):
+        raise ValueError("This job has no configured LAMMPS restart input.")
+    transport, remote = remote_location(directory, record, auth)
+    reply = transport.command(esen_restart.control_script(remote, "ESEN-" + directory.name, esen_restart.RESUME))
+    job_id = tagged(reply, "JOB_ID")
+    if not re.fullmatch(r"[0-9]+", job_id):
+        raise RuntimeError("Invalid Slurm job ID. Refresh to recover the submission.")
+    save_job(directory, record, state="Submitted", job_id=job_id, detail="", cancel_requested=False)
+
+
+def refresh_status(directory, record, transport, setup, *, managed=False):
+    queue_error = "queue=''" if managed else "exit"
+    reply = transport.command(setup + f"""
+if [[ -n "$job" ]]; then
+    queue=$(squeue -h -j "$job" -o '%T|%r') || {queue_error}
+    accounting=$(sacct -n -X -j "$job" --format=State,ExitCode -P) || exit
+else
+    queue= accounting=
+fi
 printf 'QUEUE=%s\\nACCT=%s\\n' "$queue" "$accounting"
 for log in {' '.join(LOGS)}; do
     printf '%s=' "$log"
@@ -395,14 +455,27 @@ for log in {' '.join(LOGS)}; do
     printf '\\n'
 done
 """)
+    if managed:
+        job_id = tagged(reply, "JOB_ID")
+        if not job_id:
+            save_job(directory, record, detail="Slurm has not confirmed this submission. Refresh to check again.")
+            return
+        save_job(directory, record, job_id=job_id, has_checkpoint=tagged(reply, "HAS_CHECKPOINT") == "1",
+                 cancel_requested=tagged(reply, "cancelled") == "1")
     queue = tagged(reply, "QUEUE")
     accounting = tagged(reply, "ACCT")
     status, _, code = accounting.rstrip("|").partition("|")
     status = status.split(" ", 1)[0].rstrip("+")
     for name in LOGS:
         (directory / name).write_bytes(base64.b64decode(tagged(reply, re.escape(name)), validate=True))
-    if status in SLURM_TERMINAL and not queue:
+    if managed and tagged(reply, "completed") == "1":
+        save_job(directory, record, state="Completed", detail="")
+    elif status in SLURM_TERMINAL and not queue:
         state = {"COMPLETED": "Completed" if code == "0:0" else "Failed", "CANCELLED": "Cancelled"}.get(status, "Failed")
+        if managed and record.get("cancel_requested"):
+            state = "Cancelled"
+        elif managed and state == "Completed":
+            state = "Interrupted"
         save_job(directory, record, state=state, detail=accounting.rstrip("|"))
     else:
         state = "Cancellation requested" if record.get("cancel_requested") else "Running" if queue.startswith("RUNNING|") else "Queued"

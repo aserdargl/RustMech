@@ -28,6 +28,36 @@ istediğinizi indirebilirsiniz. RustMech yeniden açıldığında TRUBA'ya tekra
 aynı işi seçerek izlemeye devam edin. Aynı girdileri diğer hedefte çalıştırmak için
 geçmişteki işi seçip **Girdileri yeniden kullan** düğmesine basın ve hedefi değiştirin.
 
+### TRUBA'da ara kayıttan devam ve 70. saatte devir
+
+LAMMPS devam betiğini iş dosyalarına ekleyip göreli yolunu **Devam girdisi**
+alanına yazın. Başlangıç ve devam betiklerinde aşağıdaki gibi tek dosyalı,
+adım numaralı ara kayıtlar oluşturun. Aralığı, kaybedilebilecek hesaplama
+süresine ve diskteki yerinize göre seçin.
+
+```lammps
+restart 10000 ${esen_checkpoint_dir}/step.*
+```
+
+Devam betiği `read_restart ${esen_checkpoint}` ile başlar. Bu komuttan sonra
+gerekli kuvvet alanı, fix kimlikleri, timestep ve çıktı ayarlarını yeniden kurun.
+Örneğin son hedef 50000 ise `run 50000 upto` kullanın. Böylece yalnızca
+kalan adımlar hesaplanır. Her Slurm parçası için ayrı yörünge ve diğer çıktı
+adlarında `${esen_segment}` kullanın. Önceki parçanın son ara kaydından
+sonraki çıktı kareleri birleştirme sırasında örtüşebilir. Devam için aynı
+LAMMPS derlemesi ve fiziksel parametreler kullanılır.
+
+72 saatlik iş yaklaşık 70. saatte yeni bir Slurm işi gönderir. Yeni iş kaynak
+alınca önce okunabilir bir ara kayıt doğrular, eski işi durdurur ve Slurm
+temizliği bittikten sonra en yeni okunabilir kayıttan devam eder. Geçerli
+ilerleme yoksa eski iş 72 saatlik sınırına kadar çalışabilir. Kuyruk bekleme
+süresini Slurm belirler. RustMech kapalıyken de devir işler.
+
+Kesilen iş için **İşi yenile**, ardından **İşi sürdür** ile aynı TRUBA
+klasöründeki ara kayıttan yeni bir iş gönderin. İlk ara kayıt oluşmadan kesilen
+hesapta sürdürülecek adım yoktur. **İşi durdur**, o koşunun çalışan ve bekleyen
+Slurm işlerini iptal eder. Ara kayıtlar TRUBA scratch alanında saklanır.
+
 ## Ortak analiz projesi
 
 Üst çubuktaki **Project / Proje** menüsünden **Save project** ile

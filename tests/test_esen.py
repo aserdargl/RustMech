@@ -50,6 +50,35 @@ class EsenTests(unittest.TestCase):
         return jobs.remote_script(self.entry, 2, "debug", self.auth.username, 512,
                                   "00:02:00", jobs.DEFAULT_MODULE, "lmp", "mpirun")
 
+    def test_restartable_submission_uses_the_seventieth_hour_of_a_72_hour_job(self):
+        args = self.entry, 56, "orfoz", self.auth.username, 512
+        options = dict(module="", executable="lmp", launcher="mpirun", resume_input="restart case.in")
+        script = jobs.remote_script(*args, walltime="72:00:00", **options)
+        self.assertIn("#SBATCH --signal=B:USR1@7200\n", script)
+        self.assertIn("resume_input='restart case.in'", script)
+        self.assertIn('#SBATCH --requeue', script)
+        self.assertNotIn("#SBATCH --signal", jobs.remote_script(*args, walltime="01:00:00", **options))
+        self.assertNotIn("#SBATCH --requeue", self.script())
+
+    def test_restartable_refresh_tracks_the_successor_and_resubmits_the_same_directory(self):
+        directory, record = self.new_job()
+        jobs.save_job(directory, record, username=self.auth.username, resume_input="restart.in", job_id="123")
+        with patch("esen_jobs.RemoteTransport") as factory:
+            transport = factory.return_value
+            transport.command.side_effect = [
+                "JOB_ID=456\ncompleted=0\ncancelled=0\nHAS_CHECKPOINT=1\n"
+                "QUEUE=\nACCT=TIMEOUT|0:0|\nstdout.log=\nstderr.log=\n",
+                "JOB_ID=789\n",
+            ]
+            jobs.refresh_remote(directory, record, self.auth)
+            self.assertEqual((record["job_id"], record["state"], record["has_checkpoint"]), ("456", "Failed", True))
+            jobs.resume_remote(directory, record, self.auth)
+            command = transport.command.call_args.args[0]
+            self.assertIn(directory.name, command)
+            self.assertIn("submit_segment resume", command)
+            self.assertEqual((record["job_id"], record["state"]), ("789", "Submitted"))
+            transport.put.assert_not_called()
+
     def test_local_results_do_not_replace_saved_inputs(self):
         directory, record = self.new_job("local")
         command = [sys.executable, "-c",
