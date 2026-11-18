@@ -918,6 +918,14 @@ class RustMechDialog(QDialog):
         brand_layout.addWidget(title)
         brand_layout.addStretch()
         brand_layout.addWidget(self.brand_subtitle_lbl)
+        self.esen_workspace = None
+        self.esen_button = QPushButton("ESEN")
+        self.esen_button.setFixedHeight(CONTROL_HEIGHT)
+        self.esen_button.setAutoDefault(False)
+        self.esen_button.setDefault(False)
+        self.esen_button.setToolTip("Open the LAMMPS workspace")
+        self.esen_button.clicked.connect(self.show_esen_workspace)
+        brand_layout.addWidget(self.esen_button)
         self.truba_dialog = TrubaConnectionDialog(self)
         self.truba_button = QPushButton("TRUBA")
         self.truba_button.setObjectName("trubaConnectBtn")
@@ -2097,6 +2105,14 @@ class RustMechDialog(QDialog):
             self.brand_header.style().unpolish(self.brand_header)
             self.brand_header.style().polish(self.brand_header)
             self.brand_header.update()
+
+    def show_esen_workspace(self):
+        from esen_workspace import EsenWorkspace
+        from window_state import show_restored_window
+
+        if self.esen_workspace is None:
+            self.esen_workspace = EsenWorkspace(self.truba_dialog, self)
+        show_restored_window(self.esen_workspace)
 
     def _update_truba_button(self, connected: bool) -> None:
         self.truba_button.setText("Connected" if connected else "TRUBA")
@@ -3496,6 +3512,8 @@ class RustMechDialog(QDialog):
         if hasattr(self,"remote_controller"):
             self.remote_controller.shutdown()
         self.disposed = True
+        if self.esen_workspace is not None:
+            self.esen_workspace.dispose()
         self.truba_dialog.shutdown()
         self.debounce.stop()
         self.poll.stop()

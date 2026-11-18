@@ -2,6 +2,56 @@
 from setup_help import GEOMETRY_HELP
 
 _TEXT = '''
+Open the LAMMPS workspace|LAMMPS çalışma alanını aç
+Job settings|İş ayarları
+This computer|Bu bilgisayar
+Run on|Çalıştırma hedefi
+MPI processes|MPI süreçleri
+LAMMPS executable|LAMMPS programı
+MPI launcher|MPI başlatıcısı
+Memory (MiB)|Bellek (MiB)
+Wall time (HH:MM:SS)|Süre (SS:DD:SS)
+LAMMPS module|LAMMPS modülü
+Linux executable|Linux programı
+Input script…|Girdi betiği…
+Job folder…|İş klasörü…
+Add files…|Dosya ekle…
+LAMMPS input files|LAMMPS girdi dosyaları
+Include entire job folder|İş klasörünün tamamını ekle
+Remove file|Dosyayı çıkar
+Run LAMMPS|LAMMPS'i çalıştır
+Job history|İş geçmişi
+ESEN job history|ESEN iş geçmişi
+Reuse inputs|Girdileri yeniden kullan
+Refresh job|İşi yenile
+Stop job|İşi durdur
+Command preview|Komut önizlemesi
+Logs and files|Günlükler ve dosyalar
+Standard output|Standart çıktı
+Standard error|Standart hata
+Job log tail|İş günlüğünün son satırları
+Result files|Sonuç dosyaları
+Open file|Dosyayı aç
+Open job folder|İş klasörünü aç
+Download file|Dosyayı indir
+LAMMPS input script|LAMMPS girdi betiği
+Job folder|İş klasörü
+Add input files|Girdi dosyası ekle
+Choose files inside the job folder.|İş klasörünün içinden dosya seçin.
+Choose a LAMMPS input script.|Bir LAMMPS girdi betiği seçin.
+The selected input script is missing.|Seçilen girdi betiği bulunamadı.
+Connect using the main TRUBA button.|Ana penceredeki TRUBA düğmesinden bağlanın.
+Windows paths found in the script. Use relative paths with / on TRUBA.|Betikte Windows dosya yolu bulundu. TRUBA için / ile göreli yollar kullanın.
+Select an ESEN job.|Bir ESEN işi seçin.
+Some files are omitted from this list.|Bazı dosyalar bu listede gösterilmiyor.
+Submitting|Gönderiliyor
+Submitted|Gönderildi
+Queued|Kuyrukta
+Interrupted|Kesintiye uğradı
+Cancellation requested|İptal istendi
+Waiting for Slurm accounting…|Slurm iş kaydı bekleniyor…
+Slurm has not confirmed this submission. Refresh to check again.|Slurm gönderimi henüz doğrulamadı. Yeniden kontrol etmek için işi yenileyin.
+Connect using the TRUBA account that submitted this job.|Bu işi gönderen TRUBA hesabıyla bağlanın.
 Fluid mesh|Akış ağı
 Cartesian|Kartezyen
 Fitted · OpenFOAM|Yüzeye oturan · OpenFOAM

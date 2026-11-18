@@ -84,6 +84,7 @@ class DialogKeyboardTests(unittest.TestCase):
                             self.app.processEvents()
                             self.assertAlmostEqual(spin.value(), 0.65)
                             self.assertFalse(dialog.truba_dialog.isVisible())
+                            self.assertIsNone(dialog.esen_workspace)
                             self.assertTrue(dialog.isVisible())
                             self.assertTrue(all(spy.count() == 0 for spy in clicks))
                         QTest.mouseClick(dialog.truba_button, Qt.MouseButton.LeftButton)
@@ -98,6 +99,14 @@ class DialogKeyboardTests(unittest.TestCase):
                         self.assertFalse(dialog.truba_button.property("trubaConnected"))
                         dialog.truba_dialog.hide()
                         clicks = [QSignalSpy(button.clicked) for button in buttons]
+                    with patch("esen_jobs.jobs_directory", return_value=Path(directory) / "esen-jobs"), \
+                            patch("esen_workspace.QSettings", return_value=store.settings):
+                        QTest.mouseClick(dialog.esen_button, Qt.MouseButton.LeftButton)
+                        self.app.processEvents()
+                        self.assertTrue(dialog.esen_workspace.isVisible())
+                        self.assertFalse(dialog.truba_dialog.isVisible())
+                        self.assertIsNone(dialog.truba_dialog.process)
+                        dialog.esen_workspace.close()
                     for width in (1000, 1440):
                         dialog.resize(width, 800)
                         self.app.processEvents()

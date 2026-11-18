@@ -1,5 +1,27 @@
 # RustMech
 
+## ESEN ile LAMMPS çalıştırma
+
+Üst çubuktan **ESEN**'i açıp LAMMPS girdi betiğini seçin. Betiğin kullandığı veri,
+potansiyel ve `include` dosyalarını **Dosya ekle** ile ekleyin. Göreli dosya yolları
+analizin iş klasörüne göre çözülür. **İş klasörünün tamamını ekle** seçeneği alt
+klasörleri de kopyalar. Her çalıştırmada ESEN girdilerin bir kopyasını saklar.
+
+- **Bu bilgisayar** hedefi için `lmp` ve birden çok MPI süreci kullanıyorsanız
+  LAMMPS derlemesiyle uyumlu `mpiexec` gerekir. ESEN, Windows'ta MS-MPI'yi arar.
+  Farklı bir kurulum kullanıyorsanız program ve başlatıcı alanlarına tam yollarını yazın.
+- **TRUBA** hedefi için RustMech'in **TRUBA** düğmesiyle bağlanın. Kuyruğu, hesabı,
+  bellek ve süreyi, MPI süreç sayısını ve LAMMPS modülünü kontrol edin. ESEN ilk
+  sürümde tek düğümlü CPU işi gönderir. Kişisel bir Linux kurulumu için modül
+  alanını boş bırakıp çalıştırılabilir dosyanın yolunu girebilirsiniz. Betikte
+  Linux'ta da çözülebilen göreli yollar kullanın.
+
+**LAMMPS'i çalıştır** düğmesinden önce komutu veya Slurm betiğini önizleyebilirsiniz.
+**İş geçmişi** üzerinden günlükleri ve dosyaları açabilir, TRUBA çıktılarından
+istediğinizi indirebilirsiniz. RustMech yeniden açıldığında TRUBA'ya tekrar bağlanıp
+aynı işi seçerek izlemeye devam edin. Aynı girdileri diğer hedefte çalıştırmak için
+geçmişteki işi seçip **Girdileri yeniden kullan** düğmesine basın ve hedefi değiştirin.
+
 ## Ortak analiz projesi
 
 Üst çubuktaki **Project / Proje** menüsünden **Save project** ile
