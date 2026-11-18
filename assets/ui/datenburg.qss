@@ -218,8 +218,11 @@ QScrollBar::handle:hover { background: #45474B; }
 
 QScrollBar::add-line, QScrollBar::sub-line { width: 0; height: 0; }
 QScrollBar::add-page, QScrollBar::sub-page { background: transparent; }
-QSplitter::handle { background: #DDDDDD; }
-QSplitter::handle:hover { background: #A0A0A0; }
+/* Paint a hairline while retaining the full drag area and saved handle widths. */
+QSplitter::handle { background: transparent; }
+QSplitter::handle:horizontal { border-left: 1px solid #D5DBE2; }
+QSplitter::handle:vertical { border-top: 1px solid #D5DBE2; }
+QSplitter::handle:hover { border-color: #3978BE; }
 #kpiCard { background: #F8FAFC; border: 1px solid #CBD5E1; border-radius: 2px; }
 #kpiTitle { color: #666666; font-size: 11px; }
 #kpiValue { color: #242424; font-size: 13px; font-weight: 400; }
@@ -264,10 +267,6 @@ QWidget#SampleNamingDialog QTabBar::tab {
 QWidget#SampleNamingDialog QTabBar::tab:selected {
     background: #FFFFFF; border-bottom-color: #1E4D8D;
 }
-QWidget#SampleNamingDialog QSplitter::handle:vertical {
-    background: #DDDDDD;
-}
-QWidget#SampleNamingDialog QSplitter::handle:vertical:hover { background: #1E4D8D; }
 QWidget#SampleNamingDialog QLabel#NamingSection { color: #1E4D8D; font-weight: 400; }
 QWidget#SampleNamingDialog QTableWidget {
     background: #FFFFFF; color: #0F172A;

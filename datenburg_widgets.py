@@ -194,18 +194,12 @@ def graphcalc_combo_stylesheet() -> str:
     )
 
 class DatenburgComboBox(QComboBox):
-    _LIGHT_POPUP_STYLE = COMPACT_COMBO_POPUP_STYLE
-
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._apply_light_popup_style()
 
     def _apply_light_popup_style(self):
         apply_compact_combo_popup_style(self)
-        # Qt 6.10 (Datenburg) paints the popup frame in the surface colour.
-        # Qt 6.11 otherwise introduces a dark outline absent from the source.
-        self.view().setStyleSheet(COMPACT_COMBO_POPUP_STYLE +
-                                  "\nQAbstractItemView { border-color: #F8FAFC; }")
 
     def wheelEvent(self, event: QWheelEvent):
         event.ignore()

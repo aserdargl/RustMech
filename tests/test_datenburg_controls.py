@@ -5,6 +5,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtTest import QSignalSpy, QTest
 from PySide6.QtWidgets import QApplication, QAbstractSpinBox, QToolButton, QWidget
 
+from datenburg_widgets import POPUP_BORDER
 from studio_style import CompactComboBox, CompactDoubleSpinBox, CompactSpinBox, STUDIO_STYLESHEET
 from kratos_settings import ToleranceSpinBox
 
@@ -74,6 +75,12 @@ class DatenburgControlTests(unittest.TestCase):
             self.assertEqual(control.height(), 25)
             self.assertEqual(control.view().gridSize().height(), 17)
             self.assertGreaterEqual(control.view().width(), control.view().sizeHintForColumn(0))
+            popup = control.view().grab().toImage()
+            width, height = popup.width(), popup.height()
+            edges = ((0, height // 2), (width - 1, height // 2),
+                     (width // 2, 0), (width // 2, height - 1))
+            for x, y in edges:
+                self.assertEqual(popup.pixelColor(x, y).name(), POPUP_BORDER)
             QTest.keyClick(control.view(), Qt.Key.Key_Down)
             QTest.keyClick(control.view(), Qt.Key.Key_Return)
             self.assertEqual(control.currentIndex(), 1)

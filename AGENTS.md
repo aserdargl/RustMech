@@ -1,5 +1,6 @@
 # User interface preferences
 
+- Follow the visual preferences recorded in [UI_TASARIM_TERCIHLERI.md](UI_TASARIM_TERCIHLERI.md).
 - Keep dropdowns and buttons compact and sized to their content. Never stretch
   them to fill a row; put extra space in the layout instead. Preview case
   dropdowns should stay within 100–200 px and use the shared control height.
