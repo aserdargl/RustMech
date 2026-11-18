@@ -400,9 +400,10 @@ komutun parçası değildir. Gerçek MAPDL, WSL/OpenFOAM ve Linux işçi doğrul
 ayrı entegrasyon kontrolleridir. Qt testleri, yerel DLL'ler ve bazı testler için
 Git Bash gerekir; eksik isteğe bağlı bileşenlerin skip gerekçelerini sonuçta okuyun.
 
-FFT Homogenization, Material Point Method ve Peridynamics menü sayfaları yalnız
-plan açıklamalarıdır. Kırpılmış voxel mesh planı **ertelendi; şimdilik
-uygulanmayacak**. Bunlar mevcut çözüm yöntemleri olarak değerlendirilmemelidir.
+Mekanik ayarlar menüsü seçilen yöntemi gösterir. **Finite Element** mevcut
+çözüm yoludur. Kırpılmış voxel mesh, FFT Homogenization, Material Point Method
+ve Peridynamics sayfaları plan durumundadır. İlk çalışır örnekler ve doğrulama
+ölçütleri [mekanik yöntemlerin uygulama planında](MEKANIK_YONTEM_PLANI.md) yer alır.
 
 ## İsteğe bağlı TRUBA hesaplama modu
 
@@ -783,13 +784,13 @@ paketlerin yüklenebildiğini derlemeden önce kontrol eder.
 
 ## Plan: geometri sınırına göre kırpılmış voxel mesh
 
-Durum: ertelendi; şimdilik uygulanmayacak. Hedef, voxel yüzeyindeki basamaklı
+Hedef, voxel yüzeyindeki basamaklı
 çıkıntıları gerçek referans geometri sınırına göre kesmek. Tek bağlantılı
 elemanların silinmesi bu hedefi karşılamaz. Önce küçük bir örnekte kesilmiş
 hücrelerin eleman tipleri, çok küçük hücreler, hacim farkı ve ANSYS aktarımı
 değerlendirilecek. Saf HEX20 korunacaksa sınır düğümlerini yüzeye oturtma yolu
-ayrıca eleman bozulması açısından incelenecek. Uygulamaya geçiş sonraki iş.
-Bu fikir `More methods` menüsünde de yalnız plan olarak listelenir.
+ayrıca eleman bozulması açısından incelenecek. Deneme ve çözücüye alma koşulları
+[mekanik yöntemlerin uygulama planında](MEKANIK_YONTEM_PLANI.md) yer alır.
 
 ## Yön küpü
 
@@ -805,8 +806,8 @@ Ana ekran açık renkli Precision Light tasarımına geçirildi. Solda Geometry,
 Material ve Analysis sekmeleri, ortada geniş 3B önizleme, altta tek satır ağ
 bilgileri bulunur. Geometry / FE mesh / Overlay düğmeleri mevcut gerçek
 geometriyi görüntüler. Kamera yönleri, perspektif ve ayrıntılı mesh bilgileri
-View menüsündedir. Mesh Convergence ve DoE işlevleri korunur; planlanan yöntemler
-More methods menüsündedir.
+View menüsündedir. Mesh Convergence ve DoE işlevleri korunur. Planlanan
+yöntemlere, üzerinde seçili yöntem adı yazan menüden erişilir.
 
 Arayüz yoğunluğu kompakt tutulur: kontroller 25 px, form satır araları 2 px,
 sekmelerle içerik arası 2 px. Stepper'lar Datenburg'un ortalanmış değer alanını

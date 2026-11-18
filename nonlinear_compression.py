@@ -1463,8 +1463,6 @@ class RustMechDialog(QDialog):
 
         self.sidebar_toggle = QToolButton()
         self.sidebar_toggle.setObjectName("headerMenu")
-        self.sidebar_toggle.setText("Settings")
-        self.sidebar_toggle.setAccessibleName("Select settings method")
         self.sidebar_toggle.setToolTip("Select a method to open its settings")
         self.sidebar_toggle.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         self.methods_menu = QMenu(self.sidebar_toggle)
@@ -1479,6 +1477,7 @@ class RustMechDialog(QDialog):
             action.triggered.connect(lambda checked=False, page=index: self._select_settings_method(page))
         self.sidebar_toggle.setMenu(self.methods_menu)
         self.setup_tabs.currentChanged.connect(self._sync_settings_method)
+        self._sync_settings_method(self.setup_tabs.currentIndex())
         navigation.addWidget(self.sidebar_toggle)
 
         # Keep the indexed navigation model for existing integrations; expose
@@ -2142,7 +2141,7 @@ class RustMechDialog(QDialog):
         return layout
 
     def _add_planned_method_pages(self) -> None:
-        self.method_names = ["Nonlinear Compression"]
+        self.method_names = ["Finite Element"]
         methods = (
             ("Voxel", "Geometry-trimmed voxel mesh", "Clip boundary voxels against the reference geometry. Cut-cell element types, small cells and ANSYS compatibility require validation."),
             ("FFT", "FFT Homogenization", "Effective stiffness from periodic unit-cell tests."),
@@ -2172,7 +2171,8 @@ class RustMechDialog(QDialog):
             self.main_splitter.toggle_sidebar()
 
     def _sync_settings_method(self, index: int) -> None:
-        self.sidebar_toggle.setText(self.method_names[index])
+        from ui_language import translate
+        self.sidebar_toggle.setText(translate(self.method_names[index]))
         for action in self.method_actions.actions():
             action.setChecked(action.data() == index)
 

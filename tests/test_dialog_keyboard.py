@@ -33,6 +33,7 @@ class DialogKeyboardTests(unittest.TestCase):
                     dialog = RustMechDialog(Settings())
                     dialog.show()
                     self.app.processEvents()
+                    self.assertEqual(dialog.sidebar_toggle.text(), "Finite Element")
                     groups = dialog.findChildren(SidebarGroupBox)
                     self.assertGreater(len(groups), 5)
                     dialog.main_splitter.setSizes([320, 1000])
@@ -134,7 +135,7 @@ class DialogKeyboardTests(unittest.TestCase):
                         self.assertEqual(dialog.main_splitter.sizes(), expected)
                         dialog.setup_tabs.setCurrentIndex(2)
                         dialog._show_geometry_workspace()
-                        self.assertEqual(dialog.sidebar_toggle.text(), "Nonlinear Compression")
+                        self.assertEqual(dialog.sidebar_toggle.text(), "Finite Element")
             finally:
                 if dialog is not None:
                     dialog.close()

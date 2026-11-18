@@ -332,6 +332,7 @@ Porous centre / solid ends|Gözenekli orta / dolu uçlar
 Porous centre length|Gözenekli orta uzunluğu
 Özel deney / Custom experiment|Özel deney
 Nonlinear Compression|Doğrusal olmayan basma
+Finite Element|Sonlu Eleman
 Mechanic|Mekanik
 Experiments (DoE)|Deneyler (DoE)
 Flow CFD|Akış CFD
