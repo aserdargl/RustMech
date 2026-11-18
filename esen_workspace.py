@@ -23,6 +23,8 @@ from studio_style import (
 from ui_language import translate
 
 
+WORKSPACE_TITLE = "ESEN STUDIES"
+
 ESEN_STYLE = """
 QDialog#esenWorkspace { background: #F5F5F3; }
 #esenTitle { background: #BFDBFE; border: 1px solid #2563EB; border-radius: 6px;
@@ -97,7 +99,7 @@ class EsenWorkspace(QDialog):
     def __init__(self, truba, parent=None, *, history=None):
         super().__init__(parent)
         self.setObjectName("esenWorkspace")
-        self.setWindowTitle("ESEN · LAMMPS")
+        self.setWindowTitle(WORKSPACE_TITLE)
         self.setWindowFlag(Qt.WindowType.WindowMinMaxButtonsHint)
         self.setStyleSheet(STUDIO_STYLESHEET + ESEN_STYLE)
         self.resize(1020, 750)
@@ -135,10 +137,13 @@ class EsenWorkspace(QDialog):
         outer = QVBoxLayout(self)
         outer.setContentsMargins(8, 8, 8, 8)
         outer.setSpacing(7)
-        title = QLabel("ESEN · LAMMPS")
+        title = QLabel(WORKSPACE_TITLE)
         title.setObjectName("esenTitle")
         title.setFixedHeight(30)
         outer.addWidget(title)
+        credit = QLabel("thanks to Prof. Dr. Ismail ESEN")
+        credit.setObjectName("mutedHintLabel")
+        outer.addWidget(credit)
         split = QSplitter(Qt.Orientation.Horizontal)
         split.setObjectName("esenColumns")
         split.setChildrenCollapsible(False)
