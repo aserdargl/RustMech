@@ -370,8 +370,9 @@ def download_file(directory, record, name, auth):
     relative = relative_file(name)
     transport, remote = remote_location(directory, record, auth)
     source = remote + "/" + name
-    quoted = shlex.quote(source)
-    transport.command(f'test -f {quoted} && test "$(realpath -- {quoted})" = {quoted}')
+    transport.command(f'''base=$(realpath -- {shlex.quote(remote)}) || exit
+file="$base"/{shlex.quote(name)}
+test -f "$file" && test "$(realpath -- "$file")" = "$file"''')
     destination = directory / "downloads" / relative
     if not destination.resolve().is_relative_to(directory.resolve()):
         raise ValueError("Invalid local result path.")
