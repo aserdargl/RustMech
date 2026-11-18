@@ -3,7 +3,7 @@
 Only settings and versioned source are uploaded. Meshes and numerical work are
 created by SLURM workers; downloaded VTK/CSV data is rendered locally.
 """
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 import base64
 import gzip
 import hashlib
@@ -16,7 +16,7 @@ import tarfile
 import time
 import uuid
 
-from truba_jobs import (HOST, SAFE_NAME, SSHJobs, WinSCPJobs, connection,
+from truba_jobs import (HOST, SAFE_NAME, SLURM_TERMINAL_STATES, SSHJobs, WinSCPJobs, connection, job_record_lock,
                         validated_remote_path, write_record, cancel_remote)
 from truba_credentials import state_directory
 
@@ -176,8 +176,11 @@ def slurm_script(context,username,request):
     needs_foam = request['operation'] in ('probe', 'prepare', 'flow_export', 'flow_solve', 'thermal_export', 'thermal_solve')
     foam_load = "module load "+shlex.quote(context.foam_module)+" >/dev/null 2>&1 || true" if context.foam_module and needs_foam else ":"
     step_cores, _ = request_resources(context, request['operation'])
+    job_name = "RustMech-remote"
+    if request.get("background"):
+        job_name = analysis_code(request)
     return f'''#!/bin/bash -l
-#SBATCH --job-name=RustMech-remote
+#SBATCH --job-name={job_name}
 #SBATCH --partition={partition}
 #SBATCH --account={account}
 #SBATCH --nodes=1
@@ -224,6 +227,11 @@ def request_resources(context, operation):
     return max(1, context.cores // slots), max(1, context.memory_mb // slots)
 
 
+def analysis_code(record):
+    request_id = str(record.get("request_id", ""))
+    return "RM-" + request_id[:12].upper() if re.fullmatch(r"[a-f0-9]{32}", request_id) else ""
+
+
 def _rebase_paths(directory,result):
     """Relocate the known reporting paths; never reuse a remote absolute path locally."""
     remote_output = result.get("remote_output","")
@@ -239,7 +247,8 @@ def _rebase_paths(directory,result):
     return result
 
 
-def run_remote_job(request,context,auth=None,marker=None,*,directory=None,resume_record=None,on_progress=None,cancelled=None):
+def run_remote_job(request,context,auth=None,marker=None,*,directory=None,resume_record=None,on_progress=None,cancelled=None,
+                   submit_only=False, poll_once=False):
     from remote_operations import required_capability
     if not resume_record:
         required_capability(request)
@@ -265,17 +274,24 @@ def run_remote_job(request,context,auth=None,marker=None,*,directory=None,resume
         step_cores, step_memory = request_resources(context, request['operation'])
         execution_context = dict(asdict(context), cores=step_cores, memory_mb=step_memory)
         request = {**request,"schema_version":1,"request_id":uuid.uuid4().hex,"source_sha256":source_hash,"native_sha256":native_hash,"remote_context":execution_context}
+        if submit_only:
+            request["background"] = True
         write_record(directory/"request.json",request)
         record = dict(schema_version=1,kind="rustmech_remote",host=HOST,username=transport.username,
                       transport="winscp" if isinstance(transport.delegate,WinSCPJobs) else "ssh",
                       remote_directory=f"/arf/scratch/{transport.username}/RustMech/{uuid.uuid4().hex}",
                       local_directory=str(directory.resolve()),state="preparing",context=asdict(context),
                       operation=request["operation"],request_id=request["request_id"],source_sha256=source_hash)
+        if submit_only:
+            record["background"] = True
+            settings = request.get("settings", {})
+            record["geometry_name"] = settings.get("imported_geometry_name") or settings.get("structure_name", "")
         if isinstance(transport.delegate,WinSCPJobs): record["winscp_site"] = transport.delegate.site
     remote = validated_remote_path(record["remote_directory"],transport.username)
     registry = state_directory()/"jobs"/(PurePosixPath(remote).name+".json")
     paths = [directory/"remote_job.json",registry]+([Path(marker)] if marker else [])
-    _write_paths(paths,record)
+    if not poll_once:
+        _write_paths(paths,record)
     if context.session_id and not record.get("session"):
         from truba_session import saved_session, validate_session, refresh_session
         session = saved_session()
@@ -296,22 +312,23 @@ def run_remote_job(request,context,auth=None,marker=None,*,directory=None,resume
                 or (cancelled is not None and cancelled.is_set())
                 or (marker is not None and Path(marker).with_suffix(".cancel").exists()))
     def update(stage):
-        # The job-list worker may have cancelled this request on another channel.
-        # Do not revive its durable record with an older monitor response.
-        saved = json.loads(paths[0].read_text()) if paths[0].exists() else {}
-        if saved.get('state') == 'cancelled':
-            from concurrent.futures import CancelledError
-            raise CancelledError
-        record["state"] = stage
-        _write_paths(paths,record)
+        with job_record_lock:
+            saved = json.loads(paths[0].read_text()) if paths[0].exists() else {}
+            if saved.get('state') == 'cancelled':
+                from concurrent.futures import CancelledError
+                raise CancelledError
+            record["state"] = stage
+            _write_paths(paths,record)
         if on_progress: on_progress("TRUBA · "+stage)
     try:
-        if not resume_record or not record.get("job_id"):
+        if not poll_once and (not resume_record or not record.get("job_id")):
             if resume_record: request = json.loads((directory/"request.json").read_text())
             (directory/"run.slurm").write_text(slurm_script(context,transport.username,request),encoding="utf-8",newline="\n")
             transport.command("mkdir -p -- "+shlex.quote(remote))
             for name in ("engine.tar.gz","request.json","run.slurm"): transport.put(directory/name,remote+"/"+name)
         if is_cancelled():
+            if poll_once:
+                return None
             cancel_remote(paths[0],auth)
             from concurrent.futures import CancelledError
             raise CancelledError
@@ -343,15 +360,34 @@ printf 'RUSTMECH_JOB_ID=%s\n' "$(cat job.id)"
                       " mv -- "+shlex.quote(inbox+".tmp")+" "+shlex.quote(inbox)+"\n"+
                       " printf '%s\\n' "+job_id+" > job.id\nfi\n"+
                       "printf 'RUSTMECH_JOB_ID=%s\\n' \"$(cat job.id)\"\n")
-        reply = transport.command(script)
-        match = re.search(r"^RUSTMECH_JOB_ID=(\d+)\s*$",reply,re.MULTILINE)
-        if not match: raise RuntimeError("Submission was not confirmed. Resume this job record; do not submit a duplicate.")
-        if record.get("job_id") and record["job_id"]!=match.group(1): raise RuntimeError("The resumed SLURM job ID changed; refusing to attach another job.")
-        record["job_id"] = match.group(1)
-        update("submitted")
+        if submit_only:
+            record["submission_attempted"] = True
+            update("submitting")
+            script = "trap '' HUP\n" + script
+        if not poll_once or not record.get("job_id"):
+            if poll_once:
+                # The upload finished but the client may have lost the sbatch reply.
+                # Reconnect only to an existing remote ID.
+                script = "cd " + shlex.quote(remote) + """ && {
+if [ -s job.id ]; then printf 'RUSTMECH_JOB_ID=%s\n' "$(cat job.id)"; fi
+}"""
+            reply = transport.command(script)
+            match = re.search(r"^RUSTMECH_JOB_ID=([0-9]+)\s*$",reply,re.MULTILINE)
+            if poll_once and not match:
+                return None
+            if not match: raise RuntimeError("Submission was not confirmed. Resume this job record; do not submit a duplicate.")
+            if record.get("job_id") and record["job_id"]!=match.group(1): raise RuntimeError("The resumed SLURM job ID changed; refusing to attach another job.")
+            record["job_id"] = match.group(1)
+            update("submitted")
+        if not re.fullmatch(r"[0-9]+", str(record.get("job_id", ""))):
+            raise ValueError("Invalid SLURM job ID.")
+        if submit_only:
+            return record
         next_renewal_check = 0.0
         while True:
             if is_cancelled():
+                if poll_once:
+                    return None
                 cancel_remote(paths[0],auth)
                 from concurrent.futures import CancelledError
                 raise CancelledError
@@ -374,11 +410,14 @@ printf 'RUSTMECH_JOB_ID=%s\n' "$(cat job.id)"
                     record["step_status"] = step[1].strip()
                     break
             else:
-                reply = transport.command(f"printf 'RUSTMECH_QUEUE='; squeue -h -j {record['job_id']} -o '%T|%r'")
+                from truba_session import QUEUE_FUNCTION
+                reply = transport.command(QUEUE_FUNCTION +
+                    f"printf 'RUSTMECH_QUEUE='; rustmech_queue {record['job_id']} '%T|%r'")
             state = re.search(r"^RUSTMECH_QUEUE=(.*)$",reply,re.MULTILINE)
             if state is None: raise RuntimeError("Could not read the SLURM queue state; resume the job record.")
             value = state.group(1).strip()
-            if not value:
+            queue_state = value.partition("|")[0].rstrip("+")
+            if not value or (poll_once and queue_state in SLURM_TERMINAL_STATES):
                 if record.get("session"):
                     raise RuntimeError("Resource session ended before this analysis completed. Results and job record remain available.")
                 break
@@ -388,16 +427,29 @@ printf 'RUSTMECH_JOB_ID=%s\n' "$(cat job.id)"
                 if step and step[1] == 'RUNNING' and progress and progress[1].strip():
                     value += ' · ' + progress[1].strip()
             if value!=record["state"]: update(value)
+            if poll_once:
+                return None
             if cancelled is not None: cancelled.wait(2)
             else: time.sleep(2)
         accounting = ""
-        for _ in range(0 if record.get("session") else 15):
+        for _ in range(0 if record.get("session") else 1 if poll_once else 15):
             reply = transport.command(f"printf 'RUSTMECH_ACCOUNTING='; sacct -n -X -j {record['job_id']} --format=State,ExitCode -P | head -n 1")
             match = re.search(r"^RUSTMECH_ACCOUNTING=(.*)$",reply,re.MULTILINE)
             accounting = match.group(1).strip().rstrip("|") if match else ""
             if accounting and not accounting.startswith(("PENDING","RUNNING","COMPLETING")): break
-            time.sleep(1)
+            if not poll_once: time.sleep(1)
         if record.get("session"): accounting = record["step_status"]
+        if poll_once:
+            terminal_state = accounting.partition("|")[0].split()
+            if not terminal_state or terminal_state[0].rstrip("+") not in SLURM_TERMINAL_STATES:
+                return None
+            if accounting != "COMPLETED|0:0":
+                for name in ("slurm.out", "slurm.err"):
+                    try: transport.get(remote+"/"+name, directory/name)
+                    except (OSError, RuntimeError): pass
+                record["slurm_status"] = accounting
+                update(accounting)
+                return None
         record["slurm_status"] = accounting
         update("downloading")
         for name in ("slurm.out","slurm.err"):
@@ -471,9 +523,14 @@ run_remote_operation.remote_job_target = True
 
 
 def run_remote_mechanics(settings,context,mesh_source="",remote_auth=None,job_marker=None):
-    result,directory = run_remote_job(dict(operation="mechanical",settings=asdict(settings),mesh_source=mesh_source),context,remote_auth,job_marker)
-    return result["run_folder"]
+    request = dict(operation="mechanical", settings=asdict(settings), mesh_source=mesh_source)
+    return run_remote_job(request, replace(context, session_id=""), remote_auth, job_marker, submit_only=True)
 run_remote_mechanics.remote_job_target = True
+run_remote_mechanics.remote_submit_target = True
+
+
+def sync_background_analysis(record, auth):
+    return run_remote_job({}, RemoteContext(**record["context"]), auth, resume_record=record, poll_once=True)
 
 
 def run_remote_level(settings,context,max_elements,selected,remote_auth=None,job_marker=None):

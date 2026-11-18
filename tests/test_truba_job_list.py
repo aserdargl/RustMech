@@ -68,6 +68,36 @@ class JobListTests(unittest.TestCase):
         _, record = self.record('1', operation='doe_solve')
         self.assertEqual(job_description(record), 'DOE analysis · Gyroid · DOE row 12')
 
+    def test_background_jobs_show_distinct_codes_and_track_connected_owner(self):
+        first, running = self.record('1', state='RUNNING|None', request_id='a' * 32,
+                                     background=True, submission_attempted=True)
+        second, queued = self.record('2', request_id='b' * 32, background=True, submission_attempted=True)
+        self.record('3', username='other', request_id='c' * 32, background=True, submission_attempted=True)
+        panel = self.dialog.job_list
+        panel.refresh()
+        table = panel.table
+        self.assertIn('RM-AAAAAAAAAAAA', table.item(0, 0).text())
+        self.assertIn('RM-BBBBBBBBBBBB', table.item(1, 0).text())
+        self.assertEqual(table.item(0, 1).text(), 'Analysis started and running')
+        self.assertEqual(table.item(1, 1).text(), 'Analysis queued')
+
+        def sync(record, auth):
+            if record == queued:
+                write_record(second, dict(record, state='downloaded'))
+                return dict(run_folder='results'), self.directory
+
+        updates = []
+        panel.background_updated.connect(lambda *args: updates.append(args))
+        with patch.object(self.dialog, 'analysis_auth', return_value=RemoteAuth('tester', 'test')), patch(
+                'truba_job_list.sync_background_analysis', side_effect=sync) as run:
+            self.dialog.connection_changed.emit(True)
+            panel.sync_worker.wait()
+            self.app.processEvents()
+            self.assertEqual([call.args[0] for call in run.call_args_list], [running, queued])
+        self.assertEqual(len(updates), 1)
+        self.assertEqual(table.item(1, 1).text(), 'Analysis complete · results downloaded')
+        self.assertIsNone(table.cellWidget(1, 2))
+
     def test_cancel_uses_selected_record_and_keeps_failed_job_retryable(self):
         path, record = self.record('1')
         auth = RemoteAuth('tester', 'test-password')

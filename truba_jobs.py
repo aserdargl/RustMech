@@ -8,6 +8,7 @@ import shlex
 import shutil
 import subprocess
 import tempfile
+from threading import RLock
 import time
 from urllib.parse import unquote
 import uuid
@@ -17,6 +18,11 @@ from truba_credentials import CredentialStore, state_directory
 
 HOST = "172.16.6.15"
 SAFE_NAME = re.compile(r"^[A-Za-z0-9_.-]+$")
+SLURM_TERMINAL_STATES = {
+    "COMPLETED", "CANCELLED", "FAILED", "TIMEOUT", "NODE_FAIL", "OUT_OF_MEMORY",
+    "PREEMPTED", "BOOT_FAIL", "DEADLINE", "REVOKED",
+}
+job_record_lock = RLock()
 
 
 @dataclass
@@ -376,7 +382,11 @@ def cancel_remote(record_path,auth=None):
         cancel_session_request(record,auth)
     else:
         transport.cancel(record)
-    record["state"]="cancelled"
-    write_record(path,record)
-    write_record(Path(record["local_directory"])/"remote_job.json",record)
-    write_record(state_directory()/"jobs"/(PurePosixPath(record["remote_directory"]).name+".json"),record)
+    with job_record_lock:
+        local_record = Path(record["local_directory"])/"remote_job.json"
+        if local_record.is_file() and json.loads(local_record.read_text()).get("state") == "downloaded":
+            return
+        record["state"]="cancelled"
+        write_record(path,record)
+        write_record(local_record,record)
+        write_record(state_directory()/"jobs"/(PurePosixPath(record["remote_directory"]).name+".json"),record)

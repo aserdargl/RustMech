@@ -813,6 +813,7 @@ class RustMechDialog(QDialog):
             app_inst.setPalette(pal)
         super().__init__()
         self.analysis_job = None
+        self._latest_background_analysis = None
         self.analysis_poll = QTimer(self)
         self.analysis_poll.setInterval(100)
         self.analysis_poll.timeout.connect(self._poll_analysis)
@@ -928,6 +929,7 @@ class RustMechDialog(QDialog):
         self.esen_button.clicked.connect(self.show_esen_workspace)
         brand_layout.addWidget(self.esen_button)
         self.truba_dialog = TrubaConnectionDialog(self)
+        self.truba_dialog.job_list.background_updated.connect(self._background_analysis_updated)
         self.truba_button = QPushButton("TRUBA")
         self.truba_button.setObjectName("trubaConnectBtn")
         self.truba_button.setProperty("trubaConnected", False)
@@ -2827,7 +2829,7 @@ class RustMechDialog(QDialog):
             bool(current and not pending and not errors and not mesh_errors)
         )
         if self.analysis_job is not None:
-            self.status.setText("Analysis running...")
+            self._show_analysis_progress(self.analysis_job)
             self._update_status_visuals("busy", "● ANALYSING", False)
             return
         if errors or mesh_errors:
@@ -3315,7 +3317,7 @@ class RustMechDialog(QDialog):
         self.refresh_validity()
         if not self.apply_button.isEnabled():
             return
-        if self.preview.mesh is None:
+        if self.preview.mesh is None and not self.remote_controller.requested:
             self._analysis_after_mesh = settings
             self._mesh_requested = True
             self.failed_key = None
@@ -3332,8 +3334,8 @@ class RustMechDialog(QDialog):
                 from truba_remote import run_remote_mechanics
                 context,auth = self.remote_controller.require(settings.solver_backend,settings)
                 source = getattr(self.preview,"remote_source","")
-                if not source: raise RuntimeError("Build this mesh on TRUBA before starting a remote analysis.")
                 self.analysis_job = AnalysisProcess(run_remote_mechanics,settings,context,source,remote_auth=auth)
+                self.truba_dialog.job_list.submitting = True
             else:
                 self.analysis_job = AnalysisProcess(run_single_analysis, settings, self.preview.mesh,
                                                    remote_auth=self.truba_dialog.analysis_auth() if settings.solver_backend == "kratos" else None)
@@ -3343,7 +3345,7 @@ class RustMechDialog(QDialog):
         self.accepted_settings = settings
         self.apply_button.setEnabled(False)
         self.force_stop_button.setEnabled(True)
-        self.status.setText("Analysis running...")
+        self._show_analysis_progress(self.analysis_job)
         self._update_status_visuals("busy", "● ANALYSING", False)
         self.analysis_poll.start()
 
@@ -3357,6 +3359,16 @@ class RustMechDialog(QDialog):
         if not filename:return
         try:
             record=json.loads(Path(filename).read_text())
+            if record.get("background") and record.get("submission_attempted"):
+                if record.get("state") == "downloaded":
+                    result = json.loads((Path(record["local_directory"]) / "output" / "result.json").read_text(encoding="utf-8"))
+                    from truba_remote import _rebase_paths
+                    result = _rebase_paths(Path(record["local_directory"]), result)
+                    self._show_completed_analysis(result["run_folder"], record)
+                else:
+                    self.truba_dialog.job_list.sync_background()
+                    self.status.setText("See TRUBA jobs for this analysis. Results download automatically when connected.")
+                return
             if record.get("kind")=="rustmech_remote":
                 from truba_remote import retrieve_remote_operation
                 self.analysis_job=AnalysisProcess(retrieve_remote_operation,filename,remote_auth=self.truba_dialog.analysis_auth())
@@ -3394,25 +3406,49 @@ class RustMechDialog(QDialog):
             self.status.setText(f"Forced Stop failed: {exc}")
             return
         self.analysis_job = None
+        self.truba_dialog.job_list.submitting = False
         self.analysis_poll.stop()
         self.force_stop_button.setEnabled(False)
         self.refresh_validity()
         self.status.setText("Analysis cancelled. Analysis and solver processes forcibly terminated.")
         self._update_status_visuals("error", "● CANCELLED", False)
 
-    def _poll_analysis(self) -> None:
+    def _show_analysis_progress(self, job):
+        record = job.remote_status()
+        if record and record.get("background"):
+            self._show_background_analysis(record)
+        elif record:
+            self.status.setText(f"TRUBA job {record.get('job_id', '—')} · {record.get('state', 'preparing')}")
+        elif getattr(job, "background_submission", False) is True:
+            self.status.setText("Preparing analysis for TRUBA…")
+        else:
+            stage = job.progress_status() if hasattr(job, "progress_status") else None
+            self.status.setText(stage or "Analysis running...")
+
+    def _show_background_analysis(self, record):
+        from truba_job_list import background_status
+        from truba_remote import analysis_code
+        job_id = f" · Slurm #{record['job_id']}" if record.get("job_id") else ""
+        self.status.setText(f"{background_status(record)} · {analysis_code(record)}{job_id}")
+
+    def _background_analysis_updated(self, record, result):
+        if self.disposed:
+            return
+        idle = self.analysis_job is None and self.future is None
+        if result is not None:
+            payload, _ = result
+            self._show_completed_analysis(payload["run_folder"], record, announce=idle)
+        elif idle and self._latest_background_analysis == record.get("request_id"):
+            self._show_background_analysis(record)
+
+    def _poll_analysis(self, *, track_background=True) -> None:
         if self.analysis_job is None:
             return
         if not self.analysis_job.done():
-            record=self.analysis_job.remote_status()
-            if record:
-                self.status.setText(f"TRUBA job {record.get('job_id','—')} · {record.get('state','preparing')}")
-            elif hasattr(self.analysis_job, "progress_status"):
-                stage = self.analysis_job.progress_status()
-                if stage:
-                    self.status.setText(stage)
+            self._show_analysis_progress(self.analysis_job)
             return
         job, self.analysis_job = self.analysis_job, None
+        self.truba_dialog.job_list.submitting = False
         self.analysis_poll.stop()
         self.force_stop_button.setEnabled(False)
         self.refresh_validity()
@@ -3422,6 +3458,13 @@ class RustMechDialog(QDialog):
             self.status.setText(f"Analysis failed: {exc}")
             self._update_status_visuals("error", "● FAILED", False)
         else:
+            if getattr(job, "background_submission", False) is True:
+                self._latest_background_analysis = folder["request_id"]
+                self._show_background_analysis(folder)
+                self.truba_dialog.job_list.refresh()
+                if track_background:
+                    self.truba_dialog.job_list.sync_background()
+                return
             if isinstance(folder,dict) and folder.get("remote_retrieval"):
                 result = folder["result"]
                 directory = Path(folder["directory"])/"output"
@@ -3450,17 +3493,25 @@ class RustMechDialog(QDialog):
                 else:
                     self.status.setText(f"TRUBA results retrieved: {directory}")
                 if operation!="mechanical": return
-            self.status.setText(f"Analysis completed. Results: {folder}")
-            try:
-                report=json.loads((Path(folder)/"summary.json").read_text(encoding="utf-8"))
-                if report.get("solver") == "kratos":
-                    self._latest_kratos_results=str(folder)
-                    self.kratos_panel.view_results_button.setEnabled(True)
-                    if self._persist_solver_profiles:
-                        self.solver_profile_store.settings.setValue("kratos/latestResultFolder",str(folder))
-                        self.solver_profile_store.settings.sync()
-            except (OSError,ValueError):pass
+            self._show_completed_analysis(folder)
+
+    def _show_completed_analysis(self, folder, record=None, *, announce=True):
+        if announce:
+            if record:
+                self._show_background_analysis(record)
+                self.status.setText(f"{self.status.text()} · {folder}")
+            else:
+                self.status.setText(f"Analysis completed. Results: {folder}")
             self._update_status_visuals("ready", "● COMPLETED", False)
+        try:
+            report=json.loads((Path(folder)/"summary.json").read_text(encoding="utf-8"))
+            if report.get("solver") == "kratos":
+                self._latest_kratos_results=str(folder)
+                self.kratos_panel.view_results_button.setEnabled(True)
+                if self._persist_solver_profiles:
+                    self.solver_profile_store.settings.setValue("kratos/latestResultFolder",str(folder))
+                    self.solver_profile_store.settings.sync()
+        except (OSError,ValueError):pass
 
     def _stop_remote_for_close(self):
         if self.disposed:
@@ -3468,7 +3519,12 @@ class RustMechDialog(QDialog):
         # Keep the job handle available for retry if remote cancellation cannot
         # be confirmed. Never label a disconnected, still-running job cancelled.
         job = self.analysis_job
-        if job is not None and getattr(job,"_generic_remote_target",False) is True:
+        if job is not None and getattr(job, "background_submission", False) is True:
+            if not job.done():
+                self.status.setText("Waiting for TRUBA submission confirmation. Close once the Slurm job number is visible.")
+                return False
+            self._poll_analysis(track_background=False)
+        elif job is not None and getattr(job,"_generic_remote_target",False) is True:
             self.force_stop_analysis()
             if self.analysis_job is not None:
                 return False

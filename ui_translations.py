@@ -876,6 +876,25 @@ Uses each geometry's selected variables. Without variables, only its reference c
 1 reference case|1 referans deneyi
 Top platen displacement in −Z; reaction force is calculated (N).|Üst plakanın −Z yönündeki yer değiştirmesi; tepki kuvveti hesaplanır (N).
 Pending / active remote jobs|Bekleyen / Etkin uzak işler
+TRUBA jobs|TRUBA işleri
+Analysis code / purpose|Analiz kodu / Açıklama
+No saved TRUBA jobs.|Kayıtlı TRUBA işi yok.
+Background analyses update and download automatically when connected.|TRUBA'ya bağlanınca analiz durumları güncellenir ve sonuçlar otomatik indirilir.
+Preparing analysis for TRUBA…|Analiz TRUBA için hazırlanıyor…
+Preparing analysis…|Analiz hazırlanıyor…
+Uploading analysis inputs…|Analiz girdileri yükleniyor…
+Submitting analysis to TRUBA…|Analiz TRUBA'ya gönderiliyor…
+Analysis submitted|Analiz gönderildi
+waiting for Slurm|Slurm bekleniyor
+Analysis queued|Analiz kuyrukta
+Slurm is preparing resources…|Slurm kaynakları hazırlıyor…
+Analysis started and running|Analiz başladı ve çalışıyor
+Analysis is finishing…|Analiz tamamlanıyor…
+Downloading results…|Sonuçlar indiriliyor…
+Analysis complete|Analiz tamamlandı
+results downloaded|sonuçlar indirildi
+See TRUBA jobs for this analysis. Results download automatically when connected.|Bu analiz için TRUBA işleri listesine bakın. Bağlandığınızda sonuçlar otomatik indirilir.
+Waiting for TRUBA submission confirmation. Close once the Slurm job number is visible.|TRUBA gönderim onayı bekleniyor. Slurm iş numarası göründüğünde programı kapatabilirsiniz.
 Saved job states · Connect to cancel a job.|Kayıtlı iş durumları · İptal etmek için bağlanın.
 Saved job states · Connect with the owning account to cancel.|Kayıtlı iş durumları · İptal etmek için işi gönderen hesapla bağlanın.
 No pending remote jobs in saved records.|Kayıtlarda bekleyen uzak iş yok.

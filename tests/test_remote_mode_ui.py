@@ -611,6 +611,21 @@ class RemoteModeUiTests(unittest.TestCase):
         self.assertIs(self.window.analysis_job,job)
         self.window.analysis_job=None
 
+    def test_background_submission_survives_window_close_after_confirmation(self):
+        job = MagicMock(background_submission=True)
+        job.done.return_value = False
+        self.window.analysis_job = job
+        self.assertFalse(self.window._stop_remote_for_close())
+        self.assertIn('submission confirmation', self.window.status.text())
+        job.done.return_value = True
+        job.result.return_value = dict(request_id='a' * 32, job_id='123', state='submitted')
+        with patch.object(self.controller, 'request_close', return_value=True):
+            self.assertTrue(self.window._stop_remote_for_close())
+        self.assertIsNone(self.window.analysis_job)
+        self.assertIn('RM-AAAAAAAAAAAA', self.window.status.text())
+        self.assertIn('Slurm #123', self.window.status.text())
+        job.force_stop.assert_not_called()
+
     def test_mechanics_cfd_and_cht_dispatch_only_remote_operations(self):
         self.enable()
         self.window.preview=SimpleNamespace(mesh=object(),remote_source="/arf/scratch/tester/RustMech/"+"a"*32+"/output/preview")

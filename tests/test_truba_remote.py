@@ -14,7 +14,7 @@ import unittest
 from unittest.mock import patch
 
 from model import ROOT,Settings
-from truba_remote import (RemoteContext,make_source_bundle,run_remote_job,safe_extract,
+from truba_remote import (RemoteContext,analysis_code,make_source_bundle,run_remote_job,safe_extract,sync_background_analysis,
                           slurm_script,load_remote_preview,RemoteTransport)
 
 
@@ -35,7 +35,7 @@ class FakeTransport:
     def command(self,script):
         if "RUSTMECH_JOB_ID" in script:
             if not self.server_job:
-                self.server_job = "321"
+                self.server_job = str(320 + len(self.instances)) if self.request.get("background") else "321"
                 self.submissions += 1
             return "RUSTMECH_JOB_ID="+self.server_job+"\n"
         if "RUSTMECH_QUEUE" in script: return "RUSTMECH_QUEUE=\n"
@@ -94,6 +94,37 @@ class RemoteProtocolTests(unittest.TestCase):
         run_remote_job({},RemoteContext(),resume_record=record)
         self.assertEqual(FakeTransport.instances[-1].submissions,0)
         self.assertEqual(FakeTransport.instances[-1].put_names,[])
+
+    def test_background_analyses_upload_inputs_and_poll_independently(self):
+        import base64
+        geometry = self.root / "specimen.vtp"
+        geometry.write_bytes(b"test geometry")
+        settings = dict(solver_backend="kratos", imported_geometry_path=str(geometry))
+        request = dict(operation="mechanical", settings=settings)
+        first = run_remote_job(request, RemoteContext(), directory=self.root / "first", submit_only=True)
+        second = run_remote_job(request, RemoteContext(), directory=self.root / "second", submit_only=True)
+        self.assertNotEqual(analysis_code(first), analysis_code(second))
+        self.assertNotEqual(first["job_id"], second["job_id"])
+        self.assertEqual(first["state"], "submitted")
+        self.assertEqual(base64.b64decode(FakeTransport.instances[0].request["imported_geometry_vtp"]), geometry.read_bytes())
+        self.assertIn("#SBATCH --job-name=" + analysis_code(first), (self.root / "first/run.slurm").read_text())
+        self.assertFalse((self.root / "first/output/result.json").exists())
+
+        command = FakeTransport.command
+        def queue(transport, script):
+            if "RUSTMECH_QUEUE" in script:
+                if transport.request["request_id"] == first["request_id"]:
+                    return "RUSTMECH_QUEUE=RUNNING|None\n"
+                return "RUSTMECH_QUEUE=COMPLETED|None\n"
+            return command(transport, script)
+
+        with patch.object(FakeTransport, "command", queue):
+            self.assertIsNone(sync_background_analysis(first, None))
+            result, folder = sync_background_analysis(second, None)
+        self.assertEqual(json.loads((self.root / "first/remote_job.json").read_text())["state"], "RUNNING|None")
+        self.assertEqual(json.loads((folder / "remote_job.json").read_text())["state"], "downloaded")
+        self.assertEqual(result["request_id"], second["request_id"])
+        self.assertTrue(all(transport.submissions == 0 and not transport.put_names for transport in FakeTransport.instances[2:]))
 
     def test_mismatched_request_or_transfer_never_becomes_downloaded(self):
         for key in ("corrupt_hash","wrong_request"):

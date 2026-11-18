@@ -1,4 +1,4 @@
-"""Saved unfinished TRUBA requests, visible even while computation is local."""
+"""Saved TRUBA requests and automatic tracking of background analyses."""
 import json
 import paramiko
 
@@ -7,7 +7,8 @@ from PySide6.QtWidgets import (QGroupBox, QHeaderView, QLabel, QPushButton,
                                QTableWidget, QTableWidgetItem, QVBoxLayout)
 
 from studio_style import CONTROL_HEIGHT
-from truba_jobs import HOST, cancel_remote
+from truba_jobs import HOST, SLURM_TERMINAL_STATES, cancel_remote
+from truba_remote import analysis_code, sync_background_analysis
 
 
 OPERATIONS = {
@@ -18,12 +19,15 @@ OPERATIONS = {
     'flow_export': 'Flow export', 'flow_solve': 'Flow analysis',
     'thermal_export': 'Thermal export', 'thermal_solve': 'Thermal analysis',
 }
-TERMINAL = {'DOWNLOADED', 'CANCELLED', 'COMPLETED', 'FAILED', 'TIMEOUT',
-            'NODE_FAIL', 'OUT_OF_MEMORY', 'PREEMPTED', 'BOOT_FAIL',
-            'DEADLINE', 'REVOKED', 'RELEASED', 'ENDED'}
+TERMINAL = SLURM_TERMINAL_STATES | {'DOWNLOADED', 'RELEASED', 'ENDED'}
 
 
-def unfinished_records(directory):
+def terminal_record(record):
+    state = str(record.get('state', '')).upper().split('|')[0].split()
+    return bool(state and state[0].rstrip('+') in TERMINAL)
+
+
+def unfinished_records(directory, *, include_background_history=False):
     paths = sorted((directory / 'jobs').glob('*.json'))
     paths.append(directory / 'resource_session.json')
     result = []
@@ -32,8 +36,7 @@ def unfinished_records(directory):
             record = json.loads(path.read_text(encoding='utf-8'))
             if not isinstance(record, dict) or record.get('host') != HOST:
                 continue
-            state = str(record.get('state', 'unknown')).upper().split('|')[0].split()[0]
-            if state.rstrip('+') not in TERMINAL:
+            if not terminal_record(record) or (include_background_history and record.get('background')):
                 result.append((path, record))
         except (OSError, ValueError, IndexError):
             continue
@@ -45,6 +48,9 @@ def job_description(record):
         context = record.get('context', {})
         return f"Resource session · {context.get('cores', '?')} CPUs · {context.get('memory_mb', '?')} MiB"
     label = OPERATIONS.get(record.get('operation'), record.get('operation') or 'Mechanical analysis (Kratos)')
+    if 'geometry_name' in record:
+        geometry = record['geometry_name']
+        return f'{label} · {geometry}' if geometry else label
     # Older job records store identifying details only in the original request.
     from pathlib import Path
     try:
@@ -58,6 +64,48 @@ def job_description(record):
     except (OSError, ValueError, KeyError, TypeError, AttributeError):
         pass
     return label
+
+
+def background_status(record):
+    stage = record.get('state', '')
+    state = stage.partition('|')[0].upper().rstrip('+')
+    return {
+        'PREPARING': 'Uploading analysis inputs…',
+        'SUBMITTING': 'Submitting analysis to TRUBA…',
+        'SUBMITTED': 'Analysis submitted · waiting for Slurm',
+        'PENDING': 'Analysis queued',
+        'CONFIGURING': 'Slurm is preparing resources…',
+        'RUNNING': 'Analysis started and running',
+        'COMPLETING': 'Analysis is finishing…',
+        'DOWNLOADING': 'Downloading results…',
+        'DOWNLOADED': 'Analysis complete · results downloaded',
+    }.get(state, stage or 'Preparing analysis…')
+
+
+class BackgroundJobSync(QThread):
+    updated = Signal(dict, object)
+
+    def __init__(self, records, auth, parent):
+        super().__init__(parent)
+        self.records, self.auth = records, auth
+
+    def run(self):
+        try:
+            for path, record in self.records:
+                if self.isInterruptionRequested():
+                    break
+                try:
+                    result = sync_background_analysis(record, self.auth)
+                except Exception:
+                    result = None  # Leave the durable record eligible on the next poll.
+                try:
+                    current = json.loads(path.read_text(encoding='utf-8'))
+                except (OSError, ValueError):
+                    continue
+                if current != record or result is not None:
+                    self.updated.emit(current, result)
+        finally:
+            self.auth = None
 
 
 class CancelJobWorker(QThread):
@@ -84,13 +132,16 @@ class CancelJobWorker(QThread):
 
 class TrubaJobList(QGroupBox):
     release_requested = Signal()
+    background_updated = Signal(dict, object)
 
     def __init__(self, dialog):
-        super().__init__('Pending / active remote jobs', dialog)
+        super().__init__('TRUBA jobs', dialog)
         self.dialog = dialog
         self.workers = {}
         self._snapshot = None
         self._session_releasing = False
+        self.submitting = False
+        self.sync_worker = None
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 4, 8, 6)
         self.hint = QLabel('Saved job states · Connect to cancel a job.')
@@ -98,7 +149,7 @@ class TrubaJobList(QGroupBox):
         self.hint.setWordWrap(True)
         layout.addWidget(self.hint)
         self.table = QTableWidget(0, 3)
-        self.table.setHorizontalHeaderLabels(['Job / purpose', 'Saved state', ''])
+        self.table.setHorizontalHeaderLabels(['Analysis code / purpose', 'Saved state', ''])
         self.table.verticalHeader().hide()
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
@@ -112,13 +163,17 @@ class TrubaJobList(QGroupBox):
         self.timer.timeout.connect(self.refresh)
         dialog.connection_changed.connect(lambda *_: self.refresh())
         self.timer.start()
+        self.sync_timer = QTimer(self, interval=5000)
+        self.sync_timer.timeout.connect(self.sync_background)
+        dialog.connection_changed.connect(self.sync_background)
+        self.sync_timer.start()
 
     def showEvent(self, event):
         super().showEvent(event)
         self.refresh()
 
     def refresh(self):
-        records = unfinished_records(self.dialog.state_dir)
+        records = unfinished_records(self.dialog.state_dir, include_background_history=True)
         auth = self.cancellation_auth()
         snapshot = (records, auth.username if auth else None, tuple(self.workers), self._session_releasing)
         if snapshot == self._snapshot:
@@ -126,12 +181,22 @@ class TrubaJobList(QGroupBox):
         self._snapshot = snapshot
         self.table.setRowCount(len(records))
         for row, (path, record) in enumerate(records):
-            identity = str(record.get('job_id') or record.get('request_id') or path.stem)
+            code = analysis_code(record)
+            identity = code or str(record.get('job_id') or record.get('request_id') or path.stem)
             title = f"{identity} · {job_description(record)}"
             item = QTableWidgetItem(title)
-            item.setToolTip(f"{title}\n{record.get('username', '')}\n{path}")
+            job_id = record.get('job_id') or '—'
+            item.setToolTip(f"{title}\nSlurm #{job_id} · {record.get('username', '')}\n"
+                            f"{record.get('local_directory') or path}")
             self.table.setItem(row, 0, item)
-            self.table.setItem(row, 1, QTableWidgetItem(str(record.get('state', 'unknown'))))
+            saved_state = str(record.get('state', 'unknown'))
+            state = QTableWidgetItem(background_status(record) if record.get('background') else saved_state)
+            state.setToolTip(saved_state)
+            self.table.setItem(row, 1, state)
+            if terminal_record(record):
+                self.table.removeCellWidget(row, 2)
+                self.table.setRowHeight(row, CONTROL_HEIGHT + 6)
+                continue
             cancelling = path in self.workers or (record.get('kind') == 'rustmech_session' and self._session_releasing)
             button = QPushButton('Cancelling…' if cancelling else 'Cancel')
             button.setObjectName('cancelBtn')
@@ -145,9 +210,33 @@ class TrubaJobList(QGroupBox):
             self.table.setCellWidget(row, 2, button)
             self.table.setRowHeight(row, CONTROL_HEIGHT + 6)
         if not records:
-            self.hint.setText('No pending remote jobs in saved records.')
+            self.hint.setText('No saved TRUBA jobs.')
         elif not self.workers and not self._session_releasing:
-            self.hint.setText('Saved job states · Cancel uses the connected or saved owning account.')
+            self.hint.setText('Background analyses update and download automatically when connected.')
+
+    def sync_background(self, connected=True):
+        if not connected or self.sync_worker is not None:
+            return
+        auth = self.dialog.analysis_auth()
+        if auth is None:
+            return
+        records = [(path, record) for path, record in unfinished_records(self.dialog.state_dir)
+                   if record.get('background') and record.get('submission_attempted')
+                   and not (self.submitting and record.get('state') == 'submitting')
+                   and record.get('username') == auth.username and path not in self.workers]
+        if records:
+            self.sync_worker = BackgroundJobSync(records, auth, self)
+            self.sync_worker.updated.connect(self._background_updated)
+            self.sync_worker.finished.connect(self._sync_finished)
+            self.sync_worker.start()
+
+    def _background_updated(self, record, result):
+        self.refresh()
+        self.background_updated.emit(record, result)
+
+    def _sync_finished(self):
+        self.sync_worker.deleteLater()
+        self.sync_worker = None
 
     def cancellation_auth(self):
         auth = self.dialog.analysis_auth()
@@ -191,5 +280,9 @@ class TrubaJobList(QGroupBox):
 
     def shutdown(self):
         self.timer.stop()
+        self.sync_timer.stop()
+        if self.sync_worker is not None:
+            self.sync_worker.requestInterruption()
+            self.sync_worker.wait()
         for worker in tuple(self.workers.values()):
             worker.wait()
