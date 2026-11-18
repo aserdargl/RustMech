@@ -1263,3 +1263,7 @@ CHT Kartezyen ağla devam eder. Dağıtım EXE'si yeniden paketlenmedi.
 
 Tekrarlanabilir küçük çözücü kontrolleri:
 `python tools/verify_fitted_flow.py --output-root D:/MySoftware/RustMech/build`.
+
+## License
+
+RustMech is free software licensed under the GNU General Public License v3.0 or later (GPL-3.0-or-later). See LICENSE.
