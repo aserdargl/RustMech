@@ -479,6 +479,21 @@ class RemoteModeUiTests(unittest.TestCase):
         self.app.processEvents()
         self.assertEqual(panel.frameGeometry(),expected)
 
+    def test_truba_button_reopens_maximized_panel_with_saved_normal_bounds(self):
+        panel = self.window.truba_dialog
+        self.window.truba_button.click()
+        self.app.processEvents()
+        normal = panel.geometry()
+        panel.showMaximized()
+        self.app.processEvents()
+        panel.hide()
+        self.window.truba_button.click()
+        self.app.processEvents()
+        self.assertTrue(panel.isMaximized())
+        panel.showNormal()
+        self.app.processEvents()
+        self.assertEqual(panel.geometry(), normal)
+
     def test_group_order_and_full_panel_positions_survive_resize(self):
         panel = self.window.truba_dialog
         panel.show()

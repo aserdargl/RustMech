@@ -60,6 +60,7 @@ from studio_style import ActionFlowLayout, CompactDoubleSpinBox, CONTROL_HEIGHT,
 from sidebar_splitter import SidebarSplitter
 from setup_help import GEOMETRY_HELP
 from truba_connection import TrubaConnectionDialog
+from window_state import show_restored_window
 from kratos_settings import KratosSettingsPanel
 from solver_profiles import SolverProfileStore, profile_values
 from doe_studio import DoEStudioWidget, DoEStudioWindow
@@ -935,7 +936,7 @@ class RustMechDialog(QDialog):
         self.truba_button.setProperty("trubaConnected", False)
         self.truba_button.setFixedSize(132, CONTROL_HEIGHT)
         self.truba_button.setToolTip("Connect to TRUBA with your own username and password")
-        self.truba_button.clicked.connect(self.truba_dialog.show)
+        self.truba_button.clicked.connect(lambda: show_restored_window(self.truba_dialog))
         self.truba_dialog.connection_changed.connect(self._update_truba_button)
         brand_layout.addWidget(self.truba_button)
         brand_layout.addWidget(unit_badge)
