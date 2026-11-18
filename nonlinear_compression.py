@@ -30,6 +30,7 @@ from PySide6.QtGui import QActionGroup
 from PySide6.QtWidgets import (
     QAbstractSpinBox,
     QApplication,
+    QButtonGroup,
     QCheckBox,
     QComboBox,
     QDialog,
@@ -1543,9 +1544,10 @@ class RustMechDialog(QDialog):
 
         self.display_mode_group = QFrame()
         self.display_mode_group.setObjectName("displayModeGroup")
+        self.display_mode_group.setAccessibleName("3D display mode")
         mode_layout = QHBoxLayout(self.display_mode_group)
         mode_layout.setContentsMargins(3, 2, 3, 2)
-        mode_layout.setSpacing(0)
+        mode_layout.setSpacing(5)
         toolbar.addWidget(self.display_mode_group, 0, 1, Qt.AlignmentFlag.AlignCenter)
 
         self.mode = NoWheelComboBox(toolbar_frame)
@@ -1557,20 +1559,17 @@ class RustMechDialog(QDialog):
         self.mode.currentIndexChanged.connect(self._display_mode_changed)
         # Retain the mode model for existing render/preview integrations.
         self.mode.hide()
-        self.display_mode_tabs = QTabBar()
-        self.display_mode_tabs.setObjectName("displayModeTabs")
-        self.display_mode_tabs.setAccessibleName("3D display mode")
-        self.display_mode_tabs.setExpanding(False)
-        self.display_mode_tabs.setDrawBase(False)
-        self.display_mode_tabs.setElideMode(Qt.TextElideMode.ElideNone)
-        mode_layout.addWidget(self.display_mode_tabs)
+        self.display_mode_buttons = QButtonGroup(self.display_mode_group)
         for index, text in enumerate(("Geometry", "FE Mesh", "Overlay")):
-            self.display_mode_tabs.addTab(text)
-            self.display_mode_tabs.setTabToolTip(index, self.mode.itemText(index))
-        self.display_mode_tabs.setCurrentIndex(self.mode.currentIndex())
-        self.display_mode_tabs.tabBarClicked.connect(lambda _: self.workspace_tabs.setCurrentIndex(0))
-        self.display_mode_tabs.currentChanged.connect(self.mode.setCurrentIndex)
-        self.mode.currentIndexChanged.connect(self.display_mode_tabs.setCurrentIndex)
+            button = QPushButton(text)
+            button.setCheckable(True)
+            button.setToolTip(self.mode.itemText(index))
+            self.display_mode_buttons.addButton(button, index)
+            mode_layout.addWidget(button)
+        self.display_mode_buttons.button(self.mode.currentIndex()).setChecked(True)
+        self.display_mode_buttons.idClicked.connect(lambda _: self.workspace_tabs.setCurrentIndex(0))
+        self.display_mode_buttons.idClicked.connect(self.mode.setCurrentIndex)
+        self.mode.currentIndexChanged.connect(lambda index: self.display_mode_buttons.button(index).setChecked(True))
 
         self.show_platens_cb = QCheckBox("Show platens")
         self.show_platens_cb.setObjectName("legendPlatenPill")
@@ -1824,7 +1823,6 @@ class RustMechDialog(QDialog):
             if remote is not None:
                 self._update_remote_banner()
             self.sidebar_toggle.setVisible(not flow_active)
-            self.display_mode_tabs.setVisible(not flow_active)
             self.display_mode_group.setVisible(not flow_active)
             self.show_platens_cb.setVisible(not flow_active)
             camera_controls.setVisible(not flow_active)
@@ -1931,6 +1929,10 @@ class RustMechDialog(QDialog):
         navigation = (self.workspace_button, self.doe_button, self.designs_button, self.project_button)
         width = max(button.fontMetrics().horizontalAdvance(button.text()) + 32 for button in navigation)
         for button in navigation:
+            button.setFixedSize(width, CONTROL_HEIGHT)
+        display_buttons = self.display_mode_buttons.buttons()
+        width = max(button.fontMetrics().horizontalAdvance(button.text()) for button in display_buttons) + 26
+        for button in display_buttons:
             button.setFixedSize(width, CONTROL_HEIGHT)
         # Allow the shared button face's focus border to grow by 1 px on each side.
         width = max(button.sizeHint().width() for button in self._analysis_action_buttons) + 2

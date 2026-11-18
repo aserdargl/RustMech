@@ -158,12 +158,6 @@ QTabBar#doeMatrixTabs::tab:selected {
 }
 #setupTabs::pane { background: #F5F5F3; border: none; }
 #setupTabs QTabBar::tab { padding: 0 8px; }
-#displayModeTabs::tab { padding: 0 8px; margin: 0 2px 0 0; }
-#displayModeGroup { background: #F5F5F3; border: 1px solid #CBD5E1; border-radius: 4px; }
-#displayModeTabs::tab:selected {
-    color: white; border-color: #1E4D8D;
-    background: #265AA1;
-}
 #viewportToolbar { background: #F8FAFC; border: 1px solid #CBD5E1; border-radius: 2px; }
 #navigationSeparator { background: #707070; border: none; margin: 0; }
 #viewportContainer { background: #FFFFFF; border: 1px solid #CBD5E1; border-radius: 2px; }
@@ -298,8 +292,8 @@ QTabWidget::pane { border: 1px solid #CBD5E1; background: #F8FAFC; }
 QTabBar::tab { background: #F1F5F9; color: #0F172A; border: 1px solid #CBD5E1; border-radius: 0px; padding: 0px 5px; min-height: 23px; font-weight: 400; }
 QTabBar::tab:selected { background: #BFDBFE; border-color: #2563EB; border-bottom: 2px solid #1D4ED8; }
 
-QTabBar#doeMatrixTabs::tab, #setupTabs QTabBar::tab, #displayModeTabs::tab { background: #F1F5F9; border: 1px solid #CBD5E1; border-radius: 0px; }
-QTabBar#doeMatrixTabs::tab:selected, #setupTabs QTabBar::tab:selected, #displayModeTabs::tab:selected { background: #BFDBFE; color: #0F172A; border-color: #2563EB; border-bottom: 2px solid #1D4ED8; }
+QTabBar#doeMatrixTabs::tab, #setupTabs QTabBar::tab { background: #F1F5F9; border: 1px solid #CBD5E1; border-radius: 0px; }
+QTabBar#doeMatrixTabs::tab:selected, #setupTabs QTabBar::tab:selected { background: #BFDBFE; color: #0F172A; border-color: #2563EB; border-bottom: 2px solid #1D4ED8; }
 
 /* GraphCalc Edit is the sole cross-application reference. */
 QDialog#rustMechWindow, QMainWindow#doeStudioWindow, #sidebarPanel, #scrollFields, #doeWorkspace { background: #F5F5F3; }
@@ -308,9 +302,9 @@ QGroupBox { background: #FFFFFF; border: 1px solid #D5DBE2; border-radius: 7px; 
 QLineEdit { background: #FFFFFF; border-color: #CBD5E1; border-radius: 4px; }
 QLineEdit:hover { border-color: #93C5FD; }
 QLineEdit:focus { border-color: #3B82F6; }
-QTabBar::tab, QTabBar#doeMatrixTabs::tab, #setupTabs QTabBar::tab, #displayModeTabs::tab {
+QTabBar::tab, QTabBar#doeMatrixTabs::tab, #setupTabs QTabBar::tab {
     background: #F1F5F9; border: 1px solid #D5DBE2;
     border-top-left-radius: 8px; border-top-right-radius: 8px;
     border-bottom-left-radius: 0px; border-bottom-right-radius: 0px;
 }
-QTabBar::tab:selected, QTabBar#doeMatrixTabs::tab:selected, #setupTabs QTabBar::tab:selected, #displayModeTabs::tab:selected { background: #BFDBFE; color: #0F172A; border-color: #2563EB; }
+QTabBar::tab:selected, QTabBar#doeMatrixTabs::tab:selected, #setupTabs QTabBar::tab:selected { background: #BFDBFE; color: #0F172A; border-color: #2563EB; }

@@ -53,7 +53,7 @@ class FlowWorkspaceTests(unittest.TestCase):
         dialog = self.dialog()
         flow = dialog.flow_workspace
         self.assertEqual(dialog.workspace_tabs.currentIndex(),2)
-        self.assertFalse(dialog.display_mode_tabs.isVisible())
+        self.assertFalse(dialog.display_mode_group.isVisible())
         accepted = QSignalSpy(dialog.accepted)
         for button in flow.findChildren(QPushButton):
             self.assertFalse(button.autoDefault())
@@ -94,7 +94,20 @@ class FlowWorkspaceTests(unittest.TestCase):
         self.assertAlmostEqual(second.flow_workspace.collect().inlet_speed,.0123)
         second.workspace_navigation.setCurrentIndex(0)
         self.app.processEvents()
-        self.assertTrue(second.display_mode_tabs.isVisible())
+        self.assertTrue(second.display_mode_group.isVisible())
+
+    def test_display_mode_buttons_track_view_selection(self):
+        dialog = self.dialog()
+        dialog.workspace_navigation.setCurrentIndex(0)
+        buttons = dialog.display_mode_buttons
+        self.assertEqual(len({(button.width(), button.height()) for button in buttons.buttons()}), 1)
+        with patch.object(dialog, "start_preview"), patch.object(dialog, "render_preview"):
+            QTest.mouseClick(buttons.button(1), Qt.MouseButton.LeftButton)
+            self.assertEqual(dialog.mode.currentIndex(), 1)
+            QTest.keyClick(buttons.button(1), Qt.Key.Key_Right)
+            self.assertEqual(dialog.mode.currentIndex(), 2)
+            dialog.mode.setCurrentIndex(0)
+            self.assertEqual(buttons.checkedId(), 0)
 
 
 if __name__ == "__main__":
