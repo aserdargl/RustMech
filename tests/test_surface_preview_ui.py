@@ -1,5 +1,6 @@
 """Workspace requests a volume mesh only for an explicit FE/analysis action."""
 from concurrent.futures import Future
+from dataclasses import replace
 from threading import Event
 import unittest
 from unittest.mock import MagicMock, patch
@@ -9,6 +10,7 @@ from PySide6.QtWidgets import QApplication, QWidget
 from mesh_engine import build_preview
 from model import Settings
 from nonlinear_compression import RustMechDialog
+from preview_viewport import MESH_PREVIEW_ACTOR
 
 
 class SurfacePreviewUITests(unittest.TestCase):
@@ -48,6 +50,36 @@ class SurfacePreviewUITests(unittest.TestCase):
         self.window.mode.setCurrentIndex(1)
         self.assertTrue(self.window._mesh_requested)
         self.assertIsNone(self.window.preview.mesh)
+
+    def test_geometry_button_hides_excluded_mesh_fragments(self):
+        preview = build_preview(self.settings, self.window.preview, include_mesh=True)
+        fragment = preview.mesh.grid.extract_cells([0])
+        mesh = replace(preview.mesh, removed_grid=fragment)
+        preview.mesh = mesh
+        self.window.preview = preview
+        buttons = self.window.display_mode_buttons
+        plotter = self.window.plotter
+        for mode in (1, 0, 2, 0):
+            with self.subTest(mode=mode):
+                plotter.reset_mock()
+                buttons.button(mode).click()
+                plotter.clear.assert_called_once()
+                layers = {
+                    call.kwargs.get("name"): call
+                    for call in plotter.add_mesh.call_args_list
+                }
+                if mode == 0:
+                    self.assertNotIn(MESH_PREVIEW_ACTOR, layers)
+                    self.assertNotIn("excluded_fragments", layers)
+                    self.assertIs(layers[None].args[0], preview.surface)
+                    self.assertEqual(layers[None].kwargs["opacity"], 1)
+                    self.assertTrue(self.window.fragment_status.isHidden())
+                    self.assertNotIn("RED = removed fragments", self.window.stats.text())
+                else:
+                    self.assertIn(MESH_PREVIEW_ACTOR, layers)
+                    self.assertIs(layers["excluded_fragments"].args[0], fragment)
+                    self.assertFalse(self.window.fragment_status.isHidden())
+                self.assertIs(self.window.preview.mesh, mesh)
 
     def test_doe_select_ignores_mesh_errors_and_pending_main_preview(self):
         self.window.controls['mesh_resolution'].setValue(2)

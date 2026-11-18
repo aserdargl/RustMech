@@ -3008,7 +3008,8 @@ class RustMechDialog(QDialog):
         self.plotter.enable_lightkit()
         self.plotter.set_background("#f0f0f0", top="#ffffff")
         mode = self.mode.currentIndex()
-        if mode in (0, 2) or self.preview.mesh is None:
+        mesh = self.preview.mesh
+        if mode in (0, 2) or mesh is None:
             self.plotter.add_mesh(
                 self.preview.surface,
                 color="#4ea8de",
@@ -3018,9 +3019,10 @@ class RustMechDialog(QDialog):
                 specular_power=20,
                 opacity=0.35 if mode == 2 else 1,
             )
-        if mode in (1, 2) and self.preview.mesh is not None:
+        removed = None
+        if mode in (1, 2) and mesh is not None:
             self.plotter.add_mesh(
-                self.preview.mesh.grid,
+                mesh.grid,
                 color="#60a5fa",
                 show_edges=True,
                 edge_color="#334155",
@@ -3028,7 +3030,7 @@ class RustMechDialog(QDialog):
                 smooth_shading=False,
                 name=MESH_PREVIEW_ACTOR,
             )
-        removed = self.preview.mesh.removed_grid if self.preview.mesh is not None else pv.UnstructuredGrid()
+            removed = mesh.removed_grid
         if self.preview_settings().imported_geometry_path and mode in (0, 2):
             faces = self.preview.surface.cell_data.get('compression_face')
             if faces is not None:
@@ -3039,7 +3041,8 @@ class RustMechDialog(QDialog):
                                                      name=f'compression_face_{role}', pickable=False, lighting=False)
                         actor.mapper.SetResolveCoincidentTopologyToPolygonOffset()
                         actor.mapper.SetRelativeCoincidentTopologyPolygonOffsetParameters(-2, -2)
-        if removed.n_cells:
+        removed_count = removed.n_cells if removed is not None else 0
+        if removed_count:
             self.plotter.add_mesh(
                 removed,
                 color="#dc2626",
@@ -3070,9 +3073,9 @@ class RustMechDialog(QDialog):
                 edge_color="#1e293b",
                 name="top_platen",
             )
-        self.fragment_status.setVisible(bool(removed.n_cells))
+        self.fragment_status.setVisible(bool(removed_count))
         self.fragment_status.setText(
-            f"Excluded: {removed.n_cells} disconnected elements will be removed. "
+            f"Excluded: {removed_count} disconnected elements will be removed. "
             "Red pieces are excluded from the ANSYS mesh."
         )
         self.plotter.add_axes(color="#0f172a", interactive=False)
@@ -3096,7 +3099,6 @@ class RustMechDialog(QDialog):
             self.plotter.reset_camera_clipping_range()
             self.plotter.render()
 
-        mesh = self.preview.mesh
         if mesh is None:
             for name in ("elements", "nodes", "fraction", "spacing"):
                 self._kpi_labels[name].setText("—")
@@ -3113,11 +3115,10 @@ class RustMechDialog(QDialog):
         )
         self._kpi_labels["spacing"].setText(spacing)
         fragments = ""
-        if mesh.subdivisions is not None:
-            removed = mesh.removed_grid.n_cells
+        if removed is not None and mesh.subdivisions is not None:
             fragments = (
-                f"\nRED = removed fragments: {removed:,} elements, "
-                f"{removed * mesh.spacing**3:.6g} mm³ — excluded from analysis."
+                f"\nRED = removed fragments: {removed_count:,} elements, "
+                f"{removed_count * mesh.spacing**3:.6g} mm³ — excluded from analysis."
             )
         self.stats.setText(
             f"FE size {spacing} | "
