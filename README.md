@@ -2,10 +2,16 @@
 
 ## ESEN ile LAMMPS çalıştırma
 
-Üst çubuktan **ESEN**'i açıp LAMMPS girdi betiğini seçin. Betiğin kullandığı veri,
-potansiyel ve `include` dosyalarını **Dosya ekle** ile ekleyin. Göreli dosya yolları
-analizin iş klasörüne göre çözülür. **İş klasörünün tamamını ekle** seçeneği alt
-klasörleri de kopyalar. Her çalıştırmada ESEN girdilerin bir kopyasını saklar.
+Üst çubuktan **ESEN**'i açın. LAMMPS betiğini ve kullandığı veri, potansiyel veya
+`include` dosyalarını **Dosya yükle…** ile seçin ya da girdi listesine sürükleyip
+bırakın. Tek dosya veya bir gruptaki tek `in.*` / `*.in` dosyası ana betik olarak
+seçilir. Diğer durumlarda ana dosyayı listeden seçip **Betik olarak seç** düğmesine
+basın. **LAMMPS'i çalıştır** düğmesiyle işi başlatın.
+
+İlk yüklemede dosyaların ortak klasörü iş klasörü olur. Betikteki göreli yollar
+bu klasöre göre çözülür. Gerekirse **İş klasörü…** ile kökü belirleyin ve
+**İş klasörünün tamamını ekle** ile alt klasörler dahil tüm dosyaları kopyalayın.
+Her çalıştırmada ESEN girdilerin bir kopyasını saklar.
 
 - **Bu bilgisayar** hedefi için `lmp` ve birden çok MPI süreci kullanıyorsanız
   LAMMPS derlemesiyle uyumlu `mpiexec` gerekir. ESEN, Windows'ta MS-MPI'yi arar.

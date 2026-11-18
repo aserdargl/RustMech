@@ -1,4 +1,4 @@
-"""Focused regression coverage for ESEN input reuse and Slurm job recovery."""
+"""Focused regression coverage for ESEN file loading and job lifecycle."""
 
 import base64
 from pathlib import Path
@@ -9,7 +9,8 @@ from threading import Event
 import unittest
 from unittest.mock import patch
 
-from PySide6.QtCore import QObject, QSettings, Qt, Signal
+from PySide6.QtCore import QMimeData, QObject, QPoint, QSettings, Qt, QUrl, Signal
+from PySide6.QtGui import QDragEnterEvent, QDropEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
@@ -124,6 +125,56 @@ class EsenTests(unittest.TestCase):
             jobs.refresh_remote(directory, record, self.auth)
             self.assertEqual(record["state"], "Cancelled")
             self.assertEqual(transport.command.call_args_list[0].args[0], "scancel 456")
+
+    def test_load_files_then_choose_script_and_run(self):
+        app = QApplication.instance() or QApplication([])
+        preferences = QSettings(str(self.root / "settings.ini"), QSettings.Format.IniFormat)
+        files = [str(self.source / name) for name in (self.entry, "data/cell.lmp")]
+        with patch("esen_workspace.QSettings", return_value=preferences):
+            workspace = EsenWorkspace(FakeTruba(), history=self.history)
+        self.addCleanup(workspace.dispose)
+        workspace.show()
+        app.processEvents()
+
+        with patch("esen_workspace.QFileDialog.getOpenFileNames", return_value=(files, "")):
+            QTest.mouseClick(workspace.load_files, Qt.MouseButton.LeftButton)
+        self.assertEqual(workspace.input_root, self.source)
+        self.assertFalse(workspace.start.isEnabled())
+        self.assertEqual(workspace.history.count(), 0)
+        QTest.mouseClick(workspace.use_as_script, Qt.MouseButton.LeftButton)
+        self.assertEqual(workspace.entry, self.entry)
+        self.assertEqual(workspace.extra, ["data/cell.lmp"])
+
+        with patch("esen_jobs.run_local") as run, patch("esen_jobs.local_command", return_value=["lmp"]):
+            workspace._preview()
+            QTest.mouseClick(workspace.start, Qt.MouseButton.LeftButton)
+            workspace.local_task[1].result(timeout=5)
+            self.assertEqual(run.call_args.args[2], self.files)
+
+    def test_drop_selects_unique_conventional_script_and_preserves_paths(self):
+        app = QApplication.instance() or QApplication([])
+        preferences = QSettings(str(self.root / "settings.ini"), QSettings.Format.IniFormat)
+        with patch("esen_workspace.QSettings", return_value=preferences):
+            workspace = EsenWorkspace(FakeTruba(), history=self.history)
+        self.addCleanup(workspace.dispose)
+        script = self.source / "in.cell"
+        script.write_text("# LAMMPS example\n", encoding="utf-8")
+        mime = QMimeData()
+        mime.setUrls([QUrl.fromLocalFile(str(path)) for path in (self.source / "data/cell.lmp", script)])
+        args = (QPoint(10, 10), Qt.DropAction.CopyAction, mime, Qt.MouseButton.LeftButton,
+                Qt.KeyboardModifier.NoModifier)
+        workspace.show()
+        app.processEvents()
+        viewport = workspace.inputs.viewport()
+        enter = QDragEnterEvent(*args)
+        app.sendEvent(viewport, enter)
+        self.assertTrue(enter.isAccepted())
+        drop = QDropEvent(*args)
+        app.sendEvent(viewport, drop)
+        self.assertTrue(drop.isAccepted())
+        self.assertEqual(workspace.entry, "in.cell")
+        self.assertEqual(workspace.extra, ["data/cell.lmp"])
+        self.assertEqual(workspace.history.count(), 0)
 
     def test_workspace_reopens_with_maximized_geometry_and_splitter(self):
         app = QApplication.instance() or QApplication([])

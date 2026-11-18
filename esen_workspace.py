@@ -2,12 +2,13 @@
 
 from concurrent.futures import ThreadPoolExecutor
 from itertools import islice
+from os.path import commonpath
 from pathlib import Path
 import re
 import subprocess
 from threading import Event
 
-from PySide6.QtCore import QSettings, QSignalBlocker, Qt, QTimer, QUrl
+from PySide6.QtCore import QSettings, QSignalBlocker, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QCheckBox, QDialog, QFileDialog, QFormLayout, QFrame, QHBoxLayout, QLabel,
@@ -93,6 +94,32 @@ def code_view(name):
     edit.setAccessibleName(name)
     edit.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
     return edit
+
+
+class InputFileList(QListWidget):
+    files_dropped = Signal(list)
+
+    @staticmethod
+    def _local_files(event):
+        urls = event.mimeData().urls()
+        return [url.toLocalFile() for url in urls] if all(url.isLocalFile() for url in urls) else []
+
+    def dragEnterEvent(self, event):
+        if self._local_files(event):
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dragMoveEvent(self, event):
+        self.dragEnterEvent(event)
+
+    def dropEvent(self, event):
+        files = self._local_files(event)
+        if files:
+            self.files_dropped.emit(files)
+            event.acceptProposedAction()
+        else:
+            event.ignore()
 
 
 class EsenWorkspace(QDialog):
@@ -204,19 +231,24 @@ class EsenWorkspace(QDialog):
             field.editingFinished.connect(self._preview)
             field.returnPressed.connect(self._preview)
 
-        layout.addLayout(button_row(command("Input script…", self._pick_script), command("Job folder…", self._pick_root),
-                                    command("Add files…", self._add_files)))
-        self.inputs = QListWidget()
+        self.load_files = command("Load files…", self._pick_files)
+        layout.addLayout(button_row(self.load_files, command("Input script…", self._pick_script),
+                                    command("Job folder…", self._pick_root)))
+        self.inputs = InputFileList()
+        self.inputs.setAcceptDrops(True)
+        self.inputs.viewport().setAcceptDrops(True)
+        self.inputs.files_dropped.connect(self._load_files)
         self.inputs.setAccessibleName("LAMMPS input files")
         self.inputs.setMinimumHeight(63)
         self.whole_folder = QCheckBox("Include entire job folder")
         self.whole_folder.toggled.connect(self._preview)
         layout.addWidget(self.whole_folder)
         layout.addWidget(self.inputs, 1)
+        self.use_as_script = command("Use as script", self._use_as_script)
         self.remove_inputs = command("Remove file", self._remove_file)
         self.inputs.currentRowChanged.connect(self._buttons)
         self.start = command("Run LAMMPS", self._start, role="esenRun")
-        layout.addLayout(button_row(self.remove_inputs, self.start))
+        layout.addLayout(button_row(self.use_as_script, self.remove_inputs, self.start))
 
         history, layout = panel("Job history", paper=True)
         left.addWidget(history)
@@ -317,6 +349,8 @@ class EsenWorkspace(QDialog):
             if self.input_root is None or not path.is_relative_to(self.input_root):
                 self.input_root = path.parent
                 self.extra.clear()
+                with QSignalBlocker(self.whole_folder):
+                    self.whole_folder.setChecked(False)
             self.entry = path.relative_to(self.input_root).as_posix()
             self.extra = [name for name in self.extra if name != self.entry]
             self._update_inputs()
@@ -332,24 +366,54 @@ class EsenWorkspace(QDialog):
             else:
                 self.entry, self.extra = "", []
             self.input_root = root
+            if root != source:
+                with QSignalBlocker(self.whole_folder):
+                    self.whole_folder.setChecked(False)
             self._update_inputs()
 
-    def _add_files(self):
-        if self.input_root is None:
+    def _pick_files(self):
+        files, _ = QFileDialog.getOpenFileNames(self, translate("Load input files"), str(self.input_root or Path.home()))
+        self._load_files(files)
+
+    def _load_files(self, files):
+        if not files:
             return
-        files, _ = QFileDialog.getOpenFileNames(self, translate("Add input files"), str(self.input_root))
-        outside = False
-        for name in files:
-            path = Path(name)
-            if not path.is_relative_to(self.input_root):
-                outside = True
-                continue
-            relative = path.relative_to(self.input_root).as_posix()
-            if relative != self.entry and relative not in self.extra:
-                self.extra.append(relative)
-        self._update_inputs()
-        if outside:
+        paths = [Path(name) for name in files]
+        if not all(path.is_file() for path in paths):
+            self.input_note.setText(translate("Load existing files. To include a folder, use Job folder."))
+            return
+        try:
+            root = self.input_root or Path(commonpath([path.parent for path in paths]))
+            names = [path.relative_to(root).as_posix() for path in paths]
+        except ValueError:
             self.input_note.setText(translate("Choose files inside the job folder."))
+            return
+        try:
+            for name in names:
+                jobs.relative_file(name)
+        except ValueError as error:
+            self.input_note.setText(translate(str(error)))
+            return
+        self.input_root = root
+        supporting_files = [name for name in names if name != self.entry]
+        self.extra = list(dict.fromkeys(self.extra + supporting_files))
+        if not self.entry:
+            scripts = [name for name in self.extra
+                       if Path(name).name.lower().startswith("in.") or Path(name).suffix.lower() == ".in"]
+            if len(self.extra) == 1 or len(scripts) == 1:
+                self.entry = (scripts or self.extra)[0]
+                self.extra.remove(self.entry)
+        self._update_inputs()
+
+    def _use_as_script(self):
+        item = self.inputs.currentItem()
+        if item and item.text() in self.extra:
+            name = item.text()
+            self.extra.remove(name)
+            if self.entry:
+                self.extra.insert(0, self.entry)
+            self.entry = name
+            self._update_inputs()
 
     def _remove_file(self):
         item = self.inputs.currentItem()
@@ -362,8 +426,14 @@ class EsenWorkspace(QDialog):
         if self.entry:
             item = QListWidgetItem(self.entry)
             item.setToolTip(translate("LAMMPS input script"))
+            item.setData(Qt.ItemDataRole.AccessibleDescriptionRole, translate("LAMMPS input script"))
+            font = item.font()
+            font.setBold(True)
+            item.setFont(font)
             self.inputs.addItem(item)
         self.inputs.addItems(self.extra)
+        if not self.entry and self.extra:
+            self.inputs.setCurrentRow(0)
         self._preview()
 
     def _command(self):
@@ -398,6 +468,9 @@ class EsenWorkspace(QDialog):
             self.preview.setPlainText(translate(str(error)))
             self.command_valid = False
         lines = [str(self.input_root)] if self.input_root else []
+        if not self.entry:
+            lines.append(translate("Select the input file and click Use as script." if self.extra else
+                                   "Load files or drop them on the input list."))
         if remote and self.entry:
             try:
                 with (self.input_root / self.entry).open("rb") as stream:
@@ -549,7 +622,9 @@ class EsenWorkspace(QDialog):
         remote = self.target.currentData() == "remote"
         self.start.setEnabled(self.command_valid and ((authenticated and not self.remote_task) if remote else not self.local_task))
         item = self.inputs.currentItem()
-        self.remove_inputs.setEnabled(bool(item and item.text() in self.extra))
+        supporting_file_selected = bool(item and item.text() in self.extra)
+        self.use_as_script.setEnabled(supporting_file_selected)
+        self.remove_inputs.setEnabled(supporting_file_selected)
         self.open_folder.setEnabled(directory is not None)
         self.use_inputs.setEnabled(bool(record and directory and directory not in self._active_directories()
                                         and (directory / "inputs" / jobs.relative_file(record["name"])).is_file()))

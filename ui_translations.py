@@ -15,10 +15,11 @@ LAMMPS module|LAMMPS modülü
 Linux executable|Linux programı
 Input script…|Girdi betiği…
 Job folder…|İş klasörü…
-Add files…|Dosya ekle…
+Load files…|Dosya yükle…
 LAMMPS input files|LAMMPS girdi dosyaları
 Include entire job folder|İş klasörünün tamamını ekle
 Remove file|Dosyayı çıkar
+Use as script|Betik olarak seç
 Run LAMMPS|LAMMPS'i çalıştır
 Job history|İş geçmişi
 ESEN job history|ESEN iş geçmişi
@@ -36,7 +37,10 @@ Open job folder|İş klasörünü aç
 Download file|Dosyayı indir
 LAMMPS input script|LAMMPS girdi betiği
 Job folder|İş klasörü
-Add input files|Girdi dosyası ekle
+Load input files|Girdi dosyalarını yükle
+Load files or drop them on the input list.|Dosyaları yükleyin veya girdi listesine sürükleyip bırakın.
+Select the input file and click Use as script.|Girdi betiğini seçip Betik olarak seç düğmesine basın.
+Load existing files. To include a folder, use Job folder.|Mevcut dosyaları yükleyin. Klasör eklemek için İş klasörü düğmesini kullanın.
 Choose files inside the job folder.|İş klasörünün içinden dosya seçin.
 Choose a LAMMPS input script.|Bir LAMMPS girdi betiği seçin.
 The selected input script is missing.|Seçilen girdi betiği bulunamadı.
