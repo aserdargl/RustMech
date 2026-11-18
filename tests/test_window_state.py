@@ -5,10 +5,10 @@ import unittest
 from ctypes import wintypes
 from pathlib import Path
 
-from PySide6.QtCore import QSettings, Qt
+from PySide6.QtCore import QPoint, QSettings, Qt
 from PySide6.QtWidgets import QApplication, QDialog, QFileDialog, QMainWindow, QMenu, QSplitter, QVBoxLayout, QWidget
 
-from window_caption import CAPTION_PROPERTY, CaptionButton, MonitorInfo, install_window_captions
+from window_caption import CAPTION_PROPERTY, WM_NCHITTEST, CaptionButton, MonitorInfo, install_window_captions
 from window_state import WindowStateStore
 
 
@@ -184,6 +184,18 @@ class WindowStateTests(unittest.TestCase):
         self.assertGreaterEqual(main.centralWidget().y(), caption.geometry().bottom() + 1)
         self.assertTrue(caption.outline.isVisible())
         self.assertTrue(caption.outline.testAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents))
+        if service._native_frame is not None:
+            # VTK's native viewport likewise promotes the surrounding Qt widgets.
+            main.centralWidget().winId()
+            self.assertIsNotNone(caption.outline.windowHandle())
+            send_message = ctypes.windll.user32.SendMessageW
+            send_message.argtypes = (wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM)
+            send_message.restype = ctypes.c_ssize_t
+            self.assertEqual(send_message(int(caption.outline.winId()), WM_NCHITTEST, 0, 0), -1)
+        main.resize(660, 450)
+        self.app.processEvents()
+        self.assertTrue(caption.outline.mask().contains(QPoint(main.width() - 1, main.height() - 1)))
+        self.assertFalse(caption.outline.mask().contains(main.rect().center()))
         normal = main.geometry()
         buttons[1].click()
         self.app.processEvents()

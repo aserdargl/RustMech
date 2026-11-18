@@ -4,7 +4,7 @@ import ctypes
 from ctypes import wintypes
 
 from PySide6.QtCore import QAbstractNativeEventFilter, QEvent, QMargins, QObject, QPoint, QPointF, QRect, Qt
-from PySide6.QtGui import QColor, QCursor, QFont, QPainter, QPainterPath, QPen
+from PySide6.QtGui import QColor, QCursor, QFont, QPainter, QPainterPath, QPen, QRegion
 from PySide6.QtWidgets import QAbstractButton, QApplication, QDialog, QHBoxLayout, QMainWindow, QWidget
 
 
@@ -15,6 +15,7 @@ WM_GETMINMAXINFO = 0x0024
 WM_NCCALCSIZE = 0x0083
 WM_NCHITTEST = 0x0084
 WM_NCLBUTTONDBLCLK = 0x00A3
+HTTRANSPARENT = -1
 WS_DLGFRAME = 0x00400000
 ACTION_HINTS = (
     ("minimize", Qt.WindowType.WindowMinimizeButtonHint),
@@ -89,6 +90,8 @@ class WindowsCaptionFrame(QAbstractNativeEventFilter):
         if native.message not in (WM_GETMINMAXINFO, WM_NCCALCSIZE, WM_NCHITTEST, WM_NCLBUTTONDBLCLK):
             return False, 0
         window = QWidget.find(int(native.hWnd or 0))
+        if native.message == WM_NCHITTEST and isinstance(window, WindowOutline):
+            return True, HTTRANSPARENT
         caption = window.property(CAPTION_PROPERTY) if window is not None else None
         if caption is None or (window.isFullScreen() and not window.isMaximized()):
             return False, 0
@@ -199,6 +202,13 @@ class WindowOutline(QWidget):
     def __init__(self, window):
         super().__init__(window)
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+
+    def resizeEvent(self, event):
+        # A native viewport can make this sibling native too. Leave the interior
+        # outside its window region so it cannot cover the viewport or take clicks.
+        outline = self.rect()
+        self.setMask(QRegion(outline).subtracted(QRegion(outline.adjusted(1, 1, -1, -1))))
+        super().resizeEvent(event)
 
     def paintEvent(self, event):
         painter = QPainter(self)
