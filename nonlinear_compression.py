@@ -3173,7 +3173,7 @@ class RustMechDialog(QDialog):
         self.status.setText(f"{name}: configure material, mesh and solver; Designs > Add current model to analysis queue.")
 
     def import_flow_geometry(self):
-        from PySide6.QtWidgets import QFileDialog
+        from file_dialog import QFileDialog
         from imported_geometry import read_surface, prepare_general_surface, store_surface
         if self.project_workspace.busy():
             QMessageBox.information(self, "Geometry import", "Wait for the current operation to finish before replacing geometry.")
@@ -3371,7 +3371,7 @@ class RustMechDialog(QDialog):
         if self.analysis_job is not None or self.remote_controller.future is not None:
             QMessageBox.information(self,"TRUBA job","Wait for the current operation to finish, or stop it first.")
             return
-        from PySide6.QtWidgets import QFileDialog
+        from file_dialog import QFileDialog
         from truba_credentials import state_directory
         filename,_=QFileDialog.getOpenFileName(self,"Retrieve TRUBA job",str(state_directory()/"jobs"),"TRUBA job record (*.json)")
         if not filename:return

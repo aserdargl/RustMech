@@ -11,12 +11,13 @@ from studio_style import CompactSpinBox, CompactComboBox
 from PySide6.QtCore import QTimer, Qt
 from PySide6.QtGui import QActionGroup
 from PySide6.QtWidgets import (
-    QAbstractItemView, QCheckBox, QComboBox, QDialog, QFileDialog, QFormLayout, QFrame,
+    QAbstractItemView, QCheckBox, QComboBox, QDialog, QFormLayout, QFrame,
     QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMenu, QMessageBox, QPushButton,
     QScrollArea, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
 from analysis_process import AnalysisProcess
+from file_dialog import QFileDialog
 from model import ANALYSIS_FIELDS, TETRAHEDRAL_MESH_TYPES, validate_settings
 from solver_api import SOLVER_REGISTRY, get_solver_capabilities
 from mesh_convergence_style import CONVERGENCE_STYLESHEET

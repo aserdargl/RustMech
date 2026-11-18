@@ -10,11 +10,12 @@ import pyvista as pv
 from studio_style import CompactSpinBox, CompactComboBox
 from PySide6.QtCore import QSettings, Qt, QTimer, QUrl
 from PySide6.QtGui import QDesktopServices
-from PySide6.QtWidgets import (QCheckBox, QComboBox, QFileDialog, QFormLayout, QHBoxLayout,
+from PySide6.QtWidgets import (QCheckBox, QComboBox, QFormLayout, QHBoxLayout,
                               QLabel, QLineEdit, QPushButton, QScrollArea,
                               QSplitter, QVBoxLayout, QWidget, QSizePolicy)
 
 from analysis_process import AnalysisProcess
+from file_dialog import QFileDialog
 from flow_analysis import FlowSettings, export_flow_case, export_geometry_inspection, execute_flow_case, stop_flow_case
 from model import ROOT
 from preview_viewport import create_preview_viewport

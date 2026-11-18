@@ -12,12 +12,13 @@ from threading import Event
 from PySide6.QtCore import QSettings, QSignalBlocker, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
-    QCheckBox, QDialog, QFileDialog, QFormLayout, QFrame, QHBoxLayout, QLabel,
+    QCheckBox, QDialog, QFormLayout, QFrame, QHBoxLayout, QLabel,
     QLineEdit, QListWidget, QListWidgetItem, QPlainTextEdit, QPushButton,
     QSizePolicy, QSplitter, QVBoxLayout,
 )
 
 import esen_jobs as jobs
+from file_dialog import QFileDialog
 from studio_style import (
     ActionFlowLayout, CompactComboBox, CompactSpinBox, CONTROL_HEIGHT,
     STUDIO_STYLESHEET, configure_form, field_label,

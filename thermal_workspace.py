@@ -10,10 +10,11 @@ import pyvista as pv
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
 from PySide6.QtCore import Qt,QTimer
-from PySide6.QtWidgets import (QFileDialog,QFormLayout,QHBoxLayout,QLabel,QPushButton,
+from PySide6.QtWidgets import (QFormLayout,QHBoxLayout,QLabel,QPushButton,
                               QSlider,QSplitter,QWidget,QSizePolicy)
 
 from analysis_process import AnalysisProcess
+from file_dialog import QFileDialog
 from flow_workspace import FlowWorkspace
 from flow_analysis import FlowSettings
 from model import ROOT

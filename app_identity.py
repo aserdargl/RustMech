@@ -13,10 +13,14 @@ ICON_PATH = Path(__file__).resolve().parent / "assets" / "ui" / "rustmech.ico"
 def configure_application(app):
     """Set identity before creating windows; child windows inherit the icon."""
     from datenburg_widgets import install_button_shadows
+    from file_dialog import install_file_dialogs
     from window_caption import install_window_captions
+    from window_state import install_window_state
 
     install_button_shadows(app)
     install_window_captions(app)
+    install_file_dialogs(app)
+    install_window_state(app)
     if sys.platform == "win32":
         import ctypes
 

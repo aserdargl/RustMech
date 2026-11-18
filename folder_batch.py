@@ -9,10 +9,11 @@ import re
 
 import numpy as np
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtWidgets import (QAbstractItemView, QApplication, QDialog, QFileDialog,
+from PySide6.QtWidgets import (QAbstractItemView, QApplication, QDialog,
                               QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPushButton,
                               QTableWidget, QTableWidgetItem, QVBoxLayout)
 
+from file_dialog import QFileDialog
 from imported_geometry import (automatic_compression_faces, compression_direction,
                                read_surface, store_surface)
 from model import settings_from_dict

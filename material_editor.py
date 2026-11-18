@@ -13,7 +13,6 @@ from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
     QDoubleSpinBox,
-    QFileDialog,
     QFormLayout,
     QHeaderView,
     QLabel,
@@ -27,6 +26,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from file_dialog import QFileDialog
 from studio_style import ActionFlowLayout, CompactDoubleSpinBox, SidebarGroupBox, configure_form, field_label
 from model import (
     MATERIAL_FIELDS, MATERIAL_MODELS, ROOT, Settings, load_material, save_material,

@@ -1,0 +1,84 @@
+"""Exercise the shared picker through the application's file-selection entry points."""
+
+from pathlib import Path
+
+import pytest
+from PySide6.QtCore import QDir, QSettings, Qt, QTimer
+from PySide6.QtTest import QTest
+from PySide6.QtWidgets import QApplication, QComboBox, QLineEdit, QStackedWidget, QWidget
+
+from file_dialog import QFileDialog, install_file_dialogs
+from window_caption import CAPTION_PROPERTY, install_window_captions
+from window_state import WindowStateStore
+
+
+@pytest.fixture
+def picker_app(tmp_path):
+    app = QApplication.instance() or QApplication([])
+    attribute = Qt.ApplicationAttribute.AA_DontUseNativeDialogs
+    previous = app.testAttribute(attribute)
+    install_window_captions(app)
+    install_file_dialogs(app)
+    store = WindowStateStore(app, QSettings(str(tmp_path / "windows.ini"), QSettings.Format.IniFormat))
+    yield app
+    app.removeEventFilter(store)
+    store.deleteLater()
+    for name in ("_rustmech_file_dialog_service", "_rustmech_caption_service"):
+        service = getattr(app, name)
+        app.removeEventFilter(service)
+        if frame := getattr(service, "_native_frame", None):
+            app.removeNativeEventFilter(frame)
+        delattr(app, name)
+        service.deleteLater()
+    app.setAttribute(attribute, previous)
+
+
+@pytest.mark.parametrize("method", ["getOpenFileName", "getOpenFileNames", "getSaveFileName", "getExistingDirectory"])
+def test_picker_navigation_and_geometry(picker_app, tmp_path, method):
+    nested = tmp_path / "a folder"
+    nested.mkdir()
+    owner = QWidget()
+    owner.show()
+    visits = []
+
+    def inspect():
+        dialog = picker_app.activeModalWidget()
+        try:
+            combo = dialog.findChild(QComboBox, "lookInCombo")
+            address = combo.lineEdit()
+            sidebar = dialog.findChild(QWidget, "sidebar")
+            files = dialog.findChild(QStackedWidget, "stackedWidget")
+            caption = dialog.property(CAPTION_PROPERTY)
+            if not visits:
+                dialog.resize(710, 465)
+                dialog.move(90, 105)
+            geometry = dialog.geometry()
+            filename = dialog.findChild(QLineEdit, "fileNameEdit")
+            filename.setFocus()
+            QTest.keyClick(filename, Qt.Key.Key_L, Qt.KeyboardModifier.ControlModifier)
+            shortcut_worked = dialog.focusWidget() in (combo, address) and address.selectedText() == address.text()
+            address.setText(nested.name)
+            QTest.keyClick(address, Qt.Key.Key_Return)
+            after_enter = Path(dialog.directory().absolutePath())
+            QTest.keyClick(address, Qt.Key.Key_Left, Qt.KeyboardModifier.AltModifier)
+            after_back = Path(dialog.directory().absolutePath())
+            QTest.keyClick(address, Qt.Key.Key_Right, Qt.KeyboardModifier.AltModifier)
+            after_forward = Path(dialog.directory().absolutePath())
+            QTest.keyClick(address, Qt.Key.Key_Up, Qt.KeyboardModifier.AltModifier)
+            visits.append((geometry, sidebar.isHidden(), files.x(), caption.height(), shortcut_worked,
+                           after_enter, after_back, after_forward,
+                           Path(QDir.fromNativeSeparators(address.text())), dialog.isVisible()))
+        finally:
+            dialog.reject()
+
+    try:
+        for _ in range(2):
+            QTimer.singleShot(0, inspect)
+            getattr(QFileDialog, method)(owner, "Choose", str(tmp_path))
+        assert visits[0] == visits[1]
+        _, hidden, file_list_left, caption_height, shortcut, entered, back, forward, address, still_open = visits[0]
+        assert hidden and file_list_left < 25
+        assert caption_height == 25 and shortcut and still_open
+        assert (entered, back, forward, address) == (nested, tmp_path, nested, tmp_path)
+    finally:
+        owner.close()

@@ -5,7 +5,7 @@ from contextlib import nullcontext
 from PySide6.QtCore import Qt
 
 def choose_geometry(parent):
-    from PySide6.QtWidgets import QFileDialog
+    from file_dialog import QFileDialog
     path, _ = QFileDialog.getOpenFileName(parent, 'Import geometry (mm)', '', 'Surface geometry (*.stl *.obj *.ply *.vtp)')
     if not path:
         return None

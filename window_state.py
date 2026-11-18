@@ -12,10 +12,15 @@ class WindowStateStore(QObject):
 
     @staticmethod
     def key(window):
+        if isinstance(window, QFileDialog):
+            return f"windows/QFileDialog/{window.acceptMode().name}/{window.fileMode().name}"
         return f"windows/{type(window).__name__}/{window.objectName() or 'default'}"
 
     @staticmethod
     def splitters(window):
+        if isinstance(window, QFileDialog):
+            # Qt owns the picker splitter. Its shortcuts pane is hidden.
+            return []
         # QObject descendants also include owned top-level windows. Their
         # layouts belong exclusively to their own preferences, not the owner.
         return [splitter for splitter in window.findChildren(QSplitter)
@@ -73,12 +78,17 @@ class WindowStateStore(QObject):
                 window.restoreState(state)
 
     def eventFilter(self, window, event):
+        kind = event.type()
+        if kind not in (QEvent.Type.Show, QEvent.Type.Close, QEvent.Type.Hide):
+            return False
         if (isinstance(window, (QDialog, QMainWindow)) and window.isWindow()
-                and not isinstance(window, (QFileDialog, QMessageBox))):
-            if event.type() == QEvent.Type.Show and not window.property("preferencesRestored"):
+                and not isinstance(window, QMessageBox)):
+            if isinstance(window, QFileDialog) and not window.testOption(QFileDialog.Option.DontUseNativeDialog):
+                return False
+            if kind == QEvent.Type.Show and not window.property("preferencesRestored"):
                 window.setProperty("preferencesRestored", True)
                 self.restore(window)
-            elif event.type() in (QEvent.Type.Close, QEvent.Type.Hide) and window.property("preferencesRestored"):
+            elif kind in (QEvent.Type.Close, QEvent.Type.Hide) and window.property("preferencesRestored"):
                 self.save(window)
         return False
 

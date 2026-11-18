@@ -33,7 +33,6 @@ from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
     QDoubleSpinBox,
-    QFileDialog,
     QFrame,
     QHeaderView,
     QLabel,
@@ -51,6 +50,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from file_dialog import QFileDialog
 from model import MIN_MESH_INPUT_MM, ROOT, Settings, settings_from_dict, validate_geometry
 from studio_style import ActionFlowLayout, CONTROL_HEIGHT, NUMERIC_FIELD_WIDTH, CompactDoubleSpinBox
 from structure_library import (

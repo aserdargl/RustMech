@@ -3,7 +3,8 @@ from dataclasses import asdict
 import json
 from pathlib import Path
 
-from PySide6.QtWidgets import QFileDialog, QMessageBox, QAbstractSpinBox, QWidget
+from PySide6.QtWidgets import QMessageBox, QAbstractSpinBox, QWidget
+from file_dialog import QFileDialog
 
 from analysis_project import AnalysisProject, load_project, save_project
 from solver_api import get_solver_capabilities
