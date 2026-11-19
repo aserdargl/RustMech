@@ -43,6 +43,7 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QSizePolicy,
     QSplitter,
+    QStyle,
     QTabBar,
     QTableWidget,
     QTableWidgetItem,
@@ -366,8 +367,17 @@ class DoEStudioWindow(QMainWindow):
         self.setObjectName("doeStudioWindow")
         self.setWindowTitle("DoE · RustMech")
         self.setCentralWidget(studio)
-        self.resize(1180, 780)
         self.setMinimumSize(680, 480)
+        width, height = 1180, 780
+        screen = self.screen()
+        if screen is not None:
+            # Match restoreGeometry's screen limits so reopening at the
+            # default size does not shrink the workspace and its splitters.
+            area = screen.availableGeometry()
+            title_height = QApplication.style().pixelMetric(QStyle.PixelMetric.PM_TitleBarHeight, None, self)
+            width = min(width, area.width() - 2)
+            height = min(height, area.height() - title_height - 2)
+        self.resize(width, height)
 
     def open_workspace(self):
         from window_state import show_restored_window
