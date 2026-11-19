@@ -475,6 +475,94 @@ class EsenTests(unittest.TestCase):
         actual = store.splitters(second)[0].sizes()
         self.assertAlmostEqual(actual[0] / sum(actual), expected[0] / sum(expected), delta=0.03)
 
+    def test_analysis_folder_review_submits_checked_folders_as_independent_jobs(self):
+        app = QApplication.instance() or QApplication([])
+        first = self.source / "01-single"
+        second = self.source / "02-study" / "case"
+        ignored = self.source / "03-helper"
+        previous = self.source / "Results" / "old"
+        for folder in (first, second, ignored, previous):
+            folder.mkdir(parents=True)
+            (folder / "in.run").touch()
+        (second / "restart.IN").touch()
+        first, second = first.resolve(), second.resolve()
+
+        truba = FakeTruba()
+        preferences = QSettings(str(self.root / "settings.ini"), QSettings.Format.IniFormat)
+        with patch("esen_workspace.QSettings", return_value=preferences):
+            workspace = EsenWorkspace(truba, history=self.history)
+        self.addCleanup(workspace.dispose)
+        workspace.show()
+        app.processEvents()
+        with patch("esen_workspace.QFileDialog.getExistingDirectory", return_value=str(self.source)):
+            workspace.batch_folder.click()
+        review = workspace.batch_dialog
+        review.scan.result(timeout=5)
+        review._check_scan()
+        self.assertEqual(review.table.rowCount(), 3)
+        self.assertEqual(review.table.cellWidget(0, 1).currentData(), "in.run")
+        ambiguous = review.table.cellWidget(1, 1)
+        self.assertIsNone(ambiguous.currentData())
+        self.assertFalse(review.submit.isEnabled())
+        truba.auth = self.auth
+        truba.connection_changed.emit(True)
+        self.assertFalse(review.submit.isEnabled())
+        ambiguous.setCurrentIndex(ambiguous.findData("restart.IN"))
+        review.table.item(2, 0).setCheckState(Qt.CheckState.Unchecked)
+        self.assertTrue(review.submit.isEnabled())
+        QTest.keyClick(ambiguous, Qt.Key.Key_Return)
+        self.assertEqual(workspace.history.count(), 0)
+
+        def submit(directory, record, files, settings, auth):
+            self.assertEqual((files[2], files[3]), ((), True))
+            self.assertEqual(auth, self.auth)
+            self.assertEqual(settings["walltime"], "00:30:00")
+            if files[0] == first:
+                jobs.save_job(directory, record, state="Failed", detail="Fixture rejection")
+            else:
+                jobs.save_job(directory, record, state="Submitted", job_id="789", username=auth.username)
+
+        with patch("esen_jobs.submit_full_node", side_effect=submit) as launch:
+            review.submit.click()
+            for _ in range(2):
+                workspace.remote_task[1].result(timeout=5)
+                workspace._tick()
+            self.assertEqual([call.args[2][:2] for call in launch.call_args_list],
+                             [(first, "in.run"), (second, "restart.IN")])
+
+        self.assertIsNone(workspace.batch_dialog)
+        self.assertEqual(workspace.history.count(), 2)
+        self.assertIn("02-study/case/restart.IN", workspace.history.item(0).text())
+        self.assertIn("Failed", workspace.history.item(1).text())
+        submitted, = workspace._active_truba_jobs
+        record = jobs.read_job(submitted)
+        self.assertEqual(jobs.result_directory(submitted, record).parent, second / "Results")
+
+    def test_analysis_folder_review_restores_maximized_and_normal_geometry(self):
+        app = QApplication.instance() or QApplication([])
+        preferences = QSettings(str(self.root / "settings.ini"), QSettings.Format.IniFormat)
+        store = WindowStateStore(app, preferences)
+        self.addCleanup(app.removeEventFilter, store)
+        with patch("esen_workspace.QSettings", return_value=preferences):
+            workspace = EsenWorkspace(FakeTruba(), history=self.history)
+        self.addCleanup(workspace.dispose)
+        workspace.show()
+        with patch("esen_workspace.QFileDialog.getExistingDirectory", return_value=str(self.source)):
+            workspace.batch_folder.click()
+            review = workspace.batch_dialog
+            review.resize(590, 345)
+            review.move(35, 45)
+            app.processEvents()
+            review.showMaximized()
+            app.processEvents()
+            normal = review.normalGeometry()
+            review.close()
+            workspace.batch_folder.click()
+            restored = workspace.batch_dialog
+            app.processEvents()
+        self.assertTrue(restored.isMaximized())
+        self.assertEqual(restored.normalGeometry(), normal)
+
 
 if __name__ == "__main__":
     unittest.main()

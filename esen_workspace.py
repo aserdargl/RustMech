@@ -12,11 +12,12 @@ from threading import Event
 from PySide6.QtCore import QSettings, QSignalBlocker, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
-    QCheckBox, QDialog, QFormLayout, QFrame, QHBoxLayout, QLabel,
+    QCheckBox, QDialog, QFormLayout, QFrame, QHBoxLayout, QHeaderView, QLabel,
     QLineEdit, QListWidget, QListWidgetItem, QPlainTextEdit, QPushButton,
-    QScrollArea, QSizePolicy, QSplitter, QVBoxLayout,
+    QScrollArea, QSizePolicy, QSplitter, QTableWidget, QTableWidgetItem, QVBoxLayout,
 )
 
+from datenburg_widgets import qss_asset_url
 import esen_jobs as jobs
 from file_dialog import QFileDialog
 from studio_style import (
@@ -24,13 +25,14 @@ from studio_style import (
     STUDIO_STYLESHEET, SidebarGroupBox, configure_form, field_label,
 )
 from ui_language import translate
+from window_state import show_restored_window
 
 
 WORKSPACE_TITLE = "ESEN STUDIES"
-ACTIVE_TRUBA_STATES = frozenset({"Submitted", "Queued", "Running", "Cancellation requested"})
+ACTIVE_TRUBA_STATES = frozenset({"Submitting", "Submitted", "Queued", "Running", "Cancellation requested"})
 
 ESEN_STYLE = """
-QDialog#esenWorkspace { background: #F5F5F3; }
+QDialog#esenWorkspace, QDialog#esenBatch { background: #F5F5F3; }
 #esenTitle { background: #BFDBFE; border: 1px solid #2563EB; border-radius: 6px;
              color: #0F172A; font-size: 14px; padding-left: 6px; }
 QFrame[esenCard="true"] { background: #FCFCFB; border: 1px solid #D5DBE2; border-radius: 7px; }
@@ -40,6 +42,13 @@ QFrame[esenCard="paper"] { background: #FFFFFF; border: 1px solid #D5DBE2; borde
 #esenWorkspace QPlainTextEdit, #esenWorkspace QListWidget {
     background: #FFFFFF; border: 1px solid #DCE3EC; border-radius: 3px;
 }
+#esenBatch QTableWidget { background: #FFFFFF; border: 1px solid #DCE3EC; border-radius: 3px; }
+#esenBatch QHeaderView::section { background: #E5ECF4; }
+#esenBatch QTableWidget::indicator { width: 13px; height: 13px; background: #FFFFFF;
+                                    border: 1px solid #AAAAAA; border-radius: 2px; }
+#esenBatch QTableWidget::indicator:checked { border-color: #2563EB;
+                                           image: url(@ESEN_CHECK@); }
+#esenBatch QTableWidget::indicator:hover { border-color: #2563EB; }
 #esenWorkspace QPlainTextEdit { font-family: Consolas; font-size: 12px; }
 #esenFieldLabel { color: #475569; font-size: 11px; }
 #esenWorkspace #trubaConnectionBadge { margin: 0; }
@@ -49,7 +58,7 @@ QFrame[esenCard="paper"] { background: #FFFFFF; border: 1px solid #D5DBE2; borde
 #esenRun:hover { background: #245692; }
 #esenRun:pressed { background: #1E477C; }
 #esenRun:disabled { background: #EBEBEB; color: #808080; border-color: #D6D6D6; }
-"""
+""".replace("@ESEN_CHECK@", qss_asset_url("checkbox-check-blue.svg"))
 
 
 def panel(title, *, paper=False, scrollable=False):
@@ -146,6 +155,116 @@ class InputFileList(CompactListWidget):
             event.ignore()
 
 
+class EsenBatchDialog(QDialog):
+    def __init__(self, workspace, root):
+        super().__init__(workspace)
+        self.workspace = workspace
+        self.root = root
+        self.folders = []
+        self.setObjectName("esenBatch")
+        self.setWindowTitle("TRUBA folder submission")
+        self.setWindowFlag(Qt.WindowType.WindowMinMaxButtonsHint)
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        self.setStyleSheet(STUDIO_STYLESHEET + ESEN_STYLE)
+        self.resize(680, 420)
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(8, 8, 8, 8)
+        card, layout = panel("Discovered LAMMPS jobs", paper=True)
+        outer.addWidget(card, 1)
+        location = QLabel(str(root))
+        location.setTextFormat(Qt.TextFormat.PlainText)
+        location.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        location.setWordWrap(True)
+        layout.addWidget(location)
+        self.table = QTableWidget(0, 2)
+        self.table.setHorizontalHeaderLabels(["Analysis folder", "Main script"])
+        self.table.setAccessibleName("Discovered LAMMPS jobs")
+        self.table.verticalHeader().hide()
+        self.table.verticalHeader().setDefaultSectionSize(CONTROL_HEIGHT + 5)
+        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed)
+        self.table.setColumnWidth(1, 106)
+        layout.addWidget(self.table, 1)
+        self.message = QLabel("Scanning for LAMMPS input scripts…")
+        self.message.setTextFormat(Qt.TextFormat.PlainText)
+        self.message.setWordWrap(True)
+        layout.addWidget(self.message)
+        self.submit = command("Send to TRUBA", self._submit, role="esenRun")
+        self.submit.setEnabled(False)
+        layout.addLayout(button_row(self.submit, command("Close", self.reject)))
+
+        self.scan = workspace.executor.submit(jobs.discover_job_folders, root)
+        self.scan_timer = QTimer(self)
+        self.scan_timer.setInterval(100)
+        self.scan_timer.timeout.connect(self._check_scan)
+        self.scan_timer.start()
+        self.finished.connect(lambda: self.scan.cancel())
+        self.table.itemChanged.connect(self._selection_changed)
+
+    def _check_scan(self):
+        if not self.scan.done():
+            return
+        self.scan_timer.stop()
+        try:
+            self.folders = self.scan.result()
+        except (OSError, ValueError) as error:
+            self.message.setText(str(error))
+            return
+        if not self.folders:
+            self.message.setText(translate("No LAMMPS input scripts named in.* or *.in were found."))
+            return
+        script_width = 100
+        with QSignalBlocker(self.table):
+            self.table.setRowCount(len(self.folders))
+            for row, (folder, scripts) in enumerate(self.folders):
+                name = folder.relative_to(self.root).as_posix()
+                item = QTableWidgetItem(self.root.name if name == "." else name)
+                item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                item.setToolTip(str(folder))
+                item.setCheckState(Qt.CheckState.Checked)
+                self.table.setItem(row, 0, item)
+                options = [(script, script) for script in scripts]
+                if len(scripts) > 1:
+                    options.insert(0, ("Choose main script…", None))
+                selector = compact_combo(options)
+                selector.setAccessibleName(f"{translate('Main script')} · {item.text()}")
+                selector.setToolTip(selector.currentText())
+                selector.currentTextChanged.connect(selector.setToolTip)
+                selector.currentIndexChanged.connect(self._selection_changed)
+                self.table.setCellWidget(row, 1, selector)
+                script_width = max(script_width, selector.width())
+        self.table.setColumnWidth(1, script_width + 6)
+        self._selection_changed()
+
+    def _selected_jobs(self):
+        return [(folder, self.table.cellWidget(row, 1).currentData())
+                for row, (folder, _) in enumerate(self.folders)
+                if self.table.item(row, 0).checkState() == Qt.CheckState.Checked]
+
+    def _selection_changed(self, *_):
+        selected = self._selected_jobs()
+        self.submit.setEnabled(bool(selected and all(script for _, script in selected)
+                                    and self.workspace.truba.analysis_auth() and not self.workspace.batch_queue))
+        if not self.folders:
+            return
+        if not self.workspace.truba.analysis_auth():
+            message = "Connect using the main TRUBA button."
+        elif any(not script for _, script in selected):
+            message = "Choose a main script for each checked folder."
+        else:
+            message = "Checked folders use the current TRUBA settings and run as separate jobs."
+        self.message.setText(translate(message))
+
+    def _submit(self):
+        try:
+            self.workspace._queue_batch(self.root, self._selected_jobs())
+        except (OSError, ValueError) as error:
+            self.message.setText(translate(str(error)))
+        else:
+            self.accept()
+
+
 class EsenWorkspace(QDialog):
     def __init__(self, truba, parent=None, *, history=None):
         super().__init__(parent)
@@ -159,6 +278,8 @@ class EsenWorkspace(QDialog):
         self.preferences = QSettings("RustMech", "RustMech")
         self.executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="esen")
         self.local_task = self.remote_task = None
+        self.batch_dialog = None
+        self.batch_queue = {}
         self._active_truba_jobs = {}
         self.local_stop = Event()
         self.record = None
@@ -280,6 +401,8 @@ class EsenWorkspace(QDialog):
         self.load_files = command("Load files…", self._pick_files)
         layout.addLayout(button_row(self.load_files, command("Input script…", self._pick_script),
                                     command("Job folder…", self._pick_root)))
+        self.batch_folder = command("TRUBA analysis folder…", self._pick_batch_folder)
+        layout.addLayout(button_row(self.batch_folder))
         self.inputs = InputFileList()
         self.inputs.setAcceptDrops(True)
         self.inputs.viewport().setAcceptDrops(True)
@@ -431,6 +554,26 @@ class EsenWorkspace(QDialog):
         files, _ = QFileDialog.getOpenFileNames(self, translate("Load input files"), str(self.input_root or Path.home()))
         self._load_files(files)
 
+    def _pick_batch_folder(self):
+        initial = self.preferences.value("esen/batchFolder", str(self.input_root or Path.home()))
+        name = QFileDialog.getExistingDirectory(self, translate("TRUBA analysis folder"), str(initial))
+        if not name:
+            return
+        try:
+            root = Path(name).resolve(strict=True)
+        except OSError as error:
+            self.input_note.setText(str(error))
+            return
+        self.preferences.setValue("esen/batchFolder", str(root))
+        self.batch_dialog = EsenBatchDialog(self, root)
+        self.batch_dialog.finished.connect(self._batch_dialog_closed)
+        show_restored_window(self.batch_dialog)
+        self._buttons()
+
+    def _batch_dialog_closed(self):
+        self.batch_dialog = None
+        self._buttons()
+
     def _load_files(self, files):
         if not files:
             return
@@ -454,8 +597,7 @@ class EsenWorkspace(QDialog):
         supporting_files = [name for name in names if name != self.entry]
         self.extra = list(dict.fromkeys(self.extra + supporting_files))
         if not self.entry:
-            scripts = [name for name in self.extra
-                       if Path(name).name.lower().startswith("in.") or Path(name).suffix.lower() == ".in"]
+            scripts = [name for name in self.extra if jobs.is_input_script(name)]
             if len(self.extra) == 1 or len(scripts) == 1:
                 self.entry = (scripts or self.extra)[0]
                 self.extra.remove(self.entry)
@@ -552,6 +694,8 @@ class EsenWorkspace(QDialog):
 
     def _connection_changed(self, *_):
         self._preview()
+        if self.batch_dialog is not None:
+            self.batch_dialog._selection_changed()
         self._auto_refresh(manual=bool(self.record and self.record.get("remote_run")))
 
     def _load_history(self):
@@ -586,9 +730,16 @@ class EsenWorkspace(QDialog):
             self._active_truba_jobs.pop(directory, None)
         target = translate("This computer") if record["target"] == "local" else "TRUBA"
         state = translate(self._state(directory, record))
-        item.setText(f"{record['name']} · {target} · {state}")
+        name = record["name"]
+        if record.get("batch_folder"):
+            name = f"{record['batch_folder']}/{name}"
+        item.setText(f"{name} · {target} · {state}")
+        if record.get("source"):
+            item.setToolTip(record["source"])
 
     def _state(self, directory, record):
+        if record["state"] == "Preparing" and directory in self.batch_queue:
+            return "Waiting to submit"
         if record["state"] == "Preparing" and directory not in self._active_directories():
             return "Interrupted"
         if record["target"] == "local" and record["state"] == "Running" and directory not in self._active_directories():
@@ -617,8 +768,7 @@ class EsenWorkspace(QDialog):
         files = (self.input_root, self.entry, tuple(self.extra), self.whole_folder.isChecked())
         self._save_profiles()
         if target == "remote":
-            future = self.executor.submit(jobs.submit_full_node, directory, record, files, self._remote_settings(auth), auth)
-            self.remote_task = (directory, future)
+            self._submit_remote(directory, record, files, self._remote_settings(auth), auth)
         else:
             self.local_stop = Event()
             future = self.executor.submit(jobs.run_local, directory, record, files, invocation, self.local_stop,
@@ -626,6 +776,64 @@ class EsenWorkspace(QDialog):
             self.local_task = (directory, future)
         self._history_item(directory, record, prepend=True)
         self._buttons()
+
+    def _submit_remote(self, directory, record, files, settings, auth):
+        future = self.executor.submit(jobs.submit_full_node, directory, record, files, settings, auth)
+        self.remote_task = (directory, future)
+
+    def _queue_batch(self, root, selected):
+        auth = self.truba.analysis_auth()
+        if not auth:
+            raise ValueError("Connect using the main TRUBA button.")
+        if not selected or any(not entry for _, entry in selected):
+            raise ValueError("Choose a main script for each checked folder.")
+        if self.batch_queue:
+            raise ValueError("An analysis folder is already being submitted.")
+        settings = self._remote_settings(auth)
+        limit = jobs.BASELINES[settings["partition"]]
+        restart = settings["resume_input"]
+        history = self.history_root.resolve()
+        for folder, entry in selected:
+            if history.is_relative_to(folder):
+                raise ValueError("Choose a job folder outside the ESEN history directory.")
+            if not (folder / jobs.relative_file(entry)).is_file():
+                raise ValueError(f"{translate('The selected input script is missing.')} {folder / entry}")
+            if restart and not (folder / jobs.relative_file(restart)).is_file():
+                raise ValueError(f"{translate('Include the LAMMPS restart input in the job files.')} {folder / restart}")
+        jobs.remote_script(selected[0][1], limit.max_cpus, memory=limit.memory_ceiling(limit.max_cpus), **settings)
+        self._save_profiles()
+        errors = []
+        for folder, entry in selected:
+            label = (Path(root.name) / folder.relative_to(root)).as_posix()
+            try:
+                directory, record = jobs.new_job(folder, entry, "remote", None, parent=self.history_root,
+                                                 batch_folder=label)
+            except OSError as error:
+                errors.append(f"{label}: {error}")
+                continue
+            self.batch_queue[directory] = (record, (folder, entry, (), True), settings, auth.username)
+            self._history_item(directory, record, prepend=True)
+        if errors:
+            if not self.batch_queue:
+                raise OSError("\n".join(errors))
+            self.input_note.setText("\n".join(errors))
+        self._submit_next_batch_job()
+        self._buttons()
+
+    def _submit_next_batch_job(self):
+        while self.batch_queue and not self.remote_task:
+            directory = next(iter(self.batch_queue))
+            record, files, settings, username = self.batch_queue.pop(directory)
+            auth = self.truba.analysis_auth()
+            if auth and auth.username == username:
+                self._submit_remote(directory, record, files, settings, auth)
+            else:
+                try:
+                    jobs.save_job(directory, record, state="Interrupted",
+                                  detail="TRUBA disconnected before this job was submitted.")
+                except OSError as error:
+                    self.input_note.setText(str(error))
+            self._update_finished_job(directory, record)
 
     def _select_job(self, *_):
         self.job_error = ""
@@ -716,6 +924,8 @@ class EsenWorkspace(QDialog):
                 self.truba_badge.style().unpolish(self.truba_badge)
                 self.truba_badge.style().polish(self.truba_badge)
         self.start.setEnabled(self.command_valid and ((authenticated and not self.remote_task) if remote else not self.local_task))
+        self.batch_folder.setVisible(remote)
+        self.batch_folder.setEnabled(not self.batch_queue and self.batch_dialog is None)
         item = self.inputs.currentItem()
         supporting_file_selected = bool(item and item.text() in self.extra)
         self.use_as_script.setEnabled(supporting_file_selected)
@@ -746,20 +956,24 @@ class EsenWorkspace(QDialog):
                 try:
                     future.result()
                     record = jobs.read_job(directory)
-                    for row in range(self.history.count()):
-                        item = self.history.item(row)
-                        if item.data(Qt.ItemDataRole.UserRole) == str(directory):
-                            self._update_history_item(item, directory, record)
-                            break
-                    else:
-                        self._history_item(directory, record, prepend=True)
+                    self._update_finished_job(directory, record)
                 except Exception as error:
                     if directory == self._selected_directory() or (
                         field == "remote_task" and directory not in self._active_truba_jobs
                     ):
                         self.job_error = str(error)
+        self._submit_next_batch_job()
         if self.isVisible():
             self._show_selected()
+
+    def _update_finished_job(self, directory, record):
+        for row in range(self.history.count()):
+            item = self.history.item(row)
+            if item.data(Qt.ItemDataRole.UserRole) == str(directory):
+                self._update_history_item(item, directory, record)
+                break
+        else:
+            self._history_item(directory, record, prepend=True)
 
     def _attach_remote(self):
         auth = self.truba.analysis_auth()
@@ -922,6 +1136,8 @@ class EsenWorkspace(QDialog):
             self._buttons()
 
     def closeEvent(self, event):
+        if self.batch_dialog is not None:
+            self.batch_dialog.reject()
         self._save_profiles()
         super().closeEvent(event)
 
@@ -931,6 +1147,8 @@ class EsenWorkspace(QDialog):
             self._save_profiles()
             self.timer.stop()
             self.poll_timer.stop()
+            if self.batch_dialog is not None:
+                self.batch_dialog.reject()
             self.local_stop.set()
             self.executor.shutdown(wait=False, cancel_futures=True)
             self.close()

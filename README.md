@@ -31,6 +31,22 @@ RustMech yeniden açıldığında TRUBA'ya tekrar bağlanıp aynı işi seçerek
 devam edin. Aynı girdileri diğer hedefte çalıştırmak için
 geçmişteki işi seçip **Girdileri yeniden kullan** düğmesine basın ve hedefi değiştirin.
 
+### Klasörden TRUBA’ya toplu gönderim
+
+**TRUBA analiz klasörü…** ile tek bir analiz klasörünü veya bağımsız analizleri
+içeren üst klasörü seçin. ESEN, seçilen klasörü ve alt klasörlerini tarar ve
+`in.*` ya da `*.in` betiği bulduğu her klasörü bir satırda gösterir. `Results`
+alt klasörleri taranmaz. Tek aday otomatik seçilir. Birden fazla aday varsa
+**Ana betik** listesinden seçin. Yardımcı betik klasörlerinin ve çalıştırmak
+istemediğiniz klasörlerin işaretini kaldırabilirsiniz.
+
+**TRUBA’ya gönder**, işaretli klasörleri mevcut TRUBA ayarlarıyla ayrı Slurm
+işleri olarak gönderir. Her işin çalışma dizini kendi analiz klasörüdür. Veri,
+potansiyel ve diğer bağımlılık dosyalarını bu klasörün içinde tutun ve betikte
+göreli yollar kullanın. **Devam girdisi** ayarlandıysa aynı göreli yol her seçili
+klasörde bulunmalıdır. İşler **İş geçmişi**'nde ayrı görünür ve sonuçlar her
+analiz klasörünün kendi `Results` dizinine indirilir.
+
 ### TRUBA'da ara kayıttan devam ve 70. saatte devir
 
 LAMMPS devam betiğini iş dosyalarına ekleyip göreli yolunu **Devam girdisi**

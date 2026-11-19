@@ -68,6 +68,28 @@ def is_link(path):
     return path.is_symlink() or getattr(path, "is_junction", lambda: False)()
 
 
+def is_input_script(name):
+    path = Path(name)
+    return path.name.lower().startswith("in.") or path.suffix.lower() == ".in"
+
+
+def discover_job_folders(root):
+    """List candidate entry scripts by working directory, without following links."""
+    def walk_error(error):
+        raise error
+
+    found = []
+    for folder, dirs, files in os.walk(root.resolve(strict=True), onerror=walk_error):
+        folder = Path(folder)
+        dirs[:] = sorted((name for name in dirs if name.casefold() != "results"
+                          and not is_link(folder / name)), key=str.casefold)
+        scripts = tuple(sorted((name for name in files if is_input_script(name)
+                                and (folder / name).is_file() and not is_link(folder / name)), key=str.casefold))
+        if scripts:
+            found.append((folder, scripts))
+    return found
+
+
 def save_job(directory, record, **changes):
     updated = {**record, **changes}
     write_record(directory / "job.json", updated)
@@ -78,11 +100,13 @@ def read_job(directory):
     return json.loads((directory / "job.json").read_text(encoding="utf-8"))
 
 
-def new_job(root, entry, target, ranks, *, parent):
+def new_job(root, entry, target, ranks, *, parent, batch_folder=None):
     directory = parent / uuid4().hex
     directory.mkdir(parents=True, exist_ok=False)
     record = dict(name=entry, target=target, ranks=ranks, state="Preparing",
                   created=datetime.now().astimezone().isoformat(timespec="seconds"), source=str(root))
+    if batch_folder is not None:
+        record["batch_folder"] = batch_folder
     if root.name == "inputs" and root.parent.parent == parent:
         # Reused inputs are stored in job history, while their results belong in the original job folder.
         with suppress(OSError, ValueError):
@@ -118,7 +142,7 @@ def snapshot_inputs(directory, root, entry, extra, whole_folder, stop=None):
             folder = Path(folder)
             for name in dirs[:]:
                 source = folder / name
-                if is_link(source) or (source.parent == root / "Results" and RESULT_DIRECTORY.fullmatch(name)):
+                if is_link(source) or (folder.name.casefold() == "results" and RESULT_DIRECTORY.fullmatch(name)):
                     dirs.remove(name)
                 else:
                     relative = relative_file(source.relative_to(root).as_posix())
