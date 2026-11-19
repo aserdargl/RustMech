@@ -30,6 +30,7 @@ def main():
             "--icon", str(root / "assets/ui/rustmech.ico"),
             "--add-data", f"{root / 'assets/ui'};assets/ui",
             "--add-data", f"{root / 'tools/setupmaker/worker.py'};tools/setupmaker",
+            "--exclude-module", "tkinter", "--exclude-module", "_tkinter",
             str(root / "tools/setupmaker/main.py"),
         ], cwd=root, env=environment, check=True)
         target = output / "SetupMaker.exe"
