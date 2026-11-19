@@ -58,6 +58,7 @@ QFrame[esenCard="paper"] { background: #FFFFFF; border: 1px solid #D5DBE2; borde
 #esenWorkspace QPlainTextEdit, #esenWorkspace QListWidget, #esenWorkspace QTreeWidget {
     background: #FFFFFF; border: 1px solid #DCE3EC; border-radius: 3px;
 }
+#esenWorkspace QTreeWidget { color: #111827; selection-background-color: #E5E5E5; selection-color: #111827; }
 #esenWorkspace QListWidget::indicator { width: 13px; height: 13px; background: #FFFFFF;
                                     border: 1px solid #AAAAAA; border-radius: 2px; }
 #esenWorkspace QListWidget::indicator:checked { border-color: #2563EB;
@@ -815,16 +816,17 @@ class EsenWorkspace(QDialog):
                 self.files_upload = self._input_files(), upload
             if selected:
                 self._queue_batch("remote", auth, selected=selected)
-            else:
-                self.truba_browser.refresh_after_upload(auth, directory)
-                if self.folder_root is not None and not self.folder_slurm:
-                    self._scan_folder(checked=set(self._folder_jobs()))
+            elif self.folder_root is not None and not self.folder_slurm:
+                self._scan_folder(checked=set(self._folder_jobs()))
         except FileExistsError as error:
             self.upload_error = translate("A file or folder with different contents already exists: {path}").format(
                 path=error.filename or str(error),
             )
         except Exception as error:
             self.upload_error = str(error)
+        finally:
+            if not selected:
+                self.truba_browser.refresh_after_upload(auth, directory)
         self._preview()
 
     def _load_files(self, files):

@@ -1000,10 +1000,23 @@ class EsenTests(unittest.TestCase):
             browser.refresh.click()
             finish_browsing()
             list_directory.return_value = []
-            browser.files.itemActivated.emit(browser.files.topLevelItem(0), 0)
+            browser.files.setCurrentItem(browser.files.topLevelItem(0))
+            self.assertTrue(browser.open_folder.isEnabled())
+            browser.open_folder.click()
             finish_browsing()
 
-            list_directory.return_value = [SimpleNamespace(filename=names[0], st_mode=S_IFREG, st_size=12)]
+            listing_started = Event()
+            finish_stale_listing = Event()
+            self.addCleanup(finish_stale_listing.set)
+
+            def list_while_uploading(*_):
+                listing_started.set()
+                finish_stale_listing.wait(timeout=5)
+                return []
+
+            list_directory.side_effect = list_while_uploading
+            browser.refresh.click()
+            self.assertTrue(listing_started.wait(timeout=5))
             workspace.upload.click()
             upload_id = workspace.upload_task[0].result(timeout=5)
             workspace._tick()
@@ -1012,9 +1025,16 @@ class EsenTests(unittest.TestCase):
             transport.assert_not_called()
             remote = f"/arf/scratch/{self.auth.username}/RustMech/{destination}"
             self.assertIn(f"Uploaded to TRUBA: {remote}\n", workspace.input_note.text())
+            list_directory.return_value = [SimpleNamespace(filename=names[0], st_mode=S_IFREG, st_size=12)]
+            list_directory.side_effect = None
+            finish_stale_listing.set()
+            finish_browsing()
             finish_browsing()
             list_directory.assert_called_with(self.auth, PurePosixPath(destination))
             self.assertEqual(browser.files.topLevelItem(0).text(0), names[0])
+            browser.files.setCurrentItem(browser.files.topLevelItem(0))
+            self.assertTrue(browser.download.isEnabled())
+            self.assertFalse(browser.open_folder.isEnabled())
             snapshot = jobs.upload_snapshot(self.history, upload_id)
             self.assertTrue(all((snapshot / name).is_file() for name in names))
             self.assertFalse((snapshot / self.entry).exists())

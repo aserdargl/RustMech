@@ -40,6 +40,7 @@ class TrubaFileBrowser(QWidget):
         self.directory = PurePosixPath()
         self.task = None
         self.loaded = False
+        self._uploaded_directory = None
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -51,9 +52,11 @@ class TrubaFileBrowser(QWidget):
         layout.addWidget(self.address)
 
         self.up = command("Up", self._up)
+        self.open_folder = command("Open", self._open_selected_folder, hint="Open selected TRUBA folder")
         self.refresh = command("Refresh", self._refresh)
         actions = ActionFlowLayout(equal_width=True)
         actions.addWidget(self.up)
+        actions.addWidget(self.open_folder)
         actions.addWidget(self.refresh)
         layout.addLayout(actions)
 
@@ -107,7 +110,8 @@ class TrubaFileBrowser(QWidget):
     def showEvent(self, event):
         super().showEvent(event)
         self._sync_connection()
-        if self.auth is not None and not self.loaded and self.task is None:
+        if self.auth is not None and self.task is None:
+            self._uploaded_directory = None
             self._refresh()
 
     def _sync_connection(self, *_):
@@ -120,6 +124,7 @@ class TrubaFileBrowser(QWidget):
         self.auth = auth
         self.directory = PurePosixPath()
         self.loaded = False
+        self._uploaded_directory = None
         self.files.clear()
         self.folder_name.clear()
         self._update_address()
@@ -139,10 +144,11 @@ class TrubaFileBrowser(QWidget):
         can_change = ready and self.loaded
         self.refresh.setEnabled(ready)
         self.up.setEnabled(ready and self.directory != PurePosixPath())
+        self.open_folder.setEnabled(can_change and self._selected_item(S_ISDIR) is not None)
         self.folder_name.setEnabled(can_change)
         self.create.setEnabled(can_change and bool(self.folder_name.text().strip()))
         self.upload.setEnabled(can_change)
-        self.download.setEnabled(can_change and self._selected_file() is not None)
+        self.download.setEnabled(can_change and self._selected_item(S_ISREG) is not None)
 
     def _submit(self, kind, operation, directory, *args, success_message=""):
         if self.auth is None or self.task is not None:
@@ -161,7 +167,15 @@ class TrubaFileBrowser(QWidget):
         return ""
 
     def refresh_after_upload(self, auth, directory):
-        if self.isVisible() and self.auth == auth and self.open_directory(auth) == directory:
+        if self.auth == auth:
+            self._uploaded_directory = PurePosixPath(directory)
+            self._refresh_after_upload_if_ready()
+
+    def _refresh_after_upload_if_ready(self):
+        if self.task is not None or not self.isVisible() or self._uploaded_directory is None:
+            return
+        directory, self._uploaded_directory = self._uploaded_directory, None
+        if self.directory.is_relative_to(directory):
             self._refresh()
 
     def _up(self):
@@ -170,6 +184,10 @@ class TrubaFileBrowser(QWidget):
     def _open_folder(self, item, _column):
         if S_ISDIR(item.data(0, Qt.ItemDataRole.UserRole)):
             self._submit("list", truba_files.list_directory, self.directory / item.text(0))
+
+    def _open_selected_folder(self):
+        if item := self._selected_item(S_ISDIR):
+            self._open_folder(item, 0)
 
     def _create_folder(self):
         if not self.create.isEnabled():
@@ -182,10 +200,10 @@ class TrubaFileBrowser(QWidget):
             return
         self._submit("mkdir", truba_files.create_directory, self.directory, name)
 
-    def _selected_file(self):
+    def _selected_item(self, matches_mode):
         items = self.files.selectedItems()
-        if items and S_ISREG(items[0].data(0, Qt.ItemDataRole.UserRole)):
-            return items[0].text(0)
+        if items and matches_mode(items[0].data(0, Qt.ItemDataRole.UserRole)):
+            return items[0]
         return None
 
     def _upload_file(self):
@@ -200,7 +218,7 @@ class TrubaFileBrowser(QWidget):
         if not self.download.isEnabled():
             return
         auth, directory = self.auth, self.directory
-        name = self._selected_file()
+        name = self._selected_item(S_ISREG).text(0)
         # A valid Linux filename can contain characters that a Windows picker
         # interprets as a drive, directory separator or wildcard.
         suggestion = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", name).rstrip(" .") or "download"
@@ -239,9 +257,11 @@ class TrubaFileBrowser(QWidget):
         else:
             if kind == "mkdir":
                 self.folder_name.clear()
+                self._uploaded_directory = None
                 self._refresh()
                 return
             if kind == "upload":
+                self._uploaded_directory = None
                 self._refresh(success_message="File uploaded to TRUBA.")
                 return
             if kind == "download":
@@ -253,6 +273,7 @@ class TrubaFileBrowser(QWidget):
                 self._show_entries(entries)
                 self.status.setText(success_message or ("" if entries else "This folder is empty."))
         self._update_controls()
+        self._refresh_after_upload_if_ready()
 
     def _show_entries(self, entries):
         self.files.clear()

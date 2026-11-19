@@ -96,6 +96,7 @@ Stop job|İşi durdur
 Command preview|Komut önizlemesi
 TRUBA files|TRUBA dosyaları
 TRUBA folder path|TRUBA klasör yolu
+Open selected TRUBA folder|Seçili TRUBA klasörünü aç
 Upload|Yükle
 Upload file to the open TRUBA folder|Açık TRUBA klasörüne dosya yükle
 Download selected TRUBA file|Seçili TRUBA dosyasını indir
