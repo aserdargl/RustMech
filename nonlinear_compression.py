@@ -24,7 +24,7 @@ import numpy as np
 import pyvista as pv
 from studio_style import CompactSpinBox, CompactComboBox
 from PySide6.QtCore import QSignalBlocker, QSize, QTimer, Qt, QUrl
-from PySide6.QtGui import QActionGroup, QDesktopServices, QFontDatabase
+from PySide6.QtGui import QActionGroup, QDesktopServices, QFontDatabase, QIcon
 from PySide6.QtWidgets import (
     QAbstractSpinBox,
     QApplication,
@@ -1185,7 +1185,11 @@ class RustMechDialog(QDialog):
 
         self.apply_button = QPushButton("Run analysis")
         self.apply_button.setObjectName("primaryLaunchBtn")
-        self.apply_button.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaPlay))
+        icon_dir = Path(__file__).resolve().parent / "assets" / "ui"
+        play_icon = QIcon(str(icon_dir / "analysis-play-green.svg"))
+        play_icon.addFile(str(icon_dir / "analysis-play-green.svg"), mode=QIcon.Mode.Active)
+        play_icon.addFile(str(icon_dir / "analysis-play-red.svg"), mode=QIcon.Mode.Disabled)
+        self.apply_button.setIcon(play_icon)
         self.apply_button.setIconSize(QSize(16, 16))
         self.apply_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.apply_button.setEnabled(False)
