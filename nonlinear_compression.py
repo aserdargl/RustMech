@@ -964,7 +964,6 @@ class RustMechDialog(QDialog):
         self.workspace_button.setMenu(self.workspace_menu)
         navigation.addWidget(self.workspace_button)
         self.doe_button = QPushButton("DoE")
-        self.doe_button.setObjectName("experimentActionBtn")
         self.doe_button.setToolTip("Open Design of Experiments settings.")
         self.doe_button.clicked.connect(self._show_doe_workspace)
         navigation.addWidget(self.doe_button)

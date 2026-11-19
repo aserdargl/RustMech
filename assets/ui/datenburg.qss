@@ -79,10 +79,6 @@ QPushButton, QToolButton {
 #geometryApplyBtn[pending="true"]:pressed, #structureApplyBtn[pending="true"]:pressed, #meshApplyBtn[pending="true"]:pressed {
     background: #F59E0B; border-color: #78350F;
 }
-#experimentActionBtn {
-    color: #166534; border-color: #94B99B;
-    background: #E2F4E6;
-}
 #destructiveActionBtn { color: #991B1B; border-color: #D3A2A2; }
 #destructiveActionBtn:hover { background: #FEE2E2; border-color: #B91C1C; }
 #forcedStopBtn {
@@ -92,7 +88,7 @@ QPushButton, QToolButton {
 #forcedStopBtn:hover { background: #B91C1C; border-color: #7F1D1D; }
 #forcedStopBtn:pressed { background: #991B1B; color: #FFFFFF; }
 #forcedStopBtn:disabled { background: #EBEBEB; color: #808080; border-color: #D6D6D6; }
-#experimentActionBtn:disabled, #geometryApplyBtn:disabled, #structureApplyBtn:disabled, #meshApplyBtn:disabled, #destructiveActionBtn:disabled {
+#geometryApplyBtn:disabled, #structureApplyBtn:disabled, #meshApplyBtn:disabled, #destructiveActionBtn:disabled {
     background: #EBEBEB; color: #808080; border-color: #D6D6D6;
 }
 QToolButton::menu-indicator, QPushButton::menu-indicator {
