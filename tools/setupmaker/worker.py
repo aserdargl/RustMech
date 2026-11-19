@@ -2,7 +2,6 @@
 
 import argparse
 from contextlib import contextmanager
-from datetime import datetime
 import hashlib
 import json
 import msvcrt
@@ -12,7 +11,7 @@ import re
 import shutil
 import subprocess
 import sys
-from tempfile import TemporaryDirectory
+from tempfile import NamedTemporaryFile, TemporaryDirectory, gettempdir
 
 
 RELEASE_REPO = "aserdargl/RustMech-Releases"
@@ -110,22 +109,37 @@ def run(command, root, *, env=None):
         raise ValueError(f"{Path(command[0]).name} başarısız oldu (çıkış kodu {completed.returncode}).")
 
 
+def setup_output_directory():
+    return Path.home() / "MyDrive/X-MySoftware/RustMech"
+
+
 @contextmanager
-def build_lock(output):
-    with (output / ".build.lock").open("a+b") as lock:
-        if not lock.tell():
-            lock.write(b"0")
-            lock.flush()
-        lock.seek(0)
+def build_lock(root):
+    identity = hashlib.sha256(os.path.normcase(str(root)).encode()).hexdigest()
+    lock_path = Path(gettempdir()) / f"rustmech-setup-{identity}.lock"
+    try:
+        fd = os.open(lock_path, os.O_BINARY | os.O_RDWR | os.O_CREAT | os.O_TEMPORARY)
+    except PermissionError as error:
+        raise ValueError("Bu proje için bir kurulum derlemesi zaten çalışıyor.") from error
+    with os.fdopen(fd, "r+b") as lock:
         try:
             msvcrt.locking(lock.fileno(), msvcrt.LK_NBLCK, 1)
         except OSError as error:
             raise ValueError("Bu proje için bir kurulum derlemesi zaten çalışıyor.") from error
-        try:
-            yield
-        finally:
-            lock.seek(0)
-            msvcrt.locking(lock.fileno(), msvcrt.LK_UNLCK, 1)
+        yield
+
+
+def copy_installer(setup, output):
+    output.mkdir(parents=True, exist_ok=True)
+    target = output / setup.name
+    with NamedTemporaryFile(dir=output, prefix=".setup-", suffix=".tmp", delete=False) as stream:
+        staged = Path(stream.name)
+    try:
+        shutil.copyfile(setup, staged)
+        staged.replace(target)
+    finally:
+        staged.unlink(missing_ok=True)
+    return target
 
 
 def create_release(root, job, compiler, output):
@@ -138,11 +152,7 @@ def create_release(root, job, compiler, output):
             raise ValueError("Yayın için GitHub CLI ve kullanıcı/depo biçiminde hedef gerekli.")
         run([github, "repo", "view", repo, "--json", "nameWithOwner"], root)
 
-    staging = root / "build"
-    staging.mkdir(exist_ok=True)
-    releases = output / "releases"
-    releases.mkdir(exist_ok=True)
-    with TemporaryDirectory(dir=staging, prefix="setup-") as temporary:
+    with TemporaryDirectory(prefix="rustmech-setup-") as temporary:
         stage = Path(temporary)
         version_file = stage / "version_info.txt"
         windows_version_file(root, version_file, label, numeric)
@@ -162,23 +172,14 @@ def create_release(root, job, compiler, output):
             str(root / INSTALLER_SCRIPT),
         ], root)
         setup = compiled / f"{asset_name}.exe"
-        with setup.open("rb") as stream:
-            digest = hashlib.file_digest(stream, "sha256").hexdigest()
-        name = f"{asset_name}-{datetime.now():%Y%m%d-%H%M%S-%f}"
-        (compiled / "release.json").write_text(json.dumps({
-            "version": label, "tag": tag, "file": setup.name,
-            "bytes": setup.stat().st_size, "sha256": digest,
-        }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-        destination = releases / name
-        compiled.rename(destination)
-        installer = destination / setup.name
+        installer = copy_installer(setup, output)
         print(f"RESULT|{installer}", flush=True)
 
         if github:
             progress(90, "Kurulum dosyası GitHub'a yükleniyor…")
             notes = stage / "notes.txt"
             notes.write_text(job.get("notes", ""), encoding="utf-8")
-            run([github, "release", "create", tag, str(installer), "--repo", repo,
+            run([github, "release", "create", tag, str(setup), "--repo", repo,
                  "--title", f"RustMech {label}", "--notes-file", str(notes)], root)
     progress(100, "Kurulum dosyası hazır." if not github else "Kurulum dosyası hazır ve GitHub'da yayımlandı.")
 
@@ -198,10 +199,8 @@ def main():
             progress(100, f"Proje ve derleme araçları hazır · {read_version(root)}")
         else:
             job = json.load(sys.stdin)
-            output = root / "dist/SetupMaker"
-            output.mkdir(parents=True, exist_ok=True)
-            with build_lock(output):
-                create_release(root, job, compiler, output)
+            with build_lock(root):
+                create_release(root, job, compiler, setup_output_directory())
     except (OSError, ValueError, KeyError) as error:
         print(f"ERROR|{error}", flush=True)
         return 1

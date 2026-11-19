@@ -3,7 +3,6 @@
 import argparse
 import codecs
 import ctypes
-from datetime import datetime
 import json
 import os
 from pathlib import Path
@@ -11,17 +10,16 @@ import subprocess
 import sys
 
 from PySide6.QtCore import QProcess, QProcessEnvironment, QSettings, QSignalBlocker, QUrl
-from PySide6.QtGui import QDesktopServices
+from PySide6.QtGui import QDesktopServices, QFont
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit,
-    QMainWindow, QPlainTextEdit, QProgressBar, QPushButton, QVBoxLayout, QWidget,
+    QMainWindow, QPlainTextEdit, QProgressBar, QPushButton, QSizePolicy, QSpinBox, QStyleFactory, QVBoxLayout, QWidget,
 )
 
 from app_identity import configure_application
 from file_dialog import QFileDialog
-from studio_style import CompactSpinBox, STUDIO_STYLESHEET
 from tools.setupmaker.worker import (
-    RELEASE_REPO, REPO_PATTERN, build_python, check_project, read_version, release_version, version_parts,
+    RELEASE_REPO, REPO_PATTERN, build_python, check_project, read_version, release_version, setup_output_directory, version_parts,
 )
 
 
@@ -29,28 +27,93 @@ APP_NAME = "RustMech Setup Maker"
 WORKER = (Path(sys._MEIPASS) / "tools/setupmaker/worker.py" if getattr(sys, "frozen", False)
           else Path(__file__).with_name("worker.py"))
 STYLE = """
-QMainWindow#setupMaker { background: #F5F5F3; }
+QMainWindow[setupMaker="true"], QMainWindow[setupMaker="true"] QWidget#setupSurface { background: #F5F5F3; }
 QFrame[setupCard="true"] { background: #FCFCFB; border: 1px solid #D5DBE2; border-radius: 7px; }
 QLabel[setupSection="true"] {
     background: #E5ECF4; border: 1px solid #D5DBE2; border-radius: 5px;
     color: #0F172A; font-size: 13px; padding: 0 7px;
 }
-QMainWindow#setupMaker QLabel[setupField="true"] { color: #475569; font-size: 11px; }
-QFrame[setupCard="true"] QLineEdit[setupInput="true"] {
-    background: white; border: 1px solid #CBD5E1; border-radius: 4px; font-size: 11px;
+QLabel[setupField="true"] { color: #475569; font-size: 11px; }
+QLineEdit[setupInput="true"], QPlainTextEdit#setupLog, QPlainTextEdit#setupNotes {
+    background: white; color: #0F172A; border: 1px solid #CBD5E1; border-radius: 4px;
+    selection-color: #0F172A; selection-background-color: #C7DFFE;
 }
-QFrame[setupCard="true"] QLineEdit[setupInput="true"]:hover { border-color: #93C5FD; }
-QFrame[setupCard="true"] QLineEdit[setupInput="true"]:focus { border-color: #2563EB; }
-QFrame[setupCard="true"] QLineEdit[setupInput="true"]:disabled { background: #F1F5F9; }
-QPlainTextEdit#setupLog, QPlainTextEdit#setupNotes {
-    background: white; border: 1px solid #DCE3EC; border-radius: 3px;
-}
+QLineEdit[setupInput="true"] { font-size: 11px; padding: 0 5px; }
+QLineEdit[setupInput="true"]:hover, QSpinBox[setupNumber="true"]:hover { border-color: #93C5FD; }
+QLineEdit[setupInput="true"]:focus, QSpinBox[setupNumber="true"]:focus,
 QPlainTextEdit#setupLog:focus, QPlainTextEdit#setupNotes:focus { border-color: #2563EB; }
+QLineEdit[setupInput="true"]:disabled, QPlainTextEdit#setupNotes:disabled {
+    background: #F1F5F9; color: #64748B;
+}
+QSpinBox[setupNumber="true"] {
+    background: #E5E7EB; color: #111827; border: 1px solid #9CA3AF; border-radius: 5px;
+    padding-left: 4px; font-size: 11px;
+}
+QSpinBox[setupNumber="true"]:disabled { color: #64748B; }
 QProgressBar#setupProgress {
-    border: 1px solid #CBD5E1; border-radius: 4px; background: white; text-align: center;
+    border: 1px solid #CBD5E1; border-radius: 4px; background: white; color: #0F172A; text-align: center;
 }
 QProgressBar#setupProgress::chunk { background: #BFDBFE; border-radius: 3px; }
+QPushButton[setupButton="true"] {
+    background: #F1F5F9; color: #0F172A; border: 1px solid #A6B8CA; border-radius: 4px;
+}
+QPushButton[setupButton="true"][setupPrimary="true"] { background: #285EA6; color: white; border-color: #285EA6; }
+QPushButton[setupButton="true"]:hover { border-color: #2563EB; }
+QPushButton[setupButton="true"][setupPrimary="true"]:hover { background: #3170BD; }
+QPushButton[setupButton="true"]:focus { border: 1px solid #2563EB; }
+QPushButton[setupButton="true"][setupPrimary="true"]:focus { border: 1px solid #BFDBFE; }
+QPushButton[setupButton="true"]:pressed { background: #DFE8F3; }
+QPushButton[setupButton="true"][setupPrimary="true"]:pressed { background: #204D89; }
+QPushButton[setupButton="true"]:disabled { background: #F1F5F9; color: #64748B; border-color: #CBD5E1; }
 """
+
+CONTROL_HEIGHT = 25
+WINDOW_SIZE = (650, 570)
+MINIMUM_SIZE = (440, 550)
+AFFIX_WIDTH = 95
+STEPPER_WIDTH = 62
+TARGET_WIDTH = 230
+
+
+def section(parent, title):
+    card = QFrame()
+    card.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+    card.setProperty("setupCard", True)
+    layout = QVBoxLayout(card)
+    layout.setContentsMargins(7, 6, 7, 6)
+    layout.setSpacing(4)
+    header = QLabel(title)
+    header.setProperty("setupSection", True)
+    header.setFixedHeight(CONTROL_HEIGHT)
+    layout.addWidget(header)
+    parent.addWidget(card)
+    return layout
+
+
+def field(name, text=""):
+    control = QLineEdit(text)
+    control.setAccessibleName(name)
+    control.setProperty("setupInput", True)
+    control.setFixedHeight(CONTROL_HEIGHT)
+    return control
+
+
+def label(text, buddy=None):
+    control = QLabel(text)
+    control.setProperty("setupField", True)
+    if buddy is not None:
+        control.setBuddy(buddy)
+    return control
+
+
+def button(text, callback, width=92, primary=False):
+    control = QPushButton(text)
+    control.setAutoDefault(False)
+    control.setFixedSize(width, CONTROL_HEIGHT)
+    control.setProperty("setupButton", True)
+    control.setProperty("setupPrimary", primary)
+    control.clicked.connect(callback)
+    return control
 
 
 def default_project():
@@ -78,52 +141,12 @@ def child_environment():
     return environment
 
 
-def button(text, action, *, primary=False):
-    control = QPushButton(text)
-    control.setAutoDefault(False)
-    control.setFixedHeight(25)
-    control.setProperty("primary", primary)
-    control.clicked.connect(action)
-    return control
-
-
-def section(parent, title):
-    card = QFrame()
-    card.setProperty("setupCard", True)
-    layout = QVBoxLayout(card)
-    layout.setContentsMargins(7, 6, 7, 6)
-    layout.setSpacing(4)
-    header = QLabel(title)
-    header.setProperty("setupSection", True)
-    header.setFixedHeight(25)
-    layout.addWidget(header)
-    parent.addWidget(card)
-    return layout
-
-
-def field(name, text=""):
-    control = QLineEdit(text)
-    control.setAccessibleName(name)
-    control.setProperty("setupInput", True)
-    control.setFixedHeight(25)
-    return control
-
-
-def label(text, buddy=None):
-    control = QLabel(text)
-    control.setProperty("setupField", True)
-    if buddy is not None:
-        control.setBuddy(buddy)
-    return control
-
-
 class SetupMakerWindow(QMainWindow):
     def __init__(self, project, settings, *, explicit_project=False):
         super().__init__()
         self.settings = settings
         self.project_root = None
         self.python = None
-        self.log_file = None
         self.installer = None
         self.job = None
         self.pending = ""
@@ -137,19 +160,24 @@ class SetupMakerWindow(QMainWindow):
 
         self.setObjectName("setupMaker")
         self.setWindowTitle(APP_NAME)
-        self.resize(650, 570)
+        self.setProperty("setupMaker", True)
+        self.setStyleSheet(STYLE)
+        self.setMinimumSize(*MINIMUM_SIZE)
+        self.resize(*WINDOW_SIZE)
         saved_project = project if explicit_project else settings.value("project", str(project))
         self.create_ui(str(saved_project))
         self.refresh()
 
     def create_ui(self, project):
         central = QWidget()
+        central.setObjectName("setupSurface")
         self.setCentralWidget(central)
         layout = QVBoxLayout(central)
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(7)
 
         self.inputs = QWidget()
+        self.inputs.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
         inputs = QVBoxLayout(self.inputs)
         inputs.setContentsMargins(0, 0, 0, 0)
         inputs.setSpacing(7)
@@ -176,15 +204,10 @@ class SetupMakerWindow(QMainWindow):
         layout.addWidget(self.log, 1)
 
         actions = QHBoxLayout()
-        output = button("Klasörü aç", self.open_output)
+        actions.addWidget(button("Klasörü aç", self.open_output))
         self.refresh_button = button("Yenile", self.refresh)
-        self.build_button = button("Kurulum oluştur", self.start_build, primary=True)
-        width = max(control.fontMetrics().horizontalAdvance(control.text())
-                    for control in (output, self.refresh_button)) + 22
-        for control in (output, self.refresh_button):
-            control.setFixedWidth(width)
-            actions.addWidget(control)
-        self.build_button.setFixedWidth(self.build_button.fontMetrics().horizontalAdvance(self.build_button.text()) + 24)
+        actions.addWidget(self.refresh_button)
+        self.build_button = button("Kurulum oluştur", self.start_build, 125, primary=True)
         actions.addStretch()
         actions.addWidget(self.build_button)
         layout.addLayout(actions)
@@ -196,8 +219,7 @@ class SetupMakerWindow(QMainWindow):
         panel.addLayout(grid)
         self.project = field("Kaynak klasörü", project)
         self.project.editingFinished.connect(self.refresh_if_changed)
-        browse = button("Gözat…", self.browse)
-        browse.setFixedWidth(browse.fontMetrics().horizontalAdvance(browse.text()) + 22)
+        browse = button("Gözat…", self.browse, 75)
         grid.addWidget(label("Kaynak klasörü", self.project), 0, 0)
         grid.addWidget(self.project, 0, 1)
         grid.addWidget(browse, 0, 2)
@@ -208,41 +230,52 @@ class SetupMakerWindow(QMainWindow):
     def version_section(self, inputs):
         panel = section(inputs, "Sürüm")
         parts = QHBoxLayout()
+        parts.setSpacing(4)
         panel.addLayout(parts)
         self.prefix = field("Ön ek")
         self.suffix = field("Son ek")
-        self.major, self.minor = CompactSpinBox(), CompactSpinBox()
-        parts.addWidget(self.prefix, 1)
+        self.major, self.minor = QSpinBox(), QSpinBox()
+        parts.addWidget(self.prefix)
         for name, control, maximum in (("Ana sürüm", self.major, 65535), ("Alt sürüm", self.minor, 10)):
             control.setRange(0, maximum)
-            control.setFixedSize(74, 25)
+            control.setProperty("setupNumber", True)
+            control.setFixedSize(STEPPER_WIDTH, CONTROL_HEIGHT)
             control.setAccessibleName(name)
             control.setToolTip(name)
             control.setKeyboardTracking(False)
             control.valueChanged.connect(self.spin_changed)
             parts.addWidget(control)
-        parts.addWidget(self.suffix, 1)
+        parts.addWidget(self.suffix)
+        parts.addStretch()
         for control in (self.prefix, self.suffix):
+            control.setFixedWidth(AFFIX_WIDTH)
             control.setPlaceholderText(control.accessibleName())
             control.textEdited.connect(self.compose_version)
         target = QHBoxLayout()
+        target.setSpacing(6)
         panel.addLayout(target)
         self.target = field("Hedef sürüm")
         self.target.setMaxLength(64)
+        self.target.setFixedWidth(TARGET_WIDTH)
+        self.target.textChanged.connect(self.target.setToolTip)
         self.target.textEdited.connect(self.sync_version_parts)
         self.target.textChanged.connect(self.update_build_button)
         target.addWidget(label("Hedef sürüm", self.target))
-        target.addWidget(self.target, 1)
+        target.addWidget(self.target)
+        target.addStretch()
 
     def github_section(self, inputs):
         panel = section(inputs, "GitHub Release")
         self.publish = QCheckBox("Kurulumdan sonra GitHub'a yükle")
+        self.publish.setChecked(True)
         panel.addWidget(self.publish)
         grid = QGridLayout()
         grid.setVerticalSpacing(3)
         panel.addLayout(grid)
         self.repo = field("Hedef depo", self.settings.value("repo", RELEASE_REPO))
         self.notes = QPlainTextEdit(self.settings.value("notes", ""))
+        self.repo.setPlaceholderText("kullanıcı/depo")
+        self.notes.setAccessibleName("Yayın notları")
         self.notes.setObjectName("setupNotes")
         self.notes.setFixedHeight(50)
         self.notes.setPlaceholderText("Bu sürümde neler değişti?")
@@ -274,10 +307,8 @@ class SetupMakerWindow(QMainWindow):
         except (OSError, ValueError, RuntimeError) as error:
             self.health.setText(str(error))
         else:
-            if self.installer and not self.installer.is_relative_to(project):
-                self.installer = None
             self.project_root, self.python = project, python
-            self.health.setText(f"Proje hazır · Mevcut sürüm {version}")
+            self.health.setText("Proje hazır")
             self.sync_version_parts(version)
             self.target.setText(version)
         self.update_build_button()
@@ -318,19 +349,9 @@ class SetupMakerWindow(QMainWindow):
         self.build_button.setEnabled(self.job is None and self.project_root is not None and valid)
 
     def open_output(self):
-        if self.installer:
-            folder = self.installer.parent
-        elif self.project_root:
-            folder = self.project_root / "dist/SetupMaker"
-        else:
-            self.status.setText("Önce RustMech kaynak klasörünü seçin.")
-            return
-        try:
-            folder.mkdir(exist_ok=True, parents=True)
-        except OSError as error:
-            self.status.setText(str(error))
-            return
-        QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder)))
+        folder = setup_output_directory()
+        if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder))):
+            self.status.setText(f"Hedef klasör açılamadı: {folder}")
 
     def start_build(self):
         self.refresh_if_changed()
@@ -341,10 +362,6 @@ class SetupMakerWindow(QMainWindow):
             repo = self.repo.text().strip()
             if self.publish.isChecked() and not REPO_PATTERN.fullmatch(repo):
                 raise ValueError("Hedef depoyu kullanıcı/depo biçiminde yazın.")
-            logs = self.project_root / "dist/SetupMaker/logs"
-            logs.mkdir(exist_ok=True, parents=True)
-            path = logs / f"{datetime.now():%Y%m%d-%H%M%S-%f}.log"
-            self.log_file = path.open("x", encoding="utf-8", newline="")
         except (OSError, ValueError) as error:
             self.status.setText(str(error))
             return
@@ -359,7 +376,6 @@ class SetupMakerWindow(QMainWindow):
         self.update_build_button()
         self.status.setText("Derleme başlatılıyor…")
         self.progress.setValue(0)
-        self.log.appendPlainText(f"Günlük · {path}")
         environment = QProcessEnvironment()
         for key, value in child_environment().items():
             environment.insert(key, value)
@@ -373,14 +389,6 @@ class SetupMakerWindow(QMainWindow):
 
     def read_output(self, final=False):
         chunk = self.decoder.decode(bytes(self.process.readAllStandardOutput()), final=final)
-        if self.log_file is not None and chunk:
-            try:
-                self.log_file.write(chunk)
-                self.log_file.flush()
-            except OSError as error:
-                self.log.appendPlainText(f"Günlük dosyasına yazılamadı · {error}")
-                self.log_file.close()
-                self.log_file = None
         lines = (self.pending + chunk).split("\n")
         self.pending = lines.pop()
         if final and self.pending:
@@ -414,9 +422,6 @@ class SetupMakerWindow(QMainWindow):
             self.unlock()
 
     def unlock(self):
-        if self.log_file is not None:
-            self.log_file.close()
-            self.log_file = None
         self.job = None
         self.inputs.setEnabled(True)
         self.refresh_button.setEnabled(True)
@@ -452,7 +457,9 @@ def main():
     app = QApplication(sys.argv[:1])
     settings = QSettings("RustMech", "SetupMaker")
     configure_application(app, name=APP_NAME, app_id="RustMech.SetupMaker", settings=settings)
-    app.setStyleSheet(STUDIO_STYLESHEET + STYLE)
+    app.setStyle(QStyleFactory.create("Windows"))
+    app.setPalette(app.style().standardPalette())
+    app.setFont(QFont("Segoe UI", 9))
     window = SetupMakerWindow(project, settings, explicit_project=options.project is not None)
     window.show()
     return app.exec()

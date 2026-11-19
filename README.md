@@ -1061,13 +1061,12 @@ veya yeniden derlemek için:
 ### Windows kurulumu oluşturma
 
 `dist/SetupMaker.exe` dosyasını açın, hedef sürümü girin ve **Kurulum oluştur**
-düğmesine basın. Araç, her derleme için yeni bir kurulum dosyası ve SHA-256
-bilgisini `dist/SetupMaker/releases` altında, işlem günlüğünü ise
-`dist/SetupMaker/logs` altında saklar.
+düğmesine basın. Kurulum EXE'si `MyDrive/X-MySoftware/RustMech` klasörüne yazılır.
+Paketleme geçici alanda yapılır ve işlem günlüğü pencerede görünür.
 
-**Kurulumdan sonra GitHub'a yükle** kutusunu işaretleyerek hedef depoda sürüm
-oluşturabilirsiniz. Bu işlem `gh auth login` ile oturum açmış bir GitHub CLI
-ve hedef deponun yayın iznini gerektirir. Varsayılan depo
+**Kurulumdan sonra GitHub'a yükle** kutusu açılışta işaretlidir. Sadece Drive
+çıktısı almak için kutunun işaretini kaldırın. GitHub yayını, oturum açmış
+GitHub CLI ve hedef depoda yayın izni gerektirir. Varsayılan depo
 `aserdargl/RustMech-Releases`'tir.
 
 Setup Maker'ı kaynak koddan çalıştırmak veya yeniden derlemek için RustMech'in
