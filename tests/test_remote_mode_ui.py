@@ -82,6 +82,53 @@ class RemoteModeUiTests(unittest.TestCase):
         QTest.keyClick(field,Qt.Key.Key_Return)
         self.assertFalse(self.controller.requested)
 
+    def test_main_execution_target_stays_in_sync_across_workspaces(self):
+        window = self.window
+        target = window.execution_target
+        self.assertEqual(target.currentData(), "local")
+        for index in (0, 2, 3):
+            window.workspace_tabs.setCurrentIndex(index)
+            self.app.processEvents()
+            self.assertTrue(target.isVisible())
+            self.assertEqual(window.apply_button.isVisible(), index == 0)
+            self.assertIs(window.childAt(target.mapTo(window, target.rect().center())), target)
+        with patch.object(window.truba_dialog, "start_connection") as connect:
+            QTest.keyClick(target, Qt.Key.Key_Down)
+            connect.assert_not_called()
+        self.assertTrue(self.controller.requested)
+        self.assertTrue(self.controller.toggle.isChecked())
+        self.assertFalse(window.thermal_workspace.buttons[1].isEnabled())
+        window.flow_workspace.job = MagicMock()
+        try:
+            QTest.keyClick(target, Qt.Key.Key_Up)
+            self.assertEqual(target.currentData(), "truba")
+            self.assertTrue(self.controller.requested)
+        finally:
+            window.flow_workspace.job = None
+        self.controller.toggle.setChecked(False)
+        self.assertEqual(target.currentData(), "local")
+        self.assertTrue(window.thermal_workspace.buttons[1].isEnabled())
+
+    def test_run_submits_remote_mechanics_without_a_preview(self):
+        window = self.window
+        target = window.execution_target
+        QTest.keyClick(target, Qt.Key.Key_Down)
+        self.assertFalse(window.apply_button.isEnabled())
+        self.enable()
+        self.assertIsNone(window.preview)
+        self.assertTrue(window.apply_button.isEnabled(), window.status.text())
+
+        with patch("nonlinear_compression.save_settings"), patch(
+                "nonlinear_compression.AnalysisProcess") as start:
+            start.return_value.remote_status.return_value = None
+            start.return_value.progress_status.return_value = None
+            QTest.mouseClick(window.apply_button, Qt.MouseButton.LeftButton)
+            operation, settings, context, source = start.call_args.args
+            self.assertIs(operation, run_remote_mechanics)
+            self.assertEqual((settings.solver_backend, context.session_id, source), ("kratos", "321", ""))
+        window.analysis_poll.stop()
+        window.analysis_job = None
+
     def test_fft_submits_assigned_material_without_local_wsl(self):
         window = self.window
         window._select_settings_method(window._fft_method_index)
@@ -508,21 +555,31 @@ class RemoteModeUiTests(unittest.TestCase):
                 restored.scroll.deleteLater()
 
     def test_saved_resource_session_restores_without_contacting_truba(self):
+        from concurrent.futures import Future
         from dataclasses import asdict
+        import json
         from remote_controller import RemoteController
         from truba_remote import RemoteContext
         record = dict(job_id="321",state="RUNNING",ready=True,
-                      context=asdict(RemoteContext(cores=8,walltime="72:00:00")))
+                      context=asdict(RemoteContext(partition='hamsi', cores=28,walltime="72:00:00")))
         with patch("remote_controller.saved_session",return_value=record), patch("remote_controller.refresh_session") as refresh:
             restored = RemoteController(self.window,self.preferences)
             try:
                 self.app.processEvents()
                 self.assertFalse(restored.requested)
                 self.assertFalse(restored.ready)
+                self.assertEqual(restored.controls['partition'].currentData(), 'auto')
                 self.assertEqual(restored.context().session_id,"321")
-                self.assertEqual(restored.context().cores,8)
+                self.assertEqual(restored.context().partition, 'hamsi')
+                self.assertEqual(restored.context().cores,28)
                 self.assertFalse(restored.controls["cores"].isEnabled())
                 refresh.assert_not_called()
+
+                restored.session_watch = True
+                with patch.object(restored.executor, 'submit', return_value=Future()) as submit:
+                    self.assertTrue(restored.refresh())
+                self.assertEqual(submit.call_args.args[2].partition, 'hamsi')
+                self.assertEqual(json.loads(self.preferences.value('remote/context'))['partition'], 'auto')
             finally:
                 restored.shutdown()
                 restored.scroll.deleteLater()
@@ -738,14 +795,17 @@ class RemoteModeUiTests(unittest.TestCase):
             job.force_stop.assert_not_called()
 
     def test_mechanics_cfd_and_cht_dispatch_only_remote_operations(self):
+        from mesh_engine import preview_key
         self.enable()
         self.window.truba_dialog.active_jobs.study_name.setText('A')
-        self.window.preview=SimpleNamespace(mesh=object(),remote_source="/arf/scratch/tester/RustMech/"+"a"*32+"/output/preview")
+        source = "/arf/scratch/tester/RustMech/"+"a"*32+"/output/preview"
+        self.window.preview=SimpleNamespace(mesh=object(), key=preview_key(self.window.collect()), remote_source=source)
         with patch.object(self.window,"refresh_validity"),patch("nonlinear_compression.save_settings"),patch("nonlinear_compression.AnalysisProcess") as start:
             self.window.apply_button.setEnabled(True)
             self.window.apply()
             self.assertIs(start.call_args.args[0],run_remote_mechanics)
             self.assertEqual(start.call_args.args[2].study_name, 'A')
+            self.assertEqual(start.call_args.args[3], source)
             self.window.force_stop_analysis()
         for workspace,module,operation in ((self.window.flow_workspace,"flow_workspace","flow_solve"),
                                             (self.window.thermal_workspace,"thermal_workspace","thermal_solve")):

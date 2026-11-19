@@ -106,6 +106,7 @@ class RemoteController(QObject):
         defaults = replace(defaults, walltime='72:00:00')
         if defaults.partition == 'debug':
             defaults = replace(defaults, partition='auto')  # Debug cannot reserve 72 hours.
+        preferred_partition = defaults.partition
         if self.session and self.session.get("state") not in ("released","ended"):
             defaults = RemoteContext(**self.session["context"])
         panel = QGroupBox("CPU, RAM and resource session")
@@ -146,9 +147,9 @@ class RemoteController(QObject):
                 control.addItem('Auto · program chooses resources', 'auto')
                 for key, limit in BASELINES.items():
                     control.addItem(limit.label, key)
-                index = control.findData('auto' if ',' in defaults.partition else defaults.partition)
+                index = control.findData('auto' if ',' in preferred_partition else preferred_partition)
                 if index < 0:
-                    control.addItem(defaults.partition, defaults.partition)
+                    control.addItem(preferred_partition, preferred_partition)
                     index = control.count() - 1
                 control.setCurrentIndex(index)
                 control.currentIndexChanged.connect(self.configuration_changed)
@@ -588,15 +589,19 @@ class RemoteController(QObject):
 
     def auth(self): return self.window.truba_dialog.analysis_auth()
 
+    def _save_context_preferences(self, context):
+        # A running session has a concrete Slurm partition even when Auto was selected.
+        preferences = replace(context, partition=self.controls['partition'].currentData(), session_id='')
+        self.preferences.setValue('remote/context', json.dumps(asdict(preferences)))
+        self.preferences.sync()
+
     def configuration_changed(self,*_):
         if self.closing: return
         if self.future is not None: return
         self.apply_queue_limits()
         self.update_session_controls()
         try:
-            context = self.context()
-            self.preferences.setValue("remote/context",json.dumps({**asdict(context), "session_id": ""}))
-            self.preferences.sync()
+            self._save_context_preferences(self.context())
         except (ValueError, RuntimeError) as error:
             self.status.setText(str(error))
         self.capabilities = None
@@ -689,8 +694,7 @@ class RemoteController(QObject):
             return
         try:
             context,auth = self.context(),self.auth()
-            self.preferences.setValue("remote/context",json.dumps({**asdict(context), "session_id": ""}))
-            self.preferences.sync()
+            self._save_context_preferences(context)
             self.cancelled = Event()
             self.runtime_detach = Event()
             self.capabilities = None
