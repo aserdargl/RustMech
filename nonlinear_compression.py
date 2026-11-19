@@ -354,11 +354,6 @@ class RustMechDialog(QDialog):
         brand_layout.addWidget(title)
         brand_layout.addStretch()
         brand_layout.addWidget(self.brand_subtitle_lbl)
-        self.esen_workspace = None
-        self.esen_button = QPushButton("ESEN")
-        self.esen_button.setObjectName("esenWorkspaceBtn")
-        self.esen_button.setToolTip("Open the LAMMPS workspace")
-        self.esen_button.clicked.connect(self.show_esen_workspace)
         self.truba_dialog = TrubaConnectionDialog(self)
         self.truba_dialog.job_list.background_updated.connect(self._background_analysis_updated)
         self.truba_button = QPushButton("TRUBA")
@@ -372,7 +367,7 @@ class RustMechDialog(QDialog):
         self.about_button.clicked.connect(self.show_about)
         workspace_buttons = QHBoxLayout()
         workspace_buttons.setSpacing(6)
-        for button in (self.esen_button, self.truba_button, self.about_button):
+        for button in (self.truba_button, self.about_button):
             button.setFixedSize(124, CONTROL_HEIGHT)
             button.setAutoDefault(False)
             button.setDefault(False)
@@ -984,6 +979,11 @@ class RustMechDialog(QDialog):
         self.folder_batch_button.setToolTip("Batch analysis from folder...")
         self.folder_batch_button.clicked.connect(self._show_folder_batch)
         navigation.addWidget(self.folder_batch_button)
+        self.esen_workspace = None
+        self.esen_button = QPushButton("ESEN")
+        self.esen_button.setToolTip("Open the LAMMPS workspace")
+        self.esen_button.clicked.connect(self.show_esen_workspace)
+        navigation.addWidget(self.esen_button)
 
         self.display_mode_group = QFrame()
         self.display_mode_group.setObjectName("displayModeGroup")
@@ -1385,7 +1385,8 @@ class RustMechDialog(QDialog):
                                           if action.isVisible())),
             (self.designs_button, (self.designs_button.text(),)),
         )
-        command_buttons = (self.doe_button, self.folder_batch_button, *self.display_mode_buttons.buttons())
+        command_buttons = (self.doe_button, self.folder_batch_button, self.esen_button,
+                           *self.display_mode_buttons.buttons())
         # Allow for the menu arrow and the shared 2 px focus border.
         width = max(
             max(button.fontMetrics().horizontalAdvance(label) + 18

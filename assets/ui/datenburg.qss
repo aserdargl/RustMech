@@ -95,21 +95,21 @@ QToolButton::menu-indicator, QPushButton::menu-indicator {
     image: url(@ASSETS@/spin-down-blue.svg); width: 9px; height: 9px;
     subcontrol-origin: padding; subcontrol-position: bottom right;
 }
-#esenWorkspaceBtn, #trubaConnectBtn {
+#trubaConnectBtn {
     color: #FFFFFF; border: 1px solid #A6B8CA; border-radius: 4px; font-weight: 400;
     background: #285EA6;
 }
-#esenWorkspaceBtn:hover, #trubaConnectBtn:hover { background: #245CA0; border-color: #163D70; }
-#esenWorkspaceBtn:pressed, #trubaConnectBtn:pressed { background: #1B467D; }
+#trubaConnectBtn:hover { background: #245CA0; border-color: #163D70; }
+#trubaConnectBtn:pressed { background: #1B467D; }
 #trubaConnectBtn[trubaConnected="true"], #primaryLaunchBtn[trubaConnected="true"], #primaryLaunchBtn[trubaConnected="true"]:disabled {
     color: #FFFFFF; border-color: #166534; font-weight: 400;
     background: #1C753E;
 }
 #trubaConnectBtn[trubaConnected="true"]:hover { color: #FFFFFF; background: #19733B; }
 #trubaConnectBtn[trubaConnected="true"]:pressed { color: #FFFFFF; background: #14532D; }
-#esenWorkspaceBtn:focus, #trubaConnectBtn:focus,
+#trubaConnectBtn:focus,
 #trubaConnectBtn[trubaConnected="true"]:focus { border: 2px solid #102A4C; }
-#esenWorkspaceBtn:disabled, #trubaConnectBtn:disabled,
+#trubaConnectBtn:disabled,
 #trubaConnectBtn[trubaConnected="true"]:disabled {
     background: #E9EDF2; color: #526174; border: 1px solid #CBD5E1;
 }
