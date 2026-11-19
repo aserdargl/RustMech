@@ -71,7 +71,9 @@ class _QtTranslator(QTranslator):
 
     def translate(self, context, source, disambiguation=None, n=-1):
         result = translate(source)
-        return result if result != source else ''
+        # PySide converts None to a null QString so Qt can fall back to the
+        # source text. An empty Python string is an explicit blank translation.
+        return result if result != source else None
 
 
 class _DisplayDelegate(QStyledItemDelegate):

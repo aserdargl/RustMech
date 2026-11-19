@@ -6,10 +6,11 @@ import tempfile
 import unittest
 from unittest.mock import MagicMock, patch
 
-from PySide6.QtCore import QCoreApplication, QEvent, QLocale, QSettings, Qt
+from PySide6.QtCore import QCoreApplication, QEvent, QLocale, QSettings, QTimer, Qt
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QLabel, QLineEdit, QPushButton, QWidget
+from PySide6.QtWidgets import QApplication, QDialogButtonBox, QLabel, QLineEdit, QPushButton, QWidget
 
+from file_dialog import QFileDialog
 from model import Settings
 from solver_profiles import SolverProfileStore
 from studio_style import CompactComboBox
@@ -102,6 +103,28 @@ class LanguageTests(unittest.TestCase):
         self.manager.set_language('en')
         self.assertIn('Length of one edge', label.toolTip())
 
+    def test_folder_picker_keeps_untranslated_qt_text(self):
+        owner = QWidget()
+        self.windows.append(owner)
+        labels = []
+
+        def read_labels():
+            picker = self.app.activeModalWidget()
+            try:
+                box = picker.findChild(QDialogButtonBox)
+                labels.append((box.button(QDialogButtonBox.StandardButton.Open).text().replace('&', ''),
+                               box.button(QDialogButtonBox.StandardButton.Cancel).text().replace('&', ''),
+                               picker.findChild(QLabel, 'fileNameLabel').text().replace('&', '')))
+            finally:
+                picker.reject()
+
+        for language in ('en', 'tr'):
+            self.manager.set_language(language)
+            QTimer.singleShot(0, read_labels)
+            QFileDialog.getExistingDirectory(owner, 'Specimen folder', self.temp.name)
+
+        self.assertEqual(labels, [('Choose', 'Cancel', 'Directory:'), ('Choose', 'İptal', 'Directory:')])
+
     def test_preference_is_read_by_a_fresh_process(self):
         self.manager.set_language('tr')
         script = "from PySide6.QtCore import QSettings; from PySide6.QtWidgets import QApplication; from ui_language import install_language; import sys; app=QApplication([]); print(install_language(app,QSettings(sys.argv[1],QSettings.Format.IniFormat)).language)"
@@ -129,25 +152,27 @@ class LanguageTests(unittest.TestCase):
             self.app.processEvents()
             normal_bounds = window.geometry()
             navigation = (window.project_button, window.sidebar_toggle, window.workspace_button,
-                          window.doe_button, window.designs_button)
+                          window.doe_button, window.designs_button, window.folder_batch_button)
             self.assertEqual([button.x() for button in navigation],
                              sorted(button.x() for button in navigation))
-            self.assertEqual(len({button.width() for button in navigation}), 1)
+            self.assertLess(window.doe_button.width(), window.sidebar_toggle.width())
+            self.assertEqual(window.folder_batch_button.text(), 'Batch Analysis')
             self.manager.set_language('tr')
+            self.assertEqual(window.folder_batch_button.text(), 'Toplu Analiz')
             methods = window.sidebar_toggle.menu().actions()
             self.assertEqual(window.sidebar_toggle.text(), 'Sonlu Eleman')
             self.assertEqual(window.sidebar_toggle.text(), methods[0].text())
             methods[1].trigger()
-            self.assertEqual(window.sidebar_toggle.text(), 'Geometriye göre kırpılmış')
+            self.assertEqual(window.sidebar_toggle.text(), 'Geo. Voksel')
             self.assertEqual(methods[1].text(), 'Geometriye göre kırpılmış voksel ağı')
             self.assertFalse(window.apply_button.isEnabled())
             for index in (3, 4):
                 methods[index].trigger()
                 self.assertFalse(window.apply_button.isEnabled())
             methods[2].trigger()
-            self.assertEqual(window.sidebar_toggle.text(), 'FFT homojenleştirme')
-            self.assertEqual(window.sidebar_toggle.text(), methods[2].text())
-            self.assertEqual(len({button.width() for button in navigation}), 1)
+            self.assertEqual(window.sidebar_toggle.text(), 'FFT')
+            self.assertEqual(window.sidebar_toggle.accessibleName(), methods[2].text())
+            self.assertLess(window.doe_button.width(), window.sidebar_toggle.width())
             self.assertTrue(window.apply_button.isEnabled())
             with patch.object(window, '_start_fft') as start_fft:
                 window.apply_button.click()
@@ -169,7 +194,8 @@ class LanguageTests(unittest.TestCase):
             self.assertEqual(window.geometry(), normal_bounds)
             self.assertEqual(window.doe_studio.capture_plan(), plan)
             self.manager.set_language('en')
-            self.assertEqual(window.sidebar_toggle.text(), 'FFT Homogenization')
+            self.assertEqual(window.sidebar_toggle.text(), 'FFT')
+            self.assertEqual(window.folder_batch_button.text(), 'Batch Analysis')
             methods[0].trigger()
             self.assertEqual(window.sidebar_toggle.text(), 'Finite Element')
             self.assertEqual(panel.connect_button.text(), 'Connect')

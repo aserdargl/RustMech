@@ -14,7 +14,7 @@ from datenburg_widgets import compact_gradient_button_stylesheet, qss_asset_url
 
 
 _DIALOG_BUTTON_STYLE = compact_gradient_button_stylesheet(
-    "QPushButton", "padding: 0 7px; min-height: 23px; max-height: 16777215px;"
+    "QPushButton", "padding: 0 7px; min-height: 23px; max-height: 1000px;"
 ) + "\nQPushButton:focus { padding: 0 6px; }"
 
 
