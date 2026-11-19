@@ -1,4 +1,5 @@
 """Persistent analysis snapshots using the established batch worker and table."""
+from contextlib import ExitStack, contextmanager
 from dataclasses import asdict
 from hashlib import sha256
 import json
@@ -12,6 +13,8 @@ from PySide6.QtWidgets import QLabel, QPushButton, QTableWidgetItem
 from design_exchange import pool_directory
 from doe_studio import (COL_RUN, COL_STRUCTURE, DoEStudioWidget, DoEStudioWindow,
                         ExperimentRow, TABLE_COLUMNS, generate_doe_rows)
+from folder_batch_results import (LEGACY_BATCH_DIRECTORY, batch_directory, move_batch_workspace,
+                                  relocate_batch_report, relocate_queue_row)
 from model import ROOT, settings_from_dict, validate_settings
 
 
@@ -41,15 +44,26 @@ class QueueStore:
         return rows
 
     def save(self, rows):
+        with self._write_lock():
+            self._write_rows(rows)
+
+    @contextmanager
+    def _write_lock(self):
         self.path.parent.mkdir(parents=True, exist_ok=True)
         lock = QLockFile(str(self.path) + ".lock")
         if not lock.tryLock(0):
             raise OSError("Another RustMech instance is saving the analysis queue.")
-        temporary = self.path.with_name(self.path.name + "." + uuid4().hex + ".tmp")
         try:
             current = sha256(self.path.read_bytes()).hexdigest() if self.path.exists() else None
             if current != self.digest:
                 raise OSError("Analysis queue changed in another RustMech instance. Reopen RustMech before editing it.")
+            yield
+        finally:
+            lock.unlock()
+
+    def _write_rows(self, rows):
+        temporary = self.path.with_name(self.path.name + "." + uuid4().hex + ".tmp")
+        try:
             content = json.dumps(dict(schema_version=1, jobs=[asdict(row) for row in rows]),
                                  allow_nan=False, ensure_ascii=True, indent=2).encode("utf-8")
             with temporary.open("wb") as stream:
@@ -60,7 +74,34 @@ class QueueStore:
             self.digest = sha256(content).hexdigest()
         finally:
             temporary.unlink(missing_ok=True)
-            lock.unlock()
+
+    def migrate_batch_workspaces(self, rows, roots=None):
+        if roots is None:
+            roots = {row.folder_job['root'] for row in rows if row.folder_job}
+        candidates = []
+        for root in sorted({Path(root).resolve() for root in roots}):
+            old, new = root / LEGACY_BATCH_DIRECTORY, batch_directory(root)
+            # A prior rename may have completed before the queue file was saved.
+            if old.exists() or old.is_symlink() or old.is_junction() or (new.is_dir() and any(
+                relocate_queue_row(row, [(old, new)]) != row for row in rows
+            )):
+                candidates.append(root)
+        if not candidates:
+            return False
+
+        with self._write_lock(), ExitStack() as moves, ExitStack() as undo:
+            aliases = []
+            for root in candidates:
+                alias = moves.enter_context(move_batch_workspace(root))
+                if alias is not None:
+                    aliases.append(alias)
+            updated = [relocate_queue_row(row, aliases) for row in rows]
+            relocate_batch_report(self.path.with_name('analysis_queue_results.csv'), aliases, undo)
+            if updated != rows:
+                self._write_rows(updated)
+            undo.pop_all()
+        rows[:] = updated
+        return bool(aliases)
 
 
 class AnalysisQueueWidget(DoEStudioWidget):
@@ -93,10 +134,26 @@ class AnalysisQueueWidget(DoEStudioWidget):
         except (OSError, ValueError, TypeError, KeyError) as error:
             self.storage_error = f"Queue could not be restored; original file retained: {error}"
             self.notice.setText(self.storage_error)
+        else:
+            try:
+                self.store.migrate_batch_workspaces(self._rows)
+            except (OSError, ValueError) as error:
+                self.notice.setText(f"Batch workspace migration could not finish: {error}")
         self._matrix_rows[0] = self._rows
         self._storage_ready = not bool(self.storage_error)
         self._refresh_table_view()
         self.run_batch_btn.setText("Run analysis queue")
+
+    def migrate_batch_workspace(self, root):
+        legacy = root / LEGACY_BATCH_DIRECTORY
+        if not (legacy.exists() or legacy.is_symlink() or legacy.is_junction()):
+            return
+        if self._active_mode is not None or self._active_future is not None:
+            raise ValueError("Stop the analysis queue before moving the batch workspace.")
+        if not self._storage_ready or self.storage_error:
+            raise ValueError(self.storage_error or "Analysis queue is not writable.")
+        if self.store.migrate_batch_workspaces(self._rows, [root]):
+            self._refresh_table_view()
 
     def _refresh_table_view(self):
         super()._refresh_table_view()

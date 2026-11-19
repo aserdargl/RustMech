@@ -18,7 +18,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QApplication, QDialog, QGridLa
 from camera_toolbar import camera_icon
 from file_dialog import QFileDialog
 from folder_batch_preview import FacePreviewButton, FacePreviewPopup, store_face_preview
-from folder_batch_results import BATCH_DIRECTORY, atomic_text, batch_directory
+from folder_batch_results import BATCH_DIRECTORY, LEGACY_BATCH_DIRECTORY, atomic_text, batch_directory
 from imported_geometry import (SURFACE_EXTENSIONS, SURFACE_FILE_FILTER, SurfaceComponents,
                                align_compression_surface, automatic_compression_selection,
                                compression_direction, read_polygonal_surface, store_surface, surface_cache_directory)
@@ -56,7 +56,7 @@ def discover_specimens(directory):
     paths = []
     for parent, directories, files in os.walk(root, followlinks=False):
         directories[:] = sorted(name for name in directories
-                                if name.casefold() not in ('result', BATCH_DIRECTORY.casefold())
+                                if name.casefold() not in ('result', BATCH_DIRECTORY.casefold(), LEGACY_BATCH_DIRECTORY.casefold())
                                 and not (Path(parent) / name).is_symlink()
                                 and not (Path(parent) / name).is_junction())
         for name in files:
@@ -527,6 +527,7 @@ class FolderBatchDialog(QDialog):
             if not self.folder.text().strip():
                 raise ValueError('Choose a specimen folder.')
             root = Path(self.folder.text()).expanduser().resolve()
+            self.queue.migrate_batch_workspace(root)
             paths = discover_specimens(root)
             if not paths:
                 raise ValueError('No STL, OBJ, PLY or VTP specimens found.')

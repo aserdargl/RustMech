@@ -23,7 +23,8 @@ from doe_studio import ExperimentWorker
 from folder_batch import (FACES_COLUMN, PREFLIGHT_COLUMN, RUN_COLUMN, SPECIMEN_COLUMN,
                           FolderBatchDialog, discover_specimens, prepare_specimen,
                           source_digest, specimen_snapshots)
-from folder_batch_results import batch_directory, collect_folder_output, run_remote_folder_doe
+from folder_batch_results import (LEGACY_BATCH_DIRECTORY, batch_directory, collect_folder_output,
+                                  relocate_queue_row, run_remote_folder_doe, write_folder_reports)
 from geometry_import_dialog import GeometryImportDialog
 from imported_geometry import automatic_compression_faces, compression_direction, read_surface
 from window_state import WindowStateStore
@@ -130,7 +131,7 @@ class FolderBatchTests(unittest.TestCase):
 
     def test_discovery_natural_order_nested_packages_and_result_exclusion(self):
         for name in ('part10.stl', 'part2.stl', 'Result/old.stl', 'nested/result/old.stl', 'package/geometry.stl',
-                     'BatchAnaylsis/Prepared/cached.stl', 'BatchAnaylsis/Results/generated.stl'):
+                     'BatchAnaylsis/Prepared/cached.stl', 'BatchAnalysis/Results/generated.stl'):
             self.specimen(name)
         names = [path.relative_to(self.root).as_posix() for path in discover_specimens(self.root)]
         self.assertEqual(names, ['package/geometry.stl', 'part2.stl', 'part10.stl'])
@@ -341,6 +342,68 @@ class FolderBatchTests(unittest.TestCase):
             with self.assertRaises(OSError):
                 queue.add_folder_snapshots(changed)
         self.assertEqual(len(queue.rows), 1)
+
+    def test_legacy_batch_workspace_moves_and_restores_queued_paths(self):
+        queue = self.queue()
+        prepared = self.prepared()
+        row = queue.add_folder_snapshots(specimen_snapshots(prepared, self.root, self.base, ['ansys_mapdl']))[0]
+        workspace = batch_directory(self.root)
+        legacy = self.root / LEGACY_BATCH_DIRECTORY
+        row.run_folder = str(Path(row.folder_job['destination']) / 'Run_example')
+        workspace.rename(legacy)
+        old_row = relocate_queue_row(row, [(workspace, legacy)])
+        Path(old_row.run_folder).mkdir()
+        report = Path(old_row.run_folder) / 'summary.json'
+        report.write_text(json.dumps({'run_folder': old_row.run_folder}), encoding='utf-8')
+        queue.rows[:] = [old_row]
+        queue.store.save(queue.rows)
+        write_folder_reports(queue.rows)
+
+        # A write failure must leave the original files and queue valid.
+        with patch.object(queue.store, '_write_rows', side_effect=OSError('disk full')):
+            with self.assertRaisesRegex(OSError, 'disk full'):
+                queue.store.migrate_batch_workspaces(queue.rows)
+        self.assertFalse(workspace.exists())
+        self.assertTrue(Path(old_row.design_settings.imported_geometry_path).is_file())
+        self.assertEqual(json.loads(report.read_text(encoding='utf-8'))['run_folder'], old_row.run_folder)
+
+        # Merge a non-conflicting corrected directory and migrate at startup.
+        workspace.mkdir()
+        extra = workspace / 'keep.txt'
+        extra.write_text('keep', encoding='utf-8')
+        reopened = self.queue()
+        self.assertFalse(legacy.exists())
+        self.assertEqual(extra.read_text(encoding='utf-8'), 'keep')
+        restored, = QueueStore(queue.store.path).load()
+        self.assertEqual(restored.exp_id, row.exp_id)
+        self.assertEqual(restored.folder_job, row.folder_job)
+        self.assertEqual(restored.run_folder, row.run_folder)
+        self.assertEqual(restored.design_settings.imported_geometry_path, prepared.cached)
+        self.assertTrue(Path(prepared.preview).is_file())
+        migrated_report = Path(restored.run_folder) / 'summary.json'
+        self.assertEqual(json.loads(migrated_report.read_text(encoding='utf-8'))['run_folder'], row.run_folder)
+        summary = workspace / 'Results' / 'toplu_ozet.csv'
+        self.assertIn(row.run_folder, summary.read_text(encoding='utf-8-sig'))
+        self.assertFalse(reopened.store.migrate_batch_workspaces(reopened.rows))
+
+        # Recover if a previous process moved the directory before saving the queue.
+        reopened.store.save([old_row])
+        recovered = self.queue()
+        self.assertEqual(recovered.rows[0].design_settings.imported_geometry_path, prepared.cached)
+        self.assertEqual(recovered.rows[0].run_folder, row.run_folder)
+
+    def test_check_folder_moves_unqueued_legacy_workspace(self):
+        self.specimen()
+        legacy = self.root / LEGACY_BATCH_DIRECTORY
+        (legacy / 'Images').mkdir(parents=True)
+        (legacy / 'Images' / 'existing.png').write_bytes(b'stored image')
+        dialog = self.dialog()
+        dialog.folder.setText(str(self.root))
+        dialog.mode.setCurrentIndex(4)
+        dialog.check_folder()
+        self.assertFalse(legacy.exists())
+        self.assertEqual((batch_directory(self.root) / 'Images' / 'existing.png').read_bytes(), b'stored image')
+        self.assertTrue((batch_directory(self.root) / 'Results').is_dir())
 
     def test_sequential_failure_continue_restart_and_output_routing(self):
         queue = self.queue()

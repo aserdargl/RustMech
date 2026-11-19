@@ -4,8 +4,8 @@
    parametrelerini ayarlayın.
 2. **Designs** yanındaki **Batch Analysis** düğmesine tıklayın ve klasörü seçin.
    STL, OBJ, PLY ve VTP dosyaları alt klasörleriyle birlikte, dosya adına göre
-   doğal sırada taranır (`part2`, `part10` öncesindedir). `BatchAnaylsis`, eski
-   `Result` klasörleri ve bağlantılı klasörler tarama dışında tutulur.
+   doğal sırada taranır (`part2`, `part10` öncesindedir). Batch çalışma
+   klasörleri, eski `Result` klasörleri ve bağlantılı klasörler tarama dışında tutulur.
    Koordinatlar mm kabul edilir.
 3. Basma yönünü seçin: X, Y, Z; ilk numunede seçilen destek/yükleme
    yüzeylerinden yön alma; veya her numunede elle seçim.
@@ -51,13 +51,15 @@
    hatalı işler aynı kuyruktan yeniden denenebilir. Yeniden açılışta kesilmiş
    işler işaretsizdir; çalıştırmadan önce durumlarını kontrol edin.
 
-Hazırlık dosyaları ve yeni işlerin sonuçları seçilen klasördeki `BatchAnaylsis`
-altında tutulur. Daha önce kuyruğa eklenen işler kayıtlı sonuç konumunu kullanır.
+Hazırlık dosyaları ve yeni işlerin sonuçları seçilen klasördeki `BatchAnalysis`
+altında tutulur. Eski `BatchAnaylsis` çalışma klasörleri taşınırken, kuyruktaki
+geometri ve sonuç yolları da güncellenir. Ayrı `Result` klasörlerine bağlı eski
+işler kayıtlı konumlarını kullanmaya devam eder.
 
 ```text
 Numuneler/
   numune_01.stl
-  BatchAnaylsis/
+  BatchAnalysis/
     Prepared/  # Analize hazırlanan VTP kopyaları ve kaydedilen seçimler
     Images/    # Yüzey önizleme PNG dosyaları
     Results/

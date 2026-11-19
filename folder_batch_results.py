@@ -1,13 +1,17 @@
 """Durable folder batch metadata and portable per-specimen result exports."""
 import csv
-from dataclasses import asdict
+from contextlib import ExitStack, contextmanager
+from dataclasses import asdict, replace
+from filecmp import cmp
+from io import StringIO
 import json
 from pathlib import Path
 import shutil
 from uuid import uuid4
 
 
-BATCH_DIRECTORY = 'BatchAnaylsis'
+BATCH_DIRECTORY = 'BatchAnalysis'
+LEGACY_BATCH_DIRECTORY = 'BatchAnaylsis'
 
 
 def batch_directory(root):
@@ -23,6 +27,117 @@ def atomic_text(path, content):
         temporary.replace(path)
     finally:
         temporary.unlink(missing_ok=True)
+
+
+def relocate_paths(value, aliases):
+    if isinstance(value, dict):
+        return {key: relocate_paths(item, aliases) for key, item in value.items()}
+    if isinstance(value, list):
+        return [relocate_paths(item, aliases) for item in value]
+    if isinstance(value, str) and value:
+        path = Path(value)
+        for old, new in aliases:
+            if path.is_relative_to(old):
+                return str(new / path.relative_to(old))
+    return value
+
+
+def relocate_queue_row(row, aliases):
+    settings = row.design_settings
+    if settings is not None:
+        settings = replace(settings, imported_geometry_path=relocate_paths(settings.imported_geometry_path, aliases))
+    return replace(row, design_settings=settings, folder_job=relocate_paths(row.folder_job, aliases),
+                   run_folder=relocate_paths(row.run_folder, aliases))
+
+
+def relocate_batch_report(path, aliases, undo):
+    if not path.is_file() or path.is_symlink():
+        return
+    try:
+        with path.open(encoding='utf-8', newline='') as stream:
+            original = stream.read()
+    except UnicodeError:
+        return
+    if path.suffix == '.json':
+        try:
+            data = json.loads(original.lstrip('\ufeff'))
+        except ValueError:
+            return
+        updated = relocate_paths(data, aliases)
+        if updated == data:
+            return
+        content = ('\ufeff' if original.startswith('\ufeff') else '') + json.dumps(updated, ensure_ascii=False, indent=2)
+    else:
+        try:
+            rows = list(csv.reader(StringIO(original, newline='')))
+        except csv.Error:
+            return
+        updated = relocate_paths(rows, aliases)
+        if updated == rows:
+            return
+        stream = StringIO(newline='')
+        csv.writer(stream).writerows(updated)
+        content = stream.getvalue()
+    atomic_text(path, content)
+    undo.callback(atomic_text, path, original)
+
+
+def _plan_batch_move(source, target, moves, duplicates, emptied):
+    if not target.exists() and not target.is_symlink() and not target.is_junction():
+        moves.append((source, target))
+    elif any(path.is_symlink() or path.is_junction() for path in (source, target)):
+        raise OSError(f'Batch workspace contains a linked path: {target}')
+    elif source.is_dir() and target.is_dir():
+        for child in sorted(source.iterdir()):
+            _plan_batch_move(child, target / child.name, moves, duplicates, emptied)
+        emptied.append(source)
+    elif source.is_file() and target.is_file() and cmp(source, target, shallow=False):
+        duplicates.append(source)
+    else:
+        raise OSError(f'Batch workspace contains conflicting files: {target}')
+
+
+@contextmanager
+def move_batch_workspace(root):
+    """Move the legacy workspace, rolling files back if the queue update fails."""
+    root = Path(root).resolve()
+    old, new = root / LEGACY_BATCH_DIRECTORY, batch_directory(root)
+    if any(path.is_symlink() or path.is_junction() for path in (old, new)):
+        raise OSError(f'Batch workspace contains a linked path: {root}')
+    moves, duplicates, emptied = [], [], []
+    if old.exists():
+        if not old.is_dir():
+            raise OSError(f'Expected a batch workspace directory: {old}')
+        _plan_batch_move(old, new, moves, duplicates, emptied)
+    elif not new.is_dir():
+        yield None
+        return
+
+    aliases = [(old, new)]
+    with ExitStack() as undo:
+        for source, target in moves:
+            source.rename(target)
+            undo.callback(target.rename, source)
+        results = new / 'Results'
+        for name in ('job.json', 'summary.json', 'toplu_ozet.csv'):
+            for path in results.rglob(name):
+                if path.resolve().is_relative_to(new):
+                    relocate_batch_report(path, aliases, undo)
+        yield aliases[0]
+        undo.pop_all()
+
+    # These files have verified identical copies and the remaining directories
+    # are empty. A cleanup failure leaves an intact, retryable legacy remnant.
+    for path in duplicates:
+        try:
+            path.unlink()
+        except OSError:
+            pass
+    for path in emptied:
+        try:
+            path.rmdir()
+        except OSError:
+            pass
 
 
 def collect_folder_output(row, payload):
@@ -88,9 +203,8 @@ def write_folder_reports(rows):
         grouped.setdefault(results, []).append(row)
     columns = ('source', 'solver', 'direction', 'status', 'max_force_n',
                'effective_modulus_mpa', 'energy_absorption_j', 'run_folder', 'job_id')
-    import io
     for results, jobs in grouped.items():
-        stream = io.StringIO(newline='')
+        stream = StringIO(newline='')
         writer = csv.DictWriter(stream, fieldnames=columns)
         writer.writeheader()
         for row in jobs:
