@@ -5,11 +5,12 @@ from threading import Event
 import unittest
 from unittest.mock import MagicMock, patch
 
+import numpy as np
 from PySide6.QtWidgets import QApplication, QWidget
 
 from mesh_engine import build_preview
 from model import Settings
-from nonlinear_compression import RustMechDialog
+from nonlinear_compression import RustMechDialog, _build_fft_preview
 from preview_viewport import MESH_PREVIEW_ACTOR
 
 
@@ -80,6 +81,50 @@ class SurfacePreviewUITests(unittest.TestCase):
                     self.assertIs(layers["excluded_fragments"].args[0], fragment)
                     self.assertFalse(self.window.fragment_status.isHidden())
                 self.assertIs(self.window.preview.mesh, mesh)
+
+    def test_fft_preview_uses_solver_voxel_coordinates(self):
+        solid = np.zeros((8, 8, 8), dtype=bool)
+        solid[2, 4, 6] = True
+        with patch('nonlinear_compression.sample_periodic_cell', return_value=solid):
+            outline, surface, count = _build_fft_preview(self.settings, 8)
+        self.assertEqual(count, 1)
+        self.assertEqual(surface.n_cells, 6)
+        np.testing.assert_allclose(surface.bounds, np.array([2, 3, 4, 5, 6, 7]) / 8)
+        np.testing.assert_allclose(outline.bounds, [0, 1] * 3)
+
+    def test_fft_preview_replaces_stale_grid_and_restores_fe_view(self):
+        window = self.window
+        plotter = window.plotter
+        first, second = Future(), Future()
+        with patch.object(window._fft_preview_executor, 'submit', side_effect=[first, second]) as submit:
+            window._select_settings_method(window._fft_method_index)
+            self.assertTrue(window.display_mode_group.isHidden())
+            self.assertTrue(window.show_platens_cb.isHidden())
+            window.fft_grid.setValue(8)
+            window._poll_fft_preview()
+            window.fft_grid.setValue(16)
+            first.set_result(_build_fft_preview(self.settings, 8))
+            window._poll_fft_preview()
+            self.assertIsNone(window._fft_preview_result)
+            _, settings, grid = submit.call_args.args
+            self.assertEqual(settings, window.collect())
+            self.assertEqual(grid, 16)
+            second.set_result(_build_fft_preview(settings, grid))
+            window._poll_fft_preview()
+            self.assertIn('16 × 16 × 16', window.fft_preview_summary.text())
+            self.assertIn('0.0625 mm', window.fft_preview_summary.text())
+            self.assertTrue(any(call.kwargs.get('name') == 'fft_solid_voxels'
+                                for call in plotter.add_mesh.call_args_list))
+            window.fft_void_ratio.setValue(0.05)
+            window._poll_fft_preview()
+            self.assertIn('5%', window.fft_preview_summary.text())
+            self.assertEqual(submit.call_count, 2)
+
+        plotter.reset_mock()
+        window._select_settings_method(0)
+        self.assertTrue(window.fft_preview_summary.isHidden())
+        self.assertFalse(window.display_mode_group.isHidden())
+        self.assertIs(plotter.add_mesh.call_args_list[0].args[0], window.preview.surface)
 
     def test_doe_select_ignores_mesh_errors_and_pending_main_preview(self):
         self.window.controls['mesh_resolution'].setValue(2)

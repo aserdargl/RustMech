@@ -122,20 +122,26 @@ def validate_periodic_fft(settings):
     return errors
 
 
+def sample_periodic_cell(settings, grid):
+    """Return the DAMASK solid phase at the centers of the periodic voxels."""
+    _validate_grid(grid)
+    from mesh_engine import geometry_threshold
+
+    axis = (np.arange(grid) + 0.5) * (settings.cell_size / grid)
+    field = sample_priority_grid(settings, axis, dtype=np.float32,
+                                 threshold=geometry_threshold(settings))
+    return field < 0
+
+
 def run_periodic_fft(settings, grid, void_ratio, distribution, folder):
     folder = Path(folder)
     try:
         errors = validate_periodic_fft(settings)
         if errors:
             raise ValueError("\n".join(errors))
-        _validate_grid(grid)
-        from mesh_engine import geometry_threshold
-
         report_analysis_step("Sampling the periodic cell…")
-        axis = (np.arange(grid) + 0.5) * (settings.cell_size / grid)
-        field = sample_priority_grid(settings, axis, dtype=np.float32,
-                                     threshold=geometry_threshold(settings))
-        return solve_cell(field < 0, settings.cell_size, settings.young_modulus,
+        solid = sample_periodic_cell(settings, grid)
+        return solve_cell(solid, settings.cell_size, settings.young_modulus,
                           settings.poisson_ratio, void_ratio, distribution, folder,
                           settings_snapshot=asdict(settings))
     except Exception as exc:

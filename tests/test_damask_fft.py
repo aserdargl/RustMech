@@ -7,8 +7,26 @@ from unittest.mock import patch
 
 import numpy as np
 
-from damask_fft import DamaskAnalysisProcess, RESULT_FILE, _solve_load, run_periodic_fft, solve_cell
+from damask_fft import (
+    DamaskAnalysisProcess, RESULT_FILE, _solve_load, run_periodic_fft,
+    sample_periodic_cell, solve_cell,
+)
 from model import Settings
+
+
+class DamaskInputTests(unittest.TestCase):
+    def test_solver_receives_the_same_periodic_mask_as_the_preview(self):
+        settings = Settings()
+        grid = 16
+        expected = sample_periodic_cell(settings, grid)
+        self.assertTrue(expected.any())
+        self.assertFalse(expected.all())
+        with TemporaryDirectory() as directory, patch('damask_fft.solve_cell') as solve:
+            run_periodic_fft(settings, grid, 0.02, 'Ubuntu', directory)
+        solid, cell_size, _, _, ratio, _, _ = solve.call_args.args
+        np.testing.assert_array_equal(solid, expected)
+        self.assertEqual(cell_size, settings.cell_size)
+        self.assertEqual(ratio, 0.02)
 
 
 @unittest.skipUnless(os.environ.get("RUSTMECH_TEST_DAMASK"),

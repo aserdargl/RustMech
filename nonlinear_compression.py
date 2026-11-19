@@ -57,7 +57,10 @@ from PySide6.QtWidgets import (
 )
 
 from analysis_process import AnalysisProcess, run_single_analysis, run_resume_analysis
-from damask_fft import COMPONENTS, MAX_GRID, MIN_GRID, DamaskAnalysisProcess, validate_periodic_fft
+from damask_fft import (
+    COMPONENTS, MAX_GRID, MIN_GRID, DamaskAnalysisProcess, sample_periodic_cell,
+    validate_periodic_fft,
+)
 from studio_style import ActionFlowLayout, CompactDoubleSpinBox, CONTROL_HEIGHT, STUDIO_STYLESHEET, SidebarGroupBox, configure_form, field_label
 from sidebar_splitter import SidebarSplitter
 from setup_help import GEOMETRY_HELP
@@ -776,6 +779,17 @@ class NoWheelComboBox(CompactComboBox):
         event.ignore()
 
 
+def _build_fft_preview(settings: Settings, grid: int):
+    solid = sample_periodic_cell(settings, grid)
+    spacing = settings.cell_size / grid
+    image = pv.ImageData(dimensions=(grid + 1,) * 3, spacing=(spacing,) * 3)
+    image.cell_data["solid"] = solid.ravel(order="F").astype(np.uint8)
+    # Keep the exposed voxel faces, including the walls of open pores.
+    surface = image.threshold(0.5, scalars="solid").extract_surface(
+        pass_pointid=False, pass_cellid=False, algorithm="dataset_surface")
+    return image.outline(), surface, int(np.count_nonzero(solid))
+
+
 class RustMechDialog(QDialog):
     """Compact settings editor with geometry preview and on-demand FE meshing."""
 
@@ -854,7 +868,13 @@ class RustMechDialog(QDialog):
         self.executor = ThreadPoolExecutor(
             max_workers=1, thread_name_prefix="gyroid-preview"
         )
+        self._fft_preview_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="fft-preview")
         self.future = None
+        self._fft_preview_request = None
+        self._fft_preview_future = None
+        self._fft_preview_result = None
+        self._fft_preview_error = ""
+        self._fft_preview_size = None
         self.mesh_cancelled = Event()
         self.mesh_progress_updates = SimpleQueue()
         self.worker_key = None
@@ -1662,7 +1682,9 @@ class RustMechDialog(QDialog):
         bottom_telemetry_layout.setSpacing(0)
 
         # Live KPI Metric Row
-        kpi_row = QHBoxLayout()
+        self.mesh_kpis = QWidget()
+        kpi_row = QHBoxLayout(self.mesh_kpis)
+        kpi_row.setContentsMargins(0, 0, 0, 0)
         kpi_row.setSpacing(0)
         self._kpi_labels: dict[str, QLabel] = {}
         for key, title, initial in (
@@ -1686,7 +1708,13 @@ class RustMechDialog(QDialog):
             card_layout.addWidget(v_lbl)
             kpi_row.addWidget(card, 0, Qt.AlignmentFlag.AlignLeft)
             self._kpi_labels[key] = v_lbl
-        bottom_telemetry_layout.addLayout(kpi_row)
+        bottom_telemetry_layout.addWidget(self.mesh_kpis, alignment=Qt.AlignmentFlag.AlignLeft)
+        self.fft_preview_summary = QLabel()
+        self.fft_preview_summary.setObjectName("statsReadout")
+        self.fft_preview_summary.setTextFormat(Qt.TextFormat.PlainText)
+        self.fft_preview_summary.setWordWrap(True)
+        self.fft_preview_summary.hide()
+        bottom_telemetry_layout.addWidget(self.fft_preview_summary)
 
         # Detailed Telemetry Readout Card
         telemetry_card = QFrame()
@@ -1705,7 +1733,8 @@ class RustMechDialog(QDialog):
         bottom_telemetry_layout.addWidget(telemetry_card)
         details_action = camera_menu.addAction("Mesh diagnostics")
         details_action.setCheckable(True)
-        details_action.toggled.connect(telemetry_card.setVisible)
+        details_action.toggled.connect(lambda checked: telemetry_card.setVisible(
+            checked and self.setup_tabs.currentIndex() != self._fft_method_index))
         camera_controls.add_camera_action(details_action, "diagnostics")
         camera_controls.attach(self.plotter.interactor)
         self._kpi_labels["spacing"].parentWidget().hide()
@@ -1827,10 +1856,10 @@ class RustMechDialog(QDialog):
             self.workspace_button.setText(workspace_names[index])
             self.workspace_actions.actions()[index].setChecked(True)
             flow_active = index in (2,3)
+            fft_selected = self.setup_tabs.currentIndex() == self._fft_method_index
             if flow_active:
                 title = "Transient Heat Transfer" if index == 3 else "Isothermal Flow"
             else:
-                fft_selected = self.setup_tabs.currentIndex() == self._fft_method_index
                 title = "FFT Homogenization" if fft_selected else "Nonlinear Compression"
             self.brand_title_label.setText(title)
             unit_badge.setText("Units: mm  °C  s  Pa" if index==3 else "Units: mm  m/s  Pa" if flow_active else "Units: mm  N  MPa")
@@ -1840,8 +1869,12 @@ class RustMechDialog(QDialog):
             if remote is not None:
                 self._update_remote_banner()
             self.sidebar_toggle.setVisible(not flow_active)
-            self.display_mode_group.setVisible(not flow_active)
-            self.show_platens_cb.setVisible(not flow_active)
+            self.display_mode_group.setVisible(not flow_active and not fft_selected)
+            self.show_platens_cb.setVisible(not flow_active and not fft_selected)
+            self.mesh_kpis.setVisible(not fft_selected)
+            details_action.setVisible(not fft_selected)
+            telemetry_card.setVisible(not fft_selected and details_action.isChecked())
+            self.fft_preview_summary.setVisible(fft_selected)
             camera_controls.setVisible(not flow_active)
         self._sync_workspace_context = sync_workspace_context
         self.workspace_tabs.currentChanged.connect(sync_workspace_context)
@@ -1894,6 +1927,7 @@ class RustMechDialog(QDialog):
         self.poll = QTimer(self)
         self.poll.setInterval(80)
         self.poll.timeout.connect(self.poll_preview)
+        self.poll.timeout.connect(self._poll_fft_preview)
         self.poll.start()
 
         self.stl_resolution_input.textChanged.connect(self.geometry_changed)
@@ -1941,6 +1975,8 @@ class RustMechDialog(QDialog):
     def _refresh_ui_language(self, *_):
         from ui_language import translate
         self.language_manager.localize_tree(self)
+        if self.setup_tabs.currentIndex() == self._fft_method_index:
+            self._update_fft_preview_summary(self.collect())
         self.sidebar_toggle.setFixedWidth(max(self.sidebar_toggle.fontMetrics().horizontalAdvance(translate(name))
                                              for name in self.method_names) + 32)
         navigation = (self.workspace_button, self.doe_button, self.designs_button, self.project_button)
@@ -2196,10 +2232,17 @@ class RustMechDialog(QDialog):
         self.fft_grid = CompactSpinBox()
         self.fft_grid.setRange(MIN_GRID, MAX_GRID)
         self.fft_grid.setValue(preferences.value("fft/grid", 24, type=int))
+        self.fft_grid.valueChanged.connect(self.refresh_validity)
         self.fft_void_ratio = CompactDoubleSpinBox()
         self.fft_void_ratio.setRange(0.0001, 0.1)
         self.fft_void_ratio.setSingleStep(0.001)
-        self.fft_void_ratio.setValue(preferences.value("fft/voidRatio", 0.01, type=float))
+        # Read the saved decimal directly to avoid Qt's single-precision conversion.
+        try:
+            void_ratio = float(preferences.value("fft/voidRatio", "0.01", type=str))
+        except (TypeError, ValueError):
+            void_ratio = 0.01
+        self.fft_void_ratio.setValue(void_ratio if np.isfinite(void_ratio) else 0.01)
+        self.fft_void_ratio.valueChanged.connect(self.refresh_validity)
         self.fft_distribution = QLineEdit(preferences.value("fft/distribution", "Ubuntu", type=str))
         self.fft_distribution.setEnabled(os.name == "nt")
         form = QFormLayout()
@@ -2210,6 +2253,9 @@ class RustMechDialog(QDialog):
             ("WSL distribution", self.fft_distribution),
         ):
             form.addRow(field_label(title, control), control)
+        # Reserve room for the full precision of a saved stiffness ratio.
+        ratio_width = self.fft_void_ratio.fontMetrics().horizontalAdvance("0.000000000000") + 22
+        self.fft_void_ratio.setFixedWidth(max(self.fft_void_ratio.width(), ratio_width))
         fields.addLayout(form)
         note = QLabel("DAMASK uses the current TPMS or lattice geometry and the material's E and ν. "
                       "The void phase has the specified fraction of the solid stiffness.")
@@ -2290,11 +2336,20 @@ class RustMechDialog(QDialog):
         for action in self.method_actions.actions():
             action.setChecked(action.data() == index)
         if hasattr(self, "remote_controller"):
+            was_fft = not self.fft_preview_summary.isHidden()
+            is_fft = index == self._fft_method_index
             if index != 0:
                 self._analysis_after_mesh = None
             if self.workspace_tabs.currentIndex() == 0:
                 self._sync_workspace_context(0)
             self.refresh_validity()
+            if was_fft != is_fft:
+                self._fft_preview_size = None
+                if is_fft or self.preview is not None:
+                    self.render_preview(reset=True)
+                else:
+                    self.plotter.clear()
+                    self.plotter.render()
 
     def _local_workspace_solver_name(self):
         if self.workspace_tabs.currentIndex() in (2, 3):
@@ -2955,6 +3010,7 @@ class RustMechDialog(QDialog):
         idle = self.analysis_job is None and self.future is None
         if method == self._fft_method_index:
             fft_errors = validate_periodic_fft(settings)
+            self._request_fft_preview(settings, valid=not fft_errors)
             if controller is not None and controller.requested:
                 fft_errors.append("Turn off TRUBA calculation mode to run local DAMASK FFT.")
             self.apply_button.setEnabled(idle and not fft_errors)
@@ -3144,8 +3200,85 @@ class RustMechDialog(QDialog):
         elif self.preview is not None and self.preview.mesh is None and getattr(self, '_mesh_requested', False) and self.failed_key != key:
             self.start_preview()
 
+    def _request_fft_preview(self, settings, *, valid):
+        grid = self.fft_grid.value()
+        key = (grid, *(getattr(settings, name) for name in GEOMETRY_FIELDS)) if valid else None
+        old_key = self._fft_preview_request[0] if self._fft_preview_request else None
+        if key != old_key:
+            self._fft_preview_request = (key, settings, grid) if valid else None
+            self._fft_preview_result = None
+            self._fft_preview_error = ""
+            self.render_preview()
+        self._update_fft_preview_summary(settings)
+
+    def _poll_fft_preview(self):
+        if self.disposed:
+            return
+        if self._fft_preview_future is not None:
+            request, future = self._fft_preview_future
+            if not future.done():
+                return
+            self._fft_preview_future = None
+            if request is self._fft_preview_request:
+                try:
+                    self._fft_preview_result = future.result()
+                except Exception as error:
+                    self._fft_preview_error = str(error) or type(error).__name__
+                if self.setup_tabs.currentIndex() == self._fft_method_index:
+                    self._update_fft_preview_summary(self.collect())
+                    self.render_preview()
+        if (self.setup_tabs.currentIndex() == self._fft_method_index
+                and self._fft_preview_request is not None
+                and self._fft_preview_result is None and not self._fft_preview_error):
+            request = self._fft_preview_request
+            _, settings, grid = request
+            future = self._fft_preview_executor.submit(_build_fft_preview, settings, grid)
+            self._fft_preview_future = (request, future)
+
+    def _update_fft_preview_summary(self, settings):
+        from ui_language import translate
+
+        if self._fft_preview_request is None:
+            text = "DAMASK voxel preview unavailable. Check the settings below."
+        elif self._fft_preview_error:
+            text = f"Could not build the DAMASK voxel preview: {self._fft_preview_error}"
+        elif self._fft_preview_result is None:
+            text = "Preparing DAMASK voxel preview…"
+        else:
+            grid = self.fft_grid.value()
+            _, _, count = self._fft_preview_result
+            total = grid ** 3
+            ratio = self.fft_void_ratio.value()
+            text = (f"{grid} × {grid} × {grid} · Voxel spacing: {settings.cell_size / grid:.4g} mm\n"
+                    f"Solid voxels: {count:,} ({count / total:.1%}) · Void voxels: {total - count:,}\n"
+                    f"Void stiffness: {ratio * 100:.5g}% of solid · Void E: {ratio * settings.young_modulus:.5g} MPa")
+        self.fft_preview_summary.setText(translate(text))
+
+    def _render_fft_preview(self, reset):
+        camera = self.plotter.camera_position
+        self.plotter.clear()
+        self.fragment_status.hide()
+        if self._fft_preview_result is None:
+            self.plotter.render()
+            return
+        outline, surface, count = self._fft_preview_result
+        self.plotter.enable_lightkit()
+        self.plotter.set_background("#f0f0f0", top="#ffffff")
+        self.plotter.add_mesh(outline, color="#64748b", lighting=False, name="fft_cell_outline")
+        if count:
+            self.plotter.add_mesh(surface, color="#60a5fa", show_edges=True,
+                                  edge_color="#334155", smooth_shading=False, name="fft_solid_voxels")
+        cell_size = self._fft_preview_request[1].cell_size
+        self._finish_preview_view(camera, reset or cell_size != self._fft_preview_size)
+        self._fft_preview_size = cell_size
+
     def render_preview(self, *_, reset: bool = False) -> None:
-        if not self.preview or self.disposed:
+        if self.disposed:
+            return
+        if self.setup_tabs.currentIndex() == self._fft_method_index:
+            self._render_fft_preview(reset)
+            return
+        if not self.preview:
             return
         camera = self.plotter.camera_position
         self.plotter.clear()
@@ -3222,26 +3355,7 @@ class RustMechDialog(QDialog):
             f"Excluded: {removed_count} disconnected elements will be removed. "
             "Red pieces are excluded from the ANSYS mesh."
         )
-        self.plotter.add_axes(color="#0f172a", interactive=False)
-        self.plotter.show_bounds(
-            xtitle="X / mm",
-            ytitle="Y / mm",
-            ztitle="Z / mm",
-            location="outer",
-            ticks="outside",
-            use_2d=True,
-            n_xlabels=3,
-            n_ylabels=3,
-            n_zlabels=3,
-            font_size=10,
-            color="#1e293b",
-        )
-        if reset:
-            self.reset_view()
-        else:
-            self.plotter.camera_position = camera
-            self.plotter.reset_camera_clipping_range()
-            self.plotter.render()
+        self._finish_preview_view(camera, reset)
 
         if mesh is None:
             for name in ("elements", "nodes", "fraction", "spacing"):
@@ -3270,6 +3384,28 @@ class RustMechDialog(QDialog):
             f"Solid {mesh.fraction:.6f}% | Face-connected components {mesh.components} | "
             f"Preview and solver use this same FE mesh.{fragments}"
         )
+
+    def _finish_preview_view(self, camera, reset):
+        self.plotter.add_axes(color="#0f172a", interactive=False)
+        self.plotter.show_bounds(
+            xtitle="X / mm",
+            ytitle="Y / mm",
+            ztitle="Z / mm",
+            location="outer",
+            ticks="outside",
+            use_2d=True,
+            n_xlabels=3,
+            n_ylabels=3,
+            n_zlabels=3,
+            font_size=10,
+            color="#1e293b",
+        )
+        if reset:
+            self.reset_view()
+        else:
+            self.plotter.camera_position = camera
+            self.plotter.reset_camera_clipping_range()
+            self.plotter.render()
 
     def _show_geometry_workspace(self) -> None:
         self.workspace_tabs.setCurrentIndex(0)
@@ -3775,6 +3911,7 @@ class RustMechDialog(QDialog):
         if hasattr(self, "thermal_workspace"):
             self.thermal_workspace.dispose()
         self.executor.shutdown(wait=False, cancel_futures=True)
+        self._fft_preview_executor.shutdown(wait=False, cancel_futures=True)
         if hasattr(self.plotter, "_camera_transition"):
             self.plotter._camera_transition.stop()
         self.plotter.orientation_cube.SetEnabled(0)

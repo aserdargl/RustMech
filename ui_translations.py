@@ -889,6 +889,8 @@ Peridynamics|Peridinamik
 FFT Homogenization|FFT homojenleştirme
 Voxels per axis|Eksen başına voksel
 Void / solid stiffness|Boşluk / katı rijitliği
+DAMASK voxel preview unavailable. Check the settings below.|DAMASK voksel önizlemesi kullanılamıyor. Aşağıdaki ayarları kontrol edin.
+Preparing DAMASK voxel preview…|DAMASK voksel önizlemesi hazırlanıyor…
 DAMASK uses the current TPMS or lattice geometry and the material's E and ν. The void phase has the specified fraction of the solid stiffness.|DAMASK mevcut TPMS veya kafes geometrisini ve malzemenin E ile ν değerlerini kullanır. Boşluk fazının rijitliği, katının girilen oranı kadardır.
 Effective stiffness matrix (MPa)|Etkin rijitlik matrisi (MPa)
 Last completed FFT result|Son tamamlanan FFT sonucu
@@ -1088,6 +1090,9 @@ TURKISH.update({
 })
 
 TEMPLATES = {
+    'Could not build the DAMASK voxel preview: {detail}': 'DAMASK voksel önizlemesi oluşturulamadı: {detail}',
+    '{grid} · Voxel spacing: {spacing} mm\nSolid voxels: {count} ({fraction}) · Void voxels: {void}\nVoid stiffness: {ratio} of solid · Void E: {modulus} MPa':
+        '{grid} · Voksel aralığı: {spacing} mm\nKatı vokseller: {count} ({fraction}) · Boşluk vokselleri: {void}\nBoşluk rijitliği: katının {ratio} kadarı · Boşluk E: {modulus} MPa',
     '{name} must be a positive finite number.': '{name} pozitif ve sonlu olmalıdır.',
     '{name} must be positive and finite.': '{name} pozitif ve sonlu olmalıdır.',
     '{name} must be a finite number.': '{name} sonlu bir sayı olmalıdır.',
