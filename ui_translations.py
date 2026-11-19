@@ -388,6 +388,7 @@ Analysis queue...|Analiz kuyruğu...
 Analysis Queue|Analiz Kuyruğu
 Add to Queue|Kuyruğa Ekle
 Add Truba|TRUBA'ya Ekle
+Execution|Yürütme
 Execution target|Yürütme hedefi
 Local mesh|Yerel ağ üretimi
 TRUBA batch analysis|TRUBA toplu analizi
