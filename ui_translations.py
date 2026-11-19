@@ -1162,6 +1162,13 @@ Could not update queue status.|Kuyruk durumu güncellenemedi.
 No visible Slurm queues.|Görüntülenebilen Slurm kuyruğu yok.
 Last updated|Son güncelleme
 Estimated start|Tahmini başlangıç
+Pending reason|Bekleme nedeni
+Waiting for resources|Kaynak bekleniyor
+Higher-priority jobs|Daha öncelikli işler var
+Waiting for a job dependency|Bağımlı iş bekleniyor
+Awaiting scheduler review|Slurm değerlendirmesi bekleniyor
+Account CPU limit reached|Hesabın CPU sınırına ulaşıldı
+QoS CPU limit reached|QoS CPU sınırına ulaşıldı
 Slurm has no start estimate yet.|Slurm henüz başlangıç tahmini vermedi.
 Start time estimated by Slurm. It may change.|Slurm'un tahmini başlangıç zamanı değişebilir.
 Cancel job|İşi iptal et

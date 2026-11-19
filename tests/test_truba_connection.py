@@ -13,7 +13,7 @@ from PySide6.QtCore import QItemSelectionModel, QPoint, QSettings, Qt
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QLineEdit, QMessageBox
 
-from truba_active_jobs import QUEUE_SEPARATOR, display_start
+from truba_active_jobs import PENDING_REASON_COLUMN, QUEUE_SEPARATOR, display_start
 from truba_client import TrubaSession
 from truba_connection import TrubaConnectionDialog
 from truba_credentials import CredentialStore
@@ -23,7 +23,7 @@ from window_state import WindowStateStore
 
 
 def queue_output(*rows):
-    return '\n'.join(row.replace('|', QUEUE_SEPARATOR, 9) for row in rows)
+    return '\n'.join(row.replace('|', QUEUE_SEPARATOR, 10) for row in rows)
 
 
 SELECT_ROW = QItemSelectionModel.SelectionFlag.ClearAndSelect | QItemSelectionModel.SelectionFlag.Rows
@@ -351,7 +351,7 @@ class TrubaTests(unittest.TestCase):
             QTest.keyClick(tab.study_name, Qt.Key.Key_Return)
             command.assert_called_once()
 
-            command.return_value = queue_output('1|PENDING|N/A|0:00|8:00:00|8|1|short|New job|')
+            command.return_value = queue_output('1|PENDING|N/A|0:00|8:00:00|8|1|short|Resources|New job|')
             QTest.mouseClick(tab.refresh_button, Qt.MouseButton.LeftButton)
             self.assertFalse(tab.refresh_button.isEnabled())
             tab.refresh_button.click()
@@ -359,6 +359,7 @@ class TrubaTests(unittest.TestCase):
             self.app.processEvents()
             self.assertEqual(command.call_count, 2)
             self.assertEqual(tab.jobs.item(0, 0).text(), '1')
+            self.assertEqual(tab.jobs.item(0, PENDING_REASON_COLUMN).text(), 'Waiting for resources')
             self.assertTrue(tab.refresh_button.isEnabled())
             self.assertLess(tab.cancel_button.geometry().right(), tab.refresh_button.x())
             self.assertEqual(tab.cancel_button.y(), tab.refresh_button.y())
@@ -366,6 +367,12 @@ class TrubaTests(unittest.TestCase):
             tab.layout().activate()
             bottom_margin = tab.layout().contentsMargins().bottom()
             self.assertEqual(tab.splitter.geometry().bottom(), tab.rect().bottom() - bottom_margin)
+
+            command.return_value = queue_output('1|PENDING|N/A|0:00|8:00:00|8|1|short|Priority|New job|')
+            tab.timer.timeout.emit()
+            self.assertTrue(tab.worker.wait(5000))
+            self.app.processEvents()
+            self.assertEqual(tab.jobs.item(0, PENDING_REASON_COLUMN).text(), 'Higher-priority jobs')
 
         dialog.connection_changed.emit(False)
         self.assertFalse(tab.refresh_button.isEnabled())
@@ -377,9 +384,9 @@ class TrubaTests(unittest.TestCase):
         dialog.show()
         self.assertFalse(tab.cancel_button.isEnabled())
         queue = queue_output(
-            '11|RUNNING|N/A|4:00|8:00:00|8|1|short|First job|run.slurm',
-            '23|PENDING|N/A|0:00|8:00:00|4|1|short|Second job|run.slurm',
-            '42_5|PENDING|N/A|0:00|8:00:00|8|1|short|Array task|run.slurm',
+            '11|RUNNING|N/A|4:00|8:00:00|8|1|short|None|First job|run.slurm',
+            '23|PENDING|N/A|0:00|8:00:00|4|1|short|Resources|Second job|run.slurm',
+            '42_5|PENDING|N/A|0:00|8:00:00|8|1|short|None|Array task|run.slurm',
         )
         with (patch.object(dialog, 'analysis_auth', return_value=RemoteAuth('tester', 'test')),
               patch('truba_active_jobs.RemoteTransport') as transport,
@@ -443,9 +450,9 @@ class TrubaTests(unittest.TestCase):
         dialog.tabs.setCurrentWidget(tab)
         dialog.show()
         queue = queue_output(
-            '11|RUNNING|N/A|4:00|8:00:00|8|1|short|First job|run.slurm',
-            '23|PENDING|N/A|0:00|8:00:00|4|1|short|Second job|run.slurm',
-            '31|RUNNING|N/A|4:00|8:00:00|8|1|short|Third job|run.slurm',
+            '11|RUNNING|N/A|4:00|8:00:00|8|1|short|None|First job|run.slurm',
+            '23|PENDING|N/A|0:00|8:00:00|4|1|short|Resources|Second job|run.slurm',
+            '31|RUNNING|N/A|4:00|8:00:00|8|1|short|None|Third job|run.slurm',
         ).splitlines()
         with (patch.object(dialog, 'analysis_auth', return_value=RemoteAuth('tester', 'test')),
               patch('truba_active_jobs.RemoteTransport') as transport,
@@ -532,15 +539,15 @@ class TrubaTests(unittest.TestCase):
         write_record(self.directory / 'ESEN' / 'jobs' / esen_id / 'job.json',
                      dict(username='tester', job_id='8', name='run_material.slurm'))
         output = queue_output(
-            '1|RUNNING|2026-11-18T04:15:00|1-05:20:40|2:17:15|64|2|orfoz|RM-1|/scratch/a|b/solve.slurm',
-            '2|PENDING|2026-11-18T23:15:00|0:00|8:00:00|32|1|orfoz|RM-2|/scratch/thermal.slurm',
-            '3|RUNNING|2026-11-18T05:00:00|25:40|UNLIMITED|20|1|short|External job|bash',
-            '4|COMPLETED|2026-11-18T04:15:00|1:30|0:00|20|1|short|Done|bash',
-            '5_[1-16%4]|PENDING|N/A|0:00|8:00:00|4|1|short|Array job|array.slurm',
-            '6|RUNNING|2026-11-18T04:15:00|25:40|8:00:00|32|1|short|RustMech-session|session.slurm',
-            '7|RUNNING|2026-11-18T04:15:00|25:40|8:00:00|20|1|short|bash|',
-            f'8|RUNNING|2026-11-18T04:15:00|25:40|8:00:00|16|1|short|ESEN-{esen_id}|/scratch/run.slurm',
-            '9|RUNNING|2026-11-18T04:15:00|25:40|8:00:00|8|1|short|RustMech-remote|preview.slurm',
+            '1|RUNNING|2026-11-18T04:15:00|1-05:20:40|2:17:15|64|2|orfoz|None|RM-1|/scratch/a|b/solve.slurm',
+            '2|PENDING|2026-11-18T23:15:00|0:00|8:00:00|32|1|orfoz|Priority|RM-2|/scratch/thermal.slurm',
+            '3|RUNNING|2026-11-18T05:00:00|25:40|UNLIMITED|20|1|short|None|External job|bash',
+            '4|COMPLETED|2026-11-18T04:15:00|1:30|0:00|20|1|short|None|Done|bash',
+            '5_[1-16%4]|PENDING|N/A|0:00|8:00:00|4|1|short|JobArrayTaskLimit|Array job|array.slurm',
+            '6|RUNNING|2026-11-18T04:15:00|25:40|8:00:00|32|1|short|None|RustMech-session|session.slurm',
+            '7|RUNNING|2026-11-18T04:15:00|25:40|8:00:00|20|1|short|None|bash|',
+            f'8|RUNNING|2026-11-18T04:15:00|25:40|8:00:00|16|1|short|None|ESEN-{esen_id}|/scratch/run.slurm',
+            '9|RUNNING|2026-11-18T04:15:00|25:40|8:00:00|8|1|short|None|RustMech-remote|preview.slurm',
         )
         with (patch.object(dialog, 'analysis_auth', return_value=RemoteAuth('tester', 'test')),
               patch('truba_active_jobs.esen_jobs_directory', return_value=self.directory / 'ESEN' / 'jobs'),
@@ -558,7 +565,7 @@ class TrubaTests(unittest.TestCase):
             command = transport.return_value.command.call_args.args[0]
             self.assertIn('--user=tester', command)
             self.assertIn('--all', command.split())
-            self.assertIn(QUEUE_SEPARATOR.join(('%i', '%T', '%S', '%M', '%L', '%C', '%D', '%P', '%j', '%o')),
+            self.assertIn(QUEUE_SEPARATOR.join(('%i', '%T', '%S', '%M', '%L', '%C', '%D', '%P', '%r', '%j', '%o')),
                           command)
             self.assertEqual([tab.works.item(i, 0).text() for i in range(tab.works.rowCount())],
                              ['All jobs', 'A', 'Array job', 'B', 'bash', f'ESEN-{esen_id}', 'External job',
@@ -569,6 +576,13 @@ class TrubaTests(unittest.TestCase):
             self.assertEqual(estimates['1'], '—')
             self.assertEqual(estimates['2'], display_start('2026-11-18T23:15:00'))
             self.assertEqual(estimates['5_[1-16%4]'], '—')
+            self.assertEqual(tab.jobs.horizontalHeader().logicalIndex(2), PENDING_REASON_COLUMN)
+            reasons = {tab.jobs.item(i, 0).text(): tab.jobs.item(i, PENDING_REASON_COLUMN)
+                       for i in range(tab.jobs.rowCount())}
+            self.assertEqual(reasons['1'].text(), '—')
+            self.assertEqual(reasons['2'].text(), 'Higher-priority jobs')
+            self.assertEqual(reasons['2'].toolTip(), '<qt>Priority</qt>')
+            self.assertEqual(reasons['5_[1-16%4]'].text(), 'JobArrayTaskLimit')
             self.assertFalse(tab.jobs.isColumnHidden(2))
             self.assertEqual({(tab.jobs.item(i, 0).text(), tab.jobs.item(i, 2).text()):
                               (tab.jobs.item(i, 1).text(), tab.jobs.item(i, 3).text())
@@ -644,7 +658,7 @@ class TrubaTests(unittest.TestCase):
                 self.assertEqual(header.sectionSize(1), original_width + 35)
                 tab.jobs.setColumnWidth(2, 147)
 
-                queue = queue_output('23|PENDING|N/A|0:00|8:00:00|4|1|short|Second job|run.slurm')
+                queue = queue_output('23|PENDING|N/A|0:00|8:00:00|4|1|short|Resources|Second job|run.slurm')
                 with (patch.object(first, 'analysis_auth', return_value=RemoteAuth('tester', 'test')),
                       patch('truba_active_jobs.RemoteTransport') as transport):
                     transport.return_value.command.return_value = queue

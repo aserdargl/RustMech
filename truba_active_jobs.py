@@ -23,14 +23,24 @@ from ui_language import translate
 
 # Job names and command paths may contain ordinary punctuation.
 QUEUE_SEPARATOR = '\x1f'
+QUEUE_FIELDS = ('%i', '%T', '%S', '%M', '%L', '%C', '%D', '%P', '%r', '%j', '%o')
 SLURM_JOB_HEADERS = (
     'Slurm ID', 'Status', 'Work name', 'Job description', 'Script / command', 'CPUs',
     'Nodes', 'Partition', 'Started at', 'Elapsed time', 'Time left',
 )
 ACTIVE_JOB_HEADERS = (*SLURM_JOB_HEADERS[:2], 'Work', 'Job', 'Command',
-                      *SLURM_JOB_HEADERS[5:], 'Estimated start')
-ACTIVE_JOB_COLUMN_WIDTHS = (76, 108, 88, 134, 128, 60, 66, 94, 158, 85, 80, 158)
+                      *SLURM_JOB_HEADERS[5:], 'Estimated start', 'Pending reason')
+PENDING_REASON_COLUMN = len(ACTIVE_JOB_HEADERS) - 1
+ACTIVE_JOB_COLUMN_WIDTHS = (76, 108, 88, 134, 128, 60, 66, 94, 158, 85, 80, 158, 218)
 ACTIVE_JOB_WIDTH_KEY = 'truba/activeJobs/columnWidths'
+PENDING_REASON_LABELS = {
+    'Resources': 'Waiting for resources',
+    'Priority': 'Higher-priority jobs',
+    'Dependency': 'Waiting for a job dependency',
+    'None': 'Awaiting scheduler review',
+    'AssocGrpCpuLimit': 'Account CPU limit reached',
+    'QOSGrpCpuLimit': 'QoS CPU limit reached',
+}
 
 
 def configure_slurm_job_table(table):
@@ -65,6 +75,7 @@ class ActiveJob:
     cpus: str
     nodes: str
     partition: str
+    pending_reason: str
 
 
 def esen_job_script(slurm_name, job_id, username):
@@ -83,7 +94,7 @@ def esen_job_script(slurm_name, job_id, username):
 
 def query_active_jobs(auth, state_dir):
     transport = RemoteTransport(RemoteContext(transport='ssh'), auth)
-    fields_format = QUEUE_SEPARATOR.join(('%i', '%T', '%S', '%M', '%L', '%C', '%D', '%P', '%j', '%o'))
+    fields_format = QUEUE_SEPARATOR.join(QUEUE_FIELDS)
     output = transport.command(
         "TZ=UTC SLURM_TIME_FORMAT='%Y-%m-%dT%H:%M:%S' squeue --noheader --all --array --states=all --user="
         + shlex.quote(auth.username) + ' --format=' + shlex.quote(fields_format)
@@ -94,10 +105,10 @@ def query_active_jobs(auth, state_dir):
             records[str(record['job_id'])].append(record)
     groups = defaultdict(list)
     for line in output.splitlines():
-        fields = line.split(QUEUE_SEPARATOR, 9)
-        if len(fields) != 10:
+        fields = line.split(QUEUE_SEPARATOR, len(QUEUE_FIELDS) - 1)
+        if len(fields) != len(QUEUE_FIELDS):
             continue
-        job_id, state, start, elapsed, remaining, cpus, nodes, partition, slurm_name, command = (
+        job_id, state, start, elapsed, remaining, cpus, nodes, partition, reason, slurm_name, command = (
             field.strip() for field in fields
         )
         if (not re.fullmatch(r'[0-9]+(?:[_+][0-9]+|_\[[0-9,:%-]+\])*', job_id)
@@ -120,6 +131,7 @@ def query_active_jobs(auth, state_dir):
             groups[name].append(ActiveJob(
                 job_id, state, start, elapsed, remaining, tuple(dict.fromkeys(purposes)),
                 script or '—', command, cpus or '—', nodes or '—', partition or '—',
+                reason if state == 'PENDING' else '',
             ))
     return dict(groups)
 
@@ -242,6 +254,8 @@ class TrubaActiveJobs(QWidget):
         self.column_settings = state_store.settings if state_store is not None else dialog.language_manager.preferences
         header = self.jobs.horizontalHeader()
         header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        # Put the reason next to Status while preserving stored column width keys.
+        header.moveSection(header.visualIndex(PENDING_REASON_COLUMN), 2)
         header.ensurePolished()
         dialog.language_manager.localize(header)
         for column, default_width in enumerate(ACTIVE_JOB_COLUMN_WIDTHS):
@@ -410,6 +424,11 @@ class TrubaActiveJobs(QWidget):
                         else 'Start time estimated by Slurm. It may change.'
                     ))
                 self.jobs.setItem(index, len(SLURM_JOB_HEADERS), estimate_item)
+                reason = job.pending_reason
+                reason_item = QTableWidgetItem(PENDING_REASON_LABELS.get(reason, reason) or '—')
+                if reason:
+                    reason_item.setToolTip(f'<qt>{escape(reason)}</qt>')
+                self.jobs.setItem(index, PENDING_REASON_COLUMN, reason_item)
                 if (name, job.job_id) in previous_selection:
                     selected_rows.append(index)
                 if (name, job.job_id) == previous_current:
