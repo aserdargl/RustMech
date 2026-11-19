@@ -202,8 +202,8 @@ class FolderBatchDialog(QDialog):
         self.enqueue.setEnabled(not busy and any(item.cached for item in self.items))
 
     def choose_folder(self):
-        path = QFileDialog.getExistingDirectory(self, 'Specimen folder', self.folder.text(),
-                                                filter=SURFACE_FILE_FILTER)
+        path = QFileDialog.getExistingDirectory(self, 'Specimen folder', self.folder.text().strip(),
+                                                filter=f'All files (*);;{SURFACE_FILE_FILTER}')
         if path:
             self.folder.setText(path)
 

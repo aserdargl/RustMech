@@ -15,7 +15,7 @@ import numpy as np
 import pyvista as pv
 from PySide6.QtCore import QSettings, Qt, QTimer
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QFileSystemModel, QLineEdit, QPushButton
+from PySide6.QtWidgets import QAbstractItemView, QApplication, QComboBox, QDialogButtonBox, QLineEdit, QPushButton
 
 from analysis_queue import AnalysisQueueWidget, QueueStore
 from doe_studio import ExperimentWorker
@@ -134,28 +134,47 @@ class FolderBatchTests(unittest.TestCase):
     def test_folder_picker_shows_supported_files_and_remembers_selected_folder(self):
         self.specimen('part.stl')
         (self.root / 'part.stl').rename(self.root / 'part.STL')
-        self.specimen('nested/other.stl')
+        nested = self.root / 'nested'
+        nested.mkdir()
+        (nested / 'readme.txt').touch()
         (self.root / 'notes.txt').touch()
         batch = self.dialog()
         batch.folder.setText(str(self.root))
         visits = []
 
+        def visible_names(view, expected, *, exact=False):
+            model, root = view.model(), view.rootIndex()
+            for _ in range(100):
+                names = {model.index(row, 0, root).data() for row in range(model.rowCount(root))}
+                if names == expected or (not exact and expected <= names):
+                    break
+                QTest.qWait(20)
+            return names
+
         def inspect():
             picker = self.app.activeModalWidget()
             try:
-                directory = picker.directory().absolutePath()
-                model = picker.findChild(QFileSystemModel)
-                index = model.index(directory)
-                expected = 1 if visits else 2
-                for _ in range(100):
-                    if model.rowCount(index) >= expected:
-                        break
-                    QTest.qWait(20)
-                names = {model.fileName(model.index(row, 0, index)) for row in range(model.rowCount(index))}
-                visits.append((Path(directory), names))
+                visits.append(Path(picker.directory().absolutePath()))
                 if len(visits) == 1:
-                    picker.findChild(QLineEdit, 'fileNameEdit').setText('nested')
-                    picker.accept()
+                    view = picker.findChild(QAbstractItemView, 'treeView')
+                    picker.setViewMode(picker.ViewMode.Detail)
+                    self.assertTrue(view.isVisible())
+                    filters = picker.findChild(QComboBox, 'fileTypeCombo')
+                    self.assertEqual(filters.currentText(), 'All files (*)')
+                    self.assertTrue({'nested', 'part.STL', 'notes.txt'} <= visible_names(view, {'part.STL', 'notes.txt'}))
+                    QTest.keyClick(filters, Qt.Key.Key_Down)
+                    expected = {'nested', 'part.STL'}
+                    self.assertEqual(visible_names(view, expected, exact=True), expected)
+                    address = picker.findChild(QComboBox, 'lookInCombo').lineEdit()
+                    address.setText('nested')
+                    QTest.keyClick(address, Qt.Key.Key_Return)
+                    QTest.keyClick(filters, Qt.Key.Key_Up)
+                    self.assertEqual(Path(picker.directory().absolutePath()), nested)
+                    self.assertEqual(visible_names(view, {'readme.txt'}), {'readme.txt'})
+                    box = picker.findChild(QDialogButtonBox)
+                    box.button(QDialogButtonBox.StandardButton.Open).click()
+            except Exception as error:
+                visits.append(error)
             finally:
                 if picker.isVisible():
                     picker.reject()
@@ -166,10 +185,13 @@ class FolderBatchTests(unittest.TestCase):
         batch.folder.clear()
         QTimer.singleShot(0, inspect)
         batch.choose_folder()
+        batch.folder.setText(str(self.root))
+        QTimer.singleShot(0, inspect)
+        batch.choose_folder()
 
-        self.assertEqual(selected, self.root / 'nested')
-        self.assertEqual(visits, [(self.root, {'part.STL', 'nested'}),
-                                  (selected, {'other.stl'})])
+        self.assertEqual(visits, [self.root, nested, self.root])
+        self.assertEqual(selected, nested)
+        self.specimen('nested/other.stl')
         batch.folder.setText(str(self.root))
         batch.mode.setCurrentIndex(4)
         batch.check_folder()

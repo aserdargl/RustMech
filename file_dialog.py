@@ -13,7 +13,9 @@ from PySide6.QtWidgets import (
 from datenburg_widgets import compact_gradient_button_stylesheet, qss_asset_url
 
 
-_DIALOG_BUTTON_STYLE = compact_gradient_button_stylesheet("QPushButton", "padding: 0 7px;")
+_DIALOG_BUTTON_STYLE = compact_gradient_button_stylesheet(
+    "QPushButton", "padding: 0 7px; min-height: 23px; max-height: 16777215px;"
+) + "\nQPushButton:focus { padding: 0 6px; }"
 
 
 def _style_dialog_buttons(box):
@@ -25,6 +27,7 @@ def _style_dialog_buttons(box):
         box.setProperty("rustmechDialogButtonsStyled", True)
         box.setStyleSheet(box.styleSheet() + "\n" + _DIALOG_BUTTON_STYLE)
     for button in buttons:
+        button.ensurePolished()
         # A QSS min-width can take the place of Qt's content-based size hint.
         metrics = button.fontMetrics()
         text_width = metrics.size(Qt.TextFlag.TextShowMnemonic, button.text()).width()
@@ -111,8 +114,8 @@ class FileDialogControls(QObject):
             if view is not None:
                 view.customContextMenuRequested.connect(lambda point, view=view: self.extend_menu(view, point))
 
-        _style_dialog_buttons(dialog.findChild(QDialogButtonBox, "buttonBox"))
         dialog.setStyleSheet(_picker_stylesheet())
+        _style_dialog_buttons(dialog.findChild(QDialogButtonBox, "buttonBox"))
 
     def sync_address(self, _path=""):
         self.editor.setText(QDir.toNativeSeparators(self.dialog.directory().absolutePath()))
@@ -218,17 +221,21 @@ class QFileDialog(QtFileDialog):
         key = f"fileDialogs/{owner}/{action}/{mode.name}/{title or 'default'}/directory"
         remembered = settings.value(key, "", type=str)
         folder_mode = mode == cls.FileMode.Directory
-        if remembered and QDir(remembered).exists():
+        if (remembered and QDir(remembered).exists()
+                and not (folder_mode and directory and QFileInfo(directory).isDir())):
             suggestion = QFileInfo(directory)
             if save and directory and not suggestion.isDir():
                 directory = QDir(remembered).filePath(suggestion.fileName())
             else:
                 directory = remembered
 
-        dialog = cls(parent, title, directory, filters)
+        dialog = cls(parent, title, directory)
         dialog.setOption(cls.Option.DontUseNativeDialog)
         dialog.setAcceptMode(cls.AcceptMode.AcceptSave if save else cls.AcceptMode.AcceptOpen)
         dialog.setFileMode(mode)
+        if filters:
+            # Directory mode resets the filter selector to "Directories".
+            dialog.setNameFilter(filters)
         address = dialog.findChild(QComboBox, "lookInCombo")
         dialog._file_controls = FileDialogControls(dialog, address)
         try:

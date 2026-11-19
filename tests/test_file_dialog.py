@@ -8,9 +8,11 @@ from PySide6.QtGui import QFont
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import (
     QApplication, QComboBox, QDialogButtonBox, QInputDialog, QLineEdit, QMessageBox, QStackedWidget, QWidget,
+    QStyle, QStyleOptionButton,
 )
 
 from file_dialog import QFileDialog, install_file_dialogs
+from studio_style import STUDIO_STYLESHEET
 from window_caption import CAPTION_PROPERTY, install_window_captions
 from window_state import WindowStateStore
 
@@ -133,6 +135,7 @@ def test_picker_remembers_each_actions_directory_on_cancel(picker_app, tmp_path)
 ])
 def test_dialog_buttons_fit_large_localized_text(picker_app, tmp_path, entry):
     owner = QWidget()
+    owner.setStyleSheet(STUDIO_STYLESHEET + "\nQPushButton { font-size: 26px; }")
     measured = []
 
     def measure():
@@ -142,7 +145,11 @@ def test_dialog_buttons_fit_large_localized_text(picker_app, tmp_path, entry):
             for button in box.buttons():
                 metrics = button.fontMetrics()
                 width = metrics.size(Qt.TextFlag.TextShowMnemonic, button.text()).width()
-                measured.append((button.width(), button.height(), width, metrics.height()))
+                option = QStyleOptionButton()
+                button.initStyleOption(option)
+                option.state |= QStyle.StateFlag.State_HasFocus
+                content = button.style().subElementRect(QStyle.SubElement.SE_PushButtonContents, option, button)
+                measured.append((button.size(), content.width(), content.height(), width, metrics.height()))
         finally:
             dialog.reject()
 
@@ -182,6 +189,6 @@ def test_dialog_buttons_fit_large_localized_text(picker_app, tmp_path, entry):
 
     assert len(measured) == 2
     if entry.startswith("get"):
-        assert measured[0][:2] == measured[1][:2]
-    assert all(width >= text_width + 12 and height > text_height
-               for width, height, text_width, text_height in measured), measured
+        assert measured[0][0] == measured[1][0]
+    assert all(width >= text_width and height >= text_height
+               for _, width, height, text_width, text_height in measured), measured
