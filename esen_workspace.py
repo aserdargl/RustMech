@@ -171,6 +171,9 @@ class EsenWorkspace(QDialog):
         self.folder_root = None
         self.folder_scan = None
         self.folder_error = ""
+        self.folder_upload = None
+        self.upload_task = None
+        self.upload_error = ""
         self.batch_queue = {}
         self.batch_active = None
         self._active_truba_jobs = {}
@@ -231,10 +234,11 @@ class EsenWorkspace(QDialog):
 
         settings, layout = panel("Job settings", scrollable=True)
         left.addWidget(settings)
-        self.batch_folder = command("Add Folder", self._pick_batch_folder)
+        self.batch_folder = command("Select Folder", self._pick_batch_folder)
+        self.upload = command("Upload to TRUBA", self._upload_folder)
         self.load_files = command("Files", self._pick_files, hint="Load input files")
-        layout.addLayout(button_row(self.batch_folder, self.load_files,
-                                    command("Script", self._pick_script, hint="LAMMPS input script")))
+        self.pick_script = command("Script", self._pick_script, hint="LAMMPS input script")
+        layout.addLayout(button_row(self.batch_folder, self.upload, self.load_files, self.pick_script))
         self.inputs = InputFileList()
         self.inputs.setAcceptDrops(True)
         self.inputs.viewport().setAcceptDrops(True)
@@ -310,7 +314,7 @@ class EsenWorkspace(QDialog):
         self._form_row(advanced, "Restart input", self.resume_input)
         layout.addWidget(self.truba_settings)
         self.truba_settings.set_expanded(False)
-        self.target.currentIndexChanged.connect(self._preview)
+        self.target.currentIndexChanged.connect(self._target_changed)
         self.ranks.valueChanged.connect(self._preview)
         self.partition.currentIndexChanged.connect(self._queue_changed)
         self.remote_mpi.currentIndexChanged.connect(self._preview)
@@ -466,7 +470,7 @@ class EsenWorkspace(QDialog):
 
     def _pick_batch_folder(self):
         initial = self.preferences.value("esen/batchFolder", str(self.input_root or Path.home()))
-        name = QFileDialog.getExistingDirectory(self, translate("Add Folder"), str(initial))
+        name = QFileDialog.getExistingDirectory(self, translate("Select Folder"), str(initial))
         if name:
             self._load_batch_folder(Path(name))
 
@@ -481,37 +485,59 @@ class EsenWorkspace(QDialog):
         self._clear_batch_source()
         self.preferences.setValue("esen/batchFolder", str(root))
         self.folder_root = root
-        self.folder_scan = self.executor.submit(jobs.scan_folder_files, root)
+        self._scan_folder()
+
+    def _target_changed(self, *_):
+        if self.folder_root is not None:
+            self._scan_folder()
+        else:
+            self._preview()
+
+    def _folder_source(self):
+        if self.target.currentData() == "remote" and self.folder_upload:
+            return jobs.upload_snapshot(self.history_root, self.folder_upload[0])
+        return self.folder_root
+
+    def _scan_folder(self, checked=None):
+        if self.folder_scan is not None:
+            self.folder_scan[0].cancel()
+        root = self._folder_source()
+        remote = self.target.currentData() == "remote"
+        self.folder_error = ""
+        self.folder_scan = self.executor.submit(jobs.scan_folder_files, root, include_results=remote), checked
         with QSignalBlocker(self.inputs):
             self.inputs.clear()
         self._preview()
 
     def _clear_batch_source(self):
         if self.folder_scan is not None:
-            self.folder_scan.cancel()
+            self.folder_scan[0].cancel()
         self.folder_root = self.folder_scan = None
         self.folder_error = ""
+        self.folder_upload = None
+        self.upload_error = ""
 
     def _check_folder_scan(self):
-        if self.folder_scan is None or not self.folder_scan.done():
+        if self.folder_scan is None or not self.folder_scan[0].done():
             return
-        scan, self.folder_scan = self.folder_scan, None
+        (scan, checked), self.folder_scan = self.folder_scan, None
+        remote = self.target.currentData() == "remote"
         try:
-            paths = scan.result()
+            names = scan.result()
         except (OSError, ValueError) as error:
             self.folder_error = str(error)
         else:
             with QSignalBlocker(self.inputs):
-                for path in paths:
-                    item = QListWidgetItem(path.relative_to(self.folder_root).as_posix())
-                    item.setToolTip(str(path))
-                    if jobs.is_input_script(path.name):
-                        item.setData(Qt.ItemDataRole.UserRole, (str(path.parent), path.name))
-                        item.setCheckState(Qt.CheckState.Checked)
+                for name in names:
+                    item = QListWidgetItem(name)
+                    item.setToolTip(str(self.folder_root / name))
+                    if remote or jobs.is_input_script(name):
+                        selected = name in checked if checked is not None else not remote
+                        item.setCheckState(Qt.CheckState.Checked if selected else Qt.CheckState.Unchecked)
                     else:
                         item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsUserCheckable)
                     self.inputs.addItem(item)
-            if next(self._folder_jobs(), None) is None:
+            if not remote and next(self._folder_jobs(), None) is None:
                 self.folder_error = "No LAMMPS input scripts named in.* or *.in were found."
         self._preview()
 
@@ -519,11 +545,40 @@ class EsenWorkspace(QDialog):
         for row in range(self.inputs.count()):
             item = self.inputs.item(row)
             if item.checkState() == Qt.CheckState.Checked:
-                folder, entry = item.data(Qt.ItemDataRole.UserRole)
-                yield Path(folder), entry
+                yield item.text()
+
+    def _folder_job_files(self, name):
+        path = jobs.relative_file(name)
+        return self._folder_source() / path.parent, path.name, (), True
+
+    def _upload_ready(self, auth):
+        return bool(auth and self.folder_upload and self.folder_upload[1] == auth.username
+                    and not self.upload_task and not self.folder_scan)
+
+    def _upload_folder(self):
+        auth = self.truba.analysis_auth()
+        if not self.upload.isEnabled() or not auth:
+            return
+        self.upload_error = ""
+        future = self.executor.submit(jobs.upload_folder, self.history_root, self.folder_root, auth)
+        self.upload_task = (future, auth.username)
+        self._preview()
+
+    def _check_upload(self):
+        if self.upload_task is None or not self.upload_task[0].done():
+            return
+        (future, username), self.upload_task = self.upload_task, None
+        try:
+            upload_id = future.result()
+        except Exception as error:
+            self.upload_error = str(error)
+            self._preview()
+        else:
+            self.folder_upload = upload_id, username
+            self._scan_folder(checked=set(self._folder_jobs()))
 
     def _load_files(self, files):
-        if not files:
+        if not files or self.upload_task:
             return
         paths = [Path(name) for name in files]
         if len(paths) == 1 and paths[0].is_dir():
@@ -601,7 +656,7 @@ class EsenWorkspace(QDialog):
             resume_input=self.resume_input.text().strip(),
         )
 
-    def _command(self, files=None):
+    def _command(self, files=None, *, work_subdir=""):
         root, entry, extra, whole_folder = files if files is not None else self._input_files()
         if not entry:
             raise ValueError("Choose a LAMMPS input script.")
@@ -615,7 +670,8 @@ class EsenWorkspace(QDialog):
             if (not (root / relative).is_file() or not (whole_folder or relative.as_posix() in [entry, *extra])):
                 raise ValueError("Include the LAMMPS restart input in the job files.")
         limit = jobs.BASELINES[settings["partition"]]
-        return jobs.remote_script(entry, limit.max_cpus, memory=limit.memory_ceiling(limit.max_cpus), **settings)
+        return jobs.remote_script(entry, limit.max_cpus, memory=limit.memory_ceiling(limit.max_cpus),
+                                  **settings, work_subdir=work_subdir)
 
     def _input_files(self):
         return self.input_root, self.entry, tuple(self.extra), self.whole_folder.isChecked()
@@ -632,13 +688,19 @@ class EsenWorkspace(QDialog):
         self.remove_inputs.setVisible(not folder_mode)
         self.whole_folder.setVisible(not folder_mode)
         self.pick_root.setVisible(not folder_mode)
+        self.upload.setVisible(remote)
         first = next(self._folder_jobs(), None) if folder_mode else None
-        root, entry, extra, whole_folder = (*first, (), True) if first else self._input_files()
+        root, entry, extra, whole_folder = self._input_files()
         try:
             if folder_mode and first is None:
                 raise ValueError(self.folder_error or ("Scanning folder…" if self.folder_scan
                                                        else "Select a script to run."))
-            invocation = self._command((root, entry, extra, whole_folder))
+            work_subdir = ""
+            if first:
+                root, entry, extra, whole_folder = self._folder_job_files(first)
+                if remote and Path(first).parent != Path():
+                    work_subdir = Path(first).parent.as_posix()
+            invocation = self._command((root, entry, extra, whole_folder), work_subdir=work_subdir)
             self.preview.setPlainText(invocation if remote else subprocess.list2cmdline(invocation))
             self.command_valid = True
         except (OSError, ValueError) as error:
@@ -646,6 +708,18 @@ class EsenWorkspace(QDialog):
             self.command_valid = False
         source = self.folder_root if folder_mode else root
         lines = [str(source)] if source is not None else []
+        if remote and folder_mode:
+            auth = self.truba.analysis_auth()
+            if self.upload_task:
+                lines.append(translate("Uploading folder to TRUBA…"))
+            elif auth and self.folder_upload and self.folder_upload[1] == auth.username:
+                upload_id, username = self.folder_upload
+                path = jobs.upload_location(upload_id, username) + "/inputs"
+                lines.append(translate("Uploaded to TRUBA: {path}").format(path=path))
+            else:
+                lines.append(translate("Upload the folder to TRUBA before running selected scripts."))
+            if self.upload_error:
+                lines.append(translate("Folder upload failed: {error}").format(error=self.upload_error))
         if remote:
             lines.append(translate("Preview values are estimates. Slurm limits apply at submission."))
         if folder_mode and self.inputs.count():
@@ -728,10 +802,13 @@ class EsenWorkspace(QDialog):
         target = self.target.currentData()
         auth = self.truba.analysis_auth() if target == "remote" else None
         if (self.batch_active or self.batch_queue or
-                (target == "remote" and (self.remote_task or not auth)) or (target == "local" and self.local_task)):
+                (target == "remote" and (self.remote_task or not auth or self.upload_task)) or
+                (target == "local" and self.local_task)):
             return
         try:
             if self.folder_root is not None:
+                if target == "remote" and not self._upload_ready(auth):
+                    return
                 self._queue_batch(target, auth)
                 return
             invocation = self._command()
@@ -769,24 +846,27 @@ class EsenWorkspace(QDialog):
         memory_mib = self.local_memory.value()
         history = self.history_root.resolve()
         prepared = []
-        for folder, entry in selected:
-            if history.is_relative_to(folder):
-                raise ValueError("Choose a job folder outside the ESEN history directory.")
-            files = (folder, entry, (), True)
+        for name in selected:
             try:
-                invocation = self._command(files)
+                files = self._folder_job_files(name)
+                subdir = Path(name).parent
+                work_subdir = subdir.as_posix() if auth and subdir != Path() else ""
+                if not auth and history.is_relative_to(files[0]):
+                    raise ValueError("Choose a job folder outside the ESEN history directory.")
+                invocation = self._command(files, work_subdir=work_subdir)
             except (OSError, ValueError) as error:
-                raise ValueError(f"{folder / entry}\n{translate(str(error))}") from error
+                raise ValueError(f"{root / name}\n{translate(str(error))}") from error
             options = (settings, auth.username) if auth else (invocation, memory_mib)
-            prepared.append((files, options))
+            prepared.append((name, files, options))
         self._save_profiles()
         errors = []
-        for files, options in prepared:
+        for name, files, options in prepared:
             folder, entry = files[:2]
-            label = (Path(root.name) / folder.relative_to(root)).as_posix()
+            label = root.name if auth else (Path(root.name) / folder.relative_to(root)).as_posix()
             try:
-                directory, record = jobs.new_job(folder, entry, target, ranks, parent=self.history_root,
-                                                 batch_folder=label)
+                directory, record = jobs.new_job(root if auth else folder, name if auth else entry,
+                                                 target, ranks, parent=self.history_root, batch_folder=label,
+                                                 folder_upload=self.folder_upload if auth else None)
             except OSError as error:
                 errors.append(f"{label}: {error}")
                 continue
@@ -900,7 +980,8 @@ class EsenWorkspace(QDialog):
         self.connection.setVisible(remote and not authenticated)
         self.truba_badge.setVisible(remote and authenticated)
         if remote and authenticated:
-            working = self.remote_task is not None or auth.username in self._active_truba_jobs.values()
+            working = (self.remote_task is not None or self.upload_task is not None
+                       or auth.username in self._active_truba_jobs.values())
             state = "working" if working else "connected"
             if self.truba_badge.property("state") != state:
                 self.truba_badge.setProperty("state", state)
@@ -908,7 +989,15 @@ class EsenWorkspace(QDialog):
                 self.truba_badge.style().unpolish(self.truba_badge)
                 self.truba_badge.style().polish(self.truba_badge)
         ready = authenticated and not self.remote_task if remote else not self.local_task
-        self.start.setEnabled(self.command_valid and ready and not (self.batch_active or self.batch_queue))
+        batch_busy = bool(self.batch_active or self.batch_queue)
+        uploading = self.upload_task is not None
+        if remote and self.folder_root is not None:
+            ready = ready and self._upload_ready(auth)
+        self.start.setEnabled(self.command_valid and ready and not batch_busy and not uploading)
+        self.upload.setEnabled(bool(remote and authenticated and self.folder_root is not None
+                                    and not self.folder_scan and not uploading and not batch_busy))
+        for control in (self.target, self.batch_folder, self.load_files, self.pick_script):
+            control.setEnabled(not uploading)
         item = self.inputs.currentItem()
         supporting_file_selected = bool(item and item.text() in self.extra)
         self.use_as_script.setEnabled(supporting_file_selected)
@@ -916,10 +1005,13 @@ class EsenWorkspace(QDialog):
         self.open_folder.setEnabled(directory is not None)
         self.open_results_folder.setEnabled(self._downloaded_results(directory, record) is not None)
         self.attach.setEnabled(bool(authenticated and self.remote_folder.text().strip() and not self.remote_task))
-        self.use_inputs.setEnabled(bool(record and not record.get("remote_run") and directory and directory not in self._active_directories()
-                                        and (directory / "inputs" / jobs.relative_file(record["name"])).is_file()))
+        self.use_inputs.setEnabled(bool(record and not record.get("remote_run") and directory and not uploading
+                                        and directory not in self._active_directories()
+                                        and (jobs.job_inputs(directory, record) /
+                                             jobs.relative_file(record["name"])).is_file()))
         remote_ready = bool(record and record["target"] == "remote" and record.get("username")
                             and authenticated and not self.remote_task
+                            and record["state"] != "Preparing"
                             and (record.get("job_id") or record["state"] not in jobs.TERMINAL))
         self.refresh.setEnabled(remote_ready)
         self.resume.setEnabled(bool(remote_ready and record.get("resume_input") and record.get("has_checkpoint")
@@ -932,6 +1024,7 @@ class EsenWorkspace(QDialog):
 
     def _tick(self):
         self._check_folder_scan()
+        self._check_upload()
         for field in ("local_task", "remote_task"):
             task = getattr(self, field)
             if task and task[1].done():
@@ -1008,7 +1101,8 @@ class EsenWorkspace(QDialog):
     def _refresh_remote(self, *, manual=False, cancel=False, job=None):
         directory, record = (self._selected_directory(), self.record) if job is None else job
         auth = self.truba.analysis_auth()
-        if not directory or not record or not auth or self.remote_task or not record.get("username"):
+        if (not directory or not record or not auth or self.remote_task
+                or not record.get("username") or record["state"] == "Preparing"):
             return
         if auth.username != record["username"]:
             self.job_error = "Connect using the TRUBA account that submitted this job."
@@ -1063,6 +1157,14 @@ class EsenWorkspace(QDialog):
     def _reuse_inputs(self):
         directory = self._selected_directory()
         if directory and self.record:
+            if upload_id := self.record.get("folder_upload"):
+                self._clear_batch_source()
+                self.target.setCurrentIndex(self.target.findData("remote"))
+                self.folder_root = Path(self.record["source"])
+                self.folder_upload = upload_id, self.record["username"]
+                self.resume_input.setText(self.record.get("resume_input", ""))
+                self._scan_folder(checked={self.record["name"]})
+                return
             self.input_root = directory / "inputs"
             self.entry = self.record["name"]
             self.resume_input.setText(self.record.get("resume_input", ""))

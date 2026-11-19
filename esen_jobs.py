@@ -73,20 +73,21 @@ def is_input_script(name):
     return path.name.lower().startswith("in.") or path.suffix.lower() == ".in"
 
 
-def scan_folder_files(root):
-    """List files by working directory, skipping Results and links."""
+def scan_folder_files(root, *, include_results=False):
+    """List regular files as paths relative to the selected folder."""
     def walk_error(error):
         raise error
 
+    root = root.resolve(strict=True)
     found = []
-    for folder, dirs, files in os.walk(root.resolve(strict=True), onerror=walk_error):
+    for folder, dirs, files in os.walk(root, onerror=walk_error):
         folder = Path(folder)
-        dirs[:] = sorted((name for name in dirs if name.casefold() != "results"
+        dirs[:] = sorted((name for name in dirs if (include_results or name.casefold() != "results")
                           and not is_link(folder / name)), key=str.casefold)
         for name in sorted(files, key=str.casefold):
             path = folder / name
             if path.is_file() and not is_link(path):
-                found.append(path)
+                found.append(path.relative_to(root).as_posix())
     return found
 
 
@@ -100,13 +101,18 @@ def read_job(directory):
     return json.loads((directory / "job.json").read_text(encoding="utf-8"))
 
 
-def new_job(root, entry, target, ranks, *, parent, batch_folder=None):
+def new_job(root, entry, target, ranks, *, parent, batch_folder=None, folder_upload=None):
     directory = parent / uuid4().hex
     directory.mkdir(parents=True, exist_ok=False)
     record = dict(name=entry, target=target, ranks=ranks, state="Preparing",
                   created=datetime.now().astimezone().isoformat(timespec="seconds"), source=str(root))
     if batch_folder is not None:
         record["batch_folder"] = batch_folder
+    if folder_upload is not None:
+        upload_id, username = folder_upload
+        subdir = relative_file(entry).parent
+        record.update(folder_upload=upload_id, username=username,
+                      work_subdir=subdir.as_posix() if subdir.parts else "")
     if root.name == "inputs" and root.parent.parent == parent:
         # Reused inputs are stored in job history, while their results belong in the original job folder.
         with suppress(OSError, ValueError):
@@ -116,7 +122,7 @@ def new_job(root, entry, target, ranks, *, parent, batch_folder=None):
     return directory, record
 
 
-def snapshot_inputs(directory, root, entry, extra, whole_folder, stop=None):
+def snapshot_inputs(directory, root, entry, extra, whole_folder, stop=None, *, include_results=False):
     root = root.resolve(strict=True)
     if whole_folder and directory.resolve().is_relative_to(root):
         raise ValueError("Choose a job folder outside the ESEN history directory.")
@@ -142,7 +148,8 @@ def snapshot_inputs(directory, root, entry, extra, whole_folder, stop=None):
             folder = Path(folder)
             for name in dirs[:]:
                 source = folder / name
-                if is_link(source) or (folder.name.casefold() == "results" and RESULT_DIRECTORY.fullmatch(name)):
+                if is_link(source) or (not include_results and folder.name.casefold() == "results"
+                                       and RESULT_DIRECTORY.fullmatch(name)):
                     dirs.remove(name)
                 else:
                     relative = relative_file(source.relative_to(root).as_posix())
@@ -154,9 +161,59 @@ def snapshot_inputs(directory, root, entry, extra, whole_folder, stop=None):
     else:
         for name in dict.fromkeys((entry, *extra)):
             copy(name)
-    if not (snapshot / relative_file(entry)).is_file():
+    if entry and not (snapshot / relative_file(entry)).is_file():
         raise ValueError("The input script is missing from the snapshot.")
     return snapshot
+
+
+def upload_snapshot(history, upload_id):
+    if not re.fullmatch(r"[0-9a-f]{32}", upload_id):
+        raise ValueError("Invalid ESEN folder upload.")
+    return history / ".uploads" / upload_id / "inputs"
+
+
+def upload_location(upload_id, username):
+    if (not SAFE_NAME.fullmatch(username) or username in (".", "..")
+            or not re.fullmatch(r"[0-9a-f]{32}", upload_id)):
+        raise ValueError("Invalid ESEN folder upload.")
+    return f"/arf/scratch/{username}/RustMech/esen-folders/{upload_id}"
+
+
+def upload_folder(history, root, auth):
+    """Keep one immutable input snapshot for all jobs from this upload."""
+    if history.resolve().is_relative_to(root.resolve()):
+        raise ValueError("Choose a job folder outside the ESEN history directory.")
+    upload_id = uuid4().hex
+    destination = upload_snapshot(history, upload_id).parent
+    remote = upload_location(upload_id, auth.username)
+    quoted = shlex.quote(remote)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with TemporaryDirectory(dir=destination.parent) as temporary:
+        staging = Path(temporary)
+        snapshot = snapshot_inputs(staging, root, None, (), True, include_results=True)
+        archive = staging / "inputs.tar.gz"
+        with tarfile.open(archive, "w:gz") as bundle:
+            bundle.add(snapshot, arcname=".")
+        transport = RemoteTransport(RemoteContext(transport="ssh"), auth)
+        # A unique destination keeps failed transfers away from runnable snapshots.
+        transport.command(f"umask 077; mkdir -p -- {quoted}/.incoming")
+        try:
+            transport.put(archive, remote + "/inputs.tar.gz")
+            transport.command(f"cd {quoted} && tar -xzf inputs.tar.gz -C .incoming && "
+                              "rm -- inputs.tar.gz && mv -- .incoming inputs", timeout=1800)
+            destination.mkdir()
+            snapshot.rename(destination / "inputs")
+        except Exception:
+            with suppress(Exception):
+                transport.command(f"rm -rf -- {quoted}")
+            raise
+    return upload_id
+
+
+def job_inputs(directory, record):
+    if upload_id := record.get("folder_upload"):
+        return upload_snapshot(directory.parent, upload_id)
+    return directory / "inputs"
 
 
 def local_command(entry, ranks, executable="lmp", mpi=""):
@@ -235,7 +292,7 @@ def run_local(directory, record, files, command, stop, *, memory_mib=0):
 
 
 def remote_script(entry, ranks, partition, account, memory, walltime, module, executable, launcher,
-                  *, resume_input=""):
+                  *, resume_input="", work_subdir=""):
     if partition not in CPU_QUEUES or not SAFE_NAME.fullmatch(account) or account in (".", ".."):
         raise ValueError("Select a CPU queue and enter a valid TRUBA account.")
     RemoteContext(partition=partition, account=account, walltime=walltime).validate()
@@ -249,10 +306,12 @@ def remote_script(entry, ranks, partition, account, memory, walltime, module, ex
     if launcher not in ("mpirun", "srun"):
         raise ValueError("Select mpirun or srun.")
     entry = relative_file(entry).as_posix()
+    subdir = relative_file(work_subdir) if work_subdir else Path()
+    work = (Path("work") / subdir).as_posix()
     launch = f"{launcher} -n {ranks} {target} -nonbuf -in {shlex.quote(entry)}"
     modules = f"module purge\nmodule load {shlex.quote(module)}\n" if module else ""
     directives = ""
-    body = f"cd work\nexec {launch}\n"
+    body = f"cd {shlex.quote(work)}\nexec {launch}\n"
     if resume_input:
         continuation = relative_file(resume_input).as_posix()
         hours, minutes, seconds = map(int, walltime.split(":"))
@@ -260,7 +319,7 @@ def remote_script(entry, ranks, partition, account, memory, walltime, module, ex
         directives = "#SBATCH --requeue\n#SBATCH --open-mode=append\n"
         if lead_time > 0:
             directives += f"#SBATCH --signal=B:USR1@{lead_time}\n"
-        body = esen_restart.batch_body(entry, continuation, launcher, ranks, target)
+        body = esen_restart.batch_body(entry, continuation, launcher, ranks, target, work)
     return f"""#!/bin/bash -l
 #SBATCH --partition={partition}
 #SBATCH --account={account}
@@ -290,7 +349,8 @@ def submit_full_node(directory, record, files, settings, auth):
     try:
         catalog = fetch_catalog(RemoteContext(transport="ssh"), auth, live_node_capacity=True)
         ranks, memory = full_node_resources(settings["partition"], settings["walltime"], catalog)
-        script = remote_script(files[1], ranks, memory=memory, **settings)
+        script = remote_script(files[1], ranks, memory=memory, **settings,
+                               work_subdir=record.get("work_subdir", ""))
         changes = dict(ranks=ranks, memory_mib=memory)
         if settings.get("resume_input"):
             changes["resume_input"] = settings["resume_input"]
@@ -354,20 +414,31 @@ def tagged(reply, key):
 def submit_remote(directory, record, files, script, auth):
     try:
         transport, remote = remote_location(directory, record, auth)
-        snapshot = snapshot_inputs(directory, *files)
+        upload_id = record.get("folder_upload")
+        snapshot = job_inputs(directory, record) if upload_id else snapshot_inputs(directory, *files)
+        if work_subdir := record.get("work_subdir"):
+            snapshot /= relative_file(work_subdir)
+        if not (snapshot / relative_file(files[1])).is_file():
+            raise ValueError("The selected input script is missing.")
         if record.get("resume_input") and not (snapshot / relative_file(record["resume_input"])).is_file():
             raise ValueError("Include the LAMMPS restart input in the job files.")
         batch = directory / "run.slurm"
         batch.write_text(script, encoding="utf-8", newline="\n")
-        archive = directory / "inputs.tar.gz"
-        with tarfile.open(archive, "w:gz") as bundle:
-            bundle.add(snapshot, arcname=".")
         work = shlex.quote(remote + "/work")
-        transport.command(f"umask 077; mkdir -p -- {work}")
-        transport.put(archive, remote + "/inputs.tar.gz")
-        transport.put(batch, remote + "/run.slurm")
-        transport.command(f"cd {shlex.quote(remote)} && tar -xzf inputs.tar.gz -C work && rm -- inputs.tar.gz")
-        archive.unlink()
+        if upload_id:
+            source = shlex.quote(upload_location(upload_id, auth.username) + "/inputs")
+            transport.command(f"umask 077; mkdir -p -- {shlex.quote(remote)} && "
+                              f"cp -a --reflink=auto -- {source} {work}", timeout=1800)
+            transport.put(batch, remote + "/run.slurm")
+        else:
+            archive = directory / "inputs.tar.gz"
+            with tarfile.open(archive, "w:gz") as bundle:
+                bundle.add(snapshot, arcname=".")
+            transport.command(f"umask 077; mkdir -p -- {work}")
+            transport.put(archive, remote + "/inputs.tar.gz")
+            transport.put(batch, remote + "/run.slurm")
+            transport.command(f"cd {shlex.quote(remote)} && tar -xzf inputs.tar.gz -C work && rm -- inputs.tar.gz")
+            archive.unlink()
         # After this checkpoint a lost SSH reply is ambiguous. Reattach using
         # the durable job ID or unique Slurm name, without replaying sbatch.
         save_job(directory, record, state="Submitting", username=auth.username)
@@ -615,11 +686,12 @@ umask 077
             names.add(key)
 
         safe_extract(local_archive, output, validate_name=validate_name, max_size=None)
+        inputs = job_inputs(directory, record)
         for folder, _, files in os.walk(output / "work", topdown=False):
             folder = Path(folder)
             for name in files:
                 result = folder / name
-                original = directory / "inputs" / result.relative_to(output / "work")
+                original = inputs / result.relative_to(output / "work")
                 if original.is_file() and cmp(original, result, shallow=False):
                     result.unlink()
             if not any(folder.iterdir()):

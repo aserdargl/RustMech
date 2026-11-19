@@ -52,8 +52,10 @@ exit "$failed"
 '''
 
 
-def batch_body(initial_input, resume_input, launcher, ranks, target):
+def batch_body(initial_input, resume_input, launcher, ranks, target, work="work"):
+    checkpoint_root = "/".join([".."] * len(work.split("/")))
     return (f'initial_input={shlex.quote(initial_input)}\nresume_input={shlex.quote(resume_input)}\n'
+            f'work={shlex.quote(work)}\ncheckpoint_root={checkpoint_root}\n'
             f'launch=({launcher} -n {ranks} {target})\n' + CHAIN_FUNCTIONS + r'''
 set -u
 base=$PWD
@@ -79,8 +81,8 @@ checkpoints_after() {
 find_checkpoint() {
     local step file
     while read -r step file; do
-        if (cd work && "${launch[@]}" -log none -screen none -restart2info "../$file"); then
-            checkpoint=../$file
+        if (cd -- "$work" && "${launch[@]}" -log none -screen none -restart2info "$checkpoint_root/$file"); then
+            checkpoint=$checkpoint_root/$file
             checkpoint_step=$step
             return 0
         fi
@@ -153,9 +155,9 @@ flock -w 120 8
 mkdir -p "checkpoints/$segment"
 handover_due=0
 trap 'handover_due=1' USR1
-cd work
+cd -- "$work"
 "${launch[@]}" -nonbuf -log "log.$segment.lammps" -in "$input" \
-    -var esen_checkpoint "$checkpoint" -var esen_checkpoint_dir "../checkpoints/$segment" \
+    -var esen_checkpoint "$checkpoint" -var esen_checkpoint_dir "$checkpoint_root/checkpoints/$segment" \
     -var esen_segment "$segment" &
 solver=$!
 status=0

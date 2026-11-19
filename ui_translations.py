@@ -24,6 +24,12 @@ Linux executable|Linux programı
 Input script…|Girdi betiği…
 Job folder…|İş klasörü…
 Add Folder|Klasör Ekle
+Select Folder|Klasör Seç
+Upload to TRUBA|TRUBA’ya Aktar
+Upload the folder to TRUBA before running selected scripts.|Seçtiğiniz betikleri çalıştırmadan önce klasörü TRUBA’ya aktarın.
+Uploading folder to TRUBA…|Klasör TRUBA’ya aktarılıyor…
+Uploaded to TRUBA: {path}|TRUBA’ya aktarıldı: {path}
+Folder upload failed: {error}|Klasör aktarılamadı: {error}
 Files|Dosyalar
 Script|Betik
 Root|Kök Klasör

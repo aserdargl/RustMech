@@ -167,6 +167,55 @@ class EsenTests(unittest.TestCase):
             self.assertEqual(transport.put.call_count, 2)
             self.assertIn(f"--job-name=ESEN-{directory.name}", transport.command.call_args.args[0])
 
+    def test_folder_upload_preserves_tree_and_jobs_reuse_remote_snapshot(self):
+        for name in ("study/sub", "study/empty", "Results/previous"):
+            (self.source / name).mkdir(parents=True)
+        (self.source / "study/sub/in.run").touch()
+        (self.source / "study/sub/restart.in").touch()
+        (self.source / "Results/previous/output.txt").touch()
+        with patch("esen_jobs.RemoteTransport") as factory:
+            transport = factory.return_value
+            transport.command.return_value = ""
+
+            def inspect_upload(path, _remote):
+                with tarfile.open(path) as bundle:
+                    self.assertCountEqual(bundle.getnames(), [
+                        ".", "./data", "./data/cell.lmp", f"./{self.entry}", "./study", "./study/sub",
+                        "./study/sub/in.run", "./study/sub/restart.in", "./study/empty",
+                        "./Results", "./Results/previous", "./Results/previous/output.txt",
+                    ])
+
+            transport.put.side_effect = inspect_upload
+            upload_id = jobs.upload_folder(self.history, self.source, self.auth)
+            remote = jobs.upload_location(upload_id, self.auth.username)
+            transport.put.assert_called_once()
+            self.assertEqual(transport.put.call_args.args[1], remote + "/inputs.tar.gz")
+            self.assertNotIn("sbatch", str(transport.command.call_args_list))
+
+            transport.reset_mock(side_effect=True)
+            transport.command.return_value = "JOB_ID=123\n"
+            settings = dict(partition="debug", account=self.auth.username, walltime="00:02:00",
+                            module="", executable="lmp", launcher="srun", resume_input="restart.in")
+            for _ in range(2):
+                directory, record = jobs.new_job(self.source, "study/sub/in.run", "remote", None,
+                                                 parent=self.history, folder_upload=(upload_id, self.auth.username))
+                snapshot = jobs.job_inputs(directory, record)
+                with (patch("esen_jobs.fetch_catalog"),
+                      patch("esen_jobs.full_node_resources", return_value=(2, 512))):
+                    jobs.submit_full_node(directory, record, (snapshot / "study/sub", "in.run", (), True),
+                                          settings, self.auth)
+                self.assertEqual(jobs.read_job(directory)["job_id"], "123")
+                script = (directory / "run.slurm").read_text(encoding="utf-8")
+                self.assertIn("work=work/study/sub\ncheckpoint_root=../../..\n", script)
+                self.assertIn("resume_input=restart.in", script)
+                self.assertFalse((directory / "inputs").exists())
+            self.assertEqual(transport.put.call_count, 2)
+            self.assertTrue(all(call.args[1].endswith("/run.slurm") for call in transport.put.call_args_list))
+            copies = [call.args[0] for call in transport.command.call_args_list if "cp -a" in call.args[0]]
+            self.assertEqual(len(copies), 2)
+            self.assertTrue(all(remote + "/inputs" in command for command in copies))
+            self.assertNotEqual(copies[0], copies[1])
+
     def test_full_node_submission_uses_live_partition_and_matching_node_memory(self):
         directory, record = self.new_job()
         settings = dict(partition="smp", account=self.auth.username, walltime="00:02:00",
@@ -478,7 +527,7 @@ class EsenTests(unittest.TestCase):
     def load_batch(self, workspace):
         with patch("esen_workspace.QFileDialog.getExistingDirectory", return_value=str(self.source)):
             workspace.batch_folder.click()
-        workspace.folder_scan.result(timeout=5)
+        workspace.folder_scan[0].result(timeout=5)
         workspace._tick()
 
     def test_folder_loads_directly_and_runs_checked_local_scripts_in_order(self):
@@ -541,6 +590,7 @@ class EsenTests(unittest.TestCase):
         for folder in (second, first):
             folder.mkdir()
             (folder / "in.run").touch()
+        (first / "solver.txt").touch()
         truba = FakeTruba()
         with patch("esen_workspace.QSettings", return_value=preferences):
             workspace = EsenWorkspace(truba, history=self.history)
@@ -551,11 +601,33 @@ class EsenTests(unittest.TestCase):
         self.assertFalse(workspace.start.isEnabled())
         truba.auth = self.auth
         truba.connection_changed.emit(True)
+        self.assertFalse(workspace.start.isEnabled())
+        self.assertTrue(workspace.upload.isEnabled())
+        with patch("esen_jobs.RemoteTransport") as factory:
+            factory.return_value.put.side_effect = RuntimeError("transfer interrupted")
+            workspace.upload.click()
+            with self.assertRaisesRegex(RuntimeError, "transfer interrupted"):
+                workspace.upload_task[0].result(timeout=5)
+            workspace._tick()
+            self.assertIn("transfer interrupted", workspace.input_note.text())
+            self.assertFalse(workspace.start.isEnabled())
+            factory.return_value.put.side_effect = None
+            workspace.upload.click()
+            workspace.upload_task[0].result(timeout=5)
+            workspace._tick()
+            workspace.folder_scan[0].result(timeout=5)
+            workspace._tick()
+        self.assertFalse(workspace.start.isEnabled())
+        for index in range(workspace.inputs.count()):
+            item = workspace.inputs.item(index)
+            if item.text() in {"01/solver.txt", "02/in.run"}:
+                item.setCheckState(Qt.CheckState.Checked)
         self.assertTrue(workspace.start.isEnabled())
 
         def submit(directory, record, files, settings, auth):
             self.assertEqual(auth, self.auth)
             self.assertEqual(settings["walltime"], "00:30:00")
+            self.assertEqual(record["folder_upload"], workspace.folder_upload[0])
             jobs.save_job(directory, record, state="Submitted", job_id="789", username=auth.username)
 
         def complete(directory, record, _auth, *, cancel):
@@ -578,12 +650,18 @@ class EsenTests(unittest.TestCase):
                 workspace._tick()
             workspace.remote_task[1].result(timeout=5)
             workspace._tick()
+            snapshot = jobs.upload_snapshot(self.history, workspace.folder_upload[0])
             self.assertEqual([call.args[2][:2] for call in launch.call_args_list],
-                             [(first.resolve(), "in.run"), (second.resolve(), "in.run")])
+                             [(snapshot / "01", "solver.txt"), (snapshot / "02", "in.run")])
         self.assertEqual(workspace.history.count(), 2)
-        self.assertIn("01/in.run", workspace.history.item(1).text())
+        self.assertIn("01/solver.txt", workspace.history.item(1).text())
         self.assertIn("Completed", workspace.history.item(1).text())
         self.assertFalse(workspace.start.isEnabled())
+        workspace.use_inputs.click()
+        workspace.folder_scan[0].result(timeout=5)
+        workspace._tick()
+        self.assertEqual(list(workspace._folder_jobs()), ["02/in.run"])
+        self.assertEqual(jobs.upload_snapshot(self.history, workspace.folder_upload[0]), snapshot)
 
 
 if __name__ == "__main__":
