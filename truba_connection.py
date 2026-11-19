@@ -197,7 +197,7 @@ class TrubaConnectionDialog(QDialog):
         self.setMinimumSize(360, 320)
         self.setWindowFlag(Qt.WindowType.WindowMaximizeButtonHint, True)
         self.setSizeGripEnabled(True)
-        from ui_language import LanguageSelector, install_language
+        from ui_language import install_language
         preferences = getattr(getattr(parent, 'solver_profile_store', None), 'settings', None)
         self.language_manager = install_language(QApplication.instance(), preferences)
         self.process = None  # Used by workspace no-startup-connection checks.
@@ -209,30 +209,14 @@ class TrubaConnectionDialog(QDialog):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 6)
         layout.setSpacing(6)
-        header = QFrame()
-        header.setObjectName('trubaHeader')
-        header_layout = QHBoxLayout(header)
-        header_layout.setContentsMargins(8, 5, 8, 5)
-        header_layout.setSpacing(8)
-        heading = QVBoxLayout()
-        heading.setSpacing(0)
-        title = QLabel('TRUBA')
-        title.setObjectName('trubaTitle')
-        heading.addWidget(title)
-        subtitle = QLabel('Remote compute')
-        subtitle.setObjectName('mutedHintLabel')
-        heading.addWidget(subtitle)
-        header_layout.addLayout(heading)
-        header_layout.addStretch()
-        self.connection_badge = QLabel('Disconnected')
-        self.connection_badge.setObjectName('trubaConnectionBadge')
-        header_layout.addWidget(self.connection_badge, 0, Qt.AlignmentFlag.AlignVCenter)
-        self.language_selector = LanguageSelector(self.language_manager, self)
-        header_layout.addWidget(self.language_selector)
-        layout.addWidget(header)
         self.tabs = QTabWidget()
         self.tabs.setObjectName("trubaTabs")
         self.tabs.setTabBar(TrubaTabBar())
+        self.connection_badge = QLabel("Disconnected")
+        self.connection_badge.setObjectName("trubaConnectionBadge")
+        self.connection_badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.connection_badge.setProperty("state", "disconnected")
+        self.tabs.setCornerWidget(self.connection_badge, Qt.Corner.TopRightCorner)
         self.jobs_splitter = QSplitter(Qt.Orientation.Vertical)
         self.jobs_splitter.setObjectName('trubaJobsSplitter')
         self.jobs_splitter.setChildrenCollapsible(False)
@@ -484,11 +468,12 @@ class TrubaConnectionDialog(QDialog):
             "local_error": "Local connection settings could not be read or written.",
         }
         self.status.setText(messages.get(state, "Disconnected"))
-        self.connection_badge.setText('Connected' if self.connected else
-                                      'Connecting...' if state in ('connecting', 'authenticating', 'reconnecting') else 'Disconnected')
-        self.connection_badge.setProperty('connected', self.connected)
-        self.connection_badge.style().unpolish(self.connection_badge)
-        self.connection_badge.style().polish(self.connection_badge)
+        if self.connected:
+            self._set_connection_badge("Connected", "connected")
+        elif state in ("connecting", "authenticating", "reconnecting"):
+            self._set_connection_badge("Connecting...", "pending")
+        else:
+            self._set_connection_badge("Disconnected", "disconnected")
         if self.connected and self.remember.isChecked():
             try:
                 self.credentials.save(self.username.text().strip(), self.password.text())
@@ -500,11 +485,14 @@ class TrubaConnectionDialog(QDialog):
         if not self.stopping:
             self.status.setText(message)
 
-    def _update_controls(self):
-        running = self.worker is not None
-        self.connection_badge.setProperty('connected', self.connected)
+    def _set_connection_badge(self, text, state):
+        self.connection_badge.setText(text)
+        self.connection_badge.setProperty("state", state)
         self.connection_badge.style().unpolish(self.connection_badge)
         self.connection_badge.style().polish(self.connection_badge)
+
+    def _update_controls(self):
+        running = self.worker is not None
         self.connect_button.setEnabled(not running)
         self.connect_button.setText("Connected" if self.connected else "Connect")
         self.connect_button.setProperty("trubaConnected", self.connected)
@@ -521,7 +509,7 @@ class TrubaConnectionDialog(QDialog):
             self.connection_changed.emit(False)
             self.disconnect_requested.emit()
             self.status.setText("Disconnecting...")
-            self.connection_badge.setText('Disconnecting...')
+            self._set_connection_badge("Disconnecting...", "pending")
             self.worker.stop()
             self._update_controls()
 
@@ -529,7 +517,7 @@ class TrubaConnectionDialog(QDialog):
         worker = self.worker
         self.worker = None
         self.connected = False
-        self.connection_badge.setText('Disconnected')
+        self._set_connection_badge("Disconnected", "disconnected")
         self.connection_changed.emit(False)
         if self.stopping:
             self.status.setText("Disconnected")

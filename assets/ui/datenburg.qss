@@ -21,10 +21,9 @@ QLabel:disabled { color: #808080; }
 #brandEyebrow { color: #18212F; font-size: 15px; font-weight: 400; }
 #brandTitle { color: #243B53; font-size: 13px; font-weight: 400; }
 #brandSubtitle, #unitBadge { color: #334155; font-size: 12px; font-weight: 400; }
-#trubaHeader { background: #FFFFFF; border: 1px solid #D1DBE5; border-radius: 6px; }
-#trubaTitle { color: #16365C; font-size: 15px; font-weight: 400; }
-#trubaConnectionBadge { color: #475569; background: #EEF2F6; border-radius: 8px; padding: 5px 10px; }
-#trubaConnectionBadge[connected="true"] { color: #166534; background: #DCFCE7; }
+#trubaConnectionBadge { color: #475569; background: #EEF2F6; border-radius: 4px; margin: 5px 0; padding: 2px 9px; }
+#trubaConnectionBadge[state="connected"] { color: #FFFFFF; background: #166534; }
+#trubaConnectionBadge[state="disconnected"] { color: #FFFFFF; background: #B91C1C; }
 #sidebarPanel { background: #F5F5F3; border: 1px solid #CBD5E1; border-radius: 2px; }
 #scrollFields, #doeWorkspace { background: #F5F5F3; }
 QMainWindow#doeStudioWindow { background: #F5F5F3; }
