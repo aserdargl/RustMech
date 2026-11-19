@@ -9,7 +9,7 @@ import re
 import shlex
 
 from PySide6.QtCore import QItemSelection, QItemSelectionModel, QSignalBlocker, QThread, QTimer, Qt
-from PySide6.QtWidgets import (QAbstractItemView, QFormLayout, QHBoxLayout, QHeaderView,
+from PySide6.QtWidgets import (QAbstractItemView, QApplication, QFormLayout, QHBoxLayout, QHeaderView,
                                QItemDelegate, QLabel, QLineEdit, QMessageBox, QPushButton, QSplitter,
                                QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
 
@@ -27,6 +27,10 @@ SLURM_JOB_HEADERS = (
     'Slurm ID', 'Status', 'Work name', 'Job description', 'Script / command', 'CPUs',
     'Nodes', 'Partition', 'Started at', 'Elapsed time', 'Time left',
 )
+ACTIVE_JOB_HEADERS = (*SLURM_JOB_HEADERS[:2], 'Work', 'Job', 'Command',
+                      *SLURM_JOB_HEADERS[5:], 'Estimated start')
+ACTIVE_JOB_COLUMN_WIDTHS = (76, 108, 88, 134, 128, 60, 66, 94, 158, 85, 80, 158)
+ACTIVE_JOB_WIDTH_KEY = 'truba/activeJobs/columnWidths'
 
 
 def configure_slurm_job_table(table):
@@ -222,11 +226,10 @@ class TrubaActiveJobs(QWidget):
         self.splitter = QSplitter(Qt.Orientation.Horizontal)
         self.splitter.setObjectName('trubaActiveJobsSplitter')
         self.splitter.setChildrenCollapsible(False)
-        self.works = self._table(['Work name'])
+        self.works = self._table(['Work'])
         self.works.setItemDelegate(QItemDelegate(self.works))
-        headers = (*SLURM_JOB_HEADERS, 'Estimated start')
-        self.jobs = QTableWidget(0, len(headers))
-        self.jobs.setHorizontalHeaderLabels(headers)
+        self.jobs = QTableWidget(0, len(ACTIVE_JOB_HEADERS))
+        self.jobs.setHorizontalHeaderLabels(ACTIVE_JOB_HEADERS)
         configure_slurm_job_table(self.jobs)
         self.jobs.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.splitter.addWidget(self.works)
@@ -235,6 +238,17 @@ class TrubaActiveJobs(QWidget):
         self.splitter.setStretchFactor(1, 1)
         self.splitter.setSizes([115, 375])
         layout.addWidget(self.splitter, 1)
+        state_store = getattr(QApplication.instance(), '_rustmech_window_state', None)
+        self.column_settings = state_store.settings if state_store is not None else dialog.language_manager.preferences
+        header = self.jobs.horizontalHeader()
+        header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        header.ensurePolished()
+        dialog.language_manager.localize(header)
+        for column, default_width in enumerate(ACTIVE_JOB_COLUMN_WIDTHS):
+            default_width = max(default_width, header.sectionSizeHint(column))
+            width = self.column_settings.value(f'{ACTIVE_JOB_WIDTH_KEY}/{column}', default_width, type=int)
+            self.jobs.setColumnWidth(column, width if width > 0 else default_width)
+        header.sectionResized.connect(self.save_column_width)
         self.works.currentCellChanged.connect(self.select_work)
         self.jobs.itemSelectionChanged.connect(self.update_cancel_button)
 
@@ -249,6 +263,11 @@ class TrubaActiveJobs(QWidget):
         status_row.addWidget(self.notice, 1)
         status_row.addWidget(self.cancel_notice, 1)
         layout.addLayout(status_row)
+
+    def save_column_width(self, column, old_width, width):
+        # The work filter hides and shows its column without changing the preference.
+        if old_width > 0 and width > 0:
+            self.column_settings.setValue(f'{ACTIVE_JOB_WIDTH_KEY}/{column}', width)
 
     def fit_action_buttons(self, *_):
         buttons = (self.cancel_button, self.refresh_button)

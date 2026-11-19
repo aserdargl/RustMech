@@ -620,22 +620,52 @@ class TrubaTests(unittest.TestCase):
             self.assertEqual(tab.works.rowCount(), 0)
             self.assertEqual(tab.jobs.rowCount(), 0)
 
-    def test_active_jobs_columns_restore_after_reopening(self):
-        store = WindowStateStore(self.app, QSettings(str(self.directory / 'active.ini'), QSettings.Format.IniFormat))
+    def test_active_jobs_columns_and_splitter_restore_after_reopening(self):
+        settings_path = str(self.directory / 'active.ini')
+        store = WindowStateStore(self.app, QSettings(settings_path, QSettings.Format.IniFormat))
         try:
-            first = self.dialog()
-            first.resize(690, 650)
-            first.tabs.setCurrentWidget(first.active_jobs)
-            first.show()
-            self.app.processEvents()
-            first.active_jobs.splitter.moveSplitter(250, 1)
-            expected = first.active_jobs.splitter.sizes()
-            first.hide()
-            second = self.dialog()
-            second.show()
-            second.tabs.setCurrentWidget(second.active_jobs)
-            self.app.processEvents()
-            self.assertEqual(second.active_jobs.splitter.sizes(), expected)
+            with patch.object(self.app, '_rustmech_window_state', store, create=True):
+                first = self.dialog()
+                first.resize(690, 650)
+                tab = first.active_jobs
+                first.tabs.setCurrentWidget(tab)
+                first.show()
+                self.app.processEvents()
+                self.assertEqual([tab.jobs.horizontalHeaderItem(column).text() for column in (2, 3, 4)],
+                                 ['Work', 'Job', 'Command'])
+                self.assertEqual(tab.works.horizontalHeaderItem(0).text(), 'Work')
+
+                header = tab.jobs.horizontalHeader()
+                original_width = header.sectionSize(1)
+                border = QPoint(header.sectionViewportPosition(1) + original_width - 1, header.height() // 2)
+                QTest.mousePress(header.viewport(), Qt.MouseButton.LeftButton, pos=border)
+                QTest.mouseMove(header.viewport(), border + QPoint(35, 0))
+                QTest.mouseRelease(header.viewport(), Qt.MouseButton.LeftButton, pos=border + QPoint(35, 0))
+                self.assertEqual(header.sectionSize(1), original_width + 35)
+                tab.jobs.setColumnWidth(2, 147)
+
+                queue = queue_output('23|PENDING|N/A|0:00|8:00:00|4|1|short|Second job|run.slurm')
+                with (patch.object(first, 'analysis_auth', return_value=RemoteAuth('tester', 'test')),
+                      patch('truba_active_jobs.RemoteTransport') as transport):
+                    transport.return_value.command.return_value = queue
+                    tab.refresh()
+                    self.assertTrue(tab.worker.wait(5000))
+                    self.app.processEvents()
+                self.assertEqual(header.sectionSize(1), original_width + 35)
+                tab.works.setCurrentCell(1, 0)
+                self.assertTrue(tab.jobs.isColumnHidden(2))
+
+                tab.splitter.moveSplitter(250, 1)
+                expected = tab.splitter.sizes()
+                first.hide()
+                store.settings = QSettings(settings_path, QSettings.Format.IniFormat)
+                second = self.dialog()
+                second.show()
+                second.tabs.setCurrentWidget(second.active_jobs)
+                self.app.processEvents()
+                self.assertEqual(second.active_jobs.splitter.sizes(), expected)
+                self.assertEqual(second.active_jobs.jobs.columnWidth(1), original_width + 35)
+                self.assertEqual(second.active_jobs.jobs.columnWidth(2), 147)
         finally:
             self.app.removeEventFilter(store)
 

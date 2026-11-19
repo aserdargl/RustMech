@@ -1172,6 +1172,9 @@ All jobs|Tüm işler
 Work name for new jobs|Yeni işler için çalışma adı
 Use the same work name to group multiple submissions.|Birden çok gönderimi gruplamak için aynı çalışma adını kullanın.
 Work name|Çalışma adı
+Work|Çalışma
+Job|İş
+Command|Komut
 Slurm job ID|Slurm iş numarası
 Slurm ID|Slurm no.
 Job description|İş açıklaması
