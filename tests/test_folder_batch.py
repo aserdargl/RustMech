@@ -937,11 +937,8 @@ class FolderBatchTests(unittest.TestCase):
             QTest.keyClick(dialog.folder, Qt.Key.Key_Return)
             self.assertFalse(dialog.items)
             dialog.check_folder()
-            for _ in range(1000):
-                if dialog.future is None:
-                    break
-                QTest.qWait(10)
-                dialog.poll()
+            dialog.future.result(timeout=10)
+            dialog.poll()
             self.assertIsNone(dialog.future)
             self.assertTrue(dialog.items[0].cached)
             self.assertEqual(dialog.table.item(0, RUN_COLUMN).checkState(), Qt.CheckState.Unchecked)
