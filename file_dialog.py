@@ -2,6 +2,7 @@
 
 import os
 import sys
+from ctypes import wintypes
 
 from PySide6.QtCore import QDir, QEvent, QFileInfo, QObject, QProcess, QSettings, Qt, QUrl
 from PySide6.QtGui import QDesktopServices
@@ -16,6 +17,15 @@ from datenburg_widgets import compact_gradient_button_stylesheet, qss_asset_url
 _DIALOG_BUTTON_STYLE = compact_gradient_button_stylesheet(
     "QPushButton", "padding: 0 7px; min-height: 23px; max-height: 1000px;"
 ) + "\nQPushButton:focus { padding: 0 6px; }"
+
+WM_NCXBUTTONDOWN = 0x00AB
+WM_NCXBUTTONUP = 0x00AC
+WM_NCXBUTTONDBLCLK = 0x00AD
+WM_APPCOMMAND = 0x0319
+FAPPCOMMAND_MOUSE = 0x8000
+FAPPCOMMAND_MASK = 0xF000
+# XBUTTON1/2 and APPCOMMAND_BROWSER_BACKWARD/FORWARD use the same IDs.
+WINDOWS_HISTORY_BUTTONS = {1: Qt.MouseButton.BackButton, 2: Qt.MouseButton.ForwardButton}
 
 
 def _style_dialog_buttons(box):
@@ -104,8 +114,11 @@ class FileDialogControls(QObject):
         forward = dialog.findChild(QAbstractButton, "forwardButton")
         self.mouse_navigation = {Qt.MouseButton.BackButton: back, Qt.MouseButton.ForwardButton: forward}
         self.keyboard_navigation = {
-            Qt.Key.Key_Left: back, Qt.Key.Key_Right: forward,
-            Qt.Key.Key_Up: dialog.findChild(QAbstractButton, "toParentButton"),
+            (Qt.Key.Key_Left, Qt.KeyboardModifier.AltModifier): back,
+            (Qt.Key.Key_Right, Qt.KeyboardModifier.AltModifier): forward,
+            (Qt.Key.Key_Up, Qt.KeyboardModifier.AltModifier): dialog.findChild(QAbstractButton, "toParentButton"),
+            (Qt.Key.Key_Back, Qt.KeyboardModifier.NoModifier): back,
+            (Qt.Key.Key_Forward, Qt.KeyboardModifier.NoModifier): forward,
         }
         for widget in (dialog, *dialog.findChildren(QWidget)):
             widget.installEventFilter(self)
@@ -150,9 +163,8 @@ class FileDialogControls(QObject):
                     self.focus_address()
                 event.accept()
                 return True
-            button = (self.keyboard_navigation.get(event.key())
-                      if event.modifiers() == Qt.KeyboardModifier.AltModifier else None)
-        elif kind in (QEvent.Type.MouseButtonPress, QEvent.Type.MouseButtonRelease):
+            button = self.keyboard_navigation.get((event.key(), event.modifiers()))
+        elif kind in (QEvent.Type.MouseButtonPress, QEvent.Type.MouseButtonRelease, QEvent.Type.MouseButtonDblClick):
             button = self.mouse_navigation.get(event.button())
         else:
             return False
@@ -210,6 +222,26 @@ class FileDialogService(QObject):
 
 class QFileDialog(QtFileDialog):
     """Own the widget explicitly so native window controls attach before exec."""
+
+    def nativeEvent(self, event_type, message):
+        controls = getattr(self, "_file_controls", None)
+        if event_type == b"windows_generic_MSG" and controls is not None:
+            native = wintypes.MSG.from_address(int(message))
+            # Qt handles client-area XBUTTON clicks but skips mouse-originated app commands
+            # and does not translate XBUTTON clicks on the Win32 title bar/resize frame.
+            direction = 0
+            if native.message == WM_APPCOMMAND:
+                command = (native.lParam >> 16) & 0xFFFF
+                if command & FAPPCOMMAND_MASK == FAPPCOMMAND_MOUSE:
+                    direction = command & ~FAPPCOMMAND_MASK
+            elif native.message in (WM_NCXBUTTONDOWN, WM_NCXBUTTONUP, WM_NCXBUTTONDBLCLK):
+                direction = (native.wParam >> 16) & 0xFFFF
+            button = controls.mouse_navigation.get(WINDOWS_HISTORY_BUTTONS.get(direction))
+            if button is not None:
+                if native.message in (WM_APPCOMMAND, WM_NCXBUTTONUP):
+                    button.click()
+                return True, 1
+        return super().nativeEvent(event_type, message)
 
     @classmethod
     def _choose(cls, parent, title, directory, filters, mode, *, save=False):

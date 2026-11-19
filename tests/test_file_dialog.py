@@ -1,13 +1,16 @@
 """Exercise the shared picker through the application's file-selection entry points."""
 
+import ctypes
+from ctypes import wintypes
 from pathlib import Path
 
 import pytest
-from PySide6.QtCore import QDir, QSettings, Qt, QTimer
+from PySide6.QtCore import QDir, QPoint, QSettings, Qt, QTimer
 from PySide6.QtGui import QFont
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import (
-    QApplication, QComboBox, QDialogButtonBox, QInputDialog, QLineEdit, QMessageBox, QStackedWidget, QWidget,
+    QAbstractItemView, QApplication, QComboBox, QDialogButtonBox, QInputDialog, QLineEdit, QMessageBox,
+    QStackedWidget, QWidget,
     QStyle, QStyleOptionButton,
 )
 
@@ -128,6 +131,55 @@ def test_picker_remembers_each_actions_directory_on_cancel(picker_app, tmp_path)
 
     assert visits == [(tmp_path, "original.csv"), (nested, "next.csv"),
                       (tmp_path, "other.csv"), (tmp_path, "fallback.csv")]
+
+
+@pytest.mark.parametrize("input_kind", ["mouse", "browser_keys", "win32_mouse", "win32_caption", "win32_command"])
+def test_picker_side_button_navigation(picker_app, tmp_path, input_kind):
+    if input_kind.startswith("win32_") and picker_app.platformName() != "windows":
+        pytest.skip("Requires the native Windows Qt backend")
+    first = tmp_path / "first"
+    second = first / "second"
+    second.mkdir(parents=True)
+    visits = []
+
+    def inspect():
+        dialog = picker_app.activeModalWidget()
+        try:
+            address = dialog.findChild(QComboBox, "lookInCombo").lineEdit()
+            files = dialog.findChild(QAbstractItemView, "listView").viewport()
+            address.setFocus()
+            dialog.setDirectory(str(first))
+            dialog.setDirectory(str(second))
+            for back in (True, True, False, False, False):
+                direction = 1 if back else 2
+                if input_kind == "mouse":
+                    QTest.mouseClick(files, Qt.MouseButton.BackButton if back else Qt.MouseButton.ForwardButton)
+                elif input_kind == "browser_keys":
+                    QTest.keyClick(address, Qt.Key.Key_Back if back else Qt.Key.Key_Forward)
+                else:
+                    send = ctypes.windll.user32.SendMessageW
+                    send.argtypes = (wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM)
+                    send.restype = wintypes.LPARAM
+                    hwnd = int(dialog.winId())
+                    if input_kind == "win32_command":
+                        send(hwnd, 0x0319, hwnd, (0x8000 | direction) << 16)  # WM_APPCOMMAND
+                    elif input_kind == "win32_caption":
+                        point = dialog.mapToGlobal(QPoint(50, 10))
+                        coords = (point.y() & 0xFFFF) << 16 | (point.x() & 0xFFFF)
+                        send(hwnd, 0x00AB, direction << 16 | 2, coords)  # WM_NCXBUTTONDOWN, HTCAPTION
+                        send(hwnd, 0x00AC, direction << 16 | 2, coords)  # WM_NCXBUTTONUP
+                    else:
+                        point = files.mapTo(dialog, files.rect().center()) * dialog.devicePixelRatioF()
+                        coords = point.y() << 16 | point.x()
+                        send(hwnd, 0x020B, direction << 16 | (0x20 * direction), coords)  # WM_XBUTTONDOWN
+                        send(hwnd, 0x020C, direction << 16, coords)  # WM_XBUTTONUP
+                visits.append(Path(QDir.fromNativeSeparators(address.text())))
+        finally:
+            dialog.reject()
+
+    QTimer.singleShot(0, inspect)
+    QFileDialog.getExistingDirectory(None, "Choose", str(tmp_path))
+    assert visits == [first, tmp_path, first, second, second]
 
 
 @pytest.mark.parametrize("entry", [
