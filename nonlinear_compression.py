@@ -1659,12 +1659,19 @@ class RustMechDialog(QDialog):
         self.fft_distribution.setEnabled(os.name == "nt")
         form = QFormLayout()
         configure_form(form)
-        for title, control in (
-            ("Voxels per axis", self.fft_grid),
-            ("Void / solid stiffness", self.fft_void_ratio),
-            ("WSL distribution", self.fft_distribution),
+        for title, control, tooltip in (
+            ("Voxels per axis", self.fft_grid, ""),
+            (
+                "Void / solid stiffness",
+                self.fft_void_ratio,
+                "Ratio of the Young’s modulus assigned to void voxels to that of the solid "
+                "(Eᵥ/Eₛ). For example, 0.01 gives the voids 1% of the solid stiffness. "
+                "Lower values better approximate empty space but can make the FFT solver "
+                "harder to converge. Higher values can overestimate the cell’s effective stiffness.",
+            ),
+            ("WSL distribution", self.fft_distribution, ""),
         ):
-            form.addRow(field_label(title, control), control)
+            form.addRow(field_label(title, control, tooltip=tooltip), control)
         # Reserve room for the full precision of a saved stiffness ratio.
         ratio_width = self.fft_void_ratio.fontMetrics().horizontalAdvance("0.000000000000") + 22
         self.fft_void_ratio.setFixedWidth(max(self.fft_void_ratio.width(), ratio_width))
