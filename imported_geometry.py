@@ -10,7 +10,7 @@ SURFACE_EXTENSIONS = ('.stl', '.obj', '.ply', '.vtp')
 SURFACE_FILE_FILTER = 'Surface geometry (' + ' '.join(f'*{suffix}' for suffix in SURFACE_EXTENSIONS) + ')'
 
 
-def read_surface(path, *, require_single=True):
+def read_polygonal_surface(path):
     path = Path(path)
     if path.suffix.lower() not in SURFACE_EXTENSIONS:
         raise ValueError('Supported geometry files: STL, OBJ, PLY and VTP (coordinates in mm).')
@@ -20,10 +20,21 @@ def read_surface(path, *, require_single=True):
     surface = surface.clean().triangulate()
     if not surface.n_cells or not np.isfinite(surface.points).all():
         raise ValueError('Geometry is empty or contains non-finite coordinates.')
+    if not surface.is_all_triangles:
+        raise ValueError('Import a polygonal surface.')
+    return surface
+
+
+def validate_solid_surface(surface, *, require_single=True):
     if surface.n_open_edges or not surface.is_manifold:
         raise ValueError('Geometry must be a closed, manifold solid. Repair gaps before importing.')
     if require_single and surface.connectivity().cell_data['RegionId'].max() != 0:
         raise ValueError('Import one connected solid at a time.')
+
+
+def read_surface(path, *, require_single=True):
+    surface = read_polygonal_surface(path)
+    validate_solid_surface(surface, require_single=require_single)
     return surface.compute_normals(auto_orient_normals=True, split_vertices=False)
 
 

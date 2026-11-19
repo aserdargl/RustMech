@@ -16,7 +16,8 @@ from camera_toolbar import camera_icon
 from file_dialog import QFileDialog
 from imported_geometry import (SURFACE_EXTENSIONS, SURFACE_FILE_FILTER,
                                align_compression_surface, automatic_compression_faces,
-                               compression_direction, read_surface, store_surface)
+                               compression_direction, read_polygonal_surface, read_surface,
+                               store_surface, validate_solid_surface)
 from model import settings_from_dict
 from studio_style import ActionFlowLayout, CompactComboBox, CONTROL_HEIGHT, STUDIO_STYLESHEET
 from window_state import install_window_state
@@ -246,7 +247,14 @@ class FolderBatchDialog(QDialog):
     def pick_faces(self, path, selection=None):
         from geometry_import_dialog import GeometryImportDialog
         digest = source_digest(path)
-        surface = read_surface(path)
+        surface = read_polygonal_surface(path)
+        geometry_error = ''
+        try:
+            validate_solid_surface(surface)
+        except ValueError as error:
+            geometry_error = str(error)
+        else:
+            surface = surface.compute_normals(auto_orient_normals=True, split_vertices=False)
         prepared = None
 
         def save_selection(aligned, height, cells):
@@ -268,14 +276,12 @@ class FolderBatchDialog(QDialog):
             prepared = PreparedSpecimen(str(path), digest, cached, height,
                                         tuple(float(x) for x in direction), cells)
 
-        dialog = GeometryImportDialog(surface, Path(path).name, self, save_selection=save_selection)
+        cells = selection[1] if selection and selection[0] == digest else None
+        initial_cells = cells if cells and all(0 <= cell < surface.n_cells for cell in cells) else ()
+        dialog = GeometryImportDialog(surface, Path(path).name, self, save_selection=save_selection,
+                                      initial_cells=initial_cells, geometry_error=geometry_error)
         dialog.setStyleSheet(STUDIO_STYLESHEET)
         try:
-            if (selection and selection[0] == digest and selection[1]
-                    and all(cell < surface.n_cells for cell in selection[1])):
-                for role, cell in enumerate(selection[1]):
-                    dialog.set_role(role)
-                    dialog.select_cell(cell)
             return prepared if dialog.exec() else None
         finally:
             dialog.plotter.close()

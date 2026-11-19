@@ -470,6 +470,7 @@ Selecting support face|Mesnet yüzeyi seçiliyor
 Selecting support face (right-click)|Mesnet yüzeyi seçiliyor (sağ tıklayın)
 Selecting compression face (right-click)|Basma yüzeyi seçiliyor (sağ tıklayın)
 Show platens|Plakaları göster
+Fixed platen: green. Moving platen: orange.|Sabit tabla: yeşil. Hareketli tabla: turuncu.
 Orthographic|Ortografik
 Perspective|Perspektif
 Smooth geometry|Pürüzsüz geometri

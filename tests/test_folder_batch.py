@@ -333,6 +333,27 @@ class FolderBatchTests(unittest.TestCase):
                 editor.set_role(role)
                 editor.select_cell(cell)
             self.assertTrue(editor.confirm.isEnabled())
+            self.assertTrue(editor.show_platens.isChecked())
+            fixed = editor.plotter.actors['fixed_platen']
+            moving = editor.plotter.actors['moving_platen']
+            self.assertAlmostEqual(fixed.GetBounds()[1], 10)
+            self.assertAlmostEqual(moving.GetBounds()[0], 14)
+            self.assertNotEqual(fixed.prop.color, moving.prop.color)
+            self.assertFalse(fixed.GetPickable())
+            self.assertFalse(moving.GetPickable())
+            editor.show_platens.click()
+            self.assertFalse(fixed.GetVisibility())
+            self.assertFalse(moving.GetVisibility())
+            self.assertTrue(editor.plotter.actors['selection0'].GetVisibility())
+            self.assertTrue(editor.plotter.actors['selection1'].GetVisibility())
+            self.assertTrue(editor.confirm.isEnabled())
+            editor.set_role(0)
+            editor.select_cell(selected[0])
+            fixed = editor.plotter.actors['fixed_platen']
+            self.assertFalse(fixed.GetVisibility())
+            editor.show_platens.click()
+            self.assertTrue(fixed.GetVisibility())
+            self.assertTrue(moving.GetVisibility())
             with patch('folder_batch.store_surface', side_effect=OSError('Disk unavailable')):
                 QTest.mouseClick(editor.confirm, Qt.MouseButton.LeftButton)
             self.assertTrue(editor.isVisible())
@@ -353,9 +374,9 @@ class FolderBatchTests(unittest.TestCase):
         self.assertEqual(batch.table.item(1, RUN_COLUMN).checkState(), Qt.CheckState.Checked)
 
         def cancel(editor):
-            self.assertEqual(tuple(editor.selected), selected)
             editor.show()
             self.app.processEvents()
+            self.assertEqual(tuple(editor.selected), selected)
             self.assertEqual(editor.frameGeometry(), bounds[0])
             editor.set_role(0)
             editor.select_cell(selected[1])
@@ -387,6 +408,37 @@ class FolderBatchTests(unittest.TestCase):
         reopened.poll()
         self.assertFalse(reopened.items[1].cached)
         self.assertEqual(reopened.items[1].error, 'Face selection required')
+
+    def test_not_ready_open_surface_can_be_inspected(self):
+        path = self.root / 'open.stl'
+        # Remove a side wall while keeping both compression planes intact.
+        centers = self.surface.cell_centers().points
+        self.surface.remove_cells(np.flatnonzero(np.isclose(centers[:, 1], -2))).save(path)
+        batch = self.dialog()
+        batch.folder.setText(str(self.root))
+        batch.check_folder()
+        batch.future.result(timeout=10)
+        batch.poll()
+        self.assertIn('closed', batch.items[0].error)
+
+        def inspect(editor):
+            editor.show()
+            self.app.processEvents()
+            self.assertTrue(editor.isVisible())
+            centers = editor.surface.cell_centers().points
+            for role, z in enumerate((5, 11)):
+                editor.set_role(role)
+                editor.select_cell(int(np.flatnonzero(np.isclose(centers[:, 2], z))[0]))
+            self.assertFalse(editor.confirm.isEnabled())
+            self.assertIn('closed', editor.status.text())
+            editor.reject()
+            return editor.result()
+
+        with patch.object(GeometryImportDialog, 'exec', autospec=True, side_effect=inspect) as show_editor:
+            batch.table.cellWidget(0, FACES_COLUMN).click()
+        show_editor.assert_called_once()
+        self.assertFalse(batch.items[0].cached)
+        self.assertIsNone(batch.saved_faces(path))
 
     def test_async_check_and_enter_never_start_or_enqueue(self):
         dialog = self.dialog()
