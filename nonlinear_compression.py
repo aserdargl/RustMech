@@ -919,6 +919,8 @@ class RustMechDialog(QDialog):
         project_menu.addAction("Open project...", self.project_workspace.open)
         project_menu.addAction("Save project", lambda: self.project_workspace.save())
         project_menu.addAction("Save project as...", lambda: self.project_workspace.save(save_as=True))
+        project_menu.addSeparator()
+        project_menu.addAction("Export mechanical 3D results...", self.project_workspace.export_mechanical_3d)
         self.project_button.setMenu(project_menu)
         navigation.addWidget(self.project_button)
 

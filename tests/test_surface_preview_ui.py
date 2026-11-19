@@ -137,6 +137,23 @@ class SurfacePreviewUITests(unittest.TestCase):
         np.testing.assert_allclose(surface.bounds, np.array([2, 3, 4, 5, 6, 7]) / 8)
         np.testing.assert_allclose(outline.bounds, [0, 1] * 3)
 
+    def test_project_menu_exports_an_existing_mechanical_result(self):
+        window = self.window
+        with TemporaryDirectory() as scratch:
+            folder = Path(scratch)
+            source = folder / "results_undeformed.vtu"
+            source.touch()
+            package = folder / "RustMech-3D"
+            action = next(action for action in window.project_button.menu().actions()
+                          if action.text() == "Export mechanical 3D results...")
+            with (patch("file_dialog.QFileDialog.getExistingDirectory", side_effect=[scratch, scratch]),
+                  patch("mechanical_result_export.export_mechanical_result", return_value=package) as export,
+                  patch("project_workspace.QMessageBox.information") as info):
+                action.trigger()
+            export.assert_called_once_with(source, folder)
+            self.assertIn(str(package), info.call_args.args[2])
+            self.assertIsNone(window.analysis_job)
+
     def test_fft_preview_replaces_stale_grid_and_restores_fe_view(self):
         window = self.window
         plotter = window.plotter

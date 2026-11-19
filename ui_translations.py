@@ -140,6 +140,15 @@ Analysis project|Analiz projesi
 Open project...|Proje aç...
 Save project|Projeyi kaydet
 Save project as...|Projeyi farklı kaydet...
+Export mechanical 3D results...|Mekanik 3B sonuçları dışa aktar...
+Export mechanical 3D results|Mekanik 3B sonuçları dışa aktar
+Select saved mechanical result|Kayıtlı mekanik sonucu seç
+Select 3D export destination|3B dışa aktarım klasörünü seç
+3D results exported to|3B sonuçlar şu klasöre aktarıldı
+The selected folder does not contain results_undeformed.vtu.|Seçilen klasörde results_undeformed.vtu bulunamadı.
+The selected mechanical result has an empty mesh.|Seçilen mekanik sonucun ağı boş.
+The result contains values outside the EnSight Gold numeric range.|Sonuç, EnSight Gold sayı aralığının dışında değerler içeriyor.
+The result exceeds the EnSight Gold mesh size limit.|Sonuç, EnSight Gold ağ boyutu sınırını aşıyor.
 No case loaded|Yüklenmiş vaka yok
 Project inputs restored. Build or open results explicitly.|Proje girdileri geri yüklendi. Ağ üretimini veya sonuç açmayı açıkça başlatın.
 Project opened. Use Apply to preview; run analysis explicitly.|Proje açıldı. Önizleme için Apply kullanın; analizi açıkça başlatın.
@@ -1189,7 +1198,11 @@ TURKISH.update({
 })
 
 TEMPLATES = {
+    'Could not write VTU: {file}': 'VTU dosyası yazılamadı: {file}',
+    'Missing or invalid nodal result field: {field}': 'Düğüm sonuç alanı eksik veya geçersiz: {field}',
+    'Unsupported EnSight Gold cell types: {types}': 'Desteklenmeyen EnSight Gold eleman tipleri: {types}',
     'Preview error: {error}': 'Önizleme hatası: {error}',
+    'Local Kratos {version} is ready.': 'Yerel Kratos {version} hazır.',
     'Saved to Analysis Queue ({count}). Open Analysis Queue and select Run analysis queue to start.':
         'Analiz Kuyruğuna {count} iş kaydedildi. Başlatmak için Analiz Kuyruğunu açıp Analiz kuyruğunu çalıştır düğmesine basın.',
     'Results folder is {path}': 'Sonuç klasörü {path}',

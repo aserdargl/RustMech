@@ -3,7 +3,8 @@ from dataclasses import asdict
 import json
 from pathlib import Path
 
-from PySide6.QtWidgets import QMessageBox, QAbstractSpinBox, QWidget
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import QApplication, QMessageBox, QAbstractSpinBox, QWidget
 from file_dialog import QFileDialog
 
 from analysis_project import AnalysisProject, load_project, save_project
@@ -73,6 +74,32 @@ class ProjectWorkspace:
         except (OSError, ValueError, RuntimeError) as error:
             QMessageBox.warning(self.window, "Analysis project", str(error))
             return False
+
+    def export_mechanical_3d(self):
+        from mechanical_result_export import export_mechanical_result, find_mechanical_result
+        from model import ROOT
+        from ui_language import translate
+
+        window = self.window
+        title = "Export mechanical 3D results"
+        initial = window._result_preview_folder or ROOT / "HumanResults"
+        folder = QFileDialog.getExistingDirectory(window, "Select saved mechanical result", str(initial))
+        if not folder:
+            return
+        try:
+            source = find_mechanical_result(Path(folder))
+            destination = QFileDialog.getExistingDirectory(window, "Select 3D export destination")
+            if not destination:
+                return
+            QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+            try:
+                package = export_mechanical_result(source, Path(destination))
+            finally:
+                QApplication.restoreOverrideCursor()
+        except (OSError, ValueError, RuntimeError) as error:
+            QMessageBox.warning(window, title, translate(str(error)))
+            return
+        QMessageBox.information(window, title, f"{translate('3D results exported to')}\n{package}")
 
     def _preflight(self, project):
         w = self.window

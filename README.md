@@ -859,6 +859,20 @@ veriler ayrıca malzeme kalibrasyonu gerektirir.
 eğimidir (`0 ≤ Eₜ < E`). Eₜ bir gerinim değildir. Mevcut kayıtların malzeme
 modeli ve sayısal değerleri korunur; ölçülmüş veri olmadan eğri üretilmez.
 
+## Mekanik sonuçları 3B dışa aktarma
+
+**Proje → Mekanik 3B sonuçları dışa aktar…** komutuyla kayıtlı analiz
+klasörünü (veya `03_Results` klasörünü) ve hedef klasörü seçin. RustMech
+son kayıtlı yük adımından yeni bir `RustMech-3D-…` klasörü oluşturur.
+
+- **ANSYS EnSight** için `EnSight/mechanical.case` dosyasını açın. Deforme
+  şekli görmek için `Displacement_mm` vektörünü yer değiştirme olarak uygulayın.
+  `.case`, `.geo` ve `.var` dosyalarını birlikte saklayın.
+- **OpenFOAM ve Kratos sonrası görselleştirme** için ParaView'da
+  `ParaView/results_undeformed.vtu` veya `ParaView/deformed_shape.vtu` dosyasını
+  açın. Her iki dosya da ağ, mm cinsinden yer değiştirme, MPa cinsinden
+  von Mises gerilmesi ve varsa temas alanlarını içerir.
+
 ## ANSYS Python bağlantısı
 
 ANSYS analizleri, DoE ve Mesh Convergence için uygulamayı çalıştıran Python
