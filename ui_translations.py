@@ -4,6 +4,7 @@ from setup_help import GEOMETRY_HELP
 _TEXT = '''
 Open the LAMMPS workspace|LAMMPS çalışma alanını aç
 Job settings|İş ayarları
+Advanced TRUBA settings|Gelişmiş TRUBA ayarları
 This computer|Bu bilgisayar
 Run on|Çalıştırma hedefi
 MPI processes|MPI süreçleri

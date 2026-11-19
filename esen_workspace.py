@@ -14,14 +14,14 @@ from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QCheckBox, QDialog, QFormLayout, QFrame, QHBoxLayout, QLabel,
     QLineEdit, QListWidget, QListWidgetItem, QPlainTextEdit, QPushButton,
-    QSizePolicy, QSplitter, QVBoxLayout,
+    QScrollArea, QSizePolicy, QSplitter, QVBoxLayout,
 )
 
 import esen_jobs as jobs
 from file_dialog import QFileDialog
 from studio_style import (
     ActionFlowLayout, CompactComboBox, CompactSpinBox, CONTROL_HEIGHT,
-    STUDIO_STYLESHEET, configure_form, field_label,
+    STUDIO_STYLESHEET, SidebarGroupBox, configure_form, field_label,
 )
 from ui_language import translate
 
@@ -49,7 +49,7 @@ QFrame[esenCard="paper"] { background: #FFFFFF; border: 1px solid #D5DBE2; borde
 """
 
 
-def panel(title, *, paper=False):
+def panel(title, *, paper=False, scrollable=False):
     card = QFrame()
     card.setProperty("esenCard", "paper" if paper else "true")
     layout = QVBoxLayout(card)
@@ -59,6 +59,12 @@ def panel(title, *, paper=False):
     header.setObjectName("esenSection")
     header.setFixedHeight(CONTROL_HEIGHT)
     layout.addWidget(header)
+    if scrollable:
+        scroll = QScrollArea()
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setWidgetResizable(True)
+        scroll.setWidget(card)
+        return scroll, layout
     return card, layout
 
 
@@ -98,7 +104,20 @@ def code_view(name):
     return edit
 
 
-class InputFileList(QListWidget):
+class CompactListWidget(QListWidget):
+    """Fill spare panel space without forcing scrollbars from the list's size hint."""
+
+    def __init__(self):
+        super().__init__()
+        self.setMinimumHeight(63)
+
+    def sizeHint(self):
+        size = super().sizeHint()
+        size.setHeight(self.minimumHeight())
+        return size
+
+
+class InputFileList(CompactListWidget):
     files_dropped = Signal(list)
 
     @staticmethod
@@ -188,12 +207,12 @@ class EsenWorkspace(QDialog):
         split.addWidget(right)
         split.setSizes([405, 590])
 
-        settings, layout = panel("Job settings")
+        settings, layout = panel("Job settings", scrollable=True)
         left.addWidget(settings)
         self.job_form = form = QFormLayout()
         configure_form(form)
         layout.addLayout(form)
-        self.target = compact_combo((("This computer", "local"), ("TRUBA", "remote")))
+        self.target = compact_combo((("TRUBA", "remote"), ("This computer", "local")))
         self.ranks = CompactSpinBox()
         self.ranks.setRange(1, getattr(os, "process_cpu_count", os.cpu_count)() or 1)
         self.local_memory = CompactSpinBox()
@@ -220,13 +239,22 @@ class EsenWorkspace(QDialog):
         self.resume_input = QLineEdit()
         self.resume_input.setPlaceholderText("Optional relative path")
         self.resume_input.setToolTip(translate("Include a restart input in the job files to enable checkpoint recovery and the 70-hour handover."))
-        self.remote_fields = (self.partition, self.account, self.walltime,
-                              self.module, self.remote_exe, self.remote_mpi, self.resume_input)
-        for text, control in zip(("Queue", "Account", "Wall time (HH:MM:SS)",
-                                  "LAMMPS module", "Linux executable", "MPI launcher", "Restart input"), self.remote_fields):
-            self._form_row(form, text, control)
+        self._form_row(form, "Queue", self.partition)
+        self._form_row(form, "Wall time (HH:MM:SS)", self.walltime)
         self.connection = QLabel()
+        self.connection.setWordWrap(True)
         layout.addWidget(self.connection)
+        self.truba_settings = SidebarGroupBox("Advanced TRUBA settings")
+        advanced = QFormLayout(self.truba_settings.content)
+        advanced.setContentsMargins(5, 4, 5, 3)
+        configure_form(advanced)
+        self._form_row(advanced, "Account", self.account)
+        self._form_row(advanced, "LAMMPS module", self.module)
+        self._form_row(advanced, "Linux executable", self.remote_exe)
+        self._form_row(advanced, "MPI launcher", self.remote_mpi)
+        self._form_row(advanced, "Restart input", self.resume_input)
+        layout.addWidget(self.truba_settings)
+        self.truba_settings.set_expanded(False)
         self.target.currentIndexChanged.connect(self._preview)
         self.ranks.valueChanged.connect(self._preview)
         self.partition.currentIndexChanged.connect(self._queue_changed)
@@ -244,7 +272,6 @@ class EsenWorkspace(QDialog):
         self.inputs.viewport().setAcceptDrops(True)
         self.inputs.files_dropped.connect(self._load_files)
         self.inputs.setAccessibleName("LAMMPS input files")
-        self.inputs.setMinimumHeight(63)
         self.whole_folder = QCheckBox("Include entire job folder")
         self.whole_folder.toggled.connect(self._preview)
         layout.addWidget(self.whole_folder)
@@ -255,9 +282,9 @@ class EsenWorkspace(QDialog):
         self.start = command("Run LAMMPS", self._start, role="esenRun")
         layout.addLayout(button_row(self.use_as_script, self.remove_inputs, self.start))
 
-        history, layout = panel("Job history", paper=True)
+        history, layout = panel("Job history", paper=True, scrollable=True)
         left.addWidget(history)
-        self.history = QListWidget()
+        self.history = CompactListWidget()
         self.history.setAccessibleName("ESEN job history")
         self.history.currentItemChanged.connect(self._select_job)
         layout.addWidget(self.history, 1)
@@ -334,7 +361,7 @@ class EsenWorkspace(QDialog):
                 field.setValue(int(self.preferences.value(f"esen/{key}", field.value())))
             except (ValueError, TypeError):
                 pass
-        for key in ("partition", "remote_mpi", "target"):
+        for key in ("partition", "remote_mpi"):
             field = getattr(self, key)
             index = field.findData(self.preferences.value(f"esen/{key}", field.currentData()))
             if index >= 0:
@@ -347,7 +374,7 @@ class EsenWorkspace(QDialog):
             self.preferences.setValue(f"esen/{key}", getattr(self, key).text())
         for key in ("ranks", "local_memory"):
             self.preferences.setValue(f"esen/{key}", getattr(self, key).value())
-        for key in ("partition", "remote_mpi", "target"):
+        for key in ("partition", "remote_mpi"):
             self.preferences.setValue(f"esen/{key}", getattr(self, key).currentData())
 
     def _queue_changed(self):
@@ -480,11 +507,12 @@ class EsenWorkspace(QDialog):
 
     def _preview(self, *_):
         remote = self.target.currentData() == "remote"
-        for field in (*self.local_fields, *self.remote_fields):
-            visible = (field in self.remote_fields) == remote
-            self.job_form.setRowVisible(field, visible)
+        for field in self.local_fields:
+            self.job_form.setRowVisible(field, not remote)
+        self.job_form.setRowVisible(self.partition, remote)
+        self.job_form.setRowVisible(self.walltime, remote)
         self.connection.setVisible(remote)
-        self.connection.setWordWrap(True)
+        self.truba_settings.setVisible(remote)
         self.connection.setText("Connected to TRUBA" if self.truba.analysis_auth() else "Connect using the main TRUBA button.")
         try:
             invocation = self._command()
