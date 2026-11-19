@@ -33,6 +33,12 @@ A file or folder with different contents already exists: {path}|Aynı konumda fa
 Upload the folder to TRUBA before running selected scripts.|Seçtiğiniz betikleri çalıştırmadan önce klasörü TRUBA’ya aktarın.
 Use ↑ and ↓ in Job order. Run syncs the inputs and submits each checked Slurm script after the previous job ends.|İş sırası görünümünde ↑ ve ↓ ile sırayı ayarlayın. Çalıştır, girdileri eşitler ve işaretli her Slurm betiğini önceki iş sona erince gönderir.
 Uploading files to TRUBA…|Dosyalar TRUBA’ya aktarılıyor…
+TRUBA file transfer progress|TRUBA dosya aktarımı ilerlemesi
+Preparing files for TRUBA…|Dosyalar TRUBA için hazırlanıyor…
+Uploading to TRUBA · %p%|TRUBA’ya aktarılıyor · %p%
+Finalizing TRUBA transfer…|TRUBA aktarımı tamamlanıyor…
+TRUBA transfer complete · %p%|TRUBA aktarımı tamamlandı · %p%
+TRUBA transfer failed|TRUBA aktarımı başarısız
 Stage: {stage}|Aşama: {stage}
 Runtime: {time}|Çalışma süresi: {time}
 Slurm allocation runtime: {time}|Slurm tahsisinin çalışma süresi: {time}
@@ -97,6 +103,9 @@ Command preview|Komut önizlemesi
 TRUBA files|TRUBA dosyaları
 TRUBA folder path|TRUBA klasör yolu
 Open selected TRUBA folder|Seçili TRUBA klasörünü aç
+Slurm inputs|Slurm girdileri
+Open synchronized Slurm inputs on TRUBA|TRUBA’ya eşitlenen Slurm girdilerini aç
+Synchronized inputs are read-only.|Eşitlenen girdiler salt okunurdur.
 Upload|Yükle
 Upload file to the open TRUBA folder|Açık TRUBA klasörüne dosya yükle
 Download selected TRUBA file|Seçili TRUBA dosyasını indir

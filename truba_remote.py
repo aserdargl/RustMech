@@ -151,9 +151,13 @@ class RemoteTransport:
         self.delegate.execute(["call env TERM=dumb bash -lc "+shlex.quote(command)],on_line=lines.append)
         return "\n".join(lines)
 
-    def put(self,local,remote):
+    def put(self,local,remote,*,callback=None):
         if isinstance(self.delegate,SSHJobs):
-            with self.delegate.connect() as client,client.open_sftp() as sftp: sftp.put(str(local),remote)
+            with self.delegate.connect() as client,client.open_sftp() as sftp:
+                if callback is None:
+                    sftp.put(str(local),remote)
+                else:
+                    sftp.put(str(local),remote,callback=callback)
         else: self.delegate.execute(["put "+self.delegate.quote(local)+" "+self.delegate.quote(remote)])
 
     def get(self,remote,local):

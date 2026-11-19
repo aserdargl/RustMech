@@ -11,7 +11,7 @@ from tempfile import TemporaryDirectory
 from threading import Event
 from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import ANY, patch
 
 from PySide6.QtCore import QMimeData, QObject, QPoint, QSettings, Qt, QUrl, Signal
 from PySide6.QtGui import QDragEnterEvent, QDropEvent
@@ -242,7 +242,10 @@ class EsenTests(unittest.TestCase):
             (self.source / "obsolete.txt").unlink()
             transport.command.side_effect = ["", "READY=1\n", "", "", ""]
 
-            def inspect_delta(path, _remote):
+            def inspect_delta(path, _remote, *, callback):
+                size = path.stat().st_size
+                callback(size // 2, size)
+                callback(size, size)
                 with tarfile.open(path) as bundle:
                     self.assertEqual(bundle.extractfile("copy.list").read(),
                                      b"data/cell.lmp\0run example.txt\0")
@@ -251,7 +254,13 @@ class EsenTests(unittest.TestCase):
                     ])
 
             transport.put.side_effect = inspect_delta
-            revised = jobs.sync_slurm_folder(self.history, self.source, self.auth, [run.name])
+            updates = []
+            revised = jobs.sync_slurm_folder(
+                self.history, self.source, self.auth, [run.name],
+                progress=lambda sent, total: updates.append((sent, total)),
+            )
+            size = updates[0][1]
+            self.assertEqual(updates, [(0, size), (size // 2, size), (size, size)])
             self.assertNotEqual(upload_id, revised)
             self.assertTrue((jobs.upload_snapshot(self.history, upload_id) / "obsolete.txt").exists())
             self.assertFalse((jobs.upload_snapshot(self.history, revised) / "obsolete.txt").exists())
@@ -903,7 +912,7 @@ class EsenTests(unittest.TestCase):
             if workspace.remote_task:
                 workspace.remote_task[1].result(timeout=5)
                 workspace._tick()
-            sync.assert_called_with(self.history, self.source.resolve(), self.auth, ("run_second.slurm",))
+            sync.assert_called_with(self.history, self.source.resolve(), self.auth, ("run_second.slurm",), progress=ANY)
             launch.assert_called_once()
             self.assertEqual(workspace.history.count(), 1)
             self.assertIn("run_second.slurm", workspace.history.item(0).text())
@@ -1017,9 +1026,25 @@ class EsenTests(unittest.TestCase):
             list_directory.side_effect = list_while_uploading
             browser.refresh.click()
             self.assertTrue(listing_started.wait(timeout=5))
+            transfer_half_done = Event()
+            finish_transfer = Event()
+            self.addCleanup(finish_transfer.set)
+
+            def upload_halfway(*_, progress):
+                progress(50, 100)
+                transfer_half_done.set()
+                finish_transfer.wait(timeout=5)
+
+            transfer.side_effect = upload_halfway
             workspace.upload.click()
+            self.assertTrue(transfer_half_done.wait(timeout=5))
+            workspace._tick()
+            self.assertTrue(workspace.transfer_progress.isVisible())
+            self.assertEqual(workspace.transfer_progress.value(), 50)
+            finish_transfer.set()
             upload_id = workspace.upload_task[0].result(timeout=5)
             workspace._tick()
+            self.assertEqual(workspace.transfer_progress.value(), 100)
             transfer.assert_called_once()
             self.assertEqual(transfer.call_args.args[:2], (self.auth, PurePosixPath(destination)))
             transport.assert_not_called()
@@ -1054,6 +1079,13 @@ class EsenTests(unittest.TestCase):
             self.assertEqual(record["name"], names[1])
             self.assertEqual(record["folder_upload"], run_upload_id)
             transfer.assert_called_once()
+            self.assertTrue(browser.slurm_inputs.isEnabled())
+            list_directory.return_value = [SimpleNamespace(filename=names[1], st_mode=S_IFREG, st_size=12)]
+            browser.slurm_inputs.click()
+            finish_browsing()
+            self.assertEqual(browser.address.text(), jobs.upload_location(run_upload_id, self.auth.username) + "/inputs")
+            self.assertEqual(browser.files.topLevelItem(0).text(0), names[1])
+            self.assertFalse(browser.upload.isEnabled())
             workspace._poll_remote()
             workspace.remote_task[1].result(timeout=5)
             workspace._tick()

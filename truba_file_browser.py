@@ -41,6 +41,7 @@ class TrubaFileBrowser(QWidget):
         self.task = None
         self.loaded = False
         self._uploaded_directory = None
+        self._slurm_directory = None
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -59,6 +60,8 @@ class TrubaFileBrowser(QWidget):
         actions.addWidget(self.open_folder)
         actions.addWidget(self.refresh)
         layout.addLayout(actions)
+        self.slurm_inputs = command("Slurm inputs", self._open_slurm_inputs, hint="Open synchronized Slurm inputs on TRUBA")
+        layout.addWidget(self.slurm_inputs, alignment=Qt.AlignmentFlag.AlignLeft)
 
         self.files = QTreeWidget()
         self.files.setAccessibleName("TRUBA files")
@@ -142,12 +145,15 @@ class TrubaFileBrowser(QWidget):
     def _update_controls(self, *_):
         ready = self.auth is not None and self.task is None
         can_change = ready and self.loaded
+        can_write = can_change and not self.is_slurm_snapshot_open()
         self.refresh.setEnabled(ready)
         self.up.setEnabled(ready and self.directory != PurePosixPath())
         self.open_folder.setEnabled(can_change and self._selected_item(S_ISDIR) is not None)
-        self.folder_name.setEnabled(can_change)
-        self.create.setEnabled(can_change and bool(self.folder_name.text().strip()))
-        self.upload.setEnabled(can_change)
+        self.slurm_inputs.setEnabled(ready and self._slurm_directory is not None
+                                     and self._slurm_directory[0] == self.auth.username)
+        self.folder_name.setEnabled(can_write)
+        self.create.setEnabled(can_write and bool(self.folder_name.text().strip()))
+        self.upload.setEnabled(can_write)
         self.download.setEnabled(can_change and self._selected_item(S_ISREG) is not None)
 
     def _submit(self, kind, operation, directory, *args, success_message=""):
@@ -165,6 +171,11 @@ class TrubaFileBrowser(QWidget):
         if self.auth == auth and self.directory.parts:
             return self.directory.as_posix()
         return ""
+
+    def is_slurm_snapshot_open(self):
+        parts = self.directory.parts
+        return any(parent == "esen-folders" and re.fullmatch(r"[0-9a-f]{32}", name)
+                   for parent, name in zip(parts, parts[1:]))
 
     def refresh_after_upload(self, auth, directory):
         if self.auth == auth:
@@ -188,6 +199,15 @@ class TrubaFileBrowser(QWidget):
     def _open_selected_folder(self):
         if item := self._selected_item(S_ISDIR):
             self._open_folder(item, 0)
+
+    def set_slurm_directory(self, username, path):
+        directory = PurePosixPath(path).relative_to(truba_files.project_root(username))
+        self._slurm_directory = username, directory
+        self._update_controls()
+
+    def _open_slurm_inputs(self):
+        if self.slurm_inputs.isEnabled():
+            self._submit("list", truba_files.list_directory, self._slurm_directory[1])
 
     def _create_folder(self):
         if not self.create.isEnabled():
@@ -271,7 +291,10 @@ class TrubaFileBrowser(QWidget):
                 self.loaded = True
                 self._update_address()
                 self._show_entries(entries)
-                self.status.setText(success_message or ("" if entries else "This folder is empty."))
+                if self.is_slurm_snapshot_open() and entries:
+                    self.status.setText("Synchronized inputs are read-only.")
+                else:
+                    self.status.setText(success_message or ("" if entries else "This folder is empty."))
         self._update_controls()
         self._refresh_after_upload_if_ready()
 

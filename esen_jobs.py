@@ -235,7 +235,7 @@ test ! -L {snapshot}/inputs
 """)
 
 
-def upload_folder(history, root, auth, *, files=None, directory="", include_results=True):
+def upload_folder(history, root, auth, *, files=None, directory="", include_results=True, progress=None):
     """Copy inputs to the open TRUBA folder and retain a local submission snapshot."""
     if files is None and history.resolve().is_relative_to(root.resolve()):
         raise ValueError("Choose a job folder outside the ESEN history directory.")
@@ -245,12 +245,15 @@ def upload_folder(history, root, auth, *, files=None, directory="", include_resu
     with TemporaryDirectory(dir=destination.parent) as temporary:
         staging = Path(temporary)
         snapshot = snapshot_inputs(staging, root, None, files or (), files is None, include_results=include_results)
-        upload_tree(auth, PurePosixPath(directory), snapshot)
+        if progress is None:
+            upload_tree(auth, PurePosixPath(directory), snapshot)
+        else:
+            upload_tree(auth, PurePosixPath(directory), snapshot, progress=progress)
         staging.rename(destination)
     return upload_id
 
 
-def sync_slurm_folder(history, root, auth, selected, *, files=None, directory=""):
+def sync_slurm_folder(history, root, auth, selected, *, files=None, directory="", progress=None):
     """Publish one content-identified snapshot for the selected Slurm jobs."""
     if files is None and history.resolve().is_relative_to(root.resolve()):
         raise ValueError("Choose a job folder outside the ESEN history directory.")
@@ -311,7 +314,11 @@ def sync_slurm_folder(history, root, auth, selected, *, files=None, directory=""
                         bundle.add(snapshot / relative_file(name), arcname="inputs/" + name, recursive=False)
             transport.command(f"umask 077; mkdir -p -- {quoted}/inputs")
             try:
-                transport.put(archive, incoming + "/inputs.tar.gz")
+                if progress is None:
+                    transport.put(archive, incoming + "/inputs.tar.gz")
+                else:
+                    progress(0, archive.stat().st_size)
+                    transport.put(archive, incoming + "/inputs.tar.gz", callback=progress)
                 copy = ""
                 if unchanged:
                     copy = f"""cd {previous_root}

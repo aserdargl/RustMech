@@ -1,5 +1,6 @@
 """Native ESEN workspace for running and inspecting LAMMPS jobs."""
 
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from itertools import islice
 from operator import attrgetter
@@ -15,7 +16,7 @@ from PySide6.QtCore import QPoint, QSettings, QSignalBlocker, QSize, Qt, QTimer,
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QCheckBox, QDialog, QFormLayout, QFrame, QHBoxLayout, QLabel,
-    QLineEdit, QListWidget, QListWidgetItem, QMessageBox, QPlainTextEdit, QPushButton,
+    QLineEdit, QListWidget, QListWidgetItem, QMessageBox, QPlainTextEdit, QProgressBar, QPushButton,
     QScrollArea, QSizePolicy, QSplitter, QStyle, QToolTip, QVBoxLayout,
 )
 
@@ -380,6 +381,12 @@ class EsenWorkspace(QDialog):
         self.inputs.itemChanged.connect(self._preview)
         self.inputs.itemSelectionChanged.connect(self._buttons)
         layout.addWidget(self.inputs, 1)
+        self.transfer_progress = QProgressBar()
+        self.transfer_progress.setObjectName("operationProgressBar")
+        self.transfer_progress.setAccessibleName("TRUBA file transfer progress")
+        self.transfer_progress.setFixedHeight(CONTROL_HEIGHT)
+        self.transfer_progress.hide()
+        layout.addWidget(self.transfer_progress)
         self.whole_folder = QCheckBox("Include entire job folder")
         self.whole_folder.toggled.connect(self._preview)
         layout.addWidget(self.whole_folder)
@@ -779,7 +786,12 @@ class EsenWorkspace(QDialog):
         self._transfer_inputs(auth)
 
     def _transfer_inputs(self, auth, selected=()):
-        options = {}
+        updates = deque(maxlen=1)
+
+        def report(transferred, total):
+            updates.append((transferred, total))
+
+        options = {"progress": report}
         source = self.folder_root
         if source is None:
             source, entry, extra, whole_folder = self._input_files()
@@ -800,21 +812,40 @@ class EsenWorkspace(QDialog):
                 jobs.upload_folder, self.history_root, source, auth, directory=directory,
                 include_results=not self._slurm_mode(), **options,
             )
-        self.upload_task = future, auth, selected, directory
+        self.upload_task = future, auth, selected, directory, updates
+        self._set_transfer_progress(0, "Preparing files for TRUBA…")
         self._preview()
 
+    def _set_transfer_progress(self, value, message):
+        self.transfer_progress.setFormat(translate(message))
+        self.transfer_progress.setValue(value)
+        self.transfer_progress.show()
+
     def _check_upload(self):
-        if self.upload_task is None or not self.upload_task[0].done():
+        if self.upload_task is None:
             return
-        (future, auth, selected, directory), self.upload_task = self.upload_task, None
+        future, auth, selected, directory, updates = self.upload_task
+        if updates:
+            transferred, total = updates.pop()
+            if transferred >= total:
+                self._set_transfer_progress(99 if total else 0, "Finalizing TRUBA transfer…")
+            else:
+                self._set_transfer_progress(min(99, transferred * 100 // total), "Uploading to TRUBA · %p%")
+        if not future.done():
+            return
+        self.upload_task = None
+        succeeded = False
         try:
             upload_id = future.result()
+            succeeded = True
+            self._set_transfer_progress(100, "TRUBA transfer complete · %p%")
             upload = jobs.FolderUpload(upload_id, auth.username, directory, direct=not selected)
             if self.folder_root is not None:
                 self.folder_upload = upload
             else:
                 self.files_upload = self._input_files(), upload
             if selected:
+                self.truba_browser.set_slurm_directory(auth.username, upload.path())
                 self._queue_batch("remote", auth, selected=selected)
             elif self.folder_root is not None and not self.folder_slurm:
                 self._scan_folder(checked=set(self._folder_jobs()))
@@ -825,6 +856,8 @@ class EsenWorkspace(QDialog):
         except Exception as error:
             self.upload_error = str(error)
         finally:
+            if not succeeded:
+                self._set_transfer_progress(self.transfer_progress.value(), "TRUBA transfer failed")
             if not selected:
                 self.truba_browser.refresh_after_upload(auth, directory)
         self._preview()
@@ -1257,6 +1290,9 @@ class EsenWorkspace(QDialog):
             self.status.setText(str(error))
             self._buttons()
             return
+        if record.get("folder_upload") and not record.get("direct_upload") and jobs.is_slurm_script(record["name"]):
+            upload = jobs.FolderUpload(record["folder_upload"], record["username"], record.get("upload_directory", ""))
+            self.truba_browser.set_slurm_directory(upload.username, upload.path())
         self._update_history_item(self.history.currentItem(), directory, record)
         state = self._state(directory, record)
         details = [record.get("job_id", ""), record.get("created", ""),
@@ -1354,7 +1390,8 @@ class EsenWorkspace(QDialog):
             self.input_root is not None and (self.entry or self.extra or self.whole_folder.isChecked())
         )
         self.upload.setEnabled(bool(remote and authenticated and has_inputs
-                                    and not self.folder_scan and not uploading and not batch_busy))
+                                    and not self.folder_scan and not uploading and not batch_busy
+                                    and not self.truba_browser.is_slurm_snapshot_open()))
         for control in (self.target, self.batch_folder, self.load_files, self.pick_script, self.inputs,
                         self.pick_root, self.whole_folder, self.input_filter, self.input_sort):
             control.setEnabled(not uploading)

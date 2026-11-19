@@ -2,7 +2,6 @@
 
 from contextlib import contextmanager, suppress
 from pathlib import Path, PurePosixPath
-from shutil import copyfileobj
 from stat import S_ISDIR, S_ISREG
 from tempfile import NamedTemporaryFile
 from uuid import uuid4
@@ -62,14 +61,17 @@ def upload_file(auth, relative, source):
         _publish_file(sftp, source, target)
 
 
-def _publish_file(sftp, source, target):
+def _publish_file(sftp, source, target, *, progress=None):
     temporary = str(PurePosixPath(target).with_name(f".rustmech-upload-{uuid4().hex}.part"))
     with source.open("rb") as local:
         remote = sftp.open(temporary, "wx")
         try:
             with remote:
                 remote.set_pipelined(True)
-                copyfileobj(local, remote)
+                for chunk in iter(lambda: local.read(1024 * 1024), b""):
+                    remote.write(chunk)
+                    if progress is not None:
+                        progress(local.tell())
             if sftp.stat(temporary).st_size != local.tell():
                 raise OSError("Upload size mismatch")
             try:
@@ -94,28 +96,36 @@ def _matches_file(sftp, source, target, attrs):
         return not remote.read(1)
 
 
-def upload_tree(auth, relative, source):
+def upload_tree(auth, relative, source, *, progress=None):
     """Copy the contents of a prepared tree directly into the open folder."""
     with _project_directory(auth, relative) as (sftp, directory):
         pending = []
+        total = completed = 0
         # Parents sort before their children. Reject conflicting paths before publishing files.
         for path in sorted(source.rglob("*")):
             target = str(directory / path.relative_to(source).as_posix())
             is_directory = path.is_dir()
+            size = 0 if is_directory else path.stat().st_size
+            total += size
             try:
                 attrs = sftp.lstat(target)
             except FileNotFoundError:
-                pending.append((path, target, is_directory))
+                pending.append((path, target, is_directory, size))
                 continue
             if (S_ISDIR(attrs.st_mode or 0) if is_directory else _matches_file(sftp, path, target, attrs)):
+                completed += size
                 continue
             raise FileExistsError(target)
 
-        for path, target, is_directory in pending:
+        if progress is not None:
+            progress(completed, total)
+        for path, target, is_directory, size in pending:
             if is_directory:
                 sftp.mkdir(target)
             else:
-                _publish_file(sftp, path, target)
+                report = None if progress is None else lambda sent: progress(completed + sent, total)
+                _publish_file(sftp, path, target, progress=report)
+                completed += size
 
 
 def download_file(auth, relative, name, destination):

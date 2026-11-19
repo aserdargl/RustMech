@@ -113,12 +113,14 @@ def test_job_inputs_go_directly_into_open_folder_and_retry_safely(remote, tmp_pa
     sftp.stat.side_effect = lambda path: SimpleNamespace(st_size=len(staged[path]))
     sftp.rename.side_effect = lambda path, final: known.__setitem__(final, bytes(staged.pop(path)))
 
-    upload_tree(auth, folder, tmp_path)
+    updates = []
+    upload_tree(auth, folder, tmp_path, progress=lambda sent, total: updates.append((sent, total)))
     assert known == {
         str(target / "data"): None,
         str(target / "data/model.lmp"): b"model",
         str(target / "job.slurm"): b"script",
     }
+    assert updates == [(0, 11), (5, 11), (11, 11)]
     assert not staged
     upload_tree(auth, folder, tmp_path)
     assert sftp.rename.call_count == 2
