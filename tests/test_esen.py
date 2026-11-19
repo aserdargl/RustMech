@@ -14,12 +14,13 @@ from unittest.mock import patch
 from PySide6.QtCore import QMimeData, QObject, QPoint, QSettings, Qt, QUrl, Signal
 from PySide6.QtGui import QDragEnterEvent, QDropEvent
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QMessageBox
+from PySide6.QtWidgets import QApplication, QMessageBox, QPushButton
 
 import esen_jobs as jobs
 from esen_ai_prompt import ESEN_AI_PROMPT
 from esen_workspace import EsenWorkspace
 from truba_jobs import RemoteAuth
+from ui_language import LANGUAGE_KEY, LanguageManager
 from window_state import WindowStateStore
 
 
@@ -421,6 +422,28 @@ class EsenTests(unittest.TestCase):
             jobs.refresh_remote(directory, record, self.auth)
             self.assertEqual(record["state"], "Cancelled")
             self.assertEqual(transport.command.call_args_list[0].args[0], "scancel 456")
+
+    def test_command_buttons_share_a_width_in_both_languages(self):
+        app = QApplication.instance() or QApplication([])
+        preferences = QSettings(str(self.root / "settings.ini"), QSettings.Format.IniFormat)
+        preferences.setValue(LANGUAGE_KEY, "tr")
+        language = LanguageManager(app, preferences)
+        self.addCleanup(language.shutdown)
+        with patch.object(app, "_rustmech_language", language, create=True), \
+                patch("esen_workspace.QSettings", return_value=preferences):
+            workspace = EsenWorkspace(FakeTruba(), history=self.history)
+            self.addCleanup(workspace.dispose)
+            workspace.show()
+            for locale, upload_label in (("tr", "TRUBA’ya Aktar"), ("en", "Upload to TRUBA")):
+                with self.subTest(locale=locale):
+                    if locale != language.language:
+                        language.set_language(locale)
+                    app.processEvents()
+                    self.assertEqual(workspace.upload.text(), upload_label)
+                    buttons = workspace.findChildren(QPushButton)
+                    width = max(button.sizeHint().width() for button in buttons) + 2
+                    self.assertEqual({button.maximumWidth() for button in buttons}, {width})
+                    self.assertEqual({button.width() for button in buttons if button.isVisible()}, {width})
 
     def test_copy_ai_copies_instructions_without_inputs_or_connection(self):
         app = QApplication.instance() or QApplication([])

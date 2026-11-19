@@ -102,7 +102,8 @@ def command(text, slot, *, role="", hint=""):
     button = QPushButton(text)
     button.setAutoDefault(False)
     button.setDefault(False)
-    button.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+    button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+    button.setProperty("managesLocalizedWidth", True)
     button.setFixedHeight(CONTROL_HEIGHT)
     if role:
         button.setObjectName(role)
@@ -211,6 +212,13 @@ class EsenWorkspace(QDialog):
         self._profile_partition = None
         self._disposed = False
         self._build()
+        self._command_buttons = self.findChildren(QPushButton)
+        language = getattr(QApplication.instance(), "_rustmech_language", None)
+        if language is not None:
+            for button in self._command_buttons:
+                language.localize(button)
+            language.changed.connect(self._size_command_buttons)
+        self._size_command_buttons()
         self._load_profiles()
         self._preview()
         self._load_history()
@@ -427,6 +435,12 @@ class EsenWorkspace(QDialog):
         footer.addStretch()
         footer.addWidget(self.start)
         outer.addLayout(footer)
+
+    def _size_command_buttons(self):
+        # Reserve space for the shared focus border on both sides.
+        width = max(button.sizeHint().width() for button in self._command_buttons) + 2
+        for button in self._command_buttons:
+            button.setFixedWidth(width)
 
     def _copy_ai(self):
         QApplication.clipboard().setText(ESEN_AI_PROMPT)
