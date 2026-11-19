@@ -17,6 +17,7 @@ from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 import esen_jobs as jobs
+from esen_ai_prompt import ESEN_AI_PROMPT
 from esen_workspace import EsenWorkspace
 from truba_jobs import RemoteAuth
 from window_state import WindowStateStore
@@ -420,6 +421,26 @@ class EsenTests(unittest.TestCase):
             jobs.refresh_remote(directory, record, self.auth)
             self.assertEqual(record["state"], "Cancelled")
             self.assertEqual(transport.command.call_args_list[0].args[0], "scancel 456")
+
+    def test_copy_ai_copies_instructions_without_inputs_or_connection(self):
+        app = QApplication.instance() or QApplication([])
+        preferences = QSettings(str(self.root / "settings.ini"), QSettings.Format.IniFormat)
+        with patch("esen_workspace.QSettings", return_value=preferences):
+            workspace = EsenWorkspace(FakeTruba(), history=self.history)
+        self.addCleanup(workspace.dispose)
+        workspace.show()
+        app.processEvents()
+
+        clipboard = app.clipboard()
+        self.addCleanup(clipboard.setText, clipboard.text())
+        clipboard.setText("previous text")
+        self.assertEqual(workspace.copy_ai.text(), "Copy AI")
+        self.assertFalse(workspace.copy_ai.autoDefault())
+        QTest.mouseClick(workspace.copy_ai, Qt.MouseButton.LeftButton)
+
+        self.assertEqual(clipboard.text(), ESEN_AI_PROMPT)
+        self.assertTrue(workspace.isVisible())
+        self.assertFalse(self.history.exists())
 
     def test_load_files_then_choose_script_and_run(self):
         app = QApplication.instance() or QApplication([])

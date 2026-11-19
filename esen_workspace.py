@@ -10,15 +10,16 @@ import subprocess
 from threading import Event
 from time import time
 
-from PySide6.QtCore import QSettings, QSignalBlocker, Qt, QTimer, QUrl, Signal
+from PySide6.QtCore import QPoint, QSettings, QSignalBlocker, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
-    QCheckBox, QDialog, QFormLayout, QFrame, QHBoxLayout, QLabel,
+    QApplication, QCheckBox, QDialog, QFormLayout, QFrame, QHBoxLayout, QLabel,
     QLineEdit, QListWidget, QListWidgetItem, QMessageBox, QPlainTextEdit, QPushButton,
-    QScrollArea, QSizePolicy, QSplitter, QVBoxLayout, QWidget,
+    QScrollArea, QSizePolicy, QSplitter, QToolTip, QVBoxLayout, QWidget,
 )
 
 from datenburg_widgets import qss_asset_url
+from esen_ai_prompt import ESEN_AI_PROMPT
 import esen_jobs as jobs
 from file_dialog import QFileDialog
 from studio_style import (
@@ -420,10 +421,17 @@ class EsenWorkspace(QDialog):
         right.setSizes([240, 450])
 
         self.start = command("Run", self._start, role="esenRun", hint="Run LAMMPS")
+        self.copy_ai = command("Copy AI", self._copy_ai, hint="Copy ESEN file preparation instructions for AI")
         footer = QHBoxLayout()
+        footer.addWidget(self.copy_ai)
         footer.addStretch()
         footer.addWidget(self.start)
         outer.addLayout(footer)
+
+    def _copy_ai(self):
+        QApplication.clipboard().setText(ESEN_AI_PROMPT)
+        QToolTip.showText(self.copy_ai.mapToGlobal(QPoint(0, 0)),
+                          translate("ESEN instructions copied to the clipboard."), self.copy_ai)
 
     @staticmethod
     def _form_row(form, name, field, *, field_layout=None):

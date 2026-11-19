@@ -4,6 +4,8 @@ from setup_help import GEOMETRY_HELP
 _TEXT = '''
 Open the LAMMPS workspace|LAMMPS çalışma alanını aç
 Job settings|İş ayarları
+Copy ESEN file preparation instructions for AI|ESEN dosya hazırlama yönergesini yapay zekâ için kopyala
+ESEN instructions copied to the clipboard.|ESEN yönergesi panoya kopyalandı.
 Advanced TRUBA settings|Gelişmiş TRUBA ayarları
 This computer|Bu bilgisayar
 Run on|Çalıştırma hedefi
