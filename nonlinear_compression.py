@@ -1491,6 +1491,20 @@ class RustMechDialog(QDialog):
         view_toolbar.setSpacing(2)
         toolbar.addWidget(view_controls, 0, 2, Qt.AlignmentFlag.AlignRight)
 
+        from project_workspace import ProjectWorkspace
+        self.project_workspace = ProjectWorkspace(self)
+        self.project_button = QToolButton()
+        self.project_button.setObjectName("headerMenu")
+        self.project_button.setText("Project")
+        self.project_button.setAccessibleName("Analysis project")
+        self.project_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        project_menu = QMenu(self.project_button)
+        project_menu.addAction("Open project...", self.project_workspace.open)
+        project_menu.addAction("Save project", lambda: self.project_workspace.save())
+        project_menu.addAction("Save project as...", lambda: self.project_workspace.save(save_as=True))
+        self.project_button.setMenu(project_menu)
+        navigation.addWidget(self.project_button)
+
         self.sidebar_toggle = QToolButton()
         self.sidebar_toggle.setObjectName("headerMenu")
         self.sidebar_toggle.setToolTip("Select a method to open its settings")
@@ -1558,20 +1572,6 @@ class RustMechDialog(QDialog):
         designs_menu.addAction("Batch analysis from folder...", self._show_folder_batch)
         self.designs_button.setMenu(designs_menu)
         navigation.addWidget(self.designs_button)
-
-        from project_workspace import ProjectWorkspace
-        self.project_workspace = ProjectWorkspace(self)
-        self.project_button = QToolButton()
-        self.project_button.setObjectName("headerMenu")
-        self.project_button.setText("Project")
-        self.project_button.setAccessibleName("Analysis project")
-        self.project_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
-        project_menu = QMenu(self.project_button)
-        project_menu.addAction("Open project...", self.project_workspace.open)
-        project_menu.addAction("Save project", lambda: self.project_workspace.save())
-        project_menu.addAction("Save project as...", lambda: self.project_workspace.save(save_as=True))
-        self.project_button.setMenu(project_menu)
-        navigation.addWidget(self.project_button)
 
         self.display_mode_group = QFrame()
         self.display_mode_group.setObjectName("displayModeGroup")
@@ -1903,22 +1903,10 @@ class RustMechDialog(QDialog):
                     control.setProperty("stepperFamily", "DatenburgStepper")
 
         self.ensurePolished()
-        self.sidebar_toggle.setFixedWidth(
-            max(self.sidebar_toggle.fontMetrics().horizontalAdvance(name)
-                for name in self.method_names) + 32)
-        navigation_buttons = (self.workspace_button, self.doe_button, self.designs_button, self.project_button)
-        navigation_width = max(
-            max(button.sizeHint().width() for button in navigation_buttons),
-            max(self.workspace_button.fontMetrics().horizontalAdvance(name)
-                for name in workspace_names if name != "Experiments (DoE)") + 32,
-        )
-        for button in navigation_buttons:
-            button.setFixedSize(navigation_width, CONTROL_HEIGHT)
         self.workspace_tabs.setMinimumSize(0, 0)
         preview_tab.setMinimumWidth(
             120 + right.contentsMargins().left() + right.contentsMargins().right()
         )
-        self.setMinimumWidth(max(900, self.minimumSizeHint().width()))
 
         self.debounce = QTimer(self)
         self.debounce.setSingleShot(True)
@@ -1970,6 +1958,7 @@ class RustMechDialog(QDialog):
         self._sync_test_profile_ui()
         self.language_manager.changed.connect(self._refresh_ui_language)
         self._refresh_ui_language()
+        self.setMinimumWidth(max(900, self.minimumSizeHint().width()))
         QTimer.singleShot(0, self.start_preview)
 
     def _refresh_ui_language(self, *_):
@@ -1977,10 +1966,18 @@ class RustMechDialog(QDialog):
         self.language_manager.localize_tree(self)
         if self.setup_tabs.currentIndex() == self._fft_method_index:
             self._update_fft_preview_summary(self.collect())
-        self.sidebar_toggle.setFixedWidth(max(self.sidebar_toggle.fontMetrics().horizontalAdvance(translate(name))
-                                             for name in self.method_names) + 32)
-        navigation = (self.workspace_button, self.doe_button, self.designs_button, self.project_button)
-        width = max(button.fontMetrics().horizontalAdvance(button.text()) + 32 for button in navigation)
+        navigation = (
+            self.project_button, self.sidebar_toggle, self.workspace_button,
+            self.doe_button, self.designs_button,
+        )
+        # Reserve space for every selectable label so switching menus doesn't shift the row.
+        width = max(
+            max(button.fontMetrics().horizontalAdvance(button.text()) for button in navigation),
+            max(self.sidebar_toggle.fontMetrics().horizontalAdvance(translate(name))
+                for name in self.method_names),
+            max(self.workspace_button.fontMetrics().horizontalAdvance(action.text())
+                for action in self.workspace_menu.actions() if action.isVisible()),
+        ) + 32
         for button in navigation:
             button.setFixedSize(width, CONTROL_HEIGHT)
         display_buttons = self.display_mode_buttons.buttons()
