@@ -348,8 +348,9 @@ class EsenWorkspace(QDialog):
         layout.addWidget(self.results, 1)
         self.open_file = command("Open file", self._open_result)
         self.open_folder = command("Open job folder", self._open_directory)
+        self.open_results_folder = command("Open result folder", self._open_results_directory)
         self.download = command("Download file", self._download)
-        layout.addLayout(button_row(self.open_file, self.download, self.open_folder))
+        layout.addLayout(button_row(self.open_file, self.download, self.open_folder, self.open_results_folder))
         right.setSizes([240, 450])
 
     @staticmethod
@@ -651,8 +652,8 @@ class EsenWorkspace(QDialog):
         state = translate(self._state(directory, record))
         details = [record.get("job_id", ""), state, record.get("created", ""),
                    self.job_error or translate(record.get("detail", ""))]
-        exported = jobs.result_directory(directory, record)
-        if exported is not None and exported.is_dir():
+        exported = self._downloaded_results(directory, record)
+        if exported is not None:
             details.append(f"{translate('Results')} · {exported}")
         if record.get("result_export_error"):
             details.append(f"{translate('Automatic result download failed. Use Refresh job to retry.')} "
@@ -720,6 +721,7 @@ class EsenWorkspace(QDialog):
         self.use_as_script.setEnabled(supporting_file_selected)
         self.remove_inputs.setEnabled(supporting_file_selected)
         self.open_folder.setEnabled(directory is not None)
+        self.open_results_folder.setEnabled(self._downloaded_results(directory, record) is not None)
         self.attach.setEnabled(bool(authenticated and self.remote_folder.text().strip() and not self.remote_task))
         self.use_inputs.setEnabled(bool(record and not record.get("remote_run") and directory and directory not in self._active_directories()
                                         and (directory / "inputs" / jobs.relative_file(record["name"])).is_file()))
@@ -869,6 +871,13 @@ class EsenWorkspace(QDialog):
             self.whole_folder.setChecked(True)
             self._update_inputs()
 
+    @staticmethod
+    def _downloaded_results(directory, record):
+        if directory is None or record is None or record["state"] != "Completed":
+            return None
+        folder = jobs.result_directory(directory, record)
+        return folder if folder is not None and folder.is_dir() else None
+
     def _result_path(self):
         directory = self._selected_directory()
         item = self.results.currentItem()
@@ -877,7 +886,7 @@ class EsenWorkspace(QDialog):
         try:
             relative = jobs.relative_file(item.text())
             if self.record["target"] == "remote":
-                exported = jobs.result_directory(directory, self.record)
+                exported = self._downloaded_results(directory, self.record)
                 if exported is not None and (exported / relative).is_file():
                     path = exported / relative
                     if path.resolve().is_relative_to(exported.resolve()):
@@ -896,6 +905,11 @@ class EsenWorkspace(QDialog):
     def _open_directory(self):
         directory = self._selected_directory()
         if directory:
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(directory)))
+
+    def _open_results_directory(self):
+        directory = self._downloaded_results(self._selected_directory(), self.record)
+        if directory is not None:
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(directory)))
 
     def _download(self):

@@ -389,6 +389,30 @@ class EsenTests(unittest.TestCase):
         self.assertTrue(workspace.connection.isVisible())
         self.assertFalse(workspace.truba_badge.isVisible())
 
+    def test_open_results_folder_becomes_available_after_local_download(self):
+        app = QApplication.instance() or QApplication([])
+        directory, record = self.new_job()
+        jobs.save_job(directory, record, state="Completed", username=self.auth.username)
+        preferences = QSettings(str(self.root / "settings.ini"), QSettings.Format.IniFormat)
+        with patch("esen_workspace.QSettings", return_value=preferences):
+            workspace = EsenWorkspace(FakeTruba(), history=self.history)
+        self.addCleanup(workspace.dispose)
+        workspace.show()
+        app.processEvents()
+        button = workspace.open_results_folder
+        self.assertFalse(button.isEnabled())
+
+        result_folder = jobs.result_directory(directory, record)
+        result_folder.mkdir(parents=True)
+        workspace._tick()
+        self.assertTrue(button.isEnabled())
+        with patch("esen_workspace.QDesktopServices.openUrl") as open_url:
+            QTest.mouseClick(button, Qt.MouseButton.LeftButton)
+            open_url.assert_called_once_with(QUrl.fromLocalFile(str(result_folder)))
+
+        workspace.history.setCurrentRow(-1)
+        self.assertFalse(button.isEnabled())
+
     def test_drop_selects_unique_conventional_script_and_preserves_paths(self):
         app = QApplication.instance() or QApplication([])
         preferences = QSettings(str(self.root / "settings.ini"), QSettings.Format.IniFormat)
