@@ -94,6 +94,19 @@ Stop job|İşi durdur
 Command preview|Komut önizlemesi
 TRUBA files|TRUBA dosyaları
 TRUBA folder path|TRUBA klasör yolu
+Upload|Yükle
+Upload file to the open TRUBA folder|Açık TRUBA klasörüne dosya yükle
+Download selected TRUBA file|Seçili TRUBA dosyasını indir
+Upload file to TRUBA|TRUBA'ya dosya yükle
+Download file from TRUBA|TRUBA'dan dosya indir
+Uploading file to TRUBA…|Dosya TRUBA'ya yükleniyor…
+Downloading file from TRUBA…|Dosya TRUBA'dan indiriliyor…
+File uploaded to TRUBA.|Dosya TRUBA'ya yüklendi.
+File downloaded from TRUBA.|Dosya TRUBA'dan indirildi.
+Could not upload the file to TRUBA.|Dosya TRUBA'ya yüklenemedi.
+Could not download the file from TRUBA.|Dosya TRUBA'dan indirilemedi.
+A file or folder with that name already exists on TRUBA.|TRUBA'da bu adda bir dosya veya klasör zaten var.
+Select a regular file to download.|İndirmek için normal bir dosya seçin.
 Up|Üst klasör
 Folder name|Klasör adı
 New folder|Yeni klasör

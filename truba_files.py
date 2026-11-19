@@ -1,8 +1,11 @@
-"""SFTP browsing within the authenticated user's RustMech scratch directory."""
+"""SFTP file operations within the authenticated user's RustMech project."""
 
-from contextlib import contextmanager
-from pathlib import PurePosixPath
-from stat import S_ISDIR
+from contextlib import contextmanager, suppress
+from pathlib import Path, PurePosixPath
+from shutil import copyfileobj
+from stat import S_ISDIR, S_ISREG
+from tempfile import NamedTemporaryFile
+from uuid import uuid4
 
 from truba_ssh import active_session_client
 
@@ -42,3 +45,53 @@ def create_directory(auth, relative, name):
     validate_folder_name(name)
     with _project_directory(auth, relative) as (sftp, directory):
         sftp.mkdir(str(directory / name))
+
+
+def _require_missing(sftp, path):
+    try:
+        sftp.lstat(path)
+    except FileNotFoundError:
+        return
+    raise FileExistsError(path)
+
+
+def upload_file(auth, relative, source):
+    with _project_directory(auth, relative) as (sftp, directory), source.open("rb") as local:
+        target = str(directory / source.name)
+        _require_missing(sftp, target)
+        temporary = str(directory / f".rustmech-upload-{uuid4().hex}.part")
+        remote = sftp.open(temporary, "wx")
+        try:
+            with remote:
+                remote.set_pipelined(True)
+                copyfileobj(local, remote)
+            if sftp.stat(temporary).st_size != local.tell():
+                raise OSError("Upload size mismatch")
+            try:
+                # The standard SFTP rename fails if another client created the target.
+                sftp.rename(temporary, target)
+            except OSError:
+                _require_missing(sftp, target)
+                raise
+        except BaseException:
+            with suppress(OSError, EOFError):
+                sftp.remove(temporary)
+            raise
+
+
+def download_file(auth, relative, name, destination):
+    if name in ("", ".", "..") or "/" in name or "\0" in name:
+        raise ValueError("Select a regular file to download.")
+    with _project_directory(auth, relative) as (sftp, directory):
+        source = str(directory / name)
+        if not S_ISREG(sftp.lstat(source).st_mode or 0):
+            raise ValueError("Select a regular file to download.")
+        local = NamedTemporaryFile(dir=destination.parent, prefix=".rustmech-download-",
+                                   suffix=".part", delete=False)
+        temporary = Path(local.name)
+        try:
+            with local:
+                sftp.getfo(source, local, max_concurrent_prefetch_requests=64)
+            temporary.replace(destination)
+        finally:
+            temporary.unlink(missing_ok=True)

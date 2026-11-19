@@ -1,7 +1,7 @@
 """Cover the SFTP browser's project boundary and desktop entry points."""
 
 from pathlib import PurePosixPath
-from stat import S_IFDIR, S_IFREG
+from stat import S_IFDIR, S_IFLNK, S_IFREG
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -11,7 +11,7 @@ from PySide6.QtWidgets import QApplication, QSplitter
 import pytest
 
 from esen_workspace import EsenWorkspace
-from truba_files import create_directory, list_directory, project_root
+from truba_files import create_directory, download_file, list_directory, project_root, upload_file
 from truba_ssh import RemoteAuth, register_session, unregister_session
 from window_state import WindowStateStore
 
@@ -55,6 +55,58 @@ def test_sftp_keeps_listing_and_folder_creation_in_project(remote):
     sftp.mkdir.assert_called_once()
 
 
+def test_upload_stages_data_and_never_overwrites_existing_file(remote, tmp_path):
+    auth, sftp = remote
+    folder = PurePosixPath("results")
+    source = tmp_path / "run.slurm"
+    payload = b"#!/bin/bash\n"
+    source.write_bytes(payload)
+    sftp.lstat.side_effect = FileNotFoundError
+    sftp.stat.return_value.st_size = len(payload)
+
+    upload_file(auth, folder, source)
+    temporary, mode = sftp.open.call_args.args
+    target = str(project_root(auth.username) / folder / source.name)
+    assert mode == "wx"
+    assert temporary.startswith(str(project_root(auth.username) / folder / ".rustmech-upload-"))
+    sftp.open.return_value.write.assert_called_once_with(payload)
+    sftp.rename.assert_called_once_with(temporary, target)
+
+    # A second client makes the destination after the preflight check.
+    sftp.lstat.side_effect = [FileNotFoundError, SimpleNamespace(st_mode=S_IFREG)]
+    sftp.rename.side_effect = OSError("Failure")
+    with pytest.raises(FileExistsError):
+        upload_file(auth, folder, source)
+    sftp.remove.assert_called_once_with(sftp.open.call_args.args[0])
+
+
+def test_download_replaces_local_file_only_after_complete_transfer(remote, tmp_path):
+    auth, sftp = remote
+    target = tmp_path / "output.txt"
+    target.write_bytes(b"previous contents")
+    sftp.lstat.return_value.st_mode = S_IFREG
+
+    def interrupted(_source, temporary, **_):
+        temporary.write(b"partial contents")
+        raise EOFError
+
+    sftp.getfo.side_effect = interrupted
+    with pytest.raises(EOFError):
+        download_file(auth, PurePosixPath(), target.name, target)
+    assert target.read_bytes() == b"previous contents"
+    assert list(tmp_path.iterdir()) == [target]
+
+    sftp.getfo.side_effect = lambda _source, temporary, **_: temporary.write(b"new contents")
+    download_file(auth, PurePosixPath(), target.name, target)
+    assert target.read_bytes() == b"new contents"
+    assert sftp.getfo.call_args.args[0] == str(project_root(auth.username) / target.name)
+
+    sftp.lstat.return_value.st_mode = S_IFLNK
+    with pytest.raises(ValueError, match="regular file"):
+        download_file(auth, PurePosixPath(), target.name, target)
+    assert sftp.getfo.call_count == 2
+
+
 def test_workspace_browses_creates_and_restores_three_columns(remote, tmp_path, monkeypatch):
     app = QApplication.instance() or QApplication([])
     preferences = QSettings(str(tmp_path / "layout.ini"), QSettings.Format.IniFormat)
@@ -78,6 +130,8 @@ def test_workspace_browses_creates_and_restores_three_columns(remote, tmp_path, 
         assert split.widget(1).isAncestorOf(workspace.preview)
         assert split.widget(2).isAncestorOf(browser)
         assert not browser.refresh.isEnabled()
+        assert not browser.upload.isEnabled()
+        assert not browser.download.isEnabled()
         sftp.listdir_attr.assert_not_called()
 
         def finish_request():
@@ -91,7 +145,10 @@ def test_workspace_browses_creates_and_restores_three_columns(remote, tmp_path, 
         assert browser.files.topLevelItem(0).text(0) == "results"
         assert browser.files.topLevelItem(1).text(0) == "readme.txt"
         assert not browser.up.isEnabled()
+        assert browser.upload.isEnabled()
+        assert not browser.download.isEnabled()
         browser.files.setCurrentItem(browser.files.topLevelItem(0))
+        assert not browser.download.isEnabled()
         QTest.keyClick(browser.files, Qt.Key.Key_Return)
         finish_request()
         assert browser.address.text() == str(root / "results")
@@ -103,6 +160,36 @@ def test_workspace_browses_creates_and_restores_three_columns(remote, tmp_path, 
         sftp.mkdir.assert_called_once_with(str(root / "results" / "Yeni klasör"))
         assert workspace.isVisible()
         assert not workspace.local_task and not workspace.remote_task
+
+        source = tmp_path / "local.txt"
+        source.write_bytes(b"local file")
+        monkeypatch.setattr("truba_file_browser.QFileDialog.getOpenFileName",
+                            lambda *_: (str(source), ""))
+        sftp.lstat.side_effect = FileNotFoundError
+        sftp.stat.return_value.st_size = source.stat().st_size
+        uploaded = SimpleNamespace(filename=source.name, st_mode=S_IFREG, st_size=source.stat().st_size)
+        sftp.listdir_attr.side_effect = lambda path: [file, folder] if path == str(root) else [uploaded]
+        browser.upload.click()
+        assert not browser.up.isEnabled()
+        assert not browser.upload.isEnabled()
+        finish_request()
+        finish_request()
+        assert sftp.rename.call_args.args[1] == str(root / "results" / source.name)
+        assert browser.status.text() == "File uploaded to TRUBA."
+
+        browser.files.setCurrentItem(browser.files.topLevelItem(0))
+        assert browser.download.isEnabled()
+        destination = tmp_path / "downloaded.txt"
+        monkeypatch.setattr("truba_file_browser.QFileDialog.getSaveFileName",
+                            lambda *_: (str(destination), ""))
+        sftp.lstat.side_effect = None
+        sftp.lstat.return_value.st_mode = S_IFREG
+        sftp.getfo.side_effect = lambda _source, temporary, **_: temporary.write(b"remote file")
+        browser.download.click()
+        finish_request()
+        assert sftp.getfo.call_args.args[0] == str(root / "results" / source.name)
+        assert destination.read_bytes() == b"remote file"
+        assert browser.status.text() == "File downloaded from TRUBA."
 
         browser.up.click()
         finish_request()
