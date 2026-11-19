@@ -213,6 +213,58 @@ class FolderBatchTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'changed'):
             list(specimen_snapshots(item, self.root, self.base, ['ansys_mapdl']))
 
+    def test_preflight_excludes_tiny_fragments_by_area_before_finding_faces(self):
+        dust = pv.Sphere(radius=.1, center=(15, 0, 15))
+        chip = pv.Plane(center=(8, 0, 0), i_size=.1, j_size=.1).triangulate()
+        path = self.root / 'fragments.vtp'
+        self.surface.merge([dust, chip]).save(path)
+        digest = source_digest(path)
+
+        item = prepare_specimen(path, (0, 0, 1))
+
+        self.assertFalse(item.error)
+        self.assertEqual(item.excluded_components, 2)
+        self.assertEqual(item.height, 6)
+        self.assertAlmostEqual(read_surface(item.cached).volume, self.surface.volume)
+        self.assertEqual(source_digest(path), digest)
+        _, metadata = next(specimen_snapshots(item, self.root, self.base, ['ansys_mapdl']))
+        self.assertEqual(metadata['excluded_components'], 2)
+
+    def test_pencil_editor_keeps_selected_solid_and_persists_its_faces(self):
+        alternate = pv.Box(bounds=(30, 33, 0, 2, 5, 9)).triangulate()
+        path = self.root / 'two-components.vtp'
+        self.surface.merge(alternate).save(path)
+        batch = self.dialog()
+        batch.folder.setText(str(self.root))
+        batch.check_folder()
+        batch.future.result(timeout=10)
+        batch.poll()
+        self.assertIn('Multiple substantial components', batch.items[0].error)
+        self.assertFalse(batch.items[0].cached)
+        self.assertFalse(batch.table.horizontalHeaderItem(FACES_COLUMN).icon().isNull())
+
+        def keep_alternate(editor):
+            editor.show()
+            self.app.processEvents()
+            self.assertIsNone(editor.component_index)
+            self.assertFalse(editor.confirm.isEnabled())
+            editor.component_list.setCurrentRow(int(np.argmin(editor.components.areas)))
+            self.assertEqual(editor.surface.bounds.x_min, 30)
+            self.assertIn('excludedComponents', editor.plotter.actors)
+            self.assertTrue(editor.confirm.isEnabled(), editor.status.text())
+            QTest.mouseClick(editor.confirm, Qt.MouseButton.LeftButton)
+            return editor.result()
+
+        with patch.object(GeometryImportDialog, 'exec', keep_alternate):
+            batch.table.cellWidget(0, FACES_COLUMN).click()
+        item = batch.items[0]
+        self.assertEqual(item.height, 4, batch.status.text())
+        self.assertIn('Excluded components: 1', batch.table.item(0, PREFLIGHT_COLUMN).text())
+        restored = prepare_specimen(path, None, batch.saved_faces(path))
+        self.assertEqual(restored.cached, item.cached)
+        self.assertEqual(restored.cells, item.cells)
+        self.assertEqual(restored.component, item.component)
+
     def test_snapshots_keep_loading_units_material_and_unique_output_names(self):
         first, second = self.prepared('a/same.stl'), self.prepared('b/same.stl')
         jobs = [*specimen_snapshots(first, self.root, self.base, ['ansys_mapdl', 'kratos']),

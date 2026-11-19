@@ -447,6 +447,12 @@ Open|Aç
 Save|Kaydet
 Save and close|Kaydet ve kapat
 Specimen faces|Numune yüzeyleri
+Edit specimen geometry and faces|Numune geometrisini ve yüzeylerini düzenle
+Connected components|Bağlantılı bileşenler
+Choose one solid to keep. Blue remains, red is excluded.|Kalacak katıyı seçin. Mavi bileşen kalır, kırmızı bileşenler ayıklanır.
+Choose which connected component to keep.|Kalacak bağlantılı bileşeni seçin.
+Multiple substantial components. Choose which solid to keep in Edit.|Birden fazla büyük bileşen var. Düzenle penceresinde kalacak katıyı seçin.
+Component {index}|Bileşen {index}
 Inspect / select faces|Yüzeyleri incele / seç
 Specimen faces saved.|Numune yüzeyleri kaydedildi.
 Could not save the specimen faces.|Numune yüzeyleri kaydedilemedi.
@@ -1111,6 +1117,8 @@ TURKISH.update({
 })
 
 TEMPLATES = {
+    'Ready | height {height} mm': 'Hazır | yükseklik {height} mm',
+    'Ready | height {height} mm | Excluded components: {count}': 'Hazır | yükseklik {height} mm | Ayıklanan bileşen: {count}',
     'Could not build the DAMASK voxel preview: {detail}': 'DAMASK voksel önizlemesi oluşturulamadı: {detail}',
     '{grid} · Voxel spacing: {spacing} mm\nSolid voxels: {count} ({fraction}) · Void voxels: {void}\nVoid stiffness: {ratio} of solid · Void E: {modulus} MPa':
         '{grid} · Voksel aralığı: {spacing} mm\nKatı vokseller: {count} ({fraction}) · Boşluk vokselleri: {void}\nBoşluk rijitliği: katının {ratio} kadarı · Boşluk E: {modulus} MPa',

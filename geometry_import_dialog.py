@@ -1,12 +1,14 @@
 """Interactive geometry import workspace."""
-from imported_geometry import read_surface, plane_faces, align_compression_surface, store_surface
+from imported_geometry import (align_compression_surface, automatic_compression_faces, plane_faces,
+                               read_surface, store_surface)
 from pathlib import Path
 from contextlib import nullcontext
 
 import numpy as np
 import pyvista as pv
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtWidgets import QButtonGroup, QCheckBox, QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton
+from PySide6.QtWidgets import (QButtonGroup, QCheckBox, QDialog, QGroupBox, QHBoxLayout, QLabel,
+                              QListWidget, QPushButton, QSplitter, QVBoxLayout)
 
 
 PLATEN_NAMES = ('fixed_platen', 'moving_platen')
@@ -33,7 +35,8 @@ def choose_geometry(parent):
 
 
 class GeometryImportDialog(QDialog):
-    def __init__(self, surface, filename, parent=None, *, save_selection=None, initial_cells=(), geometry_error=''):
+    def __init__(self, surface, filename, parent=None, *, save_selection=None, initial_cells=(), geometry_error='',
+                 components=None, component_index=None, direction=None):
         super().__init__(parent)
         from pyvistaqt import QtInteractor
         from window_state import install_window_state
@@ -49,6 +52,9 @@ class GeometryImportDialog(QDialog):
         self.resize(900, 700)
         self.setSizeGripEnabled(True)
         self.surface = surface
+        self.components = components
+        self.component_index = component_index
+        self.direction = direction
         self._initial_cells = initial_cells
         self.selected = [None, None]
         self.role = 0
@@ -85,10 +91,13 @@ class GeometryImportDialog(QDialog):
         from operation_progress import OperationProgress
         self.operation_progress = OperationProgress(self)
         self.plotter = QtInteractor(self)
-        layout.addWidget(self.plotter.interactor, 1)
+        if components is None:
+            layout.addWidget(self.plotter.interactor, 1)
+        else:
+            layout.addWidget(self.component_workspace(), 1)
         self.plotter.set_background('#f0f0f0', top='#ffffff')
         self.plotter.enable_lightkit()
-        self.plotter.add_mesh(surface, color='#4ea8de', show_edges=True, name='geometry')
+        self.draw_components()
         self.plotter.add_axes()
         self.plotter.enable_surface_point_picking(callback=self.pick, use_picker=True, show_point=False, show_message=False, picker='cell')
         self.plotter.reset_camera()
@@ -113,7 +122,7 @@ class GeometryImportDialog(QDialog):
 
     def showEvent(self, event):
         super().showEvent(event)
-        if self._initial_cells:
+        if self._initial_cells or (self.components is not None and self.direction is not None):
             # Wait for Qt to show the modal window and its native viewport.
             QTimer.singleShot(0, self, self._restore_faces)
 
@@ -121,12 +130,74 @@ class GeometryImportDialog(QDialog):
         if not self.isVisible():
             return
         cells, self._initial_cells = self._initial_cells, ()
+        if not cells and self.components is not None and self.direction is not None and not self.geometry_error:
+            try:
+                _, _, cells = automatic_compression_faces(self.surface, self.direction)
+            except ValueError as error:
+                self.status.setText(str(error))
         for role, cell in enumerate(cells):
             self.set_role(role)
             try:
                 self._select_cell(cell)
             except ValueError as error:
                 self.status.setText(str(error))
+
+    def component_workspace(self):
+        from ui_language import translate
+        panels = QSplitter(Qt.Orientation.Horizontal)
+        panels.setObjectName('specimenComponentPanels')
+        panels.setHandleWidth(7)
+        panels.setChildrenCollapsible(False)
+        group = QGroupBox('Connected components')
+        layout = QVBoxLayout(group)
+        hint = QLabel('Choose one solid to keep. Blue remains, red is excluded.')
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+        self.component_list = QListWidget()
+        self.component_list.setAccessibleName('Connected components')
+        for index, area in enumerate(self.components.areas):
+            self.component_list.addItem(translate('Component {index}').format(index=index + 1) + f' · {area:.5g} mm²')
+        self.component_list.setCurrentRow(self.component_index if self.component_index is not None else -1)
+        self.component_list.itemSelectionChanged.connect(self.change_selected_component)
+        layout.addWidget(self.component_list)
+        panels.addWidget(group)
+        panels.addWidget(self.plotter.interactor)
+        panels.setSizes([225, 675])
+        return panels
+
+    def draw_components(self):
+        if self.components is None or self.component_index is not None:
+            self.plotter.add_mesh(self.surface, color='#4ea8de', show_edges=True, name='geometry',
+                                  reset_camera=False, render=False)
+        if self.components is not None:
+            excluded = (self.components.surface if self.component_index is None
+                        else self.components.extract(self.component_index, excluded=True))
+            self.plotter.add_mesh(excluded, color='#dc2626', opacity=.5, pickable=False,
+                                  name='excludedComponents', reset_camera=False, render=False)
+
+    def change_selected_component(self):
+        if not self.component_list.selectedItems():
+            return
+        index = self.component_list.currentRow()
+        if index == self.component_index:
+            return
+        self.component_index = index
+        self._initial_cells = ()
+        self.selected = [None, None]
+        self.result_surface = None
+        self.confirm.setEnabled(False)
+        self.geometry_error = ''
+        try:
+            self.surface = self.components.solid(index)
+        except ValueError as error:
+            self.surface = self.components.extract(index)
+            self.geometry_error = str(error)
+        for name in ('geometry', 'selection0', 'selection1', *PLATEN_NAMES):
+            self.plotter.remove_actor(name, reset_camera=False, render=False)
+        self.draw_components()
+        self.set_role(0)
+        self._restore_faces()
+        self.plotter.render()
 
     def done(self, result):
         # Finalize before QDialog hides the native OpenGL window.

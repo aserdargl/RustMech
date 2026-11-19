@@ -38,6 +38,52 @@ def read_surface(path, *, require_single=True):
     return surface.compute_normals(auto_orient_normals=True, split_vertices=False)
 
 
+class SurfaceComponents:
+    """Connected triangle regions of a source in original cell order."""
+
+    # Use physical area rather than triangle counts, which depend on tessellation.
+    MAX_FRAGMENT_AREA_RATIO = 0.01
+
+    def __init__(self, surface):
+        self.surface = surface
+        indexed = surface.copy(deep=False)
+        indexed.cell_data['_source_triangle'] = np.arange(surface.n_cells)
+        connected = indexed.connectivity()
+        source_cells = connected.cell_data['_source_triangle']
+        region_ids = np.asarray(connected.cell_data['RegionId'])
+        first_cells = np.full(int(region_ids.max()) + 1, surface.n_cells, dtype=np.intp)
+        np.minimum.at(first_cells, region_ids, source_cells)
+        self.labels = np.empty(surface.n_cells, dtype=np.intp)
+        self.labels[source_cells] = np.argsort(np.argsort(first_cells))[region_ids]
+        self.count = len(first_cells)
+        self.areas = ()
+        if self.count > 1:
+            sizes = surface.compute_cell_sizes(length=False, volume=False)
+            self.areas = np.bincount(self.labels, weights=sizes.cell_data['Area'])
+
+    def automatic_choice(self):
+        if self.count == 1:
+            return 0
+        largest = int(np.argmax(self.areas))
+        area = self.areas[largest]
+        debris = self.areas.sum() - area
+        return largest if area > 0 and debris <= area * self.MAX_FRAGMENT_AREA_RATIO else None
+
+    def extract(self, component, *, excluded=False):
+        if self.count == 1 and not excluded:
+            return self.surface
+        mask = self.labels != component if excluded else self.labels == component
+        return self.surface.extract_cells(mask, pass_cell_ids=False, pass_point_ids=False).extract_surface(
+            pass_cellid=False, pass_pointid=False, algorithm='dataset_surface')
+
+    def solid(self, component):
+        surface = self.extract(component)
+        # The partition already guarantees connectivity. Validate the retained
+        # geometry independently of any open or non-manifold discarded fragments.
+        validate_solid_surface(surface, require_single=False)
+        return surface.compute_normals(auto_orient_normals=True, split_vertices=False)
+
+
 def prepare_general_surface(surface):
     """Centre an unscaled, mm solid in its containing cube for channel placement."""
     result = surface.copy(deep=True)

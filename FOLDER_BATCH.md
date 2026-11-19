@@ -9,12 +9,17 @@
 3. Basma yönünü seçin: X, Y, Z; ilk numunede seçilen destek/yükleme
    yüzeylerinden yön alma; veya her numunede elle seçim.
 4. **Check folder** ile ön kontrolü çalıştırın. Malzeme ve analiz ayarlarının
-   kopyası bu anda alınır. Otomatik mod, her numunenin kendi uç sınırlarında
+   kopyası bu anda alınır. Kopuk bölgelerin toplam yüzey alanı ana bileşenin
+   yüzey alanının %1'ini aşmıyorsa küçük bölgeler otomatik ayıklanır.
+   Daha büyük bölgeler için kalacak bileşeni elle seçin. Ayıklama analiz
+   geometrisine uygulanır ve kaynak dosya korunur. Otomatik mod, numunenin uç sınırlarında
    düz ve paralel yüzeyler arar. Aynı düzlemdeki birden fazla temas yaması
    birlikte seçilir. Yön bilgisi aktarılır; üçgen kimlikleri aktarılmaz.
-5. Numunenin en solundaki yüzey düğmesiyle 3B görünümü açın. Destek yeşil,
-   yükleme turuncudur. Bir atamayı değiştirmek için rolü seçin, modeldeki
-   yüzeye sağ tıklayın ve **Save and close** düğmesine basın. Kaydedilen
+5. Numunenin en solundaki kalem düğmesiyle 3B görünümü açın. **Connected
+   components** listesinden kalacak tek katıyı seçebilirsiniz. Mavi bileşen
+   kalır, kırmızı bileşenler ayıklanır. Destek yeşil, yükleme turuncudur.
+   Bir yüzey atamasını değiştirmek için rolü seçin ve modeldeki yüzeye sağ
+   tıklayın. Seçimleri uygulamak için **Save and close** düğmesine basın. Kaydedilen
    atamalar, kaynak dosya değişmediği sürece sonraki ön kontrollerde de
    kullanılır. Hazır olmayan numuneleri hazırlayın veya çalışmanın dışında bırakın.
 6. Çözücü olarak mevcut çalışma alanını, ANSYS MAPDL, Kratos veya her ikisini
