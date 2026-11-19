@@ -13,7 +13,7 @@ from PySide6.QtCore import QPoint, QSettings, Qt
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QLineEdit, QMessageBox
 
-from truba_active_jobs import QUEUE_SEPARATOR
+from truba_active_jobs import QUEUE_SEPARATOR, display_start
 from truba_client import TrubaSession
 from truba_connection import TrubaConnectionDialog
 from truba_credentials import CredentialStore
@@ -95,6 +95,54 @@ class TrubaTests(unittest.TestCase):
         self.assertIsNone(self.credentials.load())
         dialog.forget_password()
         self.assertEqual(dialog.password.text(), "")
+
+    def test_queue_status_loads_only_on_visible_connected_tab(self):
+        dialog = self.dialog()
+        tab = dialog.queue_status
+        auth = RemoteAuth('tester', 'test')
+        with (patch.object(dialog, 'analysis_auth', return_value=None) as current_auth,
+              patch('truba_queue_status.RemoteTransport') as transport):
+            command = transport.return_value.command
+            command.side_effect = [
+                'TRUBA login banner\norfoz|up|96/16/0/112|1/0/0/1\nhamsi|drain|0/0/56/56|0/0/1/1',
+                RuntimeError('Unavailable'),
+            ]
+            dialog.show()
+            dialog.tabs.setCurrentWidget(tab)
+            self.app.processEvents()
+            self.assertFalse(tab.refresh_button.isEnabled())
+            transport.assert_not_called()
+
+            dialog.tabs.setCurrentWidget(dialog.settings_scroll)
+            current_auth.return_value = auth
+            dialog.connection_changed.emit(True)
+            self.app.processEvents()
+            transport.assert_not_called()
+            dialog.tabs.setCurrentWidget(tab)
+            self.assertTrue(tab.timer.isActive())
+            self.assertTrue(tab.worker.wait(5000))
+            self.app.processEvents()
+            transport.assert_called_once()
+            self.assertIn('sinfo ', command.call_args.args[0])
+            self.assertIn('%R|%a|%C|%F', command.call_args.args[0])
+            self.assertEqual(tab.table.rowCount(), 2)
+            self.assertEqual([tab.table.item(0, i).text() for i in range(6)],
+                             ['hamsi', 'Draining', '0 / 56 (0%)', '0', '56', '0 / 1'])
+            self.assertEqual([tab.table.item(1, i).text() for i in range(6)],
+                             ['orfoz', 'Accepting jobs', '96 / 112 (86%)', '16', '0', '0 / 1'])
+            self.assertTrue(tab.updated_at)
+            tab.refresh_button.click()
+            self.assertTrue(tab.worker.wait(5000))
+            self.app.processEvents()
+            self.assertEqual(tab.table.rowCount(), 2)
+            self.assertIn('Could not update queue status.', tab.notice.text())
+            self.assertIn(tab.updated_at, tab.notice.text())
+
+            dialog.tabs.setCurrentWidget(dialog.settings_scroll)
+            self.assertFalse(tab.timer.isActive())
+            current_auth.return_value = None
+            dialog.connection_changed.emit(False)
+            self.assertEqual(tab.table.rowCount(), 0)
 
     def test_button_states_and_save_only_after_authentication(self):
         dialog = self.dialog()
@@ -431,6 +479,11 @@ class TrubaTests(unittest.TestCase):
                              ['All jobs', 'A', 'Array job', 'B', 'bash', f'ESEN-{esen_id}', 'External job',
                               'RustMech-remote'])
             self.assertEqual(tab.works.currentRow(), 0)
+            estimates = {tab.jobs.item(i, 0).text(): tab.jobs.item(i, 11).text()
+                         for i in range(tab.jobs.rowCount())}
+            self.assertEqual(estimates['1'], '—')
+            self.assertEqual(estimates['2'], display_start('2026-11-18T23:15:00'))
+            self.assertEqual(estimates['5_[1-16%4]'], '—')
             self.assertFalse(tab.jobs.isColumnHidden(2))
             self.assertEqual({(tab.jobs.item(i, 0).text(), tab.jobs.item(i, 2).text()):
                               (tab.jobs.item(i, 1).text(), tab.jobs.item(i, 3).text())

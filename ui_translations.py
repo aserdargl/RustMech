@@ -1145,6 +1145,25 @@ Top platen displacement in −Z; reaction force is calculated (N).|Üst plakanı
 Pending / active remote jobs|Bekleyen / Etkin uzak işler
 TRUBA jobs|TRUBA işleri
 Active jobs|Aktif işler
+Queue status|Kuyruk durumu
+Allocated CPU|Ayrılmış CPU
+Idle CPU|Boş CPU
+Other CPU|Diğer CPU
+Idle nodes|Boş düğüm
+Idle nodes / total nodes|Boş düğüm / toplam düğüm
+CPUs in other Slurm states, such as drained or down.|Devre dışı veya boşaltılmış gibi diğer Slurm durumlarındaki CPU'lar.
+Accepting jobs|İş alıyor
+Down|Kapalı
+Draining|Boşaltılıyor
+Inactive|Etkin değil
+Connect to TRUBA to see queue status.|Kuyruk durumunu görmek için TRUBA'ya bağlanın.
+Updating queue status…|Kuyruk durumu güncelleniyor…
+Could not update queue status.|Kuyruk durumu güncellenemedi.
+No visible Slurm queues.|Görüntülenebilen Slurm kuyruğu yok.
+Last updated|Son güncelleme
+Estimated start|Tahmini başlangıç
+Slurm has no start estimate yet.|Slurm henüz başlangıç tahmini vermedi.
+Start time estimated by Slurm. It may change.|Slurm'un tahmini başlangıç zamanı değişebilir.
 Cancel job|İşi iptal et
 Only individual Slurm allocations can be cancelled here.|Buradan yalnızca tekil Slurm tahsisleri iptal edilebilir.
 Sending cancellation request to Slurm…|Slurm’a iptal isteği gönderiliyor…

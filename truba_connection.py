@@ -236,9 +236,12 @@ class TrubaConnectionDialog(QDialog):
         self.language_manager.changed.connect(self._language_changed)
         from truba_job_list import TrubaJobList
         from truba_active_jobs import TrubaActiveJobs
+        from truba_queue_status import TrubaQueueStatus
         self.job_list = TrubaJobList(self)
         self.active_jobs = TrubaActiveJobs(self)
+        self.queue_status = TrubaQueueStatus(self)
         self.tabs.addTab(self.active_jobs, 'Active jobs')
+        self.tabs.addTab(self.queue_status, 'Queue status')
         self.jobs_splitter.addWidget(self.job_list)
         self.jobs_splitter.setStretchFactor(0, 1)
         self.jobs_splitter.setStretchFactor(1, 1)
@@ -447,5 +450,6 @@ class TrubaConnectionDialog(QDialog):
         self.job_list.shutdown()
         self.stop_connection()
         self.active_jobs.shutdown()
+        self.queue_status.shutdown()
         if self.worker is not None:
             self.worker.wait()

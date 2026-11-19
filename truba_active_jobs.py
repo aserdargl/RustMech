@@ -217,8 +217,9 @@ class TrubaActiveJobs(QWidget):
         self.splitter.setChildrenCollapsible(False)
         self.works = self._table(['Work name'])
         self.works.setItemDelegate(QItemDelegate(self.works))
-        self.jobs = QTableWidget(0, len(SLURM_JOB_HEADERS))
-        self.jobs.setHorizontalHeaderLabels(SLURM_JOB_HEADERS)
+        headers = (*SLURM_JOB_HEADERS, 'Estimated start')
+        self.jobs = QTableWidget(0, len(headers))
+        self.jobs.setHorizontalHeaderLabels(headers)
         configure_slurm_job_table(self.jobs)
         self.splitter.addWidget(self.works)
         self.splitter.addWidget(self.jobs)
@@ -370,6 +371,14 @@ class TrubaActiveJobs(QWidget):
                 )
                 for column, value in enumerate(values, start=5):
                     self.jobs.setItem(index, column, QTableWidgetItem(value))
+                estimate = display_start(job.start) if job.state == 'PENDING' else '—'
+                estimate_item = QTableWidgetItem(estimate)
+                if job.state == 'PENDING':
+                    estimate_item.setToolTip(translate(
+                        'Slurm has no start estimate yet.' if estimate == '—'
+                        else 'Start time estimated by Slurm. It may change.'
+                    ))
+                self.jobs.setItem(index, len(SLURM_JOB_HEADERS), estimate_item)
                 if (name, job.job_id) == previous:
                     row = index
             self.jobs.setCurrentCell(row, 0)
