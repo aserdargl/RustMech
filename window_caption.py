@@ -4,19 +4,30 @@ import ctypes
 from ctypes import wintypes
 
 from PySide6.QtCore import QAbstractNativeEventFilter, QEvent, QMargins, QObject, QPoint, QPointF, QRect, Qt
-from PySide6.QtGui import QColor, QCursor, QFont, QPainter, QPainterPath, QPen, QRegion
-from PySide6.QtWidgets import QAbstractButton, QApplication, QDialog, QHBoxLayout, QMainWindow, QWidget
+from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPen, QRegion
+from PySide6.QtWidgets import QAbstractButton, QDialog, QHBoxLayout, QMainWindow, QWidget
 
 
 CAPTION_HEIGHT = 25
 FRAME_GRIP = 4
 CAPTION_PROPERTY = "rustmechCaption"
 WM_GETMINMAXINFO = 0x0024
+WM_STYLECHANGING = 0x007C
 WM_NCCALCSIZE = 0x0083
 WM_NCHITTEST = 0x0084
+WM_NCPAINT = 0x0085
+WM_NCACTIVATE = 0x0086
 WM_NCLBUTTONDBLCLK = 0x00A3
+HTCLIENT = 1
+HTCAPTION = 2
+HTSYSMENU = 3
 HTTRANSPARENT = -1
-WS_DLGFRAME = 0x00400000
+GWL_STYLE = -16
+GWL_EXSTYLE = -20
+WS_CAPTION = 0x00C00000
+WS_THICKFRAME = 0x00040000
+WS_EX_APPWINDOW = 0x00040000
+WS_EX_DLGMODALFRAME = 0x00000001
 ACTION_HINTS = (
     ("minimize", Qt.WindowType.WindowMinimizeButtonHint),
     ("maximize", Qt.WindowType.WindowMaximizeButtonHint),
@@ -41,8 +52,12 @@ class MinMaxInfo(ctypes.Structure):
                 ("max_track", wintypes.POINT))
 
 
+class WindowStyle(ctypes.Structure):
+    _fields_ = (("old", wintypes.DWORD), ("new", wintypes.DWORD))
+
+
 class WindowsCaptionFrame(QAbstractNativeEventFilter):
-    """Retain the Windows sizing frame and route title area hits to the OS."""
+    """Provide system movement, resizing and work-area bounds for frameless windows."""
 
     def __init__(self):
         super().__init__()
@@ -66,18 +81,38 @@ class WindowsCaptionFrame(QAbstractNativeEventFilter):
         self._monitor_info.argtypes = (wintypes.HMONITOR, ctypes.POINTER(MonitorInfo))
         self._is_zoomed = api.IsZoomed
         self._is_zoomed.argtypes = (wintypes.HWND,)
+        self._set_dwm_attribute = ctypes.windll.dwmapi.DwmSetWindowAttribute
+        self._set_dwm_attribute.argtypes = (wintypes.HWND, wintypes.DWORD, ctypes.c_void_p, wintypes.DWORD)
 
-    def update_frame(self, window):
-        handle = window.windowHandle()
-        if handle is None or (window.isFullScreen() and not window.isMaximized()):
+    def frame_style(self, window, index, style):
+        if index == GWL_STYLE:
+            style &= ~(WS_CAPTION | WS_THICKFRAME)
+            if not window.isFullScreen() and not window.windowFlags() & Qt.WindowType.MSWindowsFixedSizeDialogHint:
+                # Win32's move/size loop uses this flag. The application owns all the pixels.
+                style |= WS_THICKFRAME
+        elif index == GWL_EXSTYLE:
+            style &= ~WS_EX_DLGMODALFRAME
+            # Windows otherwise minimizes owned windows to a classic title strip on the desktop.
+            if (window.windowFlags() & Qt.WindowType.WindowMinimizeButtonHint
+                    and (window.parentWidget() is not None or window.windowType() == Qt.WindowType.Tool)):
+                style |= WS_EX_APPWINDOW
+        return style
+
+    def configure(self, window):
+        hwnd = int(window.internalWinId())
+        if not hwnd:
             return
-        hwnd = int(handle.winId())
-        style = self._get_style(hwnd, -16)  # GWL_STYLE
-        # Keep the native resize border, system menu and window-state machinery.
-        # WS_CAPTION is WS_BORDER | WS_DLGFRAME; clearing the latter suppresses the OS title.
-        if style & WS_DLGFRAME:
-            self._set_style(hwnd, -16, style & ~WS_DLGFRAME)
-            self._set_position(hwnd, None, 0, 0, 0, 0, 0x0037)  # Recalculate the frame in place.
+        changed = False
+        for index in (GWL_STYLE, GWL_EXSTYLE):
+            style = self._get_style(hwnd, index) & 0xFFFFFFFF
+            desired = self.frame_style(window, index, style)
+            if desired != style:
+                self._set_style(hwnd, index, desired)
+                changed = True
+        policy = ctypes.c_int(1)  # DWMNCRP_DISABLED
+        self._set_dwm_attribute(hwnd, 2, ctypes.byref(policy), ctypes.sizeof(policy))
+        if changed:
+            self._set_position(hwnd, None, 0, 0, 0, 0, 0x0037)  # SWP_FRAMECHANGED without move or resize.
 
     def set_pinned(self, handle, enabled):
         # HWND_TOPMOST / HWND_NOTOPMOST, with no move, resize, activation or owner change.
@@ -87,13 +122,26 @@ class WindowsCaptionFrame(QAbstractNativeEventFilter):
         if event_type != b"windows_generic_MSG":
             return False, 0
         native = wintypes.MSG.from_address(int(message))
-        if native.message not in (WM_GETMINMAXINFO, WM_NCCALCSIZE, WM_NCHITTEST, WM_NCLBUTTONDBLCLK):
+        if native.message not in (WM_GETMINMAXINFO, WM_STYLECHANGING, WM_NCCALCSIZE, WM_NCHITTEST,
+                                  WM_NCPAINT, WM_NCACTIVATE, WM_NCLBUTTONDBLCLK):
             return False, 0
         window = QWidget.find(int(native.hWnd or 0))
         if native.message == WM_NCHITTEST and isinstance(window, WindowOutline):
             return True, HTTRANSPARENT
         caption = window.property(CAPTION_PROPERTY) if window is not None else None
-        if caption is None or (window.isFullScreen() and not window.isMaximized()):
+        if caption is None:
+            return False, 0
+        if native.message == WM_STYLECHANGING:
+            if native.lParam:
+                style = WindowStyle.from_address(native.lParam)
+                index = ctypes.c_int(native.wParam).value
+                style.new = self.frame_style(window, index, style.new)
+            return False, 0
+        if native.message == WM_NCPAINT:
+            return True, 0
+        if native.message == WM_NCACTIVATE:
+            return True, 1
+        if window.isFullScreen() and not window.isMaximized():
             return False, 0
         if native.message == WM_GETMINMAXINFO:
             # Windows uses the outer HWND bounds to decide if a window covers the taskbar.
@@ -106,8 +154,6 @@ class WindowsCaptionFrame(QAbstractNativeEventFilter):
                 bounds.max_size.y = monitor.work.bottom - monitor.work.top
             # Let Qt still populate the minimum and maximum tracking sizes.
             return False, 0
-        if window.isMinimized():
-            return False, 0
         if native.message == WM_NCCALCSIZE:
             if native.lParam and self._is_zoomed(native.hWnd):
                 # Both NCCALCSIZE forms start with the proposed client RECT.
@@ -117,9 +163,10 @@ class WindowsCaptionFrame(QAbstractNativeEventFilter):
                     rect.left, rect.top = monitor.work.left, monitor.work.top
                     rect.right, rect.bottom = monitor.work.right, monitor.work.bottom
             return True, 0
+        if window.isMinimized():
+            return False, 0
         if native.message == WM_NCLBUTTONDBLCLK:
-            # Preserve the action hints when dragging or double-clicking the native title area.
-            return native.wParam == 2 and caption.maximize is None, 0
+            return native.wParam == HTCAPTION and caption.maximize is None, 0
         origin = wintypes.POINT()
         if not self._client_to_screen(native.hWnd, ctypes.byref(origin)):
             return False, 0
@@ -133,10 +180,11 @@ class WindowsCaptionFrame(QAbstractNativeEventFilter):
                 return True, hit
         position = caption.mapFromParent(point)
         if not caption.rect().contains(position) or position.x() >= caption.pin.x():
-            return False, 0
-        if not window.windowIcon().isNull() and QRect(8, 4, 16, 16).contains(position):
-            return True, 3  # HTSYSMENU
-        return True, 2  # HTCAPTION
+            return True, HTCLIENT
+        if (window.windowFlags() & Qt.WindowType.WindowSystemMenuHint
+                and not window.windowIcon().isNull() and QRect(8, 4, 16, 16).contains(position)):
+            return True, HTSYSMENU
+        return True, HTCAPTION
 
 
 class CaptionButton(QAbstractButton):
@@ -315,6 +363,8 @@ class WindowCaptionService(QObject):
             window.setWindowFlag(Qt.WindowType.FramelessWindowHint)
         caption = WindowCaption(window, flags, self._native_frame)
         window.setProperty(CAPTION_PROPERTY, caption)
+        if self._native_frame is not None:
+            self._native_frame.configure(window)
         self._update_layout(window, caption)
 
     def _update_layout(self, window, caption):
@@ -352,16 +402,15 @@ class WindowCaptionService(QObject):
                         QEvent.Type.WindowActivate, QEvent.Type.WindowDeactivate, QEvent.Type.PaletteChange,
                         QEvent.Type.WinIdChange):
                 self._update_layout(watched, caption)
-                if self._native_frame is None and kind in (QEvent.Type.WinIdChange, QEvent.Type.Show):
-                    handle = watched.windowHandle()
-                    if handle is not None and not handle.flags() & Qt.WindowType.FramelessWindowHint:
-                        handle.setFlag(Qt.WindowType.FramelessWindowHint)
-                if self._native_frame is not None and kind in (
-                    QEvent.Type.WinIdChange, QEvent.Type.Show, QEvent.Type.WindowStateChange
-                ):
-                    self._native_frame.update_frame(watched)
-                if kind == QEvent.Type.Show and caption.pin.isChecked():
-                    caption.set_pinned(True)
+                if kind in (QEvent.Type.WinIdChange, QEvent.Type.Show) and watched.internalWinId():
+                    if self._native_frame is not None:
+                        self._native_frame.configure(watched)
+                    else:
+                        handle = watched.windowHandle()
+                        if handle is not None and not handle.flags() & Qt.WindowType.FramelessWindowHint:
+                            handle.setFlag(Qt.WindowType.FramelessWindowHint)
+                    if caption.pin.isChecked():
+                        caption.set_pinned(True)
             elif (self._native_frame is None and kind == QEvent.Type.MouseButtonPress
                   and event.button() == Qt.MouseButton.LeftButton):
                 if not watched.isMaximized() and not watched.isFullScreen():

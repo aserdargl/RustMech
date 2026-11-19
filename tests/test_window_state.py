@@ -6,7 +6,9 @@ from ctypes import wintypes
 from pathlib import Path
 
 from PySide6.QtCore import QPoint, QSettings, Qt
-from PySide6.QtWidgets import QApplication, QDialog, QFileDialog, QMainWindow, QMenu, QSplitter, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (
+    QApplication, QDialog, QFileDialog, QMainWindow, QMenu, QMessageBox, QSplitter, QVBoxLayout, QWidget,
+)
 
 from window_caption import CAPTION_PROPERTY, WM_NCHITTEST, CaptionButton, MonitorInfo, install_window_captions
 from window_state import WindowStateStore
@@ -156,18 +158,39 @@ class WindowStateTests(unittest.TestCase):
             self.addCleanup(self.app.removeNativeEventFilter, service._native_frame)
         self.addCleanup(service.deleteLater)
 
-        def assert_native_work_area(window):
-            frame = service._native_frame
-            if frame is None:
+        def assert_borderless(window):
+            if service._native_frame is None:
+                self.assertTrue(window.windowFlags() & Qt.WindowType.FramelessWindowHint)
                 return
+            frame = service._native_frame
+            hwnd = int(window.winId())
+            self.assertEqual(frame._get_style(hwnd, -16) & 0x00C00000, 0)
+            self.assertEqual(frame._get_style(hwnd, -20) & 0x00000001, 0)
+            if not window.isMinimized():
+                bounds, _ = native_bounds(window)
+                client_rect = wintypes.RECT()
+                origin = wintypes.POINT()
+                self.assertTrue(ctypes.windll.user32.GetClientRect(hwnd, ctypes.byref(client_rect)))
+                self.assertTrue(frame._client_to_screen(hwnd, ctypes.byref(origin)))
+                self.assertEqual((origin.x, origin.y, client_rect.right, client_rect.bottom),
+                                 (bounds.left, bounds.top, bounds.right - bounds.left, bounds.bottom - bounds.top))
+
+        def native_bounds(window):
+            frame = service._native_frame
             hwnd = int(window.winId())
             bounds = wintypes.RECT()
             monitor = MonitorInfo(size=ctypes.sizeof(MonitorInfo))
-            self.assertTrue(frame._is_zoomed(hwnd))
             self.assertTrue(ctypes.windll.user32.GetWindowRect(hwnd, ctypes.byref(bounds)))
             self.assertTrue(frame._monitor_info(frame._monitor_from_window(hwnd, 2), ctypes.byref(monitor)))
-            self.assertEqual((bounds.left, bounds.top, bounds.right, bounds.bottom),
-                             (monitor.work.left, monitor.work.top, monitor.work.right, monitor.work.bottom))
+            return bounds, monitor
+
+        def assert_native_work_area(window):
+            assert_borderless(window)
+            if service._native_frame is not None:
+                self.assertTrue(service._native_frame._is_zoomed(int(window.winId())))
+                bounds, monitor = native_bounds(window)
+                self.assertEqual((bounds.left, bounds.top, bounds.right, bounds.bottom),
+                                 (monitor.work.left, monitor.work.top, monitor.work.right, monitor.work.bottom))
 
         def assert_outline_color(window):
             outline = window.property(CAPTION_PROPERTY).outline
@@ -181,6 +204,7 @@ class WindowStateTests(unittest.TestCase):
         self.windows.append(main)
         main.show()
         self.app.processEvents()
+        assert_borderless(main)
         caption = main.property(CAPTION_PROPERTY)
         buttons = caption.findChildren(CaptionButton)
         self.assertEqual([button.action for button in buttons], ["pin", "minimize", "maximize", "close"])
@@ -198,6 +222,19 @@ class WindowStateTests(unittest.TestCase):
             send_message.argtypes = (wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM)
             send_message.restype = ctypes.c_ssize_t
             self.assertEqual(send_message(int(caption.outline.winId()), WM_NCHITTEST, 0, 0), -1)
+            hwnd = int(main.winId())
+            origin = wintypes.POINT()
+            self.assertTrue(service._native_frame._client_to_screen(hwnd, ctypes.byref(origin)))
+            ratio = main.devicePixelRatioF()
+            for point, expected_hit in (
+                (QPoint(1, 1), 13),
+                (caption.pos() + QPoint(80, 12), 2),
+                (caption.pos() + caption.pin.geometry().center(), 1),
+            ):
+                x = origin.x + round(point.x() * ratio)
+                y = origin.y + round(point.y() * ratio)
+                self.assertEqual(send_message(hwnd, WM_NCHITTEST, 0, (x & 0xFFFF) | ((y & 0xFFFF) << 16)),
+                                 expected_hit)
         main.resize(660, 450)
         self.app.processEvents()
         self.assertTrue(caption.outline.mask().contains(QPoint(main.width() - 1, main.height() - 1)))
@@ -217,6 +254,7 @@ class WindowStateTests(unittest.TestCase):
         self.windows.append(dialog)
         dialog.show()
         self.app.processEvents()
+        assert_borderless(dialog)
         dialog_caption = dialog.property(CAPTION_PROPERTY)
         dialog_buttons = dialog_caption.findChildren(CaptionButton)
         self.assertEqual([button.action for button in dialog_buttons], ["pin", "close"])
@@ -229,6 +267,33 @@ class WindowStateTests(unittest.TestCase):
         self.assertEqual(dialog.windowModality(), Qt.WindowModality.WindowModal)
         dialog_buttons[-1].click()
         self.assertFalse(dialog.isVisible())
+
+        modeless = QDialog(main)
+        modeless.setObjectName("modeless")
+        modeless.setWindowFlag(Qt.WindowType.WindowMinimizeButtonHint)
+        modeless.resize(400, 300)
+        self.windows.append(modeless)
+        modeless.show()
+        self.app.processEvents()
+        modeless_normal = modeless.geometry()
+        assert_borderless(modeless)
+        minimize = modeless.findChild(CaptionButton, "WindowCaptionMinimize")
+        minimize.click()
+        self.app.processEvents()
+        self.assertTrue(modeless.isMinimized())
+        if service._native_frame is not None:
+            bounds, monitor = native_bounds(modeless)
+            area = monitor.monitor
+            self.assertTrue(bounds.right <= area.left or bounds.left >= area.right
+                            or bounds.bottom <= area.top or bounds.top >= area.bottom)
+            send_message(int(modeless.winId()), 0x0112, 0xF120, 0)  # WM_SYSCOMMAND / SC_RESTORE
+        else:
+            modeless.showNormal()
+        self.app.processEvents()
+        assert_borderless(modeless)
+        self.assertEqual(modeless.geometry(), modeless_normal)
+        self.assertEqual(modeless.windowHandle().transientParent(), main.windowHandle())
+        modeless.close()
 
         caption.maximize.click()
         self.app.processEvents()
@@ -248,13 +313,29 @@ class WindowStateTests(unittest.TestCase):
         self.app.processEvents()
         self.assertEqual(restored.geometry(), normal)
         self.assertTrue(restored_caption.outline.isVisible())
+        restored.showFullScreen()
+        self.app.processEvents()
+        assert_borderless(restored)
+        self.assertFalse(restored_caption.isVisible())
+        restored.showNormal()
+        self.app.processEvents()
+        assert_borderless(restored)
+        self.assertEqual(restored.geometry(), normal)
+        self.assertTrue(restored_caption.isVisible())
 
         picker = QFileDialog(restored)
         self.windows.append(picker)
         picker.show()
         self.app.processEvents()
+        assert_borderless(picker)
         self.assertTrue(picker.property(CAPTION_PROPERTY).isVisible())
         assert_outline_color(picker)
+        warning = QMessageBox(QMessageBox.Icon.Warning, "Warning", "Application message", parent=restored)
+        self.windows.append(warning)
+        warning.show()
+        self.app.processEvents()
+        assert_borderless(warning)
+        self.assertTrue(warning.property(CAPTION_PROPERTY).isVisible())
         menu = QMenu(restored)
         menu.ensurePolished()
         self.assertIsNone(menu.property(CAPTION_PROPERTY))
