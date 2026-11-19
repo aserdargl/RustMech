@@ -190,6 +190,12 @@ class TrubaFileBrowser(QWidget):
             return self.directory.as_posix()
         return ""
 
+    def selected_file(self, auth):
+        if auth is not None and self.auth == auth and self.loaded:
+            if item := self._selected_item(S_ISREG):
+                return self.directory, item.text(0)
+        return None
+
     def is_slurm_snapshot_open(self):
         parts = self.directory.parts
         return any(parent == "esen-folders" and re.fullmatch(r"[0-9a-f]{32}", name)
@@ -305,10 +311,11 @@ class TrubaFileBrowser(QWidget):
             if kind == "download":
                 self.status.setText("File downloaded from TRUBA.")
             else:
+                same_folder = self.directory == directory
                 self.directory = directory
                 self.loaded = True
                 self._update_address()
-                self._show_entries(entries)
+                self._show_entries(entries, preserve_selection=same_folder)
                 if self.is_slurm_snapshot_open() and entries:
                     self.status.setText("Synchronized inputs are read-only.")
                 else:
@@ -316,11 +323,14 @@ class TrubaFileBrowser(QWidget):
         self._update_controls()
         self._refresh_after_upload_if_ready()
 
-    def _show_entries(self, entries):
+    def _show_entries(self, entries, *, preserve_selection=False):
         self.entries = entries
-        self._render_entries()
+        self._render_entries(preserve_selection=preserve_selection)
 
-    def _render_entries(self, *_):
+    def _render_entries(self, *_, preserve_selection=True):
+        current = self.files.selectedItems() if preserve_selection else []
+        selected_name = current[0].text(0) if current else None
+        selected_row = None
         self.files.clear()
         folder_icon = self.style().standardIcon(QStyle.StandardPixmap.SP_DirIcon)
         file_icon = self.style().standardIcon(QStyle.StandardPixmap.SP_FileIcon)
@@ -336,6 +346,8 @@ class TrubaFileBrowser(QWidget):
             row = QTreeWidgetItem([entry.filename, size])
             row.setData(0, Qt.ItemDataRole.UserRole, mode)
             row.setToolTip(0, entry.filename)
+            if entry.filename == selected_name:
+                selected_row = row
             row.setIcon(0, folder_icon if folder else link_icon if S_ISLNK(mode) else file_icon)
             if grouped:
                 if folder:
@@ -357,6 +369,8 @@ class TrubaFileBrowser(QWidget):
                 self.files.addTopLevelItem(groups[category])
                 groups[category].setExpanded(True)
         self._filter_entries()
+        if selected_row is not None and not selected_row.isHidden():
+            self.files.setCurrentItem(selected_row)
 
     def _filter_entries(self, *_):
         query = self.filter.text().strip().casefold()

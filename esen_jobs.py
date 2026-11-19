@@ -140,11 +140,14 @@ def read_job(directory):
     return json.loads((directory / "job.json").read_text(encoding="utf-8"))
 
 
-def new_job(root, entry, target, ranks, *, parent, batch_folder=None, folder_upload=None, work_subdir=None):
+def new_job(root, entry, target, ranks, *, parent, batch_folder=None, folder_upload=None, work_subdir=None,
+            truba_input_folder=None):
     directory = parent / uuid4().hex
     directory.mkdir(parents=True, exist_ok=False)
     record = dict(name=entry, target=target, ranks=ranks, state="Preparing",
-                  created=datetime.now().astimezone().isoformat(timespec="seconds"), source=str(root))
+                  created=datetime.now().astimezone().isoformat(timespec="seconds"), source=str(root) if root else "")
+    if truba_input_folder is not None:
+        record["truba_input_folder"] = truba_input_folder
     if batch_folder is not None:
         record["batch_folder"] = batch_folder
     if folder_upload is not None:
@@ -157,7 +160,7 @@ def new_job(root, entry, target, ranks, *, parent, batch_folder=None, folder_upl
             record["upload_directory"] = upload.directory
         if upload.direct:
             record["direct_upload"] = True
-    if root.name == "inputs" and root.parent.parent == parent:
+    if root and root.name == "inputs" and root.parent.parent == parent:
         # Reused inputs are stored in job history, while their results belong in the original job folder.
         with suppress(OSError, ValueError):
             previous = read_job(root.parent)
@@ -503,6 +506,9 @@ def submit_full_node(directory, record, files, settings, auth):
             script = read_slurm_script(job_inputs(directory, record) / relative_file(record["name"]))
             submit_remote(directory, record, files, script, auth)
             return
+        if "truba_input_folder" in record and is_slurm_script(record["name"]):
+            submit_remote(directory, record, files, None, auth)
+            return
         catalog = fetch_catalog(RemoteContext(transport="ssh"), auth, live_node_capacity=True)
         ranks, memory, walltime = full_node_resources(settings["partition"], catalog)
         script = remote_script(files[1], ranks, memory=memory, walltime=walltime, **settings,
@@ -567,21 +573,62 @@ def tagged(reply, key):
     return match[1].strip()
 
 
+def stage_truba_inputs(transport, remote, username, relative, entry, resume_input):
+    """Copy the selected TRUBA folder into this job's isolated work directory."""
+    folder = PurePosixPath(relative)
+    if folder.is_absolute() or ".." in folder.parts:
+        raise ValueError("This folder is outside the RustMech project.")
+    if folder.parts:
+        relative_file(folder.as_posix())
+    root = shlex.quote(str(project_root(username)))
+    suffix = shlex.quote("/" + folder.as_posix()) if folder.parts else "''"
+    target = shlex.quote(remote + "/work")
+    checks = []
+    for name in filter(None, (entry, resume_input)):
+        path = shlex.quote(relative_file(name).as_posix())
+        checks.extend((f"test -f {path}", f"test ! -L {path}"))
+    file_checks = "\n".join(checks)
+    job_dirs = "" if folder.parts else " -o -regex '\\./[a-f0-9]{32}'"
+    transport.command(f"""set -eo pipefail
+umask 077
+root=$(realpath -e -- {root})
+cd -P -- "$root"{suffix}
+test "$PWD" = "$root"{suffix}
+{file_checks}
+mkdir -p -- {target}
+find -P . -regextype posix-extended -mindepth 1 \\
+    \\( -type d \\( -name esen-folders{job_dirs} \\) -prune \\) -o \\
+    \\( -type f ! -name '.rustmech-*.part' -o -type d \\) -print0 |
+    tar --null --no-recursion -T - -cf - | tar -xf - -C {target}
+cd -- {target}
+{file_checks}
+""", timeout=1800)
+
+
 def submit_remote(directory, record, files, script, auth):
     try:
         transport, remote = remote_location(directory, record, auth)
         upload_id = record.get("folder_upload")
-        snapshot = job_inputs(directory, record) if upload_id else snapshot_inputs(directory, *files)
-        work_subdir = record.get("work_subdir", "")
-        input_dir = snapshot / relative_file(work_subdir) if work_subdir else snapshot
-        if not (input_dir / relative_file(files[1])).is_file():
-            raise ValueError("The selected input script is missing.")
-        if record.get("resume_input") and not (input_dir / relative_file(record["resume_input"])).is_file():
-            raise ValueError("Include the LAMMPS restart input in the job files.")
+        truba_input = record.get("truba_input_folder")
         batch = directory / "run.slurm"
-        batch.write_text(script, encoding="utf-8", newline="\n")
         work = shlex.quote(remote + "/work")
-        if upload_id and not record.get("direct_upload"):
+        work_subdir = record.get("work_subdir", "")
+        if truba_input is not None:
+            stage_truba_inputs(transport, remote, auth.username, truba_input, files[1], record.get("resume_input"))
+            if script is None:
+                transport.get(remote + "/work/" + relative_file(files[1]).as_posix(), batch)
+                script = read_slurm_script(batch)
+        else:
+            snapshot = job_inputs(directory, record) if upload_id else snapshot_inputs(directory, *files)
+            input_dir = snapshot / relative_file(work_subdir) if work_subdir else snapshot
+            if not (input_dir / relative_file(files[1])).is_file():
+                raise ValueError("The selected input script is missing.")
+            if record.get("resume_input") and not (input_dir / relative_file(record["resume_input"])).is_file():
+                raise ValueError("Include the LAMMPS restart input in the job files.")
+        batch.write_text(script, encoding="utf-8", newline="\n")
+        if truba_input is not None:
+            transport.put(batch, remote + "/run.slurm")
+        elif upload_id and not record.get("direct_upload"):
             source = _quoted_upload_inputs(record)
             transport.command(f"umask 077; mkdir -p -- {shlex.quote(remote)} && "
                               f"cp -a --reflink=auto -- {source} {work}", timeout=1800)
@@ -600,7 +647,7 @@ def submit_remote(directory, record, files, script, auth):
         save_job(directory, record, state="Submitting", username=auth.username)
         name = "ESEN-" + directory.name
         options = ""
-        if upload_id and is_slurm_script(record["name"]):
+        if (upload_id or truba_input is not None) and is_slurm_script(record["name"]):
             working = (remote + "/work/" + record.get("work_subdir", "")).rstrip("/")
             options = (f"--chdir={shlex.quote(working)} "
                        f"--output={shlex.quote(remote + '/stdout.log')} "
@@ -858,6 +905,8 @@ def save_file_list(directory, record, paths, omitted, **changes):
 
 def result_directory(directory, record):
     source = record.get("results_source") or record.get("source")
+    if not source and "truba_input_folder" in record:
+        source = directory
     if record["target"] == "remote" and not record.get("remote_run") and source:
         return Path(source) / "Results" / f"ESEN-{directory.name}"
     return None

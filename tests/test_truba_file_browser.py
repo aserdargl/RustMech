@@ -311,6 +311,58 @@ def test_job_settings_sync_uses_selected_folders(remote, tmp_path, monkeypatch):
         workspace.dispose()
 
 
+def test_run_uses_the_truba_selection_instead_of_checked_local_scripts(remote, tmp_path, monkeypatch):
+    app = QApplication.instance() or QApplication([])
+    preferences = QSettings(str(tmp_path / "run.ini"), QSettings.Format.IniFormat)
+    monkeypatch.setattr("esen_workspace.QSettings", lambda *_: preferences)
+    truba = Truba()
+    truba.auth, sftp = remote
+    names = ["data.txt", "in.remote", "remote.slurm"]
+    sftp.listdir_attr.return_value = [SimpleNamespace(filename=name, st_mode=S_IFREG, st_size=25)
+                                      for name in names]
+    local = tmp_path / "local"
+    local.mkdir()
+    (local / "local.slurm").write_text("#!/bin/bash\n", encoding="utf-8")
+    workspace = EsenWorkspace(truba, history=tmp_path / "history")
+    try:
+        workspace.show()
+        app.processEvents()
+        workspace._load_batch_folder(local)
+        workspace.folder_scan[0].result(timeout=5)
+        browser = workspace.truba_browser
+        browser.task[0].result(timeout=5)
+        workspace._tick()
+        local_item = workspace.inputs.items()[0]
+        local_item.setCheckState(0, Qt.CheckState.Checked)
+        assert workspace.start.isEnabled()
+        browser.files.setCurrentItem(browser.files.topLevelItem(0))
+        assert not workspace.start.isEnabled()
+        browser.files.setCurrentItem(browser.files.topLevelItem(1))
+        assert workspace.start.isEnabled()
+        browser.files.setCurrentItem(browser.files.topLevelItem(2))
+        assert workspace.start.isEnabled()
+        assert workspace.history.count() == 0
+        assert "remote.slurm" in workspace.input_note.text()
+        browser.refresh.click()
+        browser.task[0].result(timeout=5)
+        workspace._tick()
+        assert workspace.start.isEnabled()
+        assert "remote.slurm" in workspace.input_note.text()
+        submit = MagicMock()
+        monkeypatch.setattr(workspace, "_submit_remote", submit)
+        workspace.start.click()
+        _, record, files, _, auth = submit.call_args.args
+        assert auth == truba.auth
+        assert record["truba_input_folder"] == "."
+        assert record["name"] == "remote.slurm"
+        assert files[1] == "remote.slurm"
+        workspace.inputs.setCurrentItem(local_item)
+        assert workspace.start.isEnabled()
+        assert "remote.slurm" not in workspace.input_note.text()
+    finally:
+        workspace.dispose()
+
+
 def test_workspace_browses_creates_and_restores_three_columns(remote, tmp_path, monkeypatch):
     app = QApplication.instance() or QApplication([])
     preferences = QSettings(str(tmp_path / "layout.ini"), QSettings.Format.IniFormat)

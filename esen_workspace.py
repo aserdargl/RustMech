@@ -318,6 +318,7 @@ class EsenWorkspace(QDialog):
         self.upload_error = ""
         self.sync_task = None
         self.sync_message = ""
+        self._run_truba_selection = False
         self.batch_queue = {}
         self.batch_active = None
         self._active_truba_jobs = {}
@@ -438,8 +439,9 @@ class EsenWorkspace(QDialog):
         self.inputs.viewport().setAcceptDrops(True)
         self.inputs.files_dropped.connect(self._load_files)
         self.inputs.setAccessibleName("LAMMPS input files")
-        self.inputs.itemChanged.connect(self._preview)
-        self.inputs.itemSelectionChanged.connect(self._buttons)
+        self.inputs.itemChanged.connect(self._select_local_input)
+        self.inputs.itemClicked.connect(self._select_local_input)
+        self.inputs.itemSelectionChanged.connect(self._local_selection_changed)
         layout.addWidget(self.inputs, 1)
         self.transfer_progress = QProgressBar()
         self.transfer_progress.setObjectName("operationProgressBar")
@@ -587,6 +589,8 @@ class EsenWorkspace(QDialog):
 
         truba_card, truba_layout = panel("TRUBA files", paper=True)
         self.truba_browser = TrubaFileBrowser(self.truba, self.executor, command)
+        self.truba_browser.files.itemSelectionChanged.connect(self._select_truba_input)
+        self.truba_browser.files.itemClicked.connect(self._select_truba_input)
         truba_layout.addWidget(self.truba_browser, 1)
         split.addWidget(truba_card)
         split.setStretchFactor(2, 1)
@@ -762,6 +766,29 @@ class EsenWorkspace(QDialog):
         self.folder_replay = False
         self.upload_error = ""
         self.sync_message = ""
+        self._run_truba_selection = False
+        self.truba_browser.files.clearSelection()
+
+    def _select_local_input(self, *_):
+        self._run_truba_selection = False
+        self.truba_browser.files.clearSelection()
+        self._preview()
+
+    def _local_selection_changed(self):
+        if self.inputs.selectedItems():
+            self._select_local_input()
+        else:
+            self._buttons()
+
+    def _select_truba_input(self, *_):
+        if self.target.currentData() != "remote":
+            return
+        if self.truba_browser.selected_file(self.truba.analysis_auth()):
+            self._run_truba_selection = True
+            with QSignalBlocker(self.inputs):
+                self.inputs.clearSelection()
+        if self._run_truba_selection:
+            self._preview()
 
     def _check_folder_scan(self):
         if self.folder_scan is None or not self.folder_scan[0].done():
@@ -846,6 +873,7 @@ class EsenWorkspace(QDialog):
         auth = self.truba.analysis_auth()
         if not self.upload.isEnabled() or not auth:
             return
+        self._select_local_input()
         self._transfer_inputs(auth)
 
     def _sync_folders(self):
@@ -1072,6 +1100,10 @@ class EsenWorkspace(QDialog):
             relative = jobs.relative_file(settings["resume_input"])
             if (not (root / relative).is_file() or not (whole_folder or relative.as_posix() in [entry, *extra])):
                 raise ValueError("Include the LAMMPS restart input in the job files.")
+        return self._remote_command(entry, settings, work_subdir=work_subdir)
+
+    @staticmethod
+    def _remote_command(entry, settings, *, work_subdir=""):
         ranks, memory, walltime = jobs.full_node_resources(settings["partition"], jobs.BASELINES)
         return jobs.remote_script(entry, ranks, memory=memory, walltime=walltime,
                                   **settings, work_subdir=work_subdir)
@@ -1088,7 +1120,10 @@ class EsenWorkspace(QDialog):
 
     def _preview(self, *_):
         remote = self.target.currentData() == "remote"
-        slurm = self._slurm_mode()
+        using_truba = remote and self._run_truba_selection
+        auth = self.truba.analysis_auth() if remote else None
+        remote_file = self.truba_browser.selected_file(auth) if using_truba else None
+        slurm = bool(remote_file and jobs.is_slurm_script(remote_file[1])) if using_truba else self._slurm_mode()
         for field in self.local_fields:
             self.job_form.setRowVisible(field, not remote)
         self.job_form.setRowVisible(self.partition, remote and not slurm)
@@ -1102,8 +1137,11 @@ class EsenWorkspace(QDialog):
         self.sync.setVisible(remote)
         self.sync_status.setText(self.sync_message)
         self.sync_status.setVisible(remote and bool(self.sync_message))
-        self.move_up.setVisible(slurm)
-        self.move_down.setVisible(slurm)
+        self.move_up.setVisible(slurm and not using_truba)
+        self.move_down.setVisible(slurm and not using_truba)
+        if using_truba:
+            self._preview_truba_file(remote_file, auth)
+            return
         batch_mode = folder_mode or slurm
         first = next(self._folder_jobs(), None) if batch_mode else None
         root, entry, extra, whole_folder = self._input_files()
@@ -1136,6 +1174,8 @@ class EsenWorkspace(QDialog):
                 lines.append(translate("Uploaded to TRUBA: {path}").format(path=upload.path()))
             elif folder_mode and not slurm:
                 lines.append(translate("Upload the folder to TRUBA before running selected scripts."))
+            elif entry and not slurm:
+                lines.append(translate("Run uploads the selected local inputs to TRUBA."))
             if self.upload_error:
                 lines.append(translate("File upload failed: {error}").format(error=self.upload_error))
         if slurm:
@@ -1158,6 +1198,29 @@ class EsenWorkspace(QDialog):
             except OSError:
                 pass
         self.input_note.setText("\n".join(lines))
+        self._buttons()
+
+    def _preview_truba_file(self, selected, auth):
+        self.command_valid = False
+        self.input_note.clear()
+        try:
+            if not selected:
+                raise ValueError("Select a script in the TRUBA file browser.")
+            folder, name = selected
+            self.input_note.setText(str(project_root(auth.username) / folder / name))
+            if folder.parts:
+                jobs.relative_file(folder.as_posix())
+            jobs.relative_file(name)
+            if jobs.is_slurm_script(name):
+                invocation = translate("Submit the selected TRUBA Slurm script.")
+            elif jobs.is_input_script(name):
+                invocation = self._remote_command(name, self._remote_settings(auth))
+            else:
+                raise ValueError("Select a Slurm or LAMMPS input script on TRUBA.")
+            self.preview.setPlainText(invocation)
+            self.command_valid = True
+        except (OSError, ValueError) as error:
+            self.preview.setPlainText(translate(str(error)))
         self._buttons()
 
     def _connection_changed(self, *_):
@@ -1263,6 +1326,18 @@ class EsenWorkspace(QDialog):
                 (target == "local" and self.local_task)):
             return
         try:
+            if target == "remote" and self._run_truba_selection:
+                self._preview()
+                selected = self.truba_browser.selected_file(auth)
+                if self.start.isEnabled() and selected:
+                    folder, name = selected
+                    directory, record = jobs.new_job(None, name, "remote", None, parent=self.history_root,
+                                                     truba_input_folder=folder.as_posix())
+                    self._save_profiles()
+                    self._submit_remote(directory, record, (None, name, (), True), self._remote_settings(auth), auth)
+                    self._history_item(directory, record, prepend=True)
+                    self._buttons()
+                return
             if self._slurm_mode():
                 selected = tuple(self._folder_jobs())
                 if self.command_valid and not self.folder_scan and selected:
@@ -1490,8 +1565,11 @@ class EsenWorkspace(QDialog):
         ready = authenticated and not self.remote_task if remote else not self.local_task
         batch_busy = bool(self.batch_active or self.batch_queue)
         uploading = self.upload_task is not None or self.sync_task is not None
-        if remote and self.folder_root is not None and not self.folder_slurm:
-            ready = ready and self._upload_ready(auth)
+        if remote:
+            if self._run_truba_selection:
+                ready = ready and self.truba_browser.task is None
+            elif self.folder_root is not None and not self.folder_slurm:
+                ready = ready and self._upload_ready(auth)
         self.start.setEnabled(self.command_valid and ready and not batch_busy and not uploading)
         has_inputs = self.folder_root is not None or (
             self.input_root is not None and (self.entry or self.extra or self.whole_folder.isChecked())

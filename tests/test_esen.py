@@ -344,6 +344,43 @@ class EsenTests(unittest.TestCase):
             self.assertEqual(jobs.log_tail(directory / "stdout.log"), "LAMMPS done\n")
             self.assertEqual((directory / "downloads/work/sub/result.data").read_bytes(), b"result")
 
+    def test_truba_slurm_selection_stages_remote_files_before_submission(self):
+        name = "run test.slurm"
+        directory, record = jobs.new_job(None, name, "remote", None, parent=self.history,
+                                         truba_input_folder="runs/model one")
+        with patch("esen_jobs.RemoteTransport") as factory, patch("esen_jobs.fetch_catalog") as catalog:
+            transport = factory.return_value
+            transport.get.side_effect = lambda source, path: path.write_bytes(b"#!/bin/bash\r\necho done\r\n")
+            transport.command.side_effect = ["", "JOB_ID=123\n"]
+            jobs.submit_full_node(directory, record, (None, name, (), True), {}, self.auth)
+        self.assertEqual(jobs.read_job(directory)["job_id"], "123")
+        self.assertEqual((directory / "run.slurm").read_bytes(), b"#!/bin/bash\necho done\n")
+        stage, submit = (call.args[0] for call in transport.command.call_args_list)
+        self.assertIn('cd -P -- "$root"\'/runs/model one\'', stage)
+        self.assertIn("test -f 'run test.slurm'", stage)
+        self.assertIn("--chdir=", submit)
+        self.assertTrue(transport.get.call_args.args[0].endswith("/work/run test.slurm"))
+        self.assertTrue(transport.put.call_args.args[1].endswith("/run.slurm"))
+        catalog.assert_not_called()
+
+    def test_truba_lammps_selection_uses_the_configured_queue_without_uploading_inputs(self):
+        name = "in.remote"
+        directory, record = jobs.new_job(None, name, "remote", None, parent=self.history,
+                                         truba_input_folder=".")
+        settings = dict(partition="debug", account=self.auth.username, module="", executable="lmp",
+                        launcher="srun", resume_input="data/in.restart")
+        with (patch("esen_jobs.RemoteTransport") as factory,
+              patch("esen_jobs.fetch_catalog", return_value=jobs.BASELINES)):
+            transport = factory.return_value
+            transport.command.side_effect = ["", "JOB_ID=456\n"]
+            jobs.submit_full_node(directory, record, (None, name, (), True), settings, self.auth)
+        self.assertEqual(jobs.read_job(directory)["job_id"], "456")
+        self.assertIn("#SBATCH --partition=debug", (directory / "run.slurm").read_text())
+        self.assertIn("test -f data/in.restart", transport.command.call_args_list[0].args[0])
+        transport.get.assert_not_called()
+        self.assertEqual(transport.put.call_count, 1)
+        self.assertTrue(transport.put.call_args.args[1].endswith("/run.slurm"))
+
     def test_completed_remote_results_publish_atomically_beside_inputs(self):
         directory, record = self.new_job()
         jobs.snapshot_inputs(directory, *self.files)
@@ -1085,6 +1122,8 @@ class EsenTests(unittest.TestCase):
             list_directory.return_value = [folder(destination)]
             browser.up.click()
             finish_browsing()
+            self.assertFalse(workspace.start.isEnabled())
+            workspace.inputs.setCurrentItem(workspace.inputs.items()[0])
             workspace.start.click()
             run_upload_id = workspace.upload_task[0].result(timeout=5)
             workspace._tick()

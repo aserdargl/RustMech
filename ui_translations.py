@@ -63,6 +63,10 @@ Download|İndir
 Choose an existing folder.|Mevcut bir klasör seçin.
 Select files or a single folder.|Dosya veya tek bir klasör seçin.
 Select a script to run.|Çalıştırmak için bir betik seçin.
+Select a script in the TRUBA file browser.|TRUBA dosya tarayıcısında bir betik seçin.
+Select a Slurm or LAMMPS input script on TRUBA.|TRUBA’da bir Slurm veya LAMMPS girdi betiği seçin.
+Submit the selected TRUBA Slurm script.|Seçilen TRUBA betiğini Slurm’a gönder.
+Run uploads the selected local inputs to TRUBA.|Çalıştır, seçili yerel girdileri TRUBA’ya aktarır.
 Add a folder or drop inputs here.|Klasör ekleyin veya girdileri buraya bırakın.
 {files} files · {scripts} scripts selected|{files} dosya · {scripts} betik seçili
 Scanning folder…|Klasör taranıyor…
