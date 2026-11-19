@@ -19,7 +19,8 @@ import pytest
 from paramiko import SSHException
 
 from esen_workspace import EsenWorkspace
-from truba_files import create_directory, download_file, list_directory, project_root, sync_tree, upload_file, upload_tree
+from truba_files import (create_directory, download_file, list_directory, project_root, stage_batch_geometries,
+                         sync_tree, upload_file, upload_tree)
 from truba_ssh import RemoteAuth, active_session_client, register_session, unregister_session
 from window_state import WindowStateStore
 
@@ -139,6 +140,32 @@ def test_job_inputs_go_directly_into_open_folder_and_retry_safely(remote, tmp_pa
         upload_tree(auth, folder, tmp_path)
     assert str(target / "extra.txt") not in known
     assert known[str(target / "job.slurm")] == b"script"
+
+
+def test_batch_geometry_upload_is_verified_and_reused(remote, tmp_path):
+    auth, sftp = remote
+    source = tmp_path / 'prepared.vtp'
+    content = b'prepared geometry with face assignments'
+    source.write_bytes(content)
+    digest = sha256(content).hexdigest()
+    directory = project_root(auth.username) / 'BatchInputs'
+    target = str(directory / f'{digest}.vtp')
+    sftp.stat.return_value.st_size = len(content)
+    sftp.lstat.side_effect = [FileNotFoundError, SimpleNamespace(st_mode=S_IFREG)]
+    sftp.open.side_effect = [MagicMock(), BytesIO(content)]
+
+    expected = {str(source): dict(username=auth.username, sha256=digest)}
+    assert stage_batch_geometries(auth, [source, source]) == expected
+    sftp.mkdir.assert_called_once_with(str(directory))
+    assert sftp.rename.call_args.args[1] == target
+    sftp.rename.reset_mock()
+    sftp.lstat.side_effect = None
+    sftp.lstat.return_value.st_mode = S_IFREG
+    sftp.open.side_effect = [BytesIO(content), BytesIO(b'damaged')]
+    assert stage_batch_geometries(auth, [source]) == expected
+    with pytest.raises(OSError, match='geometry verification failed'):
+        stage_batch_geometries(auth, [source])
+    sftp.rename.assert_not_called()
 
 
 @pytest.mark.parametrize("available_channels", [1, 3])

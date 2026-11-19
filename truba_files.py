@@ -16,6 +16,7 @@ from uuid import uuid4
 
 from paramiko import SSHException
 
+from remote_operations import BATCH_INPUT_DIRECTORY, batch_geometry_name
 from truba_ssh import active_session_client
 
 
@@ -78,6 +79,52 @@ def upload_file(auth, relative, source):
         target = str(directory / source.name)
         _require_missing(sftp, target)
         _publish_file(sftp, source, target)
+
+
+def stage_batch_geometries(auth, sources):
+    """Publish completed, face-tagged geometry files without submitting compute work."""
+    sources = list(dict.fromkeys(map(Path, sources)))
+    if not sources:
+        return {}
+    relative = PurePosixPath(BATCH_INPUT_DIRECTORY)
+    with _sftp_channel(auth) as sftp:
+        root = str(project_root(auth.username))
+        try:
+            sftp.stat(root)
+        except FileNotFoundError:
+            try:
+                sftp.mkdir(root)
+            except OSError:
+                if not S_ISDIR(sftp.stat(root).st_mode or 0):
+                    raise
+    with _project_directory(auth, PurePosixPath()) as (sftp, root):
+        path = str(root / relative)
+        try:
+            sftp.mkdir(path)
+        except OSError:
+            if not S_ISDIR(sftp.lstat(path).st_mode or 0):
+                raise
+    staged = {}
+    with _project_directory(auth, relative) as (sftp, directory):
+        for source in sources:
+            with source.open('rb') as stream:
+                digest = file_digest(stream, 'sha256').hexdigest()
+            target = str(directory / batch_geometry_name(digest))
+            try:
+                existing = sftp.lstat(target)
+            except FileNotFoundError:
+                try:
+                    _publish_file(sftp, source, target)
+                except FileExistsError:
+                    pass  # Another sender may have published the same geometry.
+                existing = sftp.lstat(target)
+            if not S_ISREG(existing.st_mode or 0):
+                raise OSError(f'TRUBA geometry verification failed: {source.name}')
+            with sftp.open(target, 'rb') as uploaded:
+                if file_digest(uploaded, 'sha256').hexdigest() != digest:
+                    raise OSError(f'TRUBA geometry verification failed: {source.name}')
+            staged[str(source)] = {'username': auth.username, 'sha256': digest}
+    return staged
 
 
 def _publish_file(sftp, source, target, *, progress=None, sync_source=None, existing=None):

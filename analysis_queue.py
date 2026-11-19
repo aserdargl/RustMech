@@ -14,7 +14,7 @@ from design_exchange import pool_directory
 from doe_studio import (COL_RUN, COL_STRUCTURE, DoEStudioWidget, DoEStudioWindow,
                         ExperimentRow, TABLE_COLUMNS, generate_doe_rows)
 from folder_batch_results import (LEGACY_BATCH_DIRECTORY, batch_directory, move_batch_workspace,
-                                  relocate_batch_report, relocate_queue_row)
+                                  relocate_batch_report, relocate_queue_row, validate_folder_snapshot)
 from model import ROOT, settings_from_dict, validate_settings
 
 
@@ -229,21 +229,21 @@ class AnalysisQueueWidget(DoEStudioWidget):
         self.table.selectRow(len(self._rows) - 1)
         return row
 
-    def add_folder_snapshots(self, snapshots):
-        """Publish the whole prepared batch atomically; never start a solver here."""
+    def require_writable_folder_queue(self):
         if self._active_mode is not None or self._active_future is not None:
             raise ValueError("Stop the analysis queue before adding jobs.")
         if not self._storage_ready or self.storage_error:
             raise ValueError(self.storage_error or "Analysis queue is not writable.")
+
+    def add_folder_snapshots(self, snapshots):
+        """Publish the whole prepared batch atomically; never start a solver here."""
+        self.require_writable_folder_queue()
         known = {row.folder_job['key'] for row in self._rows if row.folder_job}
         added = []
         for settings, metadata in snapshots:
             if metadata['key'] in known:
                 continue
-            from solver_api import get_solver_capabilities
-            errors = validate_settings(settings) + get_solver_capabilities(settings.solver_backend).validate(settings)
-            if errors:
-                raise ValueError(settings.imported_geometry_name + ': ' + '\n'.join(errors))
+            validate_folder_snapshot(settings)
             snapshot = settings_from_dict(asdict(settings))
             row = generate_doe_rows([snapshot], {}, "grid", 1, 42)[0]
             row.exp_id = "JOB-" + uuid4().hex[:10].upper()

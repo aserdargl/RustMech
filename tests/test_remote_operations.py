@@ -1,5 +1,6 @@
 """Unsupported remote requests fail before connecting or generating a mesh."""
 from dataclasses import asdict, replace
+from hashlib import sha256
 from pathlib import Path
 import tempfile
 import unittest
@@ -131,6 +132,44 @@ class RemoteOperationTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'requires displacement control'):
                 run_operation(request, Path('.'))
             mesh.assert_not_called()
+
+    def test_staged_batch_uses_verified_remote_geometry_without_local_input(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            output = root / ('a' * 32) / 'output'
+            output.mkdir(parents=True)
+            job_dir = root / 'saved-client-request'
+            settings = replace(Settings(), imported_geometry_path=str(root / 'missing-local.vtp'))
+            prepared = b'face-tagged geometry'
+            digest = sha256(prepared).hexdigest()
+            source = root / 'BatchInputs' / f'{digest}.vtp'
+            source.parent.mkdir()
+            source.write_bytes(prepared)
+            request = dict(operation='doe_mesh', settings=asdict(settings), row=0,
+                           staged_geometry=dict(username='test-user', sha256=digest))
+            with patch('truba_remote.RemoteTransport') as transport, patch(
+                    'truba_remote.state_directory', return_value=root / 'state'), patch(
+                    'truba_remote.make_source_bundle', return_value=('source', 'native')):
+                transport.return_value.username = 'test-user'
+                transport.return_value.command.return_value = 'RUSTMECH_JOB_ID=123'
+                run_remote_job(request, RemoteContext(), directory=job_dir, submit_only=True)
+                transport.return_value.username = 'another-user'
+                with self.assertRaisesRegex(ValueError, 'account that received'):
+                    run_remote_job(request, RemoteContext(), directory=root / 'other-request', submit_only=True)
+            submitted = json.loads((job_dir / 'request.json').read_text(encoding='utf-8'))
+            self.assertNotIn('imported_geometry_vtp', submitted)
+            self.assertEqual(submitted['staged_geometry'], request['staged_geometry'])
+
+            with patch('remote_worker.probe', return_value=dict(mesh=True, mesh_types=[settings.mesh_type])), patch(
+                    'remote_worker._stage'), patch('doe_studio.ExperimentWorker._evaluate_row_mesh',
+                                                   return_value={'status': 'Completed'}) as mesh:
+                self.assertEqual(run_operation(submitted, output), {'row': {'status': 'Completed'}})
+                copied = Path(mesh.call_args.args[1].imported_geometry_path)
+                self.assertEqual(copied.read_bytes(), prepared)
+                source.write_bytes(b'changed')
+                with self.assertRaisesRegex(ValueError, 'checksum does not match'):
+                    run_operation(submitted, output)
+                mesh.assert_called_once()
 
 
 if __name__ == '__main__':

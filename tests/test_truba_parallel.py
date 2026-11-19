@@ -128,7 +128,7 @@ class ParallelBatchTests(unittest.TestCase):
         studio.start_batch_solve()
         target, args, _ = self.arguments[1]
         self.assertIs(target, run_remote_folder_doe)
-        self.assertEqual(args[-1], destination)
+        self.assertEqual(args[-2:], (destination, None))
         studio.stop_active_queue()
 
 

@@ -1614,6 +1614,7 @@ class DoEStudioWidget(TrubaParallelMixin, QWidget):
                     from folder_batch_results import run_remote_folder_doe
                     self._active_future = AnalysisProcess(run_remote_folder_doe, r_idx, s, context,
                                                           self._active_mode != "check", row.folder_job['destination'],
+                                                          row.folder_job.get('staged_geometry'),
                                                           remote_auth=auth)
                 else:
                     self._active_future = AnalysisProcess(run_remote_doe,r_idx,s,context,self._active_mode!="check",remote_auth=auth)

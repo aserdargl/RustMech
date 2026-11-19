@@ -1,7 +1,7 @@
 """Explicit, fail-closed TRUBA execution for complete RustMech operations.
 
-Only settings and versioned source are uploaded. Meshes and numerical work are
-created by SLURM workers; downloaded VTK/CSV data is rendered locally.
+SLURM workers use settings, versioned source, and optional prepared geometry
+to build meshes and compute results. Downloaded VTK/CSV data is rendered locally.
 """
 from dataclasses import asdict, dataclass, replace
 import base64
@@ -262,7 +262,7 @@ def _rebase_paths(directory,result):
 
 def run_remote_job(request,context,auth=None,marker=None,*,directory=None,resume_record=None,on_progress=None,cancelled=None,
                    submit_only=False, poll_once=False, detach_requested=None):
-    from remote_operations import required_capability
+    from remote_operations import batch_geometry_name, required_capability
     study_name = context.study_name
     if not resume_record:
         required_capability(request)
@@ -278,13 +278,17 @@ def run_remote_job(request,context,auth=None,marker=None,*,directory=None,resume
         directory = Path(record["local_directory"])
     else:
         from model import ROOT
+        geometry_path = request.get('settings', {}).get('imported_geometry_path')
+        staged_geometry = request.get('staged_geometry')
+        if staged_geometry is not None:
+            if staged_geometry['username'] != transport.username:
+                raise ValueError('Use the TRUBA account that received the prepared specimens.')
+            batch_geometry_name(staged_geometry['sha256'])
+        elif geometry_path:
+            request = {**request, 'imported_geometry_vtp': base64.b64encode(Path(geometry_path).read_bytes()).decode('ascii')}
         directory = Path(directory) if directory else ROOT/"results"/("TRUBA_"+uuid.uuid4().hex)
         directory.mkdir(parents=True,exist_ok=False)
         source_hash,native_hash = make_source_bundle(directory/"engine.tar.gz")
-        geometry_path = request.get('settings', {}).get('imported_geometry_path')
-        if geometry_path:
-            import base64
-            request = {**request, 'imported_geometry_vtp': base64.b64encode(Path(geometry_path).read_bytes()).decode('ascii')}
         step_cores, step_memory = request_resources(context, request['operation'])
         execution_context = dict(asdict(context), cores=step_cores, memory_mb=step_memory)
         request = {**request,"schema_version":1,"request_id":uuid.uuid4().hex,"source_sha256":source_hash,"native_sha256":native_hash,"remote_context":execution_context}
@@ -585,11 +589,13 @@ def run_remote_level(settings,context,max_elements,selected,remote_auth=None,job
 run_remote_level.remote_job_target = True
 
 
-def run_remote_doe(index,settings,context,solve,remote_auth=None,job_marker=None):
-    from dataclasses import replace
+def run_remote_doe(index,settings,context,solve,remote_auth=None,job_marker=None,*,staged_geometry=None):
     cores, _ = request_resources(context, 'doe_solve' if solve else 'doe_mesh')
     settings = replace(settings, cores=min(settings.cores, cores), automatic_cores=False)
-    result,_ = run_remote_job(dict(operation="doe_solve" if solve else "doe_mesh",settings=asdict(settings),row=index),context,remote_auth,job_marker)
+    request = dict(operation='doe_solve' if solve else 'doe_mesh', settings=asdict(settings), row=index)
+    if staged_geometry is not None:
+        request['staged_geometry'] = staged_geometry
+    result, _ = run_remote_job(request, context, remote_auth, job_marker)
     return result["row"] if result is not None else None
 run_remote_doe.remote_job_target = True
 

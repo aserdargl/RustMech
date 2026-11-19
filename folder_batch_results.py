@@ -173,11 +173,21 @@ def collect_folder_output(row, payload):
     return payload
 
 
-def run_remote_folder_doe(index, settings, context, solve, destination, remote_auth=None, job_marker=None):
+def validate_folder_snapshot(settings):
+    from model import validate_settings
+    from solver_api import get_solver_capabilities
+    errors = validate_settings(settings) + get_solver_capabilities(settings.solver_backend).validate(settings)
+    if errors:
+        raise ValueError(settings.imported_geometry_name + ': ' + '\n'.join(errors))
+
+
+def run_remote_folder_doe(index, settings, context, solve, destination, staged_geometry=None, remote_auth=None,
+                          job_marker=None):
     """Keep potentially large download copies off the GUI thread."""
     from types import SimpleNamespace
     from truba_remote import run_remote_doe
-    payload = run_remote_doe(index, settings, context, solve, remote_auth, job_marker)
+    payload = run_remote_doe(index, settings, context, solve, remote_auth, job_marker,
+                             staged_geometry=staged_geometry)
     if solve and payload is not None:
         try:
             row = SimpleNamespace(folder_job={'destination': destination})

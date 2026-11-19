@@ -490,12 +490,19 @@ Analysis queue|Analiz kuyruğu
 Analysis queue...|Analiz kuyruğu...
 Analysis Queue|Analiz Kuyruğu
 Add to Queue|Kuyruğa Ekle
-Add Truba|TRUBA'ya Ekle
+Send to TRUBA|TRUBA'ya Gönder
+Select all ready specimens|Hazır numunelerin tümünü seç
+Upload prepared specimens, then add the jobs to the analysis queue.|Hazırlanan numuneleri yükle ve işleri analiz kuyruğuna ekle.
+Prepared geometry uploaded to BatchInputs on TRUBA.|Hazırlanan geometri TRUBA'daki BatchInputs klasörüne yüklendi.
+Previously queued job. Geometry uploads when the queue runs.|Önceden kuyruğa eklenen iş. Geometri kuyruk çalıştırıldığında yüklenir.
+TRUBA is disconnected. Connect using the TRUBA button, then send the prepared specimens.|TRUBA bağlantısı yok. TRUBA düğmesinden bağlanın, ardından hazırlanan numuneleri gönderin.
+Checking and uploading prepared specimens to TRUBA…|Hazırlanan numuneler kontrol edilip TRUBA'ya yükleniyor…
+Wait for the TRUBA upload to finish.|TRUBA yüklemesinin bitmesini bekleyin.
+ready. Edit the faces on the left, then select the specimens to send or queue.|hazır. Solda yüzeyleri düzenleyin, ardından gönderilecek veya kuyruğa eklenecek numuneleri seçin.
+Mesh and analysis run on TRUBA with Kratos. Self-contact is disabled. TET10 uses displacement control and penalty mortar. Material and loading come from the Mechanic workspace.|Ağ üretimi ve analiz TRUBA'da Kratos ile çalışır. Öz temas devre dışıdır. TET10 yer değiştirme kontrolü ve ceza tabanlı mortar kullanır. Malzeme ve yükleme Mekanik çalışma alanından alınır.
 Check at least one ready specimen.|Hazır numunelerden en az birini işaretleyin.
-ready. Select the specimens you want to add, then click the add button.|hazır. Kuyruğa almak istediğiniz numuneleri işaretleyip ekleme düğmesine tıklayın.
 Checking source files before saving jobs to Analysis Queue…|İşler Analiz Kuyruğuna kaydedilmeden önce kaynak dosyalar kontrol ediliyor…
 The selected jobs are already in Analysis Queue.|Seçili işler zaten Analiz Kuyruğunda.
-TRUBA is disconnected. Connect to TRUBA and prepare a resource session before running the queue.|TRUBA bağlantısı yok. Kuyruğu çalıştırmadan önce TRUBA'ya bağlanın ve kaynak oturumunu hazırlayın.
 Source changed after preparation. Check the folder again.|Kaynak dosya hazırlıktan sonra değişti. Klasörü yeniden kontrol edin.
 Execution|Yürütme
 Execution target|Yürütme hedefi
@@ -508,7 +515,6 @@ Ready to submit analysis to TRUBA.|Analiz TRUBA'ya gönderilmeye hazır.
 Local mesh|Yerel ağ üretimi
 TRUBA batch analysis|TRUBA toplu analizi
 Enable TRUBA mode and allocate or refresh a resource session before running these jobs.|Bu işleri çalıştırmadan önce TRUBA modunu açın ve bir kaynak oturumu ayırın veya mevcut oturumu yenileyin.
-TRUBA uses Kratos with self-contact disabled. TET10 uses displacement control and penalty mortar. Material and loading come from the Mechanic workspace.|TRUBA, öz temas kapalı olarak Kratos kullanır. TET10 için yer değiştirme kontrolü ve ceza mortar kullanılır. Malzeme ve yükleme Mekanik çalışma alanından alınır.
 Mesh and solution run locally. Analysis settings come from the Mechanic workspace.|Ağ ve çözüm yerelde çalışır. Analiz ayarları Mekanik çalışma alanından alınır.
 Material, loading, contact and solver parameters are captured from the main Mechanic workspace when checking.|Malzeme, yükleme, temas ve çözücü ayarları ön kontrol sırasında ana Mekanik çalışma alanından alınır.
 Remove from Queue|Kuyruktan Çıkar

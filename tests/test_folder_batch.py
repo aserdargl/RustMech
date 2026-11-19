@@ -3,6 +3,7 @@ from concurrent.futures import Future
 import csv
 from dataclasses import replace
 import json
+from hashlib import sha256
 import os
 from pathlib import Path
 import tempfile
@@ -104,6 +105,19 @@ class FolderBatchTests(unittest.TestCase):
                 return
             QTest.qWait(10)
         self.fail('Enqueue did not finish')
+
+    def simulate_upload(self, dialog):
+        auth = SimpleNamespace(username='test-user')
+        dialog.queue.remote_controller = SimpleNamespace(auth=lambda: auth)
+
+        def stage(active_auth, sources):
+            self.assertIs(active_auth, auth)
+            return {source: dict(username=auth.username, sha256=sha256(Path(source).read_bytes()).hexdigest())
+                    for source in sources}
+
+        upload = patch('truba_files.stage_batch_geometries', side_effect=stage)
+        self.addCleanup(upload.stop)
+        return upload.start()
 
     def test_reopened_folder_batch_restores_inputs_and_local_choices(self):
         batch = self.dialog()
@@ -615,6 +629,7 @@ class FolderBatchTests(unittest.TestCase):
         self.assertIsNone(reopened.future)
         self.assertEqual(reopened.items[1].cells, selected)
         reopened.table.item(1, RUN_COLUMN).setCheckState(Qt.CheckState.Checked)
+        reopened.execution_target.setCurrentIndex(reopened.execution_target.findData('local'))
         reopened.enqueue.click()
         self.finish_enqueue(reopened)
         self.assertEqual(len(reopened.queue.rows), 1)
@@ -709,6 +724,7 @@ class FolderBatchTests(unittest.TestCase):
         self.assertFalse(dialog.enqueue.isEnabled())
         dialog.table.item(0, RUN_COLUMN).setCheckState(Qt.CheckState.Checked)
         self.assertTrue(dialog.enqueue.isEnabled())
+        self.simulate_upload(dialog)
         dialog.enqueue.click()
         self.finish_enqueue(dialog)
         remote = queue.rows[-1]
@@ -734,20 +750,36 @@ class FolderBatchTests(unittest.TestCase):
         self.assertEqual(dialog.mesh_type.currentText(), 'TET4')
         self.assertTrue(dialog.mesh_type.isEnabled())
         dialog.mesh_type.setCurrentText('TET10')
-        self.assertEqual(dialog.enqueue.text(), 'Add Truba')
+        self.assertEqual(dialog.enqueue.text(), 'Send to TRUBA')
         dialog.table.item(0, RUN_COLUMN).setCheckState(Qt.CheckState.Checked)
+        dialog.enqueue.click()
+        self.assertIn('TRUBA is disconnected', dialog.status.text())
+        self.assertIsNone(dialog.future)
+        self.assertFalse(queue.rows)
+        self.assertEqual(dialog.queue_table.rowCount(), 0)
+        self.simulate_upload(dialog)
+        with patch('truba_files.stage_batch_geometries', side_effect=OSError('Upload interrupted')):
+            dialog.enqueue.click()
+            self.finish_enqueue(dialog)
+        self.assertIn('Upload interrupted', dialog.status.text())
+        self.assertFalse(queue.rows)
+        self.assertFalse(dialog.table.isRowHidden(0))
         with patch('doe_studio.AnalysisProcess') as serial, patch('truba_parallel.AnalysisProcess') as parallel:
             dialog.enqueue.click()
             self.assertFalse(dialog.enqueue.isEnabled())
             self.assertFalse(dialog.enqueue.isDown())
-            self.assertIn('TRUBA is disconnected', dialog.status.text())
+            self.assertIn('uploading prepared specimens', dialog.status.text())
+            self.assertFalse(queue.rows)
+            self.assertEqual(dialog.queue_table.rowCount(), 0)
             self.finish_enqueue(dialog)
             serial.assert_not_called()
             parallel.assert_not_called()
         self.assertIn('Saved to Analysis Queue (1)', dialog.status.text())
-        self.assertIn('TRUBA is disconnected', dialog.status.text())
+        self.assertIn('uploaded to BatchInputs on TRUBA', dialog.status.text())
         remote, = QueueStore(queue.store.path).load()
         self.assertEqual(remote.folder_job['execution_target'], 'truba')
+        self.assertEqual(remote.folder_job['staged_geometry'], dict(
+            username='test-user', sha256=sha256(Path(dialog.items[0].cached).read_bytes()).hexdigest()))
         self.assertEqual(remote.design_settings.solver_backend, 'kratos')
         self.assertEqual(remote.design_settings.mesh_type, 'TET10')
         self.assertEqual(remote.design_settings.kratos_contact_method, 'penalty')
@@ -781,10 +813,11 @@ class FolderBatchTests(unittest.TestCase):
                     queue.run_batch_btn.click()
                     dispatch = serial if slots == 1 else parallel
                     dispatch.assert_called_once()
-                    target, index, settings, _, solve, destination = dispatch.call_args.args
+                    target, index, settings, _, solve, destination, staged = dispatch.call_args.args
                     self.assertIs(target, run_remote_folder_doe)
                     self.assertEqual((index, settings.solver_backend, solve, destination),
                                      (0, 'kratos', True, remote.folder_job['destination']))
+                    self.assertEqual(staged, remote.folder_job['staged_geometry'])
                     remote_future.set_result(dict(r_idx=0, status='Completed'))
                     queue._poll_worker()
                     self.assertEqual(serial.call_args.args[0].__name__, '_solve_row')
@@ -873,6 +906,7 @@ class FolderBatchTests(unittest.TestCase):
 
     def test_remove_from_right_panel_persists_and_returns_only_the_selected_job(self):
         dialog = self.dialog()
+        self.simulate_upload(dialog)
         unrelated = dialog.queue.add_snapshot(self.base)
         dialog.root, dialog.base = self.root, self.base
         dialog.items = [self.prepared('part1.stl'), self.prepared('part2.stl')]
@@ -916,6 +950,7 @@ class FolderBatchTests(unittest.TestCase):
 
     def test_enqueue_keeps_unmodified_queue_when_a_source_changes(self):
         dialog = self.dialog()
+        upload = self.simulate_upload(dialog)
         dialog.root, dialog.base = self.root, self.base
         dialog.items = [self.prepared('part1.stl'), self.prepared('part2.stl')]
         dialog.refresh_table()
@@ -928,9 +963,39 @@ class FolderBatchTests(unittest.TestCase):
         self.finish_enqueue(dialog)
 
         self.assertIn('Source changed after preparation', dialog.status.text())
+        upload.assert_not_called()
         self.assertFalse(dialog.queue.rows)
         self.assertTrue(dialog.enqueue.isEnabled())
         self.assertFalse(dialog.table.isRowHidden(0))
+
+    def test_header_checkbox_tracks_visible_ready_specimens(self):
+        dialog = self.dialog()
+        dialog.root, dialog.base = self.root, self.base
+        failed = self.specimen('open.stl')
+        pv.Plane().triangulate().save(failed)
+        dialog.items = [self.prepared('part1.stl'), self.prepared('part2.stl'),
+                        prepare_specimen(failed, (0, 0, 1)), self.prepared('hidden.stl')]
+        dialog.refresh_table()
+        dialog.table.setRowHidden(3, True)
+        dialog.update_enqueue_button()
+        dialog.show()
+        self.app.processEvents()
+        header = dialog.table.horizontalHeader()
+        checkbox = dialog.select_all
+        self.assertEqual(dialog.table.horizontalHeaderItem(RUN_COLUMN).text(), '')
+        self.assertTrue(checkbox.isVisible())
+        self.assertTrue(header.viewport().rect().contains(checkbox.geometry()))
+        row_checks = [dialog.table.item(row, RUN_COLUMN) for row in range(4)]
+        row_checks[0].setCheckState(Qt.CheckState.Checked)
+        self.assertEqual(checkbox.checkState(), Qt.CheckState.PartiallyChecked)
+        # Click the indicator, then use the keyboard to clear the ready rows.
+        QTest.mouseClick(checkbox, Qt.MouseButton.LeftButton, pos=checkbox.rect().center())
+        self.assertEqual(checkbox.checkState(), Qt.CheckState.Checked)
+        self.assertEqual([item.checkState() for item in row_checks],
+                         [Qt.CheckState.Checked] * 2 + [Qt.CheckState.Unchecked] * 2)
+        QTest.keyClick(checkbox, Qt.Key.Key_Space)
+        self.assertEqual(checkbox.checkState(), Qt.CheckState.Unchecked)
+        self.assertFalse(dialog.enqueue.isEnabled())
 
     def test_async_check_and_enter_never_start_or_enqueue(self):
         dialog = self.dialog()
