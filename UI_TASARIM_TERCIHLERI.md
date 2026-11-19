@@ -7,3 +7,4 @@
 - Düğmeler ve açılır kutular içeriklerine göre kompakt boyutlansın. İlişkili işlem düğmeleri aynı genişlik ve yükseklikte olsun. Düğme yüzeyleri düz, kenarları ince, gölgeleri hafif olsun.
 - Dosya ve klasör seçicilerinde, onay ve uyarı pencerelerinde düğmeler metni ve iç boşluğu sığdıracak kadar büyüyebilsin. Türkçe etiketler ve büyük yazı boyutları kesilmesin. Normal, basılı ve devre dışı durumlarda yazı zemininden ayırt edilebilsin.
 - Pencere boyutu, konumu, büyütülmüş durumu ve kullanıcının ayarladığı panel oranları sonraki açılışta geri yüklensin.
+- Windows, pencere dış çerçevesini, gölgeyi ve yuvarlatılmış köşeleri Datenburg’daki gibi çizsin. Qt, 25 px başlık satırını ve pencere düğmelerini çizsin.

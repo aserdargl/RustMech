@@ -10,8 +10,11 @@ from PySide6.QtWidgets import (
     QApplication, QDialog, QFileDialog, QMainWindow, QMenu, QMessageBox, QSplitter, QVBoxLayout, QWidget,
 )
 
-from window_caption import CAPTION_PROPERTY, WM_NCHITTEST, CaptionButton, MonitorInfo, install_window_captions
+from window_caption import CAPTION_PROPERTY, WM_NCHITTEST, WS_CAPTION, CaptionButton, MonitorInfo, install_window_captions
 from window_state import WindowStateStore
+
+DWMWA_NCRENDERING_ENABLED = 1
+DWMWA_VISIBLE_FRAME_BORDER_THICKNESS = 37
 
 
 class WindowStateTests(unittest.TestCase):
@@ -158,13 +161,13 @@ class WindowStateTests(unittest.TestCase):
             self.addCleanup(self.app.removeNativeEventFilter, service._native_frame)
         self.addCleanup(service.deleteLater)
 
-        def assert_borderless(window):
+        def assert_integrated_frame(window):
             if service._native_frame is None:
                 self.assertTrue(window.windowFlags() & Qt.WindowType.FramelessWindowHint)
                 return
             frame = service._native_frame
             hwnd = int(window.winId())
-            self.assertEqual(frame._get_style(hwnd, -16) & 0x00C00000, 0)
+            self.assertEqual(frame._get_style(hwnd, -16) & WS_CAPTION, 0)
             self.assertEqual(frame._get_style(hwnd, -20) & 0x00000001, 0)
             if not window.isMinimized():
                 bounds, _ = native_bounds(window)
@@ -185,17 +188,32 @@ class WindowStateTests(unittest.TestCase):
             return bounds, monitor
 
         def assert_native_work_area(window):
-            assert_borderless(window)
+            assert_integrated_frame(window)
             if service._native_frame is not None:
                 self.assertTrue(service._native_frame._is_zoomed(int(window.winId())))
                 bounds, monitor = native_bounds(window)
                 self.assertEqual((bounds.left, bounds.top, bounds.right, bounds.bottom),
                                  (monitor.work.left, monitor.work.top, monitor.work.right, monitor.work.bottom))
 
-        def assert_outline_color(window):
+        def assert_frame_decoration(window):
             outline = window.property(CAPTION_PROPERTY).outline
-            image = outline.grab().toImage()
-            self.assertEqual(image.pixelColor(image.width() // 2, 0).name(), "#64748b")
+            if service._native_frame is None:
+                self.assertTrue(outline.isVisible())
+                image = outline.grab().toImage()
+                self.assertEqual(image.pixelColor(image.width() // 2, 0).name(), "#64748b")
+            else:
+                self.assertIsNone(outline)
+                get_attribute = ctypes.windll.dwmapi.DwmGetWindowAttribute
+                get_attribute.argtypes = (wintypes.HWND, wintypes.DWORD, ctypes.c_void_p, wintypes.DWORD)
+                hwnd = int(window.winId())
+                result = wintypes.DWORD()
+                self.assertEqual(get_attribute(hwnd, DWMWA_NCRENDERING_ENABLED, ctypes.byref(result),
+                                               ctypes.sizeof(result)), 0)
+                self.assertEqual(result.value, 1)
+                status = get_attribute(hwnd, DWMWA_VISIBLE_FRAME_BORDER_THICKNESS, ctypes.byref(result),
+                                       ctypes.sizeof(result))
+                if status >= 0:
+                    self.assertGreater(result.value, 0)
 
         main = QMainWindow()
         main.setCentralWidget(QWidget())
@@ -204,24 +222,20 @@ class WindowStateTests(unittest.TestCase):
         self.windows.append(main)
         main.show()
         self.app.processEvents()
-        assert_borderless(main)
+        assert_integrated_frame(main)
         caption = main.property(CAPTION_PROPERTY)
         buttons = caption.findChildren(CaptionButton)
         self.assertEqual([button.action for button in buttons], ["pin", "minimize", "maximize", "close"])
         self.assertEqual([button.x() for button in buttons], list(range(caption.width() - 100, caption.width(), 25)))
         self.assertTrue(all(button.width() == button.height() == 25 for button in buttons))
         self.assertGreaterEqual(main.centralWidget().y(), caption.geometry().bottom() + 1)
-        self.assertTrue(caption.outline.isVisible())
-        assert_outline_color(main)
-        self.assertTrue(caption.outline.testAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents))
+        assert_frame_decoration(main)
         if service._native_frame is not None:
             # VTK's native viewport likewise promotes the surrounding Qt widgets.
             main.centralWidget().winId()
-            self.assertIsNotNone(caption.outline.windowHandle())
             send_message = ctypes.windll.user32.SendMessageW
             send_message.argtypes = (wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM)
             send_message.restype = ctypes.c_ssize_t
-            self.assertEqual(send_message(int(caption.outline.winId()), WM_NCHITTEST, 0, 0), -1)
             hwnd = int(main.winId())
             origin = wintypes.POINT()
             self.assertTrue(service._native_frame._client_to_screen(hwnd, ctypes.byref(origin)))
@@ -237,8 +251,10 @@ class WindowStateTests(unittest.TestCase):
                                  expected_hit)
         main.resize(660, 450)
         self.app.processEvents()
-        self.assertTrue(caption.outline.mask().contains(QPoint(main.width() - 1, main.height() - 1)))
-        self.assertFalse(caption.outline.mask().contains(main.rect().center()))
+        if caption.outline is not None:
+            self.assertTrue(caption.outline.testAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents))
+            self.assertTrue(caption.outline.mask().contains(QPoint(main.width() - 1, main.height() - 1)))
+            self.assertFalse(caption.outline.mask().contains(main.rect().center()))
         normal = main.geometry()
         buttons[1].click()
         self.app.processEvents()
@@ -254,13 +270,12 @@ class WindowStateTests(unittest.TestCase):
         self.windows.append(dialog)
         dialog.show()
         self.app.processEvents()
-        assert_borderless(dialog)
+        assert_integrated_frame(dialog)
         dialog_caption = dialog.property(CAPTION_PROPERTY)
         dialog_buttons = dialog_caption.findChildren(CaptionButton)
         self.assertEqual([button.action for button in dialog_buttons], ["pin", "close"])
-        self.assertTrue(dialog_caption.outline.isVisible())
-        assert_outline_color(main)
-        assert_outline_color(dialog)
+        assert_frame_decoration(main)
+        assert_frame_decoration(dialog)
         dialog_caption.pin.click()
         self.assertTrue(dialog_caption.pin.isChecked())
         self.assertFalse(caption.pin.isChecked())
@@ -276,7 +291,7 @@ class WindowStateTests(unittest.TestCase):
         modeless.show()
         self.app.processEvents()
         modeless_normal = modeless.geometry()
-        assert_borderless(modeless)
+        assert_integrated_frame(modeless)
         minimize = modeless.findChild(CaptionButton, "WindowCaptionMinimize")
         minimize.click()
         self.app.processEvents()
@@ -290,7 +305,7 @@ class WindowStateTests(unittest.TestCase):
         else:
             modeless.showNormal()
         self.app.processEvents()
-        assert_borderless(modeless)
+        assert_integrated_frame(modeless)
         self.assertEqual(modeless.geometry(), modeless_normal)
         self.assertEqual(modeless.windowHandle().transientParent(), main.windowHandle())
         modeless.close()
@@ -299,7 +314,8 @@ class WindowStateTests(unittest.TestCase):
         self.app.processEvents()
         self.assertTrue(main.isMaximized())
         self.assertTrue(caption.isVisible())
-        self.assertFalse(caption.outline.isVisible())
+        if caption.outline is not None:
+            self.assertFalse(caption.outline.isVisible())
         assert_native_work_area(main)
         main.hide()
         restored = QMainWindow()
@@ -312,14 +328,14 @@ class WindowStateTests(unittest.TestCase):
         restored_caption.maximize.click()
         self.app.processEvents()
         self.assertEqual(restored.geometry(), normal)
-        self.assertTrue(restored_caption.outline.isVisible())
+        assert_frame_decoration(restored)
         restored.showFullScreen()
         self.app.processEvents()
-        assert_borderless(restored)
+        assert_integrated_frame(restored)
         self.assertFalse(restored_caption.isVisible())
         restored.showNormal()
         self.app.processEvents()
-        assert_borderless(restored)
+        assert_integrated_frame(restored)
         self.assertEqual(restored.geometry(), normal)
         self.assertTrue(restored_caption.isVisible())
 
@@ -327,14 +343,14 @@ class WindowStateTests(unittest.TestCase):
         self.windows.append(picker)
         picker.show()
         self.app.processEvents()
-        assert_borderless(picker)
+        assert_integrated_frame(picker)
         self.assertTrue(picker.property(CAPTION_PROPERTY).isVisible())
-        assert_outline_color(picker)
+        assert_frame_decoration(picker)
         warning = QMessageBox(QMessageBox.Icon.Warning, "Warning", "Application message", parent=restored)
         self.windows.append(warning)
         warning.show()
         self.app.processEvents()
-        assert_borderless(warning)
+        assert_integrated_frame(warning)
         self.assertTrue(warning.property(CAPTION_PROPERTY).isVisible())
         menu = QMenu(restored)
         menu.ensurePolished()

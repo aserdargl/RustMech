@@ -3,7 +3,7 @@
 import ctypes
 from ctypes import wintypes
 
-from PySide6.QtCore import QAbstractNativeEventFilter, QEvent, QMargins, QObject, QPoint, QPointF, QRect, Qt
+from PySide6.QtCore import QAbstractNativeEventFilter, QEvent, QMargins, QObject, QPoint, QPointF, QRect, Qt, QTimer
 from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPen, QRegion
 from PySide6.QtWidgets import QAbstractButton, QDialog, QHBoxLayout, QMainWindow, QWidget
 
@@ -15,19 +15,20 @@ WM_GETMINMAXINFO = 0x0024
 WM_STYLECHANGING = 0x007C
 WM_NCCALCSIZE = 0x0083
 WM_NCHITTEST = 0x0084
-WM_NCPAINT = 0x0085
-WM_NCACTIVATE = 0x0086
 WM_NCLBUTTONDBLCLK = 0x00A3
 HTCLIENT = 1
 HTCAPTION = 2
 HTSYSMENU = 3
-HTTRANSPARENT = -1
 GWL_STYLE = -16
 GWL_EXSTYLE = -20
 WS_CAPTION = 0x00C00000
 WS_THICKFRAME = 0x00040000
 WS_EX_APPWINDOW = 0x00040000
 WS_EX_DLGMODALFRAME = 0x00000001
+DWMWA_WINDOW_CORNER_PREFERENCE = 33
+DWMWA_BORDER_COLOR = 34
+DWMWCP_ROUND = 2
+FRAME_BORDER_COLOR = 0x00A0A0A0
 ACTION_HINTS = (
     ("minimize", Qt.WindowType.WindowMinimizeButtonHint),
     ("maximize", Qt.WindowType.WindowMaximizeButtonHint),
@@ -54,6 +55,11 @@ class MinMaxInfo(ctypes.Structure):
 
 class WindowStyle(ctypes.Structure):
     _fields_ = (("old", wintypes.DWORD), ("new", wintypes.DWORD))
+
+
+class DwmMargins(ctypes.Structure):
+    _fields_ = (("left", ctypes.c_int), ("right", ctypes.c_int),
+                ("top", ctypes.c_int), ("bottom", ctypes.c_int))
 
 
 class WindowsCaptionFrame(QAbstractNativeEventFilter):
@@ -83,12 +89,14 @@ class WindowsCaptionFrame(QAbstractNativeEventFilter):
         self._is_zoomed.argtypes = (wintypes.HWND,)
         self._set_dwm_attribute = ctypes.windll.dwmapi.DwmSetWindowAttribute
         self._set_dwm_attribute.argtypes = (wintypes.HWND, wintypes.DWORD, ctypes.c_void_p, wintypes.DWORD)
+        self._extend_dwm_frame = ctypes.windll.dwmapi.DwmExtendFrameIntoClientArea
+        self._extend_dwm_frame.argtypes = (wintypes.HWND, ctypes.POINTER(DwmMargins))
 
     def frame_style(self, window, index, style):
         if index == GWL_STYLE:
             style &= ~(WS_CAPTION | WS_THICKFRAME)
             if not window.isFullScreen() and not window.windowFlags() & Qt.WindowType.MSWindowsFixedSizeDialogHint:
-                # Win32's move/size loop uses this flag. The application owns all the pixels.
+                # Keep Win32's move/size loop and leave caption painting to Qt.
                 style |= WS_THICKFRAME
         elif index == GWL_EXSTYLE:
             style &= ~WS_EX_DLGMODALFRAME
@@ -109,10 +117,20 @@ class WindowsCaptionFrame(QAbstractNativeEventFilter):
             if desired != style:
                 self._set_style(hwnd, index, desired)
                 changed = True
-        policy = ctypes.c_int(1)  # DWMNCRP_DISABLED
-        self._set_dwm_attribute(hwnd, 2, ctypes.byref(policy), ctypes.sizeof(policy))
         if changed:
             self._set_position(hwnd, None, 0, 0, 0, 0, 0x0037)  # SWP_FRAMECHANGED without move or resize.
+        QTimer.singleShot(0, window, lambda: self._configure_dwm(window, hwnd))
+
+    def _configure_dwm(self, window, hwnd):
+        # An HWND change can occur inside a synchronous Win32 message.
+        if int(window.internalWinId()) != hwnd:
+            return
+        for attribute, value in ((DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND),
+                                 (DWMWA_BORDER_COLOR, FRAME_BORDER_COLOR)):
+            native_value = wintypes.DWORD(value)
+            self._set_dwm_attribute(hwnd, attribute, ctypes.byref(native_value), ctypes.sizeof(native_value))
+        # Give DWM a frame to compose without changing Qt's client bounds.
+        self._extend_dwm_frame(hwnd, ctypes.byref(DwmMargins(bottom=1)))
 
     def set_pinned(self, handle, enabled):
         # HWND_TOPMOST / HWND_NOTOPMOST, with no move, resize, activation or owner change.
@@ -123,11 +141,9 @@ class WindowsCaptionFrame(QAbstractNativeEventFilter):
             return False, 0
         native = wintypes.MSG.from_address(int(message))
         if native.message not in (WM_GETMINMAXINFO, WM_STYLECHANGING, WM_NCCALCSIZE, WM_NCHITTEST,
-                                  WM_NCPAINT, WM_NCACTIVATE, WM_NCLBUTTONDBLCLK):
+                                  WM_NCLBUTTONDBLCLK):
             return False, 0
         window = QWidget.find(int(native.hWnd or 0))
-        if native.message == WM_NCHITTEST and isinstance(window, WindowOutline):
-            return True, HTTRANSPARENT
         caption = window.property(CAPTION_PROPERTY) if window is not None else None
         if caption is None:
             return False, 0
@@ -137,10 +153,6 @@ class WindowsCaptionFrame(QAbstractNativeEventFilter):
                 index = ctypes.c_int(native.wParam).value
                 style.new = self.frame_style(window, index, style.new)
             return False, 0
-        if native.message == WM_NCPAINT:
-            return True, 0
-        if native.message == WM_NCACTIVATE:
-            return True, 1
         if window.isFullScreen() and not window.isMaximized():
             return False, 0
         if native.message == WM_GETMINMAXINFO:
@@ -156,7 +168,6 @@ class WindowsCaptionFrame(QAbstractNativeEventFilter):
             return False, 0
         if native.message == WM_NCCALCSIZE:
             if native.lParam and self._is_zoomed(native.hWnd):
-                # Both NCCALCSIZE forms start with the proposed client RECT.
                 rect = wintypes.RECT.from_address(native.lParam)
                 monitor = MonitorInfo(size=ctypes.sizeof(MonitorInfo))
                 if self._monitor_info(self._monitor_from_rect(ctypes.byref(rect), 2), ctypes.byref(monitor)):
@@ -268,7 +279,7 @@ class WindowCaption(QWidget):
     def __init__(self, window, flags, native_frame):
         super().__init__(window)
         self._native_frame = native_frame
-        self.outline = WindowOutline(window)
+        self.outline = WindowOutline(window) if native_frame is None else None
         self.base_margins = window.contentsMargins()
         self.setObjectName("integratedWindowCaption")
         self.setFixedHeight(CAPTION_HEIGHT)
@@ -377,10 +388,11 @@ class WindowCaptionService(QObject):
         caption.setGeometry(grip, grip, max(0, window.width() - 2 * grip), CAPTION_HEIGHT)
         caption.setVisible(not fullscreen)
         caption.raise_()
-        caption.outline.setGeometry(window.rect())
-        caption.outline.setVisible(bool(grip))
-        caption.outline.raise_()
-        caption.outline.update()
+        if caption.outline is not None:
+            caption.outline.setGeometry(window.rect())
+            caption.outline.setVisible(bool(grip))
+            caption.outline.raise_()
+            caption.outline.update()
         if caption.maximize is not None:
             label = self.tr("Restore") if window.isMaximized() else self.tr("Maximize")
             caption.maximize.setAccessibleName(label)
