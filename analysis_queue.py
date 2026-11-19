@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 from uuid import uuid4
 
-from PySide6.QtCore import QLockFile, Qt
+from PySide6.QtCore import QLockFile, Qt, Signal
 from PySide6.QtWidgets import QLabel, QPushButton, QTableWidgetItem
 
 from design_exchange import pool_directory
@@ -64,6 +64,8 @@ class QueueStore:
 
 
 class AnalysisQueueWidget(DoEStudioWidget):
+    queue_changed = Signal()
+
     def __init__(self, settings_provider, mesh_generator, batch_solver_runner, parent=None, queue_path=None):
         self.store = QueueStore(queue_path)
         self._storage_ready = False
@@ -116,6 +118,7 @@ class AnalysisQueueWidget(DoEStudioWidget):
             self.table.resizeColumnsToContents()
         finally:
             self._updating_table = False
+        self.queue_changed.emit()
 
     def save_queue(self):
         if not self._storage_ready:

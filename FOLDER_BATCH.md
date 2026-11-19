@@ -22,11 +22,11 @@
    veya eleman seçimi açık hata verir, sessizce değiştirilmez. İçe aktarılan
    numunelerde HEX seçimi TET4'e çevrilir; mevcut TET4/TET10 seçimi korunur.
    Periyodik ağ yerine Netgen kullanılır.
-7. **Add ready specimens to queue** seçin. Çözücü uyumluluğu ve analiz ayarları
-   doğrulanır, tüm seçili işler tek işlemde kuyruğa kaydedilir. Aynı kaynak
+7. **Add to Queue** seçin. Çözücü uyumluluğu ve analiz ayarları doğrulanır.
+   Kaydedilen işler sağdaki **Analysis Queue** sütununa taşınır. Aynı kaynak
    içeriğine ve ayarlara sahip işler yeniden eklenmez. Kaynak dosya hazırlıktan
    sonra değişmişse yeniden ön kontrol gerekir.
-8. **Open analysis queue > Run analysis queue** ile açıkça başlatın. Her
+8. **Analysis Queue > Run analysis queue** ile açıkça başlatın. Her
    numunenin seçili çözücüleri tamamlandıktan sonra sıradaki numuneye geçilir.
    Varsayılan hata politikası sonraki işe devam eder. Tamamlanan işler atlanır;
    hatalı işler aynı kuyruktan yeniden denenebilir. Yeniden açılışta kesilmiş

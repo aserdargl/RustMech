@@ -367,6 +367,11 @@ Design Pool - Gitterburg / RustMech|Tasarım havuzu - Gitterburg / RustMech
 Design Pool and analysis queue|Tasarım havuzu ve analiz kuyruğu
 Analysis queue|Analiz kuyruğu
 Analysis queue...|Analiz kuyruğu...
+Analysis Queue|Analiz Kuyruğu
+Add to Queue|Kuyruğa Ekle
+Specimens|Numuneler
+Specimen|Numune
+Preflight|Ön Kontrol
 Analysis queue - RustMech|Analiz kuyruğu - RustMech
 Add current model to analysis queue|Mevcut modeli analiz kuyruğuna ekle
 Configure selected...|Seçileni yapılandır...

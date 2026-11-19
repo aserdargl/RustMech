@@ -8,9 +8,9 @@ from pathlib import Path
 import re
 
 from PySide6.QtCore import QSize, QSettings, Qt, QTimer
-from PySide6.QtWidgets import (QAbstractItemView, QApplication, QDialog, QHeaderView,
+from PySide6.QtWidgets import (QAbstractItemView, QApplication, QDialog, QGroupBox, QHeaderView,
                               QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPushButton,
-                              QTableWidget, QTableWidgetItem, QToolButton, QVBoxLayout)
+                              QSplitter, QTableWidget, QTableWidgetItem, QToolButton, QVBoxLayout)
 
 from camera_toolbar import camera_icon
 from file_dialog import QFileDialog
@@ -99,6 +99,10 @@ def specimen_snapshots(item, root, base, solvers):
         raise ValueError('Choose valid support and compression faces first.')
     if source_digest(item.source) != item.digest:
         raise ValueError('Source changed after preparation. Check the folder again.')
+    yield from _prepared_snapshots(item, root, base, solvers)
+
+
+def _prepared_snapshots(item, root, base, solvers):
     relative = Path(item.source).relative_to(root)
     # Keep the original units and loading magnitude. No automatic strain scaling.
     settings = replace(base, imported_geometry_path=item.cached,
@@ -140,6 +144,8 @@ class FolderBatchDialog(QDialog):
         self.base = None
         self.disposed = False
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(7)
         hint = QLabel('Mechanical compression • coordinates in mm. Choose a direction or select faces on the first specimen. '
                       'Every specimen is checked independently. Isotropy is not assumed. Flow and thermal studies use their existing workspaces.')
         hint.setWordWrap(True)
@@ -172,6 +178,15 @@ class FolderBatchDialog(QDialog):
                                    'Displacement stays in mm; force stays in N. Imported geometries use tetrahedral elements.')
         self.settings_hint.setWordWrap(True)
         layout.addWidget(self.settings_hint)
+        panels = QSplitter(Qt.Orientation.Horizontal)
+        panels.setObjectName('folderBatchPanels')
+        panels.setChildrenCollapsible(False)
+        panels.setHandleWidth(7)
+        layout.addWidget(panels, 1)
+        specimens = QGroupBox('Specimens')
+        specimen_layout = QVBoxLayout(specimens)
+        specimen_layout.setContentsMargins(6, 6, 6, 6)
+        panels.addWidget(specimens)
         self.table = QTableWidget(0, 4)
         self.table.setHorizontalHeaderLabels(['', 'Run', 'Specimen', 'Preflight'])
         self.table.horizontalHeaderItem(FACES_COLUMN).setToolTip('Inspect / select faces')
@@ -183,10 +198,27 @@ class FolderBatchDialog(QDialog):
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.horizontalHeader().setStretchLastSection(True)
-        layout.addWidget(self.table, 1)
-        actions = ActionFlowLayout()
-        self.enqueue = self.button('Add ready specimens to queue', self.enqueue_ready)
-        self.show_queue = self.button('Open analysis queue', self.open_queue)
+        specimen_layout.addWidget(self.table)
+
+        queued = QGroupBox('Analysis Queue')
+        queue_layout = QVBoxLayout(queued)
+        queue_layout.setContentsMargins(6, 6, 6, 6)
+        self.queue_table = QTableWidget(0, 2)
+        self.queue_table.setHorizontalHeaderLabels(['Specimen', 'Solver'])
+        self.queue_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.queue_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.queue_table.verticalHeader().hide()
+        queue_header = self.queue_table.horizontalHeader()
+        queue_header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        queue_header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        queue_layout.addWidget(self.queue_table)
+        panels.addWidget(queued)
+        panels.setSizes([560, 320])
+
+        actions = ActionFlowLayout(equal_width=True)
+        actions.setAlignment(Qt.AlignmentFlag.AlignRight)
+        self.enqueue = self.button('Add to Queue', self.enqueue_ready)
+        self.show_queue = self.button('Analysis Queue', self.open_queue)
         close = self.button('Close', self.close)
         for button in (self.enqueue, self.show_queue, close):
             actions.addWidget(button)
@@ -200,17 +232,18 @@ class FolderBatchDialog(QDialog):
         self.timer.start()
         self.folder.textChanged.connect(self.invalidate)
         self.mode.currentIndexChanged.connect(self.invalidate)
+        self.solver.currentIndexChanged.connect(self.refresh_queue_view)
+        self.queue.queue_changed.connect(self.refresh_queue_view)
         self.set_busy(False)
 
     def button(self, text, callback, *, primary=False):
         button = QPushButton(text, self)
         if primary:
             button.setProperty('primary', True)
-            button.setStyleSheet('QPushButton { padding: 0 8px; } QPushButton:focus { padding: 0 7px; }')
+        button.setStyleSheet('QPushButton { padding: 0 8px; } QPushButton:focus { padding: 0 7px; }')
         button.setAutoDefault(False)
         button.setDefault(False)
         button.clicked.connect(callback)
-        button.setFixedWidth(button.sizeHint().width())
         return button
 
     def invalidate(self, *_):
@@ -218,14 +251,41 @@ class FolderBatchDialog(QDialog):
         self.table.setRowCount(0)
         self.root = None
         self.base = None
-        self.enqueue.setEnabled(False)
+        self.refresh_queue_view()
 
     def set_busy(self, busy):
         for widget in (self.folder, self.browse, self.mode, self.solver, self.check):
             widget.setEnabled(not busy)
         for row in range(self.table.rowCount()):
             self.table.cellWidget(row, FACES_COLUMN).setEnabled(not busy)
-        self.enqueue.setEnabled(not busy and any(item.cached for item in self.items))
+        self.refresh_queue_view(busy=busy)
+
+    def selected_solvers(self):
+        return {0: [self.base.solver_backend], 1: ['ansys_mapdl'], 2: ['kratos'],
+                3: ['ansys_mapdl', 'kratos']}[self.solver.currentIndex()]
+
+    def refresh_queue_view(self, *, busy=None):
+        root = str(self.root) if self.root is not None else None
+        rows = [row for row in self.queue.rows if row.folder_job and row.folder_job['root'] == root]
+        self.queue_table.setRowCount(len(rows))
+        for index, row in enumerate(rows):
+            settings = row.design_settings
+            for column, value in enumerate((settings.imported_geometry_name, settings.solver_backend)):
+                item = QTableWidgetItem(value)
+                item.setToolTip(value)
+                self.queue_table.setItem(index, column, item)
+
+        keys = {row.folder_job['key'] for row in rows}
+        solvers = self.selected_solvers() if keys else ()
+        ready = False
+        for index, specimen in enumerate(self.items):
+            queued = bool(specimen.cached and keys) and all(
+                metadata['key'] in keys for _, metadata in _prepared_snapshots(specimen, self.root, self.base, solvers))
+            self.table.setRowHidden(index, queued)
+            ready |= bool(specimen.cached and not queued)
+        if busy is None:
+            busy = self.future is not None or bool(self.pending)
+        self.enqueue.setEnabled(ready and not busy)
 
     def choose_folder(self):
         path = QFileDialog.getExistingDirectory(self, 'Specimen folder', self.folder.text().strip(),
@@ -331,7 +391,7 @@ class FolderBatchDialog(QDialog):
             self.set_busy(False)
             ready = sum(bool(item.cached) for item in self.items)
             self.status.setText(f'{ready}/{len(self.items)} ready. Inspect or select faces for the remaining specimens, or leave them unchecked. '
-                                'Add ready specimens to the queue, then use Run analysis queue to start.')
+                                'Use Add to Queue, then open Analysis Queue to start the jobs.')
 
     def poll(self):
         if self.future is None or not self.future.done():
@@ -393,14 +453,14 @@ class FolderBatchDialog(QDialog):
         if self.future is not None or self.base is None:
             return
         try:
-            solvers = {0: [self.base.solver_backend], 1: ['ansys_mapdl'],
-                       2: ['kratos'], 3: ['ansys_mapdl', 'kratos']}[self.solver.currentIndex()]
+            solvers = self.selected_solvers()
             controller = getattr(self.queue, 'remote_controller', None)
             if controller is not None and controller.requested and solvers != [self.base.solver_backend]:
                 raise ValueError('TRUBA uses the current workspace solver. Choose Current workspace or switch to local execution.')
             snapshots = []
             for index, item in enumerate(self.items):
-                if self.table.item(index, RUN_COLUMN).checkState() == Qt.CheckState.Checked:
+                if (not self.table.isRowHidden(index)
+                        and self.table.item(index, RUN_COLUMN).checkState() == Qt.CheckState.Checked):
                     snapshots.extend(specimen_snapshots(item, self.root, self.base, solvers))
             if not snapshots:
                 raise ValueError('Check at least one ready specimen.')

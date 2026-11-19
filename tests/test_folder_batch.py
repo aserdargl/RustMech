@@ -15,7 +15,7 @@ import numpy as np
 import pyvista as pv
 from PySide6.QtCore import QSettings, Qt, QTimer
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QAbstractItemView, QApplication, QComboBox, QDialogButtonBox, QLineEdit, QPushButton
+from PySide6.QtWidgets import QAbstractItemView, QApplication, QComboBox, QDialogButtonBox, QLineEdit, QPushButton, QSplitter
 
 from analysis_queue import AnalysisQueueWidget, QueueStore
 from doe_studio import ExperimentWorker
@@ -440,6 +440,64 @@ class FolderBatchTests(unittest.TestCase):
         self.assertFalse(batch.items[0].cached)
         self.assertIsNone(batch.saved_faces(path))
 
+    def test_automatic_faces_restore_after_modal_editor_opens(self):
+        dialog = self.dialog()
+        specimen = self.prepared()
+        dialog.root, dialog.base = self.root, self.base
+        dialog.items = [specimen]
+        dialog.refresh_table()
+        dialog.show()
+        restored = []
+
+        def restore(editor):
+            restored.append((self.app.activeModalWidget() is editor, editor.isVisible()))
+            restore_faces(editor)
+            restored.append(tuple(editor.selected))
+            editor.reject()
+
+        def dismiss():
+            editor = self.app.activeModalWidget()
+            if isinstance(editor, GeometryImportDialog):
+                editor.reject()
+
+        restore_faces = GeometryImportDialog._restore_faces
+        fallback = QTimer(dialog, singleShot=True, interval=2500)
+        fallback.timeout.connect(dismiss)
+        fallback.start()
+        with patch.object(GeometryImportDialog, '_restore_faces', restore):
+            QTest.mouseClick(dialog.table.cellWidget(0, FACES_COLUMN), Qt.MouseButton.LeftButton)
+        fallback.stop()
+        self.assertEqual(restored, [(True, True), specimen.cells], dialog.status.text())
+
+    def test_queued_specimens_move_to_right_panel_and_keep_solver_options(self):
+        dialog = self.dialog()
+        dialog.root, dialog.base = self.root, self.base
+        dialog.items = [self.prepared('part1.stl'), self.prepared('part2.stl')]
+        dialog.refresh_table()
+        dialog.set_busy(False)
+        dialog.show()
+        self.app.processEvents()
+        dialog.table.item(1, RUN_COLUMN).setCheckState(Qt.CheckState.Unchecked)
+        dialog.solver.setCurrentIndex(1)
+        dialog.enqueue.click()
+
+        self.assertTrue(dialog.table.isRowHidden(0))
+        self.assertFalse(dialog.table.isRowHidden(1))
+        self.assertEqual(dialog.queue_table.rowCount(), 1)
+        self.assertEqual(dialog.queue_table.item(0, 0).text(), 'part1.stl')
+        self.assertEqual(dialog.queue_table.item(0, 1).text(), 'ansys_mapdl')
+        buttons = [button for button in dialog.findChildren(QPushButton)
+                   if button.text() in ('Add to Queue', 'Analysis Queue', 'Close')]
+        self.assertEqual(len(buttons), 3)
+        self.assertEqual(len({button.size() for button in buttons}), 1)
+        dialog.solver.setCurrentIndex(2)
+        self.assertFalse(dialog.table.isRowHidden(0))
+        dialog.solver.setCurrentIndex(1)
+        dialog.queue.table.selectRow(0)
+        dialog.queue.delete_selected_rows()
+        self.assertFalse(dialog.table.isRowHidden(0))
+        self.assertEqual(dialog.queue_table.rowCount(), 0)
+
     def test_async_check_and_enter_never_start_or_enqueue(self):
         dialog = self.dialog()
         self.specimen()
@@ -537,12 +595,16 @@ class FolderBatchTests(unittest.TestCase):
         first.resize(720, 500)
         first.move(40, 50)
         self.app.processEvents()
+        splitter = first.findChild(QSplitter, 'folderBatchPanels')
+        splitter.setSizes([300, 400])
+        sizes = splitter.sizes()
         geometry = first.frameGeometry()
         first.hide()
         second = self.dialog()
         second.show()
         self.app.processEvents()
         self.assertEqual(second.frameGeometry(), geometry)
+        self.assertEqual(second.findChild(QSplitter, 'folderBatchPanels').sizes(), sizes)
         second.showMaximized()
         self.app.processEvents()
         normal = second.normalGeometry().size()
