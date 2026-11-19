@@ -1,4 +1,4 @@
-"""Datenburg-style file and folder pickers backed by Qt's native item models."""
+"""Datenburg-style pickers and standard Qt dialog buttons."""
 
 import os
 import sys
@@ -11,6 +11,25 @@ from PySide6.QtWidgets import (
 )
 
 from datenburg_widgets import compact_gradient_button_stylesheet, qss_asset_url
+
+
+_DIALOG_BUTTON_STYLE = compact_gradient_button_stylesheet("QPushButton", "padding: 0 7px;")
+
+
+def _style_dialog_buttons(box):
+    buttons = box.buttons()
+    for button in buttons:
+        button.setProperty("primary", button.isDefault()
+                           or box.buttonRole(button) == QDialogButtonBox.ButtonRole.AcceptRole)
+    if not box.property("rustmechDialogButtonsStyled"):
+        box.setProperty("rustmechDialogButtonsStyled", True)
+        box.setStyleSheet(box.styleSheet() + "\n" + _DIALOG_BUTTON_STYLE)
+    for button in buttons:
+        # A QSS min-width can take the place of Qt's content-based size hint.
+        metrics = button.fontMetrics()
+        text_width = metrics.size(Qt.TextFlag.TextShowMnemonic, button.text()).width()
+        button.setMinimumSize(max(77, button.minimumWidth(), text_width + 18),
+                              max(25, button.minimumHeight(), metrics.height() + 6))
 
 
 def _picker_stylesheet():
@@ -57,9 +76,7 @@ QFileDialog QToolButton {{
 QFileDialog QToolButton:hover, QFileDialog QToolButton:focus {{ border-color: #3978BE; }}
 QFileDialog QToolButton:pressed, QFileDialog QToolButton:checked {{ background: #D6E8FA; }}
 QFileDialog QToolButton:disabled {{ background: #E9EDF2; }}
-""" + compact_gradient_button_stylesheet(
-        "QFileDialog #buttonBox QPushButton", "min-width: 75px; min-height: 23px;"
-    )
+"""
 
 
 class FileDialogControls(QObject):
@@ -94,9 +111,7 @@ class FileDialogControls(QObject):
             if view is not None:
                 view.customContextMenuRequested.connect(lambda point, view=view: self.extend_menu(view, point))
 
-        buttons = dialog.findChild(QDialogButtonBox, "buttonBox")
-        for button in buttons.buttons():
-            button.setProperty("primary", buttons.buttonRole(button) == QDialogButtonBox.ButtonRole.AcceptRole)
+        _style_dialog_buttons(dialog.findChild(QDialogButtonBox, "buttonBox"))
         dialog.setStyleSheet(_picker_stylesheet())
 
     def sync_address(self, _path=""):
@@ -179,17 +194,14 @@ class FileDialogControls(QObject):
 
 class FileDialogService(QObject):
     def eventFilter(self, widget, event):
-        if event.type() != QEvent.Type.Show:
+        if event.type() not in (QEvent.Type.Polish, QEvent.Type.Show):
             return False
-        if isinstance(widget, (QInputDialog, QMessageBox)) and isinstance(widget.parentWidget(), QFileDialog):
+        if isinstance(widget, (QInputDialog, QMessageBox)):
             buttons = widget.findChild(QDialogButtonBox)
             if buttons is not None:
-                for button in buttons.buttons():
-                    button.setProperty("primary", button.isDefault()
-                                       or buttons.buttonRole(button) == QDialogButtonBox.ButtonRole.AcceptRole)
-            widget.setStyleSheet("QDialog { background: #F1F5F9; }" + compact_gradient_button_stylesheet(
-                "QDialogButtonBox QPushButton", "min-width: 75px; min-height: 23px;"
-            ))
+                _style_dialog_buttons(buttons)
+            if isinstance(widget.parentWidget(), QFileDialog) and not widget.styleSheet():
+                widget.setStyleSheet("QDialog { background: #F1F5F9; }")
         return False
 
 

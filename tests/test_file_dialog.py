@@ -4,8 +4,11 @@ from pathlib import Path
 
 import pytest
 from PySide6.QtCore import QDir, QSettings, Qt, QTimer
+from PySide6.QtGui import QFont
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QComboBox, QLineEdit, QStackedWidget, QWidget
+from PySide6.QtWidgets import (
+    QApplication, QComboBox, QDialogButtonBox, QInputDialog, QLineEdit, QMessageBox, QStackedWidget, QWidget,
+)
 
 from file_dialog import QFileDialog, install_file_dialogs
 from window_caption import CAPTION_PROPERTY, install_window_captions
@@ -123,3 +126,62 @@ def test_picker_remembers_each_actions_directory_on_cancel(picker_app, tmp_path)
 
     assert visits == [(tmp_path, "original.csv"), (nested, "next.csv"),
                       (tmp_path, "other.csv"), (tmp_path, "fallback.csv")]
+
+
+@pytest.mark.parametrize("entry", [
+    "getExistingDirectory", "getOpenFileName", "getOpenFileNames", "getSaveFileName", "message", "input",
+])
+def test_dialog_buttons_fit_large_localized_text(picker_app, tmp_path, entry):
+    owner = QWidget()
+    measured = []
+
+    def measure():
+        dialog = picker_app.activeModalWidget()
+        box = dialog.findChild(QDialogButtonBox)
+        try:
+            for button in box.buttons():
+                metrics = button.fontMetrics()
+                width = metrics.size(Qt.TextFlag.TextShowMnemonic, button.text()).width()
+                measured.append((button.width(), button.height(), width, metrics.height()))
+        finally:
+            dialog.reject()
+
+    def relabel():
+        dialog = picker_app.activeModalWidget()
+        box = dialog.findChild(QDialogButtonBox)
+        for button in box.buttons():
+            button.setText("Bu klasörü &seç" if button.property("primary") else "İptal")
+        for _ in range(20):
+            if all(button.width() >= button.sizeHint().width() for button in box.buttons()):
+                break
+            QTest.qWait(10)
+        measure()
+
+    previous_font = picker_app.font()
+    picker_app.setFont(QFont("Segoe UI", 15))
+    try:
+        if entry == "message":
+            prompt = QMessageBox(QMessageBox.Icon.Question, "Confirm", "Use this folder?",
+                                 QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel, owner)
+            prompt.button(QMessageBox.StandardButton.Ok).setText("Bu klasörü &seç")
+            prompt.button(QMessageBox.StandardButton.Cancel).setText("İptal")
+            QTimer.singleShot(0, measure)
+            prompt.exec()
+        elif entry == "input":
+            prompt = QInputDialog(owner)
+            prompt.setLabelText("Folder name")
+            prompt.setOkButtonText("Klasör adını &onayla")
+            prompt.setCancelButtonText("İptal")
+            QTimer.singleShot(0, measure)
+            prompt.exec()
+        else:
+            QTimer.singleShot(0, relabel)
+            getattr(QFileDialog, entry)(owner, "Choose", str(tmp_path))
+    finally:
+        picker_app.setFont(previous_font)
+
+    assert len(measured) == 2
+    if entry.startswith("get"):
+        assert measured[0][:2] == measured[1][:2]
+    assert all(width >= text_width + 12 and height > text_height
+               for width, height, text_width, text_height in measured), measured
