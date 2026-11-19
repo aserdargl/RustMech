@@ -29,7 +29,7 @@ Add Folder|Klasör Ekle
 Select Folder|Klasör Seç
 Upload to TRUBA|TRUBA’ya Aktar
 Upload the folder to TRUBA before running selected scripts.|Seçtiğiniz betikleri çalıştırmadan önce klasörü TRUBA’ya aktarın.
-Use ↑ and ↓ to set the order. Run syncs the inputs and submits each checked Slurm script after the previous job ends.|Sırayı ↑ ve ↓ ile ayarlayın. Çalıştır, girdileri eşitler ve işaretli her Slurm betiğini önceki iş sona erince gönderir.
+Use ↑ and ↓ in Job order. Run syncs the inputs and submits each checked Slurm script after the previous job ends.|İş sırası görünümünde ↑ ve ↓ ile sırayı ayarlayın. Çalıştır, girdileri eşitler ve işaretli her Slurm betiğini önceki iş sona erince gönderir.
 Uploading files to TRUBA…|Dosyalar TRUBA’ya aktarılıyor…
 Stage: {stage}|Aşama: {stage}
 Runtime: {time}|Çalışma süresi: {time}
@@ -58,6 +58,14 @@ Choose a job folder outside the ESEN history directory.|ESEN iş geçmişini iç
 Load files…|Dosya yükle…
 LAMMPS input files|LAMMPS girdi dosyaları
 Include entire job folder|İş klasörünün tamamını ekle
+Filter by name or extension|Ada veya uzantıya göre filtrele
+Filter input files|Girdi dosyalarını filtrele
+Checked files stay checked when hidden by the filter.|Filtreyle gizlenen dosyaların işareti korunur.
+Sort input files|Girdi dosyalarını sırala
+For manual Slurm ordering, select Job order and clear the filter.|Slurm betiklerini elle sıralamak için İş sırası'nı seçip filtreyi temizleyin.
+Job order|İş sırası
+Name (A–Z)|Ada göre (A–Z)
+Format (A–Z)|Biçime göre (A–Z)
 Remove file|Dosyayı çıkar
 Remove selected files|Seçili dosyaları çıkar
 Use Ctrl or Shift to select files. Press Space to check or uncheck selected scripts.|Ctrl veya Shift ile birden fazla dosya seçin. Boşluk tuşuyla seçili betiklerin işaretini değiştirin.

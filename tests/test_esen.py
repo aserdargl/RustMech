@@ -14,7 +14,7 @@ from unittest.mock import patch
 from PySide6.QtCore import QMimeData, QObject, QPoint, QSettings, Qt, QUrl, Signal
 from PySide6.QtGui import QDragEnterEvent, QDropEvent
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QMessageBox, QPushButton
+from PySide6.QtWidgets import QApplication, QMessageBox
 
 import esen_jobs as jobs
 from esen_ai_prompt import ESEN_AI_PROMPT
@@ -423,7 +423,7 @@ class EsenTests(unittest.TestCase):
             self.assertEqual(record["state"], "Cancelled")
             self.assertEqual(transport.command.call_args_list[0].args[0], "scancel 456")
 
-    def test_command_buttons_share_a_width_in_both_languages(self):
+    def test_job_settings_commands_fit_on_one_row_in_both_languages(self):
         app = QApplication.instance() or QApplication([])
         preferences = QSettings(str(self.root / "settings.ini"), QSettings.Format.IniFormat)
         preferences.setValue(LANGUAGE_KEY, "tr")
@@ -434,16 +434,52 @@ class EsenTests(unittest.TestCase):
             workspace = EsenWorkspace(FakeTruba(), history=self.history)
             self.addCleanup(workspace.dispose)
             workspace.show()
-            for locale, upload_label in (("tr", "TRUBA’ya Aktar"), ("en", "Upload to TRUBA")):
+            for locale in ("tr", "en"):
                 with self.subTest(locale=locale):
                     if locale != language.language:
                         language.set_language(locale)
                     app.processEvents()
-                    self.assertEqual(workspace.upload.text(), upload_label)
-                    buttons = workspace.findChildren(QPushButton)
+                    self.assertEqual(workspace.batch_folder.text(), "Folder")
+                    self.assertEqual(workspace.upload.text(), "Send Truba")
+                    toolbar = (workspace.batch_folder, workspace.upload, *workspace._compact_input_actions)
+                    self.assertEqual(len({button.y() for button in toolbar if button.isVisible()}), 1)
+                    self.assertEqual(workspace.batch_folder.width(), workspace.upload.width())
+                    self.assertEqual({button.width() for button in workspace._compact_input_actions}, {25})
+                    buttons = [button for button in workspace._command_buttons if button not in toolbar]
                     width = max(button.sizeHint().width() for button in buttons) + 2
                     self.assertEqual({button.maximumWidth() for button in buttons}, {width})
                     self.assertEqual({button.width() for button in buttons if button.isVisible()}, {width})
+
+    def test_input_filter_and_sort_preserve_checks_and_manual_slurm_order(self):
+        app = QApplication.instance() or QApplication([])
+        preferences = QSettings(str(self.root / "settings.ini"), QSettings.Format.IniFormat)
+        names = ("z.slurm", "b.DATA", "a.in", "c.slurm")
+        for name in names:
+            (self.source / name).write_text("#!/bin/bash\n", encoding="utf-8")
+        with patch("esen_workspace.QSettings", return_value=preferences):
+            workspace = EsenWorkspace(FakeTruba(), history=self.history)
+        self.addCleanup(workspace.dispose)
+        workspace._load_files([str(self.source / name) for name in names])
+        items = {item.text(): item for item in workspace.inputs.items()}
+        for name in ("z.slurm", "c.slurm"):
+            items[name].setCheckState(Qt.CheckState.Checked)
+        workspace.inputs.setCurrentItem(items["c.slurm"])
+        workspace.move_up.click()
+        self.assertEqual(list(workspace._folder_jobs()), ["c.slurm", "z.slurm"])
+        manual_order = [item.text() for item in workspace.inputs.items()]
+
+        for sort_mode, expected in (("name", ["a.in", "b.DATA", "c.slurm", "z.slurm"]),
+                                    ("format", ["b.DATA", "a.in", "c.slurm", "z.slurm"])):
+            workspace.input_sort.setCurrentIndex(workspace.input_sort.findData(sort_mode))
+            self.assertEqual([item.text() for item in workspace.inputs.items()], expected)
+        workspace.input_filter.setText(".data")
+        self.assertEqual([item.text() for item in workspace.inputs.items() if not item.isHidden()], ["b.DATA"])
+        self.assertEqual(list(workspace._folder_jobs()), ["c.slurm", "z.slurm"])
+        self.assertFalse(workspace.move_up.isEnabled())
+
+        workspace.input_filter.clear()
+        workspace.input_sort.setCurrentIndex(workspace.input_sort.findData("job"))
+        self.assertEqual([item.text() for item in workspace.inputs.items()], manual_order)
 
     def test_copy_ai_copies_instructions_without_inputs_or_connection(self):
         app = QApplication.instance() or QApplication([])

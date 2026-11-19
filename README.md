@@ -33,7 +33,7 @@ geçmişteki işi seçip **Girdileri yeniden kullan** düğmesine basın ve hede
 
 ### Klasörden TRUBA’ya toplu gönderim
 
-Hazır Slurm betikleriyle çalışmak için TRUBA hedefini seçin ve **Klasör Seç**
+Hazır Slurm betikleriyle çalışmak için TRUBA hedefini seçin ve **Folder**
 ile `run_*.slurm` dosyalarını içeren proje klasörünü açın. Çalıştıracağınız
 betikleri işaretleyin ve **Çalıştır** düğmesine basın. ESEN proje girdilerini
 TRUBA’ya aktarır ve her betiği kendi klasöründeki göreli yollarla ayrı bir
@@ -42,6 +42,10 @@ Slurm işi olarak gönderir. Aynı aktarım birden fazla işte kullanılır.
 
 Dosya listesinde Ctrl ile tek tek, Shift ile aralık seçin. Boşluk tuşu
 seçili çalıştırılabilir betiklerin kutularını birlikte işaretler veya temizler.
+Dosya listesine ad veya uzantı yazarak filtre uygulayabilir, görünümü ada ya da
+uzantıya göre sıralayabilirsiniz. İşaretli dosyalar ve çalıştırma sırası korunur.
+Slurm işlerinin sırasını değiştirmek için filtreyi temizleyin, **İş sırası**
+görünümünü seçin ve yukarı/aşağı oklarını kullanın.
 
 Kuyruk, hesap, MPI görev sayısı, bellek ve süreyi betiğin `#SBATCH`
 satırlarında belirleyin. ESEN iş takibi için iş adını, çalışma dizinini ve
@@ -58,16 +62,14 @@ ekleyin. LAMMPS girdi betiğinden adım bildirmek için
 
 ### Klasörden LAMMPS girdi betiği gönderimi
 
-**TRUBA analiz klasörü…** ile tek bir analiz klasörünü veya bağımsız analizleri
-içeren üst klasörü seçin. ESEN, seçilen klasörü ve alt klasörlerini tarar ve
-`in.*` ya da `*.in` betiği bulduğu her klasörü bir satırda gösterir. `Results`
-alt klasörleri taranmaz. Tek aday otomatik seçilir. Birden fazla aday varsa
-**Ana betik** listesinden seçin. Yardımcı betik klasörlerinin ve çalıştırmak
-istemediğiniz klasörlerin işaretini kaldırabilirsiniz.
+**Folder** ile tek bir analiz klasörünü veya bağımsız analizlerin bulunduğu üst
+klasörü seçin. ESEN klasördeki ve alt klasörlerdeki dosyaları listeler.
+Çalıştıracağınız ana LAMMPS betiklerini işaretleyin.
 
-**TRUBA’ya gönder**, işaretli klasörleri mevcut TRUBA ayarlarıyla ayrı Slurm
-işleri olarak gönderir. Her işin çalışma dizini kendi analiz klasörüdür. Veri,
-potansiyel ve diğer bağımlılık dosyalarını bu klasörün içinde tutun ve betikte
+**Send Truba** ile girdileri aktarın. Aktarım tamamlanınca **Çalıştır**, işaretli
+betikleri mevcut TRUBA ayarlarıyla ayrı Slurm işleri olarak gönderir. Her işin
+çalışma dizini kendi analiz klasörüdür. Veri, potansiyel ve diğer bağımlılık
+dosyalarını bu klasörün içinde tutun ve betikte
 göreli yollar kullanın. **Devam girdisi** ayarlandıysa aynı göreli yol her seçili
 klasörde bulunmalıdır. İşler **İş geçmişi**'nde ayrı görünür ve sonuçlar her
 analiz klasörünün kendi `Results` dizinine indirilir.
