@@ -423,7 +423,6 @@ class EsenWorkspace(QDialog):
         self.partition = compact_combo([(name, name) for name in jobs.CPU_QUEUES])
         self.account = QLineEdit()
         self.account.setPlaceholderText("TRUBA username")
-        self.walltime = QLineEdit("00:30:00")
         self.module = QLineEdit(jobs.DEFAULT_MODULE)
         self.remote_exe = QLineEdit("lmp")
         self.remote_mpi = compact_combo((("mpirun", "mpirun"), ("srun", "srun")))
@@ -431,7 +430,6 @@ class EsenWorkspace(QDialog):
         self.resume_input.setPlaceholderText("Optional relative path")
         self.resume_input.setToolTip(translate("Include a restart input in the job files to enable checkpoint recovery and the 70-hour handover."))
         self._form_row(form, "Queue", self.partition)
-        self._form_row(form, "Wall time (HH:MM:SS)", self.walltime)
         self.connection = QLabel("Connect using the main TRUBA button.")
         self.connection.setWordWrap(True)
         layout.addWidget(self.connection)
@@ -450,7 +448,7 @@ class EsenWorkspace(QDialog):
         self.ranks.valueChanged.connect(self._preview)
         self.partition.currentIndexChanged.connect(self._queue_changed)
         self.remote_mpi.currentIndexChanged.connect(self._preview)
-        for field in (self.local_exe, self.local_mpi, self.account, self.walltime, self.module, self.remote_exe):
+        for field in (self.local_exe, self.local_mpi, self.account, self.module, self.remote_exe):
             field.editingFinished.connect(self._preview)
             field.returnPressed.connect(self._preview)
         self.resume_input.textChanged.connect(self._preview)
@@ -571,7 +569,7 @@ class EsenWorkspace(QDialog):
         form.addRow(label, field if field_layout is None else field_layout)
 
     def _load_profiles(self):
-        for key in ("local_exe", "local_mpi", "account", "walltime", "module", "remote_exe"):
+        for key in ("local_exe", "local_mpi", "account", "module", "remote_exe"):
             field = getattr(self, key)
             field.setText(str(self.preferences.value(f"esen/{key}", field.text())))
         for key in ("ranks", "local_memory"):
@@ -589,7 +587,7 @@ class EsenWorkspace(QDialog):
         self._profile_partition = self.partition.currentData()
 
     def _save_profiles(self):
-        for key in ("local_exe", "local_mpi", "account", "walltime", "module", "remote_exe"):
+        for key in ("local_exe", "local_mpi", "account", "module", "remote_exe"):
             self.preferences.setValue(f"esen/{key}", getattr(self, key).text())
         for key in ("ranks", "local_memory"):
             self.preferences.setValue(f"esen/{key}", getattr(self, key).value())
@@ -945,7 +943,6 @@ class EsenWorkspace(QDialog):
         return dict(
             partition=self.partition.currentData(),
             account=self.account.text().strip() or (auth.username if auth else "TRUBA_USER"),
-            walltime=self.walltime.text().strip(),
             module=self.module.text().strip(),
             executable=self.remote_exe.text().strip(),
             launcher=self.remote_mpi.currentData(),
@@ -967,8 +964,8 @@ class EsenWorkspace(QDialog):
             relative = jobs.relative_file(settings["resume_input"])
             if (not (root / relative).is_file() or not (whole_folder or relative.as_posix() in [entry, *extra])):
                 raise ValueError("Include the LAMMPS restart input in the job files.")
-        limit = jobs.BASELINES[settings["partition"]]
-        return jobs.remote_script(entry, limit.max_cpus, memory=limit.memory_ceiling(limit.max_cpus),
+        ranks, memory, walltime = jobs.full_node_resources(settings["partition"], jobs.BASELINES)
+        return jobs.remote_script(entry, ranks, memory=memory, walltime=walltime,
                                   **settings, work_subdir=work_subdir)
 
     def _input_files(self):
@@ -987,7 +984,6 @@ class EsenWorkspace(QDialog):
         for field in self.local_fields:
             self.job_form.setRowVisible(field, not remote)
         self.job_form.setRowVisible(self.partition, remote and not slurm)
-        self.job_form.setRowVisible(self.walltime, remote and not slurm)
         self.truba_settings.setVisible(remote and not slurm)
         folder_mode = self.folder_root is not None
         self.use_as_script.setVisible(not folder_mode and not slurm)

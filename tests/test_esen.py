@@ -204,7 +204,7 @@ class EsenTests(unittest.TestCase):
                         self.assertIn("./study/sub/in.run", bundle.getnames())
 
             transport.put.side_effect = inspect_archive
-            settings = dict(partition="debug", account=self.auth.username, walltime="00:02:00",
+            settings = dict(partition="debug", account=self.auth.username,
                             module="", executable="lmp", launcher="srun", resume_input="restart.in")
             for _ in range(2):
                 directory, _ = jobs.new_job(
@@ -214,7 +214,7 @@ class EsenTests(unittest.TestCase):
                 record = jobs.read_job(directory)
                 snapshot = jobs.job_inputs(directory, record)
                 with (patch("esen_jobs.fetch_catalog"),
-                      patch("esen_jobs.full_node_resources", return_value=(2, 512))):
+                      patch("esen_jobs.full_node_resources", return_value=(2, 512, "04:00:00"))):
                     jobs.submit_full_node(directory, record, (snapshot / "study/sub", "in.run", (), True),
                                           settings, self.auth)
                 self.assertEqual(jobs.read_job(directory)["job_id"], "123")
@@ -301,10 +301,10 @@ class EsenTests(unittest.TestCase):
 
     def test_full_node_submission_uses_live_partition_and_matching_node_memory(self):
         directory, record = self.new_job()
-        settings = dict(partition="smp", account=self.auth.username, walltime="00:02:00",
+        settings = dict(partition="smp", account=self.auth.username,
                         module=jobs.DEFAULT_MODULE, executable="lmp", launcher="srun")
         catalog_reply = (
-            "PartitionName=smp State=UP MaxCPUsPerNode=256 MaxMemPerCPU=12000 MaxTime=3-00:00:00\n"
+            "PartitionName=smp State=UP MaxCPUsPerNode=256 MaxMemPerCPU=12000 MaxTime=2-12:30:00\n"
             "RUSTMECH_NODES\n"
             "NodeName=larger-cpu Partitions=smp CPUTot=288 CPUEfctv=256 RealMemory=4000000 MemSpecLimit=1000\n"
             "NodeName=larger-ram Partitions=smp CPUTot=224 RealMemory=4500000"
@@ -315,6 +315,7 @@ class EsenTests(unittest.TestCase):
         script = submit.call_args.args[3]
         self.assertIn("#SBATCH --ntasks=256", script)
         self.assertIn("#SBATCH --mem=3072000M", script)
+        self.assertIn("#SBATCH --time=60:30:00", script)
         self.assertIn("exec srun -n 256", script)
         self.assertEqual(jobs.read_job(directory)["ranks"], 256)
 
@@ -530,6 +531,7 @@ class EsenTests(unittest.TestCase):
         app = QApplication.instance() or QApplication([])
         preferences = QSettings(str(self.root / "settings.ini"), QSettings.Format.IniFormat)
         preferences.setValue("esen/target", "local")
+        preferences.setValue("esen/walltime", "00:01:00")
         files = [str(self.source / name) for name in (self.entry, "data/cell.lmp")]
         with patch("esen_workspace.QSettings", return_value=preferences):
             workspace = EsenWorkspace(FakeTruba(), history=self.history)
@@ -538,7 +540,7 @@ class EsenTests(unittest.TestCase):
         app.processEvents()
         self.assertEqual(workspace.target.currentData(), "remote")
         self.assertTrue(workspace.partition.isVisible())
-        self.assertTrue(workspace.walltime.isVisible())
+        self.assertFalse(hasattr(workspace, "walltime"))
         self.assertTrue(workspace.connection.isVisible())
         self.assertFalse(workspace.account.isVisible())
         self.assertFalse(workspace.ranks.isVisible())
@@ -552,6 +554,8 @@ class EsenTests(unittest.TestCase):
         self.assertEqual(workspace.entry, self.entry)
         self.assertEqual(workspace.extra, ["data/cell.lmp"])
         self.assertIn("#SBATCH --ntasks=", workspace.preview.toPlainText())
+        workspace.partition.setCurrentIndex(workspace.partition.findData("debug"))
+        self.assertIn("#SBATCH --time=04:00:00", workspace.preview.toPlainText())
         header = workspace.truba_settings
         QTest.mouseClick(header, Qt.MouseButton.LeftButton, pos=header.header_rect().center())
         self.assertTrue(workspace.account.isVisible())
@@ -709,10 +713,6 @@ class EsenTests(unittest.TestCase):
         first.resize(720, 680)
         first.move(25, 25)
         app.processEvents()
-        first.walltime.setFocus()
-        QTest.keyClick(first.walltime, Qt.Key.Key_Return)
-        self.assertTrue(first.isVisible())
-        self.assertEqual(first.history.count(), 0)
         first.showMaximized()
         app.processEvents()
         splitter = store.splitters(first)[0]
@@ -833,7 +833,7 @@ class EsenTests(unittest.TestCase):
 
         def submit(directory, record, files, settings, auth):
             self.assertEqual(auth, self.auth)
-            self.assertEqual(settings["walltime"], "00:30:00")
+            self.assertNotIn("walltime", settings)
             self.assertEqual(record["folder_upload"], workspace.folder_upload[0])
             jobs.save_job(directory, record, state="Submitted", job_id="789", username=auth.username)
 
@@ -850,7 +850,6 @@ class EsenTests(unittest.TestCase):
             self.assertEqual(launch.call_count, 1)
             self.assertFalse(workspace.start.isEnabled())
             self.assertEqual(len(workspace.batch_queue), 1)
-            workspace.walltime.setText("01:00:00")
             with patch("esen_jobs.refresh_remote", side_effect=complete):
                 workspace._poll_remote()
                 workspace.remote_task[1].result(timeout=5)

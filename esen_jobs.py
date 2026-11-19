@@ -475,14 +475,17 @@ def remote_script(entry, ranks, partition, account, memory, walltime, module, ex
 {body}"""
 
 
-def full_node_resources(partition, walltime, catalog):
+def full_node_resources(partition, catalog):
     limit = catalog.get(partition)
     if not limit or not limit.available:
         raise ValueError("The selected TRUBA queue is unavailable.")
     ranks = limit.max_cpus
     memory = limit.memory_ceiling(ranks)
+    hours, remainder = divmod(limit.max_seconds, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    walltime = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
     candidates(partition, ranks, memory, walltime, catalog)
-    return ranks, memory
+    return ranks, memory, walltime
 
 
 def submit_full_node(directory, record, files, settings, auth):
@@ -492,8 +495,8 @@ def submit_full_node(directory, record, files, settings, auth):
             submit_remote(directory, record, files, script, auth)
             return
         catalog = fetch_catalog(RemoteContext(transport="ssh"), auth, live_node_capacity=True)
-        ranks, memory = full_node_resources(settings["partition"], settings["walltime"], catalog)
-        script = remote_script(files[1], ranks, memory=memory, **settings,
+        ranks, memory, walltime = full_node_resources(settings["partition"], catalog)
+        script = remote_script(files[1], ranks, memory=memory, walltime=walltime, **settings,
                                work_subdir=record.get("work_subdir", ""))
         changes = dict(ranks=ranks, memory_mib=memory)
         if settings.get("resume_input"):
