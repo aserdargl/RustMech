@@ -27,10 +27,10 @@ Add Folder|Klasör Ekle
 Select Folder|Klasör Seç
 Upload to TRUBA|TRUBA’ya Aktar
 Upload the folder to TRUBA before running selected scripts.|Seçtiğiniz betikleri çalıştırmadan önce klasörü TRUBA’ya aktarın.
-Run syncs the folder and submits the selected Slurm scripts with their resource settings.|Çalıştır, klasörü TRUBA’ya eşitler ve seçili Slurm betiklerini kendi kaynak ayarlarıyla gönderir.
-Uploading folder to TRUBA…|Klasör TRUBA’ya aktarılıyor…
+Use ↑ and ↓ to set the order. Run syncs the inputs and submits each checked Slurm script after the previous job ends.|Sırayı ↑ ve ↓ ile ayarlayın. Çalıştır, girdileri eşitler ve işaretli her Slurm betiğini önceki iş sona erince gönderir.
+Uploading files to TRUBA…|Dosyalar TRUBA’ya aktarılıyor…
 Uploaded to TRUBA: {path}|TRUBA’ya aktarıldı: {path}
-Folder upload failed: {error}|Klasör aktarılamadı: {error}
+File upload failed: {error}|Dosyalar aktarılamadı: {error}
 Files|Dosyalar
 Script|Betik
 Root|Kök Klasör
@@ -56,6 +56,10 @@ Use As Script|Betik Olarak Seç
 Run LAMMPS|LAMMPS'i çalıştır
 Job history|İş geçmişi
 ESEN job history|ESEN iş geçmişi
+Remove job from history|İşi geçmişten sil
+Remove the selected job from history? Job files and results will be kept.|Seçili iş geçmişten silinsin mi? İş dosyaları ve sonuçlar korunacak.
+Move script up|Betiği yukarı taşı
+Move script down|Betiği aşağı taşı
 Reuse inputs|Girdileri yeniden kullan
 Refresh job|İşi yenile
 Resume job|İşi sürdür

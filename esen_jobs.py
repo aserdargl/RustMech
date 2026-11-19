@@ -75,7 +75,7 @@ def is_input_script(name):
 
 
 def is_slurm_script(name):
-    return re.fullmatch(r"run_.+\.slurm", Path(name).name, re.IGNORECASE) is not None
+    return Path(name).suffix.lower() == ".slurm"
 
 
 def read_slurm_script(path):
@@ -116,7 +116,7 @@ def read_job(directory):
     return json.loads((directory / "job.json").read_text(encoding="utf-8"))
 
 
-def new_job(root, entry, target, ranks, *, parent, batch_folder=None, folder_upload=None):
+def new_job(root, entry, target, ranks, *, parent, batch_folder=None, folder_upload=None, work_subdir=None):
     directory = parent / uuid4().hex
     directory.mkdir(parents=True, exist_ok=False)
     record = dict(name=entry, target=target, ranks=ranks, state="Preparing",
@@ -126,8 +126,9 @@ def new_job(root, entry, target, ranks, *, parent, batch_folder=None, folder_upl
     if folder_upload is not None:
         upload_id, username = folder_upload
         subdir = relative_file(entry).parent
-        record.update(folder_upload=upload_id, username=username,
-                      work_subdir=subdir.as_posix() if subdir.parts else "")
+        if work_subdir is None:
+            work_subdir = subdir.as_posix() if subdir.parts else ""
+        record.update(folder_upload=upload_id, username=username, work_subdir=work_subdir)
     if root.name == "inputs" and root.parent.parent == parent:
         # Reused inputs are stored in job history, while their results belong in the original job folder.
         with suppress(OSError, ValueError):
@@ -174,7 +175,7 @@ def snapshot_inputs(directory, root, entry, extra, whole_folder, stop=None, *, i
                 if not is_link(source):
                     copy(source.relative_to(root).as_posix())
     else:
-        for name in dict.fromkeys((entry, *extra)):
+        for name in dict.fromkeys((entry, *extra) if entry else extra):
             copy(name)
     if entry and not (snapshot / relative_file(entry)).is_file():
         raise ValueError("The input script is missing from the snapshot.")
@@ -194,9 +195,9 @@ def upload_location(upload_id, username):
     return f"/arf/scratch/{username}/RustMech/esen-folders/{upload_id}"
 
 
-def upload_folder(history, root, auth):
-    """Keep one immutable input snapshot for all jobs from this upload."""
-    if history.resolve().is_relative_to(root.resolve()):
+def upload_folder(history, root, auth, *, files=None):
+    """Publish all inputs or the given relative paths as an immutable snapshot."""
+    if files is None and history.resolve().is_relative_to(root.resolve()):
         raise ValueError("Choose a job folder outside the ESEN history directory.")
     upload_id = uuid4().hex
     destination = upload_snapshot(history, upload_id).parent
@@ -205,7 +206,7 @@ def upload_folder(history, root, auth):
     destination.parent.mkdir(parents=True, exist_ok=True)
     with TemporaryDirectory(dir=destination.parent) as temporary:
         staging = Path(temporary)
-        snapshot = snapshot_inputs(staging, root, None, (), True, include_results=True)
+        snapshot = snapshot_inputs(staging, root, None, files or (), files is None, include_results=True)
         archive = staging / "inputs.tar.gz"
         with tarfile.open(archive, "w:gz") as bundle:
             bundle.add(snapshot, arcname=".")
@@ -225,9 +226,9 @@ def upload_folder(history, root, auth):
     return upload_id
 
 
-def sync_slurm_folder(history, root, auth, selected):
+def sync_slurm_folder(history, root, auth, selected, *, files=None):
     """Publish one content-identified snapshot for the selected Slurm jobs."""
-    if history.resolve().is_relative_to(root.resolve()):
+    if files is None and history.resolve().is_relative_to(root.resolve()):
         raise ValueError("Choose a job folder outside the ESEN history directory.")
     uploads = history / ".uploads"
     uploads.mkdir(parents=True, exist_ok=True)
@@ -240,7 +241,7 @@ def sync_slurm_folder(history, root, auth, selected):
         previous_id = json.loads(latest.read_text("utf-8"))["upload_id"]
     with TemporaryDirectory(dir=uploads) as temporary:
         staging = Path(temporary)
-        snapshot = snapshot_inputs(staging, root, None, (), True)
+        snapshot = snapshot_inputs(staging, root, None, files or (), files is None)
         for name in selected:
             read_slurm_script(snapshot / relative_file(name))
 

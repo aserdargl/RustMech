@@ -13,8 +13,8 @@ from PySide6.QtCore import QSettings, QSignalBlocker, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QCheckBox, QDialog, QFormLayout, QFrame, QHBoxLayout, QLabel,
-    QLineEdit, QListWidget, QListWidgetItem, QPlainTextEdit, QPushButton,
-    QScrollArea, QSizePolicy, QSplitter, QVBoxLayout,
+    QLineEdit, QListWidget, QListWidgetItem, QMessageBox, QPlainTextEdit, QPushButton,
+    QScrollArea, QSizePolicy, QSplitter, QVBoxLayout, QWidget,
 )
 
 from datenburg_widgets import qss_asset_url
@@ -37,7 +37,7 @@ QDialog#esenWorkspace { background: #F5F5F3; }
 QFrame[esenCard="true"] { background: #FCFCFB; border: 1px solid #D5DBE2; border-radius: 7px; }
 QFrame[esenCard="paper"] { background: #FFFFFF; border: 1px solid #D5DBE2; border-radius: 7px; }
 #esenSection { background: #E5ECF4; border: 1px solid #D5DBE2; border-radius: 5px;
-               color: #0F172A; font-size: 13px; padding-left: 5px; }
+               color: #0F172A; font-size: 13px; padding: 0 5px; }
 #esenWorkspace QPlainTextEdit, #esenWorkspace QListWidget {
     background: #FFFFFF; border: 1px solid #DCE3EC; border-radius: 3px;
 }
@@ -59,7 +59,7 @@ QFrame[esenCard="paper"] { background: #FFFFFF; border: 1px solid #D5DBE2; borde
 """.replace("@ESEN_CHECK@", qss_asset_url("checkbox-check-blue.svg"))
 
 
-def panel(title, *, paper=False, scrollable=False):
+def panel(title, *, paper=False, scrollable=False, actions=()):
     card = QFrame()
     card.setProperty("esenCard", "paper" if paper else "true")
     layout = QVBoxLayout(card)
@@ -68,7 +68,14 @@ def panel(title, *, paper=False, scrollable=False):
     header = QLabel(title)
     header.setObjectName("esenSection")
     header.setFixedHeight(CONTROL_HEIGHT)
-    layout.addWidget(header)
+    if actions:
+        toolbar = ActionFlowLayout()
+        toolbar.addWidget(header)
+        for button in actions:
+            toolbar.addWidget(button)
+        layout.addLayout(toolbar)
+    else:
+        layout.addWidget(header)
     if scrollable:
         scroll = QScrollArea()
         scroll.setFrameShape(QFrame.Shape.NoFrame)
@@ -174,6 +181,7 @@ class EsenWorkspace(QDialog):
         self.folder_upload = None
         self.folder_slurm = False
         self.folder_replay = False
+        self.files_upload = None
         self.upload_task = None
         self.upload_error = ""
         self.batch_queue = {}
@@ -234,13 +242,29 @@ class EsenWorkspace(QDialog):
         split.setStretchFactor(1, 1)
         split.setSizes([405, 590])
 
-        settings, layout = panel("Job settings", scrollable=True)
-        left.addWidget(settings)
         self.batch_folder = command("Select Folder", self._pick_batch_folder)
-        self.upload = command("Upload to TRUBA", self._upload_folder)
+        self.upload = command("Upload to TRUBA", self._upload_inputs)
         self.load_files = command("Files", self._pick_files, hint="Load input files")
         self.pick_script = command("Script", self._pick_script, hint="LAMMPS input script")
-        layout.addLayout(button_row(self.batch_folder, self.upload, self.load_files, self.pick_script))
+        self.use_as_script = command("Use As Script", self._use_as_script)
+        self.remove_inputs = command("Remove", self._remove_file, hint="Remove file")
+        self.pick_root = command("Root", self._pick_root, hint="Job folder")
+        self.move_up = command("↑", lambda: self._move_script(-1), hint="Move script up")
+        self.move_down = command("↓", lambda: self._move_script(1), hint="Move script down")
+        self.move_up.setAccessibleName("Move script up")
+        self.move_down.setAccessibleName("Move script down")
+        self.script_order = QWidget()
+        order = QHBoxLayout(self.script_order)
+        order.setContentsMargins(0, 0, 0, 0)
+        order.setSpacing(4)
+        order.addWidget(self.move_up)
+        order.addWidget(self.move_down)
+        settings, layout = panel(
+            "Job settings", scrollable=True,
+            actions=(self.batch_folder, self.upload, self.load_files, self.pick_script,
+                     self.script_order, self.pick_root, self.use_as_script, self.remove_inputs),
+        )
+        left.addWidget(settings)
         self.inputs = InputFileList()
         self.inputs.setAcceptDrops(True)
         self.inputs.viewport().setAcceptDrops(True)
@@ -249,17 +273,9 @@ class EsenWorkspace(QDialog):
         self.inputs.itemChanged.connect(self._preview)
         self.inputs.currentRowChanged.connect(self._buttons)
         layout.addWidget(self.inputs, 1)
-        self.use_as_script = command("Use As Script", self._use_as_script)
-        self.remove_inputs = command("Remove", self._remove_file, hint="Remove file")
-        layout.addLayout(button_row(self.use_as_script, self.remove_inputs))
         self.whole_folder = QCheckBox("Include entire job folder")
         self.whole_folder.toggled.connect(self._preview)
-        self.pick_root = command("Root", self._pick_root, hint="Job folder")
-        source_options = QHBoxLayout()
-        source_options.addWidget(self.whole_folder)
-        source_options.addWidget(self.pick_root)
-        source_options.addStretch()
-        layout.addLayout(source_options)
+        layout.addWidget(self.whole_folder)
 
         self.job_form = form = QFormLayout()
         configure_form(form)
@@ -325,7 +341,9 @@ class EsenWorkspace(QDialog):
             field.returnPressed.connect(self._preview)
         self.resume_input.textChanged.connect(self._preview)
 
-        history, layout = panel("Job history", paper=True, scrollable=True)
+        self.delete_job = command("Delete", self._delete_history_job, role="destructiveActionBtn",
+                                  hint="Remove job from history")
+        history, layout = panel("Job history", paper=True, scrollable=True, actions=(self.delete_job,))
         left.addWidget(history)
         self.history = CompactListWidget()
         self.history.setAccessibleName("ESEN job history")
@@ -493,7 +511,14 @@ class EsenWorkspace(QDialog):
         if self.folder_root is not None:
             self._scan_folder()
         else:
-            self._preview()
+            self._update_inputs()
+
+    def _slurm_mode(self):
+        if self.target.currentData() != "remote":
+            return False
+        if self.folder_root is not None:
+            return self.folder_slurm
+        return any(map(jobs.is_slurm_script, (self.entry, *self.extra)))
 
     def _folder_source(self):
         if self.target.currentData() == "remote" and self.folder_upload:
@@ -555,9 +580,26 @@ class EsenWorkspace(QDialog):
             if item.checkState() == Qt.CheckState.Checked:
                 yield item.text()
 
-    def _folder_job_files(self, name, *, preview=False):
+    def _script_neighbor(self, direction):
+        row = self.inputs.currentRow()
+        if row < 0 or not jobs.is_slurm_script(self.inputs.item(row).text()):
+            return None
+        end = self.inputs.count() if direction > 0 else -1
+        return next((index for index in range(row + direction, end, direction)
+                     if jobs.is_slurm_script(self.inputs.item(index).text())), None)
+
+    def _move_script(self, direction):
+        row, neighbor = self.inputs.currentRow(), self._script_neighbor(direction)
+        if self._slurm_mode() and neighbor is not None and not self.upload_task:
+            with QSignalBlocker(self.inputs):
+                item = self.inputs.takeItem(row)
+                self.inputs.insertItem(neighbor, item)
+                self.inputs.setCurrentItem(item)
+            self._preview()
+
+    def _folder_preview_files(self, name):
         path = jobs.relative_file(name)
-        root = (self.folder_root if preview and self.folder_slurm and not self.folder_replay
+        root = (self.folder_root if self.folder_slurm and not self.folder_replay
                 else self._folder_source())
         return root / path.parent, path.name, (), True
 
@@ -565,13 +607,27 @@ class EsenWorkspace(QDialog):
         return bool(auth and self.folder_upload and self.folder_upload[1] == auth.username
                     and not self.upload_task and not self.folder_scan)
 
-    def _upload_folder(self):
+    def _upload_inputs(self):
         auth = self.truba.analysis_auth()
         if not self.upload.isEnabled() or not auth:
             return
+        self._transfer_inputs(auth)
+
+    def _transfer_inputs(self, auth, selected=()):
+        options = {}
+        source = self.folder_root
+        if source is None:
+            source, entry, extra, whole_folder = self._input_files()
+            if not whole_folder:
+                options["files"] = tuple(filter(None, (entry, *extra)))
+        elif self.folder_replay:
+            source = self._folder_source()
         self.upload_error = ""
-        future = self.executor.submit(jobs.upload_folder, self.history_root, self.folder_root, auth)
-        self.upload_task = (future, auth, ())
+        if self._slurm_mode():
+            future = self.executor.submit(jobs.sync_slurm_folder, self.history_root, source, auth, selected, **options)
+        else:
+            future = self.executor.submit(jobs.upload_folder, self.history_root, source, auth, **options)
+        self.upload_task = future, auth, selected
         self._preview()
 
     def _check_upload(self):
@@ -580,10 +636,14 @@ class EsenWorkspace(QDialog):
         (future, auth, selected), self.upload_task = self.upload_task, None
         try:
             upload_id = future.result()
-            self.folder_upload = upload_id, auth.username
+            upload = upload_id, auth.username
+            if self.folder_root is not None:
+                self.folder_upload = upload
+            else:
+                self.files_upload = self._input_files(), upload
             if selected:
                 self._queue_batch("remote", auth, selected=selected)
-            else:
+            elif self.folder_root is not None and not self.folder_slurm:
                 self._scan_folder(checked=set(self._folder_jobs()))
         except Exception as error:
             self.upload_error = str(error)
@@ -643,18 +703,28 @@ class EsenWorkspace(QDialog):
 
     def _update_inputs(self):
         self._clear_batch_source()
-        self.inputs.clear()
-        if self.entry:
-            item = QListWidgetItem(self.entry)
-            item.setToolTip(translate("LAMMPS input script"))
-            item.setData(Qt.ItemDataRole.AccessibleDescriptionRole, translate("LAMMPS input script"))
-            font = item.font()
-            font.setBold(True)
-            item.setFont(font)
-            self.inputs.addItem(item)
-        self.inputs.addItems(self.extra)
-        if not self.entry and self.extra:
-            self.inputs.setCurrentRow(0)
+        self.files_upload = None
+        slurm = self._slurm_mode()
+        ordered = [self.inputs.item(index).text() for index in range(self.inputs.count())] if slurm else []
+        checked = set(self._folder_jobs()) if slurm else set()
+        names = ([self.entry] if self.entry else []) + self.extra
+        if slurm:
+            names = list(dict.fromkeys([name for name in ordered if name in names] + names))
+        with QSignalBlocker(self.inputs):
+            self.inputs.clear()
+            for name in names:
+                item = QListWidgetItem(name)
+                if slurm and jobs.is_slurm_script(name):
+                    item.setCheckState(Qt.CheckState.Checked if name in checked else Qt.CheckState.Unchecked)
+                elif name == self.entry:
+                    item.setToolTip(translate("LAMMPS input script"))
+                    item.setData(Qt.ItemDataRole.AccessibleDescriptionRole, translate("LAMMPS input script"))
+                    font = item.font()
+                    font.setBold(True)
+                    item.setFont(font)
+                self.inputs.addItem(item)
+            if names and (slurm or not self.entry):
+                self.inputs.setCurrentRow(0)
         self._preview()
 
     def _remote_settings(self, auth):
@@ -676,7 +746,7 @@ class EsenWorkspace(QDialog):
             raise ValueError("The selected input script is missing.")
         if self.target.currentData() == "local":
             return jobs.local_command(entry, self.ranks.value(), self.local_exe.text().strip(), self.local_mpi.text().strip())
-        if files is not None and self.folder_slurm and jobs.is_slurm_script(entry):
+        if self._slurm_mode() and jobs.is_slurm_script(entry):
             return jobs.read_slurm_script(root / jobs.relative_file(entry))
         settings = self._remote_settings(self.truba.analysis_auth())
         if settings["resume_input"]:
@@ -690,29 +760,41 @@ class EsenWorkspace(QDialog):
     def _input_files(self):
         return self.input_root, self.entry, tuple(self.extra), self.whole_folder.isChecked()
 
+    def _uploaded_files(self, auth):
+        if self.files_upload and auth:
+            files, upload = self.files_upload
+            if upload[1] == auth.username and files == self._input_files():
+                return upload
+        return None
+
     def _preview(self, *_):
         remote = self.target.currentData() == "remote"
-        slurm = remote and self.folder_slurm
+        slurm = self._slurm_mode()
         for field in self.local_fields:
             self.job_form.setRowVisible(field, not remote)
         self.job_form.setRowVisible(self.partition, remote and not slurm)
         self.job_form.setRowVisible(self.walltime, remote and not slurm)
         self.truba_settings.setVisible(remote and not slurm)
         folder_mode = self.folder_root is not None
-        self.use_as_script.setVisible(not folder_mode)
+        self.use_as_script.setVisible(not folder_mode and not slurm)
         self.remove_inputs.setVisible(not folder_mode)
         self.whole_folder.setVisible(not folder_mode)
         self.pick_root.setVisible(not folder_mode)
-        self.upload.setVisible(remote and not slurm)
-        first = next(self._folder_jobs(), None) if folder_mode else None
+        self.upload.setVisible(remote)
+        self.script_order.setVisible(slurm)
+        batch_mode = folder_mode or slurm
+        first = next(self._folder_jobs(), None) if batch_mode else None
         root, entry, extra, whole_folder = self._input_files()
         try:
-            if folder_mode and first is None:
+            if batch_mode and first is None:
                 raise ValueError(self.folder_error or ("Scanning folder…" if self.folder_scan
                                                        else "Select a script to run."))
             work_subdir = ""
             if first:
-                root, entry, extra, whole_folder = self._folder_job_files(first, preview=True)
+                if folder_mode:
+                    root, entry, extra, whole_folder = self._folder_preview_files(first)
+                else:
+                    entry = first
                 if remote and Path(first).parent != Path():
                     work_subdir = Path(first).parent.as_posix()
             invocation = self._command((root, entry, extra, whole_folder), work_subdir=work_subdir)
@@ -723,23 +805,24 @@ class EsenWorkspace(QDialog):
             self.command_valid = False
         source = self.folder_root if folder_mode else root
         lines = [str(source)] if source is not None else []
-        if remote and folder_mode:
+        if remote and source is not None:
             auth = self.truba.analysis_auth()
+            upload = self.folder_upload if folder_mode else self._uploaded_files(auth)
             if self.upload_task:
-                lines.append(translate("Uploading folder to TRUBA…"))
-            elif auth and self.folder_upload and self.folder_upload[1] == auth.username:
-                upload_id, username = self.folder_upload
+                lines.append(translate("Uploading files to TRUBA…"))
+            elif auth and upload and upload[1] == auth.username:
+                upload_id, username = upload
                 path = jobs.upload_location(upload_id, username) + "/inputs"
                 lines.append(translate("Uploaded to TRUBA: {path}").format(path=path))
-            elif not slurm:
+            elif folder_mode and not slurm:
                 lines.append(translate("Upload the folder to TRUBA before running selected scripts."))
             if self.upload_error:
-                lines.append(translate("Folder upload failed: {error}").format(error=self.upload_error))
+                lines.append(translate("File upload failed: {error}").format(error=self.upload_error))
         if slurm:
-            lines.append(translate("Run syncs the folder and submits the selected Slurm scripts with their resource settings."))
+            lines.append(translate("Use ↑ and ↓ to set the order. Run syncs the inputs and submits each checked Slurm script after the previous job ends."))
         elif remote:
             lines.append(translate("Preview values are estimates. Slurm limits apply at submission."))
-        if folder_mode and self.inputs.count():
+        if batch_mode and self.inputs.count():
             lines.append(translate("{files} files · {scripts} scripts selected").format(
                 files=self.inputs.count(), scripts=sum(1 for _ in self._folder_jobs())))
         elif not folder_mode and not entry:
@@ -766,7 +849,9 @@ class EsenWorkspace(QDialog):
             if not re.fullmatch(r"[0-9a-f]{32}", path.parent.name):
                 continue
             try:
-                records.append((jobs.read_job(path.parent), path.parent))
+                record = jobs.read_job(path.parent)
+                if not record.get("hidden_from_history"):
+                    records.append((record, path.parent))
             except (OSError, ValueError):
                 continue
         for record, directory in sorted(records, key=lambda pair: pair[0].get("created", ""), reverse=True):
@@ -815,6 +900,36 @@ class EsenWorkspace(QDialog):
         item = self.history.currentItem()
         return Path(item.data(Qt.ItemDataRole.UserRole)) if item else None
 
+    def _can_delete_job(self, directory, record):
+        return bool(record and directory and directory != self.batch_active
+                    and directory not in self._active_directories()
+                    and not (record["target"] == "remote" and record["state"] in ACTIVE_TRUBA_STATES))
+
+    def _delete_history_job(self):
+        directory = self._selected_directory()
+        if not self._can_delete_job(directory, self.record):
+            return
+        reply = QMessageBox.question(
+            self, translate("Remove job from history"),
+            translate("Remove the selected job from history? Job files and results will be kept."),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes or directory != self._selected_directory():
+            return
+        try:
+            record = jobs.read_job(directory)
+            if not self._can_delete_job(directory, record):
+                return
+            jobs.save_job(directory, record, hidden_from_history=True)
+        except (OSError, ValueError) as error:
+            self.job_error = str(error)
+            self._show_selected()
+            return
+        self.batch_queue.pop(directory, None)
+        self._active_truba_jobs.pop(directory, None)
+        self.history.takeItem(self.history.currentRow())
+        self._show_selected()
+
     def _start(self):
         target = self.target.currentData()
         auth = self.truba.analysis_auth() if target == "remote" else None
@@ -823,27 +938,22 @@ class EsenWorkspace(QDialog):
                 (target == "local" and self.local_task)):
             return
         try:
+            if self._slurm_mode():
+                selected = tuple(self._folder_jobs())
+                if self.command_valid and not self.folder_scan and selected:
+                    self._transfer_inputs(auth, selected)
+                return
             if self.folder_root is not None:
-                if target == "remote" and self.folder_slurm:
-                    if not self.command_valid or self.folder_scan:
-                        return
-                    selected = tuple(self._folder_jobs())
-                    if not selected:
-                        return
-                    self.upload_error = ""
-                    source = self._folder_source() if self.folder_replay else self.folder_root
-                    future = self.executor.submit(jobs.sync_slurm_folder, self.history_root,
-                                                  source, auth, selected)
-                    self.upload_task = future, auth, selected
-                    self._preview()
-                    return
                 if target == "remote" and not self._upload_ready(auth):
                     return
                 self._queue_batch(target, auth)
                 return
             invocation = self._command()
             ranks = self.ranks.value() if target == "local" else None
-            directory, record = jobs.new_job(self.input_root, self.entry, target, ranks, parent=self.history_root)
+            directory, record = jobs.new_job(
+                self.input_root, self.entry, target, ranks, parent=self.history_root,
+                folder_upload=self._uploaded_files(auth), work_subdir="",
+            )
         except (OSError, ValueError) as error:
             self.input_note.setText(translate(str(error)))
             return
@@ -871,7 +981,11 @@ class EsenWorkspace(QDialog):
             selected = list(self._folder_jobs())
         if not selected:
             raise ValueError("Select a script to run.")
-        root = self.folder_root
+        root = self.folder_root or self.input_root
+        upload = None
+        if auth:
+            upload = self.folder_upload if self.folder_root is not None else self._uploaded_files(auth)
+        source = jobs.upload_snapshot(self.history_root, upload[0]) if upload else root
         ranks = self.ranks.value() if target == "local" else None
         settings = self._remote_settings(auth) if auth else None
         memory_mib = self.local_memory.value()
@@ -879,8 +993,9 @@ class EsenWorkspace(QDialog):
         prepared = []
         for name in selected:
             try:
-                files = self._folder_job_files(name)
-                subdir = Path(name).parent
+                path = jobs.relative_file(name)
+                subdir = path.parent
+                files = source / subdir, path.name, (), True
                 work_subdir = subdir.as_posix() if auth and subdir != Path() else ""
                 if not auth and history.is_relative_to(files[0]):
                     raise ValueError("Choose a job folder outside the ESEN history directory.")
@@ -897,7 +1012,7 @@ class EsenWorkspace(QDialog):
             try:
                 directory, record = jobs.new_job(root if auth else folder, name if auth else entry,
                                                  target, ranks, parent=self.history_root, batch_folder=label,
-                                                 folder_upload=self.folder_upload if auth else None)
+                                                 folder_upload=upload)
             except OSError as error:
                 errors.append(f"{label}: {error}")
                 continue
@@ -942,6 +1057,7 @@ class EsenWorkspace(QDialog):
         if directory is None:
             self.record = None
             self.status.setText(translate(self.job_error or "Select an ESEN job."))
+            self.results.clear()
             self._buttons()
             return
         try:
@@ -1025,14 +1141,21 @@ class EsenWorkspace(QDialog):
         if remote and self.folder_root is not None and not self.folder_slurm:
             ready = ready and self._upload_ready(auth)
         self.start.setEnabled(self.command_valid and ready and not batch_busy and not uploading)
-        self.upload.setEnabled(bool(remote and authenticated and not self.folder_slurm and self.folder_root is not None
+        has_inputs = self.folder_root is not None or (
+            self.input_root is not None and (self.entry or self.extra or self.whole_folder.isChecked())
+        )
+        self.upload.setEnabled(bool(remote and authenticated and has_inputs
                                     and not self.folder_scan and not uploading and not batch_busy))
-        for control in (self.target, self.batch_folder, self.load_files, self.pick_script, self.inputs):
+        for control in (self.target, self.batch_folder, self.load_files, self.pick_script, self.inputs,
+                        self.pick_root, self.whole_folder):
             control.setEnabled(not uploading)
         item = self.inputs.currentItem()
         supporting_file_selected = bool(item and item.text() in self.extra)
-        self.use_as_script.setEnabled(supporting_file_selected)
-        self.remove_inputs.setEnabled(supporting_file_selected)
+        self.use_as_script.setEnabled(supporting_file_selected and not uploading)
+        self.remove_inputs.setEnabled(supporting_file_selected and not uploading)
+        self.move_up.setEnabled(not uploading and self._script_neighbor(-1) is not None)
+        self.move_down.setEnabled(not uploading and self._script_neighbor(1) is not None)
+        self.delete_job.setEnabled(self._can_delete_job(directory, record))
         self.open_folder.setEnabled(directory is not None)
         self.open_results_folder.setEnabled(self._downloaded_results(directory, record) is not None)
         self.attach.setEnabled(bool(authenticated and self.remote_folder.text().strip() and not self.remote_task))

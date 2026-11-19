@@ -14,7 +14,7 @@ from unittest.mock import patch
 from PySide6.QtCore import QMimeData, QObject, QPoint, QSettings, Qt, QUrl, Signal
 from PySide6.QtGui import QDragEnterEvent, QDropEvent
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QMessageBox
 
 import esen_jobs as jobs
 from esen_workspace import EsenWorkspace
@@ -748,7 +748,7 @@ class EsenTests(unittest.TestCase):
                 self.assertFalse(item.flags() & Qt.ItemFlag.ItemIsUserCheckable)
             if item.text() == "run_second.slurm":
                 item.setCheckState(Qt.CheckState.Checked)
-        self.assertFalse(workspace.upload.isVisible())
+        self.assertTrue(workspace.upload.isVisible())
         self.assertTrue(workspace.start.isEnabled())
         with (patch("esen_jobs.sync_slurm_folder") as sync,
               patch("esen_jobs.submit_full_node") as launch):
@@ -781,6 +781,86 @@ class EsenTests(unittest.TestCase):
             self.assertEqual(workspace.history.count(), 1)
             self.assertIn("run_second.slurm", workspace.history.item(0).text())
             self.assertIn("Submitted", workspace.history.item(0).text())
+
+    def test_selected_files_upload_and_slurm_runs_in_the_user_order(self):
+        app = QApplication.instance() or QApplication([])
+        preferences = QSettings(str(self.root / "settings.ini"), QSettings.Format.IniFormat)
+        names = ("01.slurm", "02.slurm", "data/cell.lmp")
+        for name in names[:2]:
+            (self.source / name).write_text("#!/bin/bash\n", encoding="utf-8")
+        truba = FakeTruba()
+        truba.auth = self.auth
+        with patch("esen_workspace.QSettings", return_value=preferences):
+            workspace = EsenWorkspace(truba, history=self.history)
+        self.addCleanup(workspace.dispose)
+        workspace.show()
+        app.processEvents()
+        workspace._load_files([str(self.source / name) for name in names])
+        workspace.inputs.setCurrentRow(1)
+        workspace.move_up.click()
+        self.assertEqual(workspace.inputs.item(0).text(), names[1])
+        for row in range(2):
+            workspace.inputs.item(row).setCheckState(Qt.CheckState.Checked)
+
+        def submit(directory, record, _files, _settings, auth):
+            jobs.save_job(directory, record, state="Submitted", job_id="123", username=auth.username)
+
+        def complete(directory, record, _auth, *, cancel):
+            jobs.save_job(directory, record, state="Completed")
+
+        with (patch("esen_jobs.RemoteTransport") as transport,
+              patch("esen_jobs.submit_full_node", side_effect=submit) as launch,
+              patch("esen_jobs.refresh_remote", side_effect=complete),
+              patch("esen_jobs.remote_files"), patch("esen_jobs.export_remote_results")):
+            workspace.upload.click()
+            upload_id = workspace.upload_task[0].result(timeout=5)
+            workspace._tick()
+            transport.return_value.put.assert_called_once()
+            snapshot = jobs.upload_snapshot(self.history, upload_id)
+            self.assertTrue(all((snapshot / name).is_file() for name in names))
+            self.assertFalse((snapshot / self.entry).exists())
+            self.assertEqual(workspace.history.count(), 0)
+            launch.assert_not_called()
+
+            workspace.start.click()
+            self.assertEqual(workspace.upload_task[0].result(timeout=5), upload_id)
+            workspace._tick()
+            workspace.remote_task[1].result(timeout=5)
+            workspace._tick()
+            launch.assert_called_once()
+            self.assertEqual(launch.call_args.args[1]["name"], names[1])
+            workspace._poll_remote()
+            workspace.remote_task[1].result(timeout=5)
+            workspace._tick()
+            workspace.remote_task[1].result(timeout=5)
+            workspace._tick()
+            self.assertEqual([call.args[1]["name"] for call in launch.call_args_list], [names[1], names[0]])
+
+    def test_remove_history_entry_preserves_job_files_and_is_persistent(self):
+        app = QApplication.instance() or QApplication([])
+        preferences = QSettings(str(self.root / "settings.ini"), QSettings.Format.IniFormat)
+        directory, record = self.new_job()
+        jobs.save_job(directory, record, state="Running", username=self.auth.username)
+        output = directory / "stdout.log"
+        output.write_text("result", encoding="utf-8")
+        with patch("esen_workspace.QSettings", return_value=preferences):
+            workspace = EsenWorkspace(FakeTruba(), history=self.history)
+            self.addCleanup(workspace.dispose)
+            workspace.show()
+            app.processEvents()
+            self.assertFalse(workspace.delete_job.isEnabled())
+            jobs.save_job(directory, record, state="Completed")
+            workspace._show_selected()
+            with patch("esen_workspace.QMessageBox.question", return_value=QMessageBox.StandardButton.No):
+                workspace.delete_job.click()
+            self.assertEqual(workspace.history.count(), 1)
+            with patch("esen_workspace.QMessageBox.question", return_value=QMessageBox.StandardButton.Yes):
+                workspace.delete_job.click()
+            self.assertEqual(workspace.history.count(), 0)
+            self.assertEqual(output.read_text(encoding="utf-8"), "result")
+            reopened = EsenWorkspace(FakeTruba(), history=self.history)
+            self.addCleanup(reopened.dispose)
+            self.assertEqual(reopened.history.count(), 0)
 
 
 if __name__ == "__main__":
