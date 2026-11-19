@@ -3,7 +3,7 @@ import unittest
 import numpy as np
 import pyvista as pv
 
-from benchmark_trimmed_voxels import make_cases
+from benchmark_trimmed_voxels import make_cases, make_gyroid_case, surface_errors, thin_wall_probes
 from periodic_tetra import face_components
 from trimmed_voxel_mesh import build_trimmed_tet4
 
@@ -49,6 +49,31 @@ class TrimmedVoxelMeshTests(unittest.TestCase):
     def test_no_sampled_interior_is_rejected(self):
         with self.assertRaisesRegex(ValueError, "No solid interior"):
             build_trimmed_tet4(lambda points: np.ones(len(points)), 4)
+
+    def test_sphere_snapping_improves_jacobian_and_limits_surface_error(self):
+        _, sphere = make_cases()
+        baseline = build_trimmed_tet4(sphere.field, 16, snap_boundary=False)
+        snapped = build_trimmed_tet4(sphere.field, 16)
+        self.assert_conforming_tets(snapped)
+        old_quality = baseline.cell_quality("scaled_jacobian").cell_data["scaled_jacobian"]
+        new_quality = snapped.cell_quality("scaled_jacobian").cell_data["scaled_jacobian"]
+        self.assertGreater(new_quality.min(), old_quality.min())
+        old_error = max(surface_errors(baseline.extract_surface(algorithm="dataset_surface"), sphere))
+        new_error = max(surface_errors(snapped.extract_surface(algorithm="dataset_surface"), sphere))
+        self.assertLess(new_error, 1.2 * old_error)
+
+    def test_gyroid_preserves_thin_wall_probes_and_rejects_topology_changes(self):
+        gyroid = make_gyroid_case()
+        probes = thin_wall_probes(gyroid.field).reshape(-1, 3)
+        self.assertGreater(len(probes), 0)
+        for level in (16, 32):
+            with self.subTest(level=level):
+                grid = build_trimmed_tet4(gyroid.field, level)
+                self.assertTrue(np.all(grid.find_containing_cell(probes) >= 0))
+                self.assertEqual(grid.extract_surface(algorithm="dataset_surface").n_open_edges, 0)
+                self.assertEqual(np.unique(face_components(grid)).size, 3)
+                # At n=16 the snapping candidates change the sheet topology.
+                self.assertEqual("snap_fraction" in grid.field_data, level == 32)
 
 
 if __name__ == "__main__":

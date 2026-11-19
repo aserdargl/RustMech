@@ -12,6 +12,7 @@ from typing import Callable
 import numpy as np
 import pyvista as pv
 
+from mesh_engine import contour_arrays, gyroid_field
 from model import Settings
 from netgen_kernel import kernel_path
 from periodic_tetra import face_components
@@ -58,6 +59,42 @@ def make_cases():
     )
 
 
+def make_gyroid_case():
+    """One 1 mm period, with independently sampled sheet boundary and cube caps."""
+    def field(points):
+        return np.abs(gyroid_field(*points.T, 1.0)) - 0.45
+
+    spacing = 1 / 96
+    axis = np.arange(-1, 98) * spacing
+    values = np.abs(gyroid_field(axis[:, None, None], axis[None, :, None], axis, 1.0)) - 0.45
+    for dimension in range(3):
+        np.moveaxis(values, dimension, 0)[[0, -1]] = 1
+    vertices, faces = contour_arrays(values, spacing)
+    vertices = np.clip(vertices - spacing, 0, 1)
+    reference = pv.PolyData.from_regular_faces(vertices, faces).clean(
+        tolerance=1e-7, absolute=True, polys_to_lines=False, lines_to_points=False,
+    )
+    return BenchmarkCase("thin_gyroid", field, reference, reference, reference.volume)
+
+
+def thin_wall_probes(field):
+    """Sample centers and quarter points of complete sheet crossings ≤ 0.125 mm."""
+    x = np.linspace(0, 1, 513)
+    yz = (np.arange(20) + 0.5) / 20
+    probes = []
+    for y in yz:
+        for z in yz:
+            line = np.column_stack((x, np.full_like(x, y), np.full_like(x, z)))
+            values = field(line)
+            crossings = np.flatnonzero((values[:-1] < 0) != (values[1:] < 0))
+            roots = x[crossings] - ((x[1] - x[0]) * values[crossings] /
+                                     (values[crossings + 1] - values[crossings]))
+            for start, end in zip(roots[:-1], roots[1:]):
+                if end - start <= 0.125 and field(np.array([[(start + end) / 2, y, z]]))[0] < 0:
+                    probes.append([(start + t * (end - start), y, z) for t in (0.25, 0.5, 0.75)])
+    return np.array(probes)
+
+
 def build_center_sampled_hex8(field, subdivisions):
     """Use the production HEX8 selection and assembly with an analytic field."""
     spacing = 1 / subdivisions
@@ -101,13 +138,18 @@ def surface_errors(skin, case):
     return float(forward.max()), float(reverse.max())
 
 
-def compare_case(case, subdivisions, repeats):
+def compare_case(case, subdivisions, repeats, *, quality_study=False, wall_probes=None):
     spacing = 1 / subdivisions
     methods = (
         ("HEX8", partial(build_center_sampled_hex8, case.field, subdivisions)),
         ("Trimmed TET4", partial(build_trimmed_tet4, case.field, subdivisions)),
         ("Netgen TET4", partial(build_netgen_tet4, case.reference, spacing)),
     )
+    if quality_study:
+        methods = (
+            ("Unsnapped", partial(build_trimmed_tet4, case.field, subdivisions, snap_boundary=False)),
+            ("Snapped", partial(build_trimmed_tet4, case.field, subdivisions)),
+        )
     for name, build in methods:
         timings = []
         for repeat in range(repeats):
@@ -127,7 +169,7 @@ def compare_case(case, subdivisions, repeats):
         jacobian = np.asarray(grid.cell_quality("scaled_jacobian").cell_data["scaled_jacobian"])
         if len(jacobian) == 0 or not np.all(np.isfinite(jacobian) & (jacobian > 0)):
             raise ValueError(f"{name} produced invalid elements for {case.name} at n={subdivisions}.")
-        yield {
+        row = {
             "case": case.name,
             "method": name,
             "subdivisions": subdivisions,
@@ -147,6 +189,16 @@ def compare_case(case, subdivisions, repeats):
             "mesh_storage_kib": grid.GetActualMemorySize(),
             "median_meshing_seconds": median(timings),
         }
+        if quality_study:
+            snap = grid.field_data.get("snap_fraction")
+            row["snap_fraction"] = float(snap[0]) if snap is not None else 0.0
+            row["skin_euler_characteristic"] = skin.n_points - skin.n_cells // 2 if not skin.n_open_edges else None
+        if wall_probes is not None:
+            inside = grid.find_containing_cell(wall_probes.reshape(-1, 3)).reshape(-1, 3) >= 0
+            row.update(wall_probe_count=len(wall_probes),
+                       wall_centers_found=int(inside[:, 1].sum()),
+                       wall_sections_found=int(inside.all(axis=1).sum()))
+        yield row
 
 
 def main():
@@ -155,25 +207,39 @@ def main():
                         metavar=("COARSE", "MEDIUM", "FINE"))
     parser.add_argument("--repeats", type=int, default=3)
     parser.add_argument("--output", type=Path, help="Also write all measurements to JSON.")
+    parser.add_argument("--quality-study", action="store_true",
+                        help="Compare unsnapped and snapped TET4, including thin Gyroid wall probes.")
     args = parser.parse_args()
     coarse, medium, fine = args.levels
     if not 0 < coarse < medium < fine or args.repeats < 1:
         parser.error("Use three positive, increasing levels and at least one repeat.")
 
-    netgen = "RustMech optimized kernel" if kernel_path() is not None else "netgen-mesher Python package"
-    print(f"Netgen: {netgen} | timed repeats: {args.repeats}")
+    netgen = None
+    if not args.quality_study:
+        netgen = "RustMech optimized kernel" if kernel_path() is not None else "netgen-mesher Python package"
+        print(f"Netgen: {netgen}")
+    print(f"Timed repeats: {args.repeats}")
     print(f"{'Geometry':15} {'Grid':>4} {'Mesher':13} {'Elements':>9} {'Vol err %':>10} "
-          f"{'Surface':>10} {'Min SJ':>9} {'KiB':>7} {'Seconds':>9} {'Parts':>5} {'Edges':>5}")
+          f"{'Surface':>10} {'Min SJ':>9} {'P01 SJ':>9} {'KiB':>7} {'Seconds':>9} "
+          f"{'Parts':>5} {'Edges':>5} {'Wall sections':>13}")
     rows = []
-    for case in make_cases():
+    cases = make_cases()
+    gyroid = make_gyroid_case() if args.quality_study else None
+    if gyroid is not None:
+        cases += (gyroid,)
+    for case in cases:
+        probes = thin_wall_probes(case.field) if case is gyroid else None
         for level in args.levels:
-            for row in compare_case(case, level, args.repeats):
+            for row in compare_case(case, level, args.repeats, quality_study=args.quality_study,
+                                    wall_probes=probes):
                 rows.append(row)
+                walls = f"{row['wall_sections_found']}/{len(probes)}" if probes is not None else ""
                 print(f"{case.name:15} {level:4} {row['method']:13} {row['elements']:9,d} "
                       f"{row['volume_error_pct']:10.5f} {row['surface_error_max']:10.6f} "
-                      f"{row['scaled_jacobian_min']:9.2g} {row['mesh_storage_kib']:7,d} "
+                      f"{row['scaled_jacobian_min']:9.2g} {row['scaled_jacobian_p01']:9.2g} "
+                      f"{row['mesh_storage_kib']:7,d} "
                       f"{row['median_meshing_seconds']:9.4f} {row['face_components']:5} "
-                      f"{row['open_or_nonmanifold_skin_edges']:5}", flush=True)
+                      f"{row['open_or_nonmanifold_skin_edges']:5} {walls:>13}", flush=True)
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True)
         report = {"netgen_backend": netgen, "pyvista_version": pv.__version__,

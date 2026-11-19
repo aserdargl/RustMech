@@ -81,3 +81,39 @@ On sekiz ağın tamamı yüzler üzerinden tek bir bağlantılı bileşen
 oluşturdu ve dış yüzeyde açık veya manifold olmayan kenar saptanmadı.
 Çözücüye geçmeden önce düşük kaliteli sınır elemanlarının yönetimi ve ince
 Gyroid duvarlarının korunması doğrulanacak.
+
+### Sınır elemanı kalitesi ve ince Gyroid duvarları
+
+Kırpma öncesinde ızgara düğümleri, komşu kenardaki en yakın uygun sıfır
+geçişine taşınır. Hareket ızgara aralığının en çok %18'i kadardır ve küp
+yüzlerindeki düğümler kendi yüzlerinde kalır. Adayda arka plan tetrahedralleri
+ters dönmemeli, en düşük ve 1. yüzdelik Jacobian kötüleşmemeli ve en az
+biri iyileşmelidir. Açık kenar, yüz-bağlantılı bileşen sayısı veya yüzeyin
+Euler karakteristiği değiştiğinde daha küçük kaydırma denenir. Uygun aday
+bulunamazsa başlangıç ağı kullanılır.
+
+```powershell
+python benchmark_trimmed_voxels.py --quality-study --output build/trimmed-voxel-quality.json
+```
+
+| Geometri | Izgara | En düşük ölçeklenmiş Jacobian, önce → sonra | En büyük yüzey sapması (mm), önce → sonra |
+| --- | ---: | ---: | ---: |
+| Eğik düzlem | 8³ | 0,000184 → 0,0508 | ≈0 → ≈0 |
+| Eğik düzlem | 16³ | 0,000170 → 0,0508 | ≈0 → ≈0 |
+| Eğik düzlem | 32³ | 0,000170 → 0,0508 | ≈0 → ≈0 |
+| Küre | 8³ | 0,000160 → 0,00776 | 0,016368 → 0,018560 |
+| Küre | 16³ | 0,000116 → 0,00907 | 0,004029 → 0,004663 |
+| Küre | 32³ | 0,00000183 → 0,00877 | 0,001011 → 0,001184 |
+| İnce Gyroid | 8³ | 0,01575 → 0,03472 | 0,067049 → 0,066596 |
+| İnce Gyroid | 16³ | 0,000632 → 0,000632 | 0,046677 → 0,046677 |
+| İnce Gyroid | 32³ | 0,000469 → 0,00891 | 0,002007 → 0,002128 |
+
+Gyroid testi, bir adet 1 mm'lik periyotta `|Gyroid| ≤ 0,45` duvarını
+kullanır. Yüzey karşılaştırması için 96³ referans ızgarası kullanıldı. Kalınlığı
+0,125 mm veya daha az olan 192 eksen doğrultulu kesitte, iki çeyrek nokta
+ve orta noktanın ağ içinde kaldığı kontrol edildi. 8³'te her iki ağ
+128/192 kesiti korudu ve 12 yüz-bağlantılı bileşen oluşturdu. 16³ ve 32³'te
+her iki ağ 192/192 kesiti korudu ve üç bileşen oluşturdu. 16³'te kaydırma
+adayları topoloji kontrolünden geçmediği için başlangıç ağı kullanıldı.
+32³'te 1. yüzdelik Jacobian kürede 0,00194'ten 0,0544'e, Gyroid'de
+0,00332'den 0,0366'ya çıktı.
