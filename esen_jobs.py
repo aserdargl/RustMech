@@ -73,8 +73,8 @@ def is_input_script(name):
     return path.name.lower().startswith("in.") or path.suffix.lower() == ".in"
 
 
-def discover_job_folders(root):
-    """List candidate entry scripts by working directory, without following links."""
+def scan_folder_files(root):
+    """List files by working directory, skipping Results and links."""
     def walk_error(error):
         raise error
 
@@ -83,10 +83,10 @@ def discover_job_folders(root):
         folder = Path(folder)
         dirs[:] = sorted((name for name in dirs if name.casefold() != "results"
                           and not is_link(folder / name)), key=str.casefold)
-        scripts = tuple(sorted((name for name in files if is_input_script(name)
-                                and (folder / name).is_file() and not is_link(folder / name)), key=str.casefold))
-        if scripts:
-            found.append((folder, scripts))
+        for name in sorted(files, key=str.casefold):
+            path = folder / name
+            if path.is_file() and not is_link(path):
+                found.append(path)
     return found
 
 

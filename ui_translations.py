@@ -23,12 +23,12 @@ LAMMPS module|LAMMPS modülü
 Linux executable|Linux programı
 Input script…|Girdi betiği…
 Job folder…|İş klasörü…
-Add folder…|Klasör ekle…
-Files…|Dosyalar…
-Script…|Betik…
-Root…|Kök klasör…
+Add Folder|Klasör Ekle
+Files|Dosyalar
+Script|Betik
+Root|Kök Klasör
 Remove|Çıkar
-Reuse|Girdiyi al
+Reuse|Girdiyi Al
 Resume|Sürdür
 Attach|Bağla
 Download|İndir
@@ -36,8 +36,8 @@ Choose an existing folder.|Mevcut bir klasör seçin.
 Select files or a single folder.|Dosya veya tek bir klasör seçin.
 Select a script to run.|Çalıştırmak için bir betik seçin.
 Add a folder or drop inputs here.|Klasör ekleyin veya girdileri buraya bırakın.
-{count} selected · Run in list order|{count} betik seçili · Liste sırasıyla çalışır
-Scanning for LAMMPS input scripts…|LAMMPS girdi betikleri aranıyor…
+{files} files · {scripts} scripts selected|{files} dosya · {scripts} betik seçili
+Scanning folder…|Klasör taranıyor…
 No LAMMPS input scripts named in.* or *.in were found.|in.* veya *.in adında LAMMPS girdi betiği bulunamadı.
 Waiting to run|Çalıştırma sırasını bekliyor
 Choose a job folder outside the ESEN history directory.|ESEN iş geçmişini içermeyen bir iş klasörü seçin.
@@ -45,7 +45,7 @@ Load files…|Dosya yükle…
 LAMMPS input files|LAMMPS girdi dosyaları
 Include entire job folder|İş klasörünün tamamını ekle
 Remove file|Dosyayı çıkar
-Use as script|Betik olarak seç
+Use As Script|Betik Olarak Seç
 Run LAMMPS|LAMMPS'i çalıştır
 Job history|İş geçmişi
 ESEN job history|ESEN iş geçmişi
@@ -70,13 +70,15 @@ Standard error|Standart hata
 Job log tail|İş günlüğünün son satırları
 Result files|Sonuç dosyaları
 Open file|Dosyayı aç
+Open File|Dosyayı Aç
 Open job folder|İş klasörünü aç
 Download file|Dosyayı indir
 LAMMPS input script|LAMMPS girdi betiği
 Job folder|İş klasörü
+Job Folder|İş Klasörü
 Load input files|Girdi dosyalarını yükle
 Load files or drop them on the input list.|Dosyaları yükleyin veya girdi listesine sürükleyip bırakın.
-Select the input file and click Use as script.|Girdi betiğini seçip Betik olarak seç düğmesine basın.
+Select the input file and click Use As Script.|Girdi betiğini seçip Betik Olarak Seç düğmesine basın.
 Load existing files. To include a folder, use Job folder.|Mevcut dosyaları yükleyin. Klasör eklemek için İş klasörü düğmesini kullanın.
 Choose files inside the job folder.|İş klasörünün içinden dosya seçin.
 Choose a LAMMPS input script.|Bir LAMMPS girdi betiği seçin.

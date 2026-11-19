@@ -509,9 +509,14 @@ class EsenTests(unittest.TestCase):
               patch("esen_jobs.local_command", side_effect=lambda entry, *_: ["lmp", entry])):
             self.load_batch(workspace)
             self.assertEqual(workspace.history.count(), 0)
-            self.assertEqual([workspace.inputs.item(i).text() for i in range(workspace.inputs.count())],
-                             ["in.first", "in.second", "in.skip", "study/run.IN"])
-            workspace.inputs.item(2).setCheckState(Qt.CheckState.Unchecked)
+            items = {workspace.inputs.item(i).text(): workspace.inputs.item(i)
+                     for i in range(workspace.inputs.count())}
+            self.assertEqual(list(items), ["in.first", "in.second", "in.skip", self.entry,
+                                           "data/cell.lmp", "study/run.IN"])
+            for name in (self.entry, "data/cell.lmp"):
+                self.assertFalse(items[name].flags() & Qt.ItemFlag.ItemIsUserCheckable)
+            self.assertIn("6 files · 4 scripts selected", workspace.input_note.text())
+            items["in.skip"].setCheckState(Qt.CheckState.Unchecked)
             workspace.local_memory.setValue(1536)
             workspace.start.click()
             self.assertFalse(workspace.start.isEnabled())

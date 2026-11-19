@@ -231,10 +231,10 @@ class EsenWorkspace(QDialog):
 
         settings, layout = panel("Job settings", scrollable=True)
         left.addWidget(settings)
-        self.batch_folder = command("Add folder…", self._pick_batch_folder)
-        self.load_files = command("Files…", self._pick_files, hint="Load input files")
+        self.batch_folder = command("Add Folder", self._pick_batch_folder)
+        self.load_files = command("Files", self._pick_files, hint="Load input files")
         layout.addLayout(button_row(self.batch_folder, self.load_files,
-                                    command("Script…", self._pick_script, hint="LAMMPS input script")))
+                                    command("Script", self._pick_script, hint="LAMMPS input script")))
         self.inputs = InputFileList()
         self.inputs.setAcceptDrops(True)
         self.inputs.viewport().setAcceptDrops(True)
@@ -243,12 +243,12 @@ class EsenWorkspace(QDialog):
         self.inputs.itemChanged.connect(self._preview)
         self.inputs.currentRowChanged.connect(self._buttons)
         layout.addWidget(self.inputs, 1)
-        self.use_as_script = command("Use as script", self._use_as_script)
+        self.use_as_script = command("Use As Script", self._use_as_script)
         self.remove_inputs = command("Remove", self._remove_file, hint="Remove file")
         layout.addLayout(button_row(self.use_as_script, self.remove_inputs))
         self.whole_folder = QCheckBox("Include entire job folder")
         self.whole_folder.toggled.connect(self._preview)
-        self.pick_root = command("Root…", self._pick_root, hint="Job folder")
+        self.pick_root = command("Root", self._pick_root, hint="Job folder")
         source_options = QHBoxLayout()
         source_options.addWidget(self.whole_folder)
         source_options.addWidget(self.pick_root)
@@ -370,8 +370,8 @@ class EsenWorkspace(QDialog):
         self.results.setAccessibleName("Result files")
         self.results.currentItemChanged.connect(self._buttons)
         layout.addWidget(self.results, 1)
-        self.open_file = command("Open file", self._open_result)
-        self.open_folder = command("Job folder", self._open_directory, hint="Open job folder")
+        self.open_file = command("Open File", self._open_result)
+        self.open_folder = command("Job Folder", self._open_directory, hint="Open job folder")
         self.open_results_folder = command("Results", self._open_results_directory, hint="Open result folder")
         self.download = command("Download", self._download, hint="Download file")
         layout.addLayout(button_row(self.open_file, self.download, self.open_folder, self.open_results_folder))
@@ -466,7 +466,7 @@ class EsenWorkspace(QDialog):
 
     def _pick_batch_folder(self):
         initial = self.preferences.value("esen/batchFolder", str(self.input_root or Path.home()))
-        name = QFileDialog.getExistingDirectory(self, translate("Add folder…"), str(initial))
+        name = QFileDialog.getExistingDirectory(self, translate("Add Folder"), str(initial))
         if name:
             self._load_batch_folder(Path(name))
 
@@ -481,7 +481,7 @@ class EsenWorkspace(QDialog):
         self._clear_batch_source()
         self.preferences.setValue("esen/batchFolder", str(root))
         self.folder_root = root
-        self.folder_scan = self.executor.submit(jobs.discover_job_folders, root)
+        self.folder_scan = self.executor.submit(jobs.scan_folder_files, root)
         with QSignalBlocker(self.inputs):
             self.inputs.clear()
         self._preview()
@@ -497,20 +497,21 @@ class EsenWorkspace(QDialog):
             return
         scan, self.folder_scan = self.folder_scan, None
         try:
-            folders = scan.result()
+            paths = scan.result()
         except (OSError, ValueError) as error:
             self.folder_error = str(error)
         else:
             with QSignalBlocker(self.inputs):
-                for folder, scripts in folders:
-                    for entry in scripts:
-                        path = folder / entry
-                        item = QListWidgetItem(path.relative_to(self.folder_root).as_posix())
-                        item.setData(Qt.ItemDataRole.UserRole, (str(folder), entry))
-                        item.setToolTip(str(path))
+                for path in paths:
+                    item = QListWidgetItem(path.relative_to(self.folder_root).as_posix())
+                    item.setToolTip(str(path))
+                    if jobs.is_input_script(path.name):
+                        item.setData(Qt.ItemDataRole.UserRole, (str(path.parent), path.name))
                         item.setCheckState(Qt.CheckState.Checked)
-                        self.inputs.addItem(item)
-            if not folders:
+                    else:
+                        item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsUserCheckable)
+                    self.inputs.addItem(item)
+            if next(self._folder_jobs(), None) is None:
                 self.folder_error = "No LAMMPS input scripts named in.* or *.in were found."
         self._preview()
 
@@ -635,7 +636,7 @@ class EsenWorkspace(QDialog):
         root, entry, extra, whole_folder = (*first, (), True) if first else self._input_files()
         try:
             if folder_mode and first is None:
-                raise ValueError(self.folder_error or ("Scanning for LAMMPS input scripts…" if self.folder_scan
+                raise ValueError(self.folder_error or ("Scanning folder…" if self.folder_scan
                                                        else "Select a script to run."))
             invocation = self._command((root, entry, extra, whole_folder))
             self.preview.setPlainText(invocation if remote else subprocess.list2cmdline(invocation))
@@ -647,10 +648,11 @@ class EsenWorkspace(QDialog):
         lines = [str(source)] if source is not None else []
         if remote:
             lines.append(translate("Preview values are estimates. Slurm limits apply at submission."))
-        if folder_mode and first:
-            lines.append(translate("{count} selected · Run in list order").format(count=sum(1 for _ in self._folder_jobs())))
+        if folder_mode and self.inputs.count():
+            lines.append(translate("{files} files · {scripts} scripts selected").format(
+                files=self.inputs.count(), scripts=sum(1 for _ in self._folder_jobs())))
         elif not folder_mode and not entry:
-            lines.append(translate("Select the input file and click Use as script." if self.extra else
+            lines.append(translate("Select the input file and click Use As Script." if self.extra else
                                    "Add a folder or drop inputs here."))
         if remote and entry and (not folder_mode or first):
             try:
