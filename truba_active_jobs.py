@@ -12,8 +12,9 @@ from PySide6.QtWidgets import (QAbstractItemView, QFormLayout, QHeaderView, QLab
                                QItemDelegate, QLineEdit, QSplitter, QTableWidget, QTableWidgetItem,
                                QVBoxLayout, QWidget)
 
+from esen_jobs import jobs_directory as esen_jobs_directory, read_job as read_esen_job
 from studio_style import CONTROL_HEIGHT
-from truba_job_list import unfinished_records
+from truba_job_list import job_description, unfinished_records
 from truba_jobs import SLURM_TERMINAL_STATES
 from truba_remote import RemoteContext, RemoteTransport
 from ui_language import translate
@@ -26,6 +27,21 @@ class ActiveJob:
     start: str
     elapsed: str
     remaining: str
+    purposes: tuple[str, ...]
+
+
+def esen_job_purpose(slurm_name, job_id, username):
+    match = re.fullmatch(r'ESEN-([0-9a-f]{32})', slurm_name)
+    if not match:
+        return slurm_name
+    try:
+        record = read_esen_job(esen_jobs_directory() / match[1])
+    except (OSError, ValueError):
+        return slurm_name
+    if (isinstance(record, dict) and record.get('username') == username
+            and str(record.get('job_id')) == job_id and record.get('name')):
+        return f"LAMMPS · {record['name']}"
+    return slurm_name
 
 
 def query_active_jobs(auth, state_dir):
@@ -34,11 +50,10 @@ def query_active_jobs(auth, state_dir):
         "TZ=UTC SLURM_TIME_FORMAT='%Y-%m-%dT%H:%M:%S' squeue --noheader --all --array --states=all --user="
         + shlex.quote(auth.username) + " --format='%i|%T|%S|%M|%L|%j'"
     )
-    names = defaultdict(set)
+    records = defaultdict(list)
     for _, record in unfinished_records(state_dir):
-        name = record.get('study_name')
-        if record.get('username') == auth.username and name and record.get('job_id'):
-            names[str(record['job_id'])].add(name)
+        if record.get('username') == auth.username and record.get('job_id'):
+            records[str(record['job_id'])].append(record)
     groups = defaultdict(list)
     for line in output.splitlines():
         fields = line.strip().split('|', 5)
@@ -48,8 +63,20 @@ def query_active_jobs(auth, state_dir):
         if (not re.fullmatch(r'[0-9]+(?:[_+][0-9]+|_\[[0-9,:%-]+\])*', job_id)
                 or state in SLURM_TERMINAL_STATES):
             continue
-        for name in names.get(job_id) or (slurm_name.strip() or job_id,):
-            groups[name].append(ActiveJob(job_id, state, start, elapsed, remaining))
+        slurm_name = slurm_name.strip()
+        fallback_name = slurm_name or job_id
+        matching = records.get(job_id, ())
+        has_study = any(record.get('study_name') for record in matching)
+        purposes_by_work = defaultdict(list)
+        for record in matching:
+            if has_study and record.get('kind') == 'rustmech_session':
+                continue
+            purposes_by_work[record.get('study_name') or fallback_name].append(job_description(record))
+        if not purposes_by_work:
+            purpose = esen_job_purpose(slurm_name, job_id, auth.username)
+            purposes_by_work[fallback_name] = [purpose or '—']
+        for name, purposes in purposes_by_work.items():
+            groups[name].append(ActiveJob(job_id, state, start, elapsed, remaining, tuple(dict.fromkeys(purposes))))
     return dict(groups)
 
 
@@ -117,12 +144,16 @@ class TrubaActiveJobs(QWidget):
         self.splitter.setChildrenCollapsible(False)
         self.works = self._table(['Work name'])
         self.works.setItemDelegate(QItemDelegate(self.works))
-        self.jobs = self._table(['Slurm job ID', 'Status', 'Work name'])
-        self.jobs.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        self.jobs = self._table(['Slurm ID', 'Status', 'Work name', 'Job description'])
+        header = self.jobs.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Interactive)
+        self.jobs.setColumnWidth(2, 88)
         self.jobs.setItemDelegateForColumn(2, QItemDelegate(self.jobs))
         self.splitter.addWidget(self.works)
         self.splitter.addWidget(self.jobs)
-        self.splitter.setSizes([180, 310])
+        self.splitter.setSizes([115, 375])
         layout.addWidget(self.splitter, 1)
         self.works.currentCellChanged.connect(self.select_work)
         self.jobs.currentCellChanged.connect(self.show_details)
@@ -219,7 +250,10 @@ class TrubaActiveJobs(QWidget):
     def select_work(self, *_):
         selected = self.works.currentItem()
         row = self.jobs.currentRow()
-        job_id = self.selected_jobs[row].job_id if 0 <= row < len(self.selected_jobs) else None
+        previous = (
+            (self.jobs.item(row, 2).text(), self.selected_jobs[row].job_id)
+            if 0 <= row < len(self.selected_jobs) else None
+        )
         selected_name = selected.data(Qt.ItemDataRole.UserRole) if selected else None
         groups = self.groups if selected_name is None else {selected_name: self.groups[selected_name]}
         jobs = [(name, job) for name, group in groups.items() for job in group]
@@ -232,7 +266,11 @@ class TrubaActiveJobs(QWidget):
                 self.jobs.setItem(index, 0, QTableWidgetItem(job.job_id))
                 self.jobs.setItem(index, 1, QTableWidgetItem(job.state))
                 self.jobs.setItem(index, 2, QTableWidgetItem(name))
-                if job.job_id == job_id:
+                description = QTableWidgetItem(' / '.join(job.purposes))
+                tooltip = '<br>'.join(escape(translate(purpose)) for purpose in job.purposes)
+                description.setToolTip(f'<qt>{tooltip}</qt>')
+                self.jobs.setItem(index, 3, description)
+                if (name, job.job_id) == previous:
                     row = index
             self.jobs.setCurrentCell(row, 0)
         self.show_details()

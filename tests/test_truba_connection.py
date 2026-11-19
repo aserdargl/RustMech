@@ -262,12 +262,27 @@ class TrubaTests(unittest.TestCase):
         finally:
             self.app.removeEventFilter(store)
 
-    def test_active_jobs_group_by_submitted_name_and_show_selected_slurm_times(self):
+    def test_active_jobs_show_purposes_by_work_and_selected_slurm_times(self):
         dialog = self.dialog()
         tab = dialog.active_jobs
-        for job_id, username, name in [('1', 'tester', 'A'), ('2', 'tester', 'A'), ('3', 'other', 'Private')]:
-            write_record(self.directory / 'jobs' / f'{job_id}.json',
-                         dict(host=HOST, username=username, job_id=job_id, state='RUNNING', study_name=name))
+        dialog.state_dir = self.directory / 'TRUBA'
+        for index, (job_id, username, name, operation, geometry) in enumerate([
+            ('1', 'tester', 'A', 'mechanical', 'Gyroid'),
+            ('2', 'tester', 'A', 'thermal_solve', ''),
+            ('3', 'other', 'Private', 'flow_solve', ''),
+            ('6', 'tester', 'A', 'doe_mesh', ''),
+            ('6', 'tester', 'A', 'doe_solve', ''),
+            ('6', 'tester', 'B', 'fft_solve', ''),
+            ('9', 'tester', '', 'preview', ''),
+        ]):
+            write_record(dialog.state_dir / 'jobs' / f'{index}.json',
+                         dict(host=HOST, username=username, job_id=job_id, state='RUNNING',
+                              study_name=name, operation=operation, geometry_name=geometry))
+        write_record(dialog.state_dir / 'resource_session.json', dict(
+            host=HOST, username='tester', job_id='6', state='RUNNING', kind='rustmech_session'))
+        esen_id = 'a' * 32
+        write_record(self.directory / 'ESEN' / 'jobs' / esen_id / 'job.json',
+                     dict(username='tester', job_id='8', name='run_material.slurm'))
         output = (
             '1|RUNNING|2026-11-18T04:15:00|1-05:20:40|2:17:15|RM-1\n'
             '2|PENDING|2026-11-18T23:15:00|0:00|8:00:00|RM-2\n'
@@ -276,9 +291,12 @@ class TrubaTests(unittest.TestCase):
             '5_[1-16%4]|PENDING|N/A|0:00|8:00:00|Array job\n'
             '6|RUNNING|2026-11-18T04:15:00|25:40|8:00:00|RustMech-session\n'
             '7|RUNNING|2026-11-18T04:15:00|25:40|8:00:00|bash\n'
+            f'8|RUNNING|2026-11-18T04:15:00|25:40|8:00:00|ESEN-{esen_id}\n'
+            '9|RUNNING|2026-11-18T04:15:00|25:40|8:00:00|RustMech-remote\n'
         )
-        with patch.object(dialog, 'analysis_auth', return_value=RemoteAuth('tester', 'test')), patch(
-                'truba_active_jobs.RemoteTransport') as transport:
+        with (patch.object(dialog, 'analysis_auth', return_value=RemoteAuth('tester', 'test')),
+              patch('truba_active_jobs.esen_jobs_directory', return_value=self.directory / 'ESEN' / 'jobs'),
+              patch('truba_active_jobs.RemoteTransport') as transport):
             transport.return_value.command.return_value = output
             dialog.show()
             self.app.processEvents()
@@ -294,17 +312,30 @@ class TrubaTests(unittest.TestCase):
             self.assertIn('--all', command.split())
             self.assertIn('%i|%T|%S|%M|%L|%j', command)
             self.assertEqual([tab.works.item(i, 0).text() for i in range(tab.works.rowCount())],
-                             ['All jobs', 'A', 'Array job', 'bash', 'External job', 'RustMech-session'])
+                             ['All jobs', 'A', 'Array job', 'B', 'bash', f'ESEN-{esen_id}', 'External job',
+                              'RustMech-remote'])
             self.assertEqual(tab.works.currentRow(), 0)
             self.assertFalse(tab.jobs.isColumnHidden(2))
-            self.assertEqual({tab.jobs.item(i, 0).text(): (tab.jobs.item(i, 1).text(), tab.jobs.item(i, 2).text())
+            self.assertEqual({(tab.jobs.item(i, 0).text(), tab.jobs.item(i, 2).text()):
+                              (tab.jobs.item(i, 1).text(), tab.jobs.item(i, 3).text())
                               for i in range(tab.jobs.rowCount())},
-                             {'1': ('RUNNING', 'A'), '2': ('PENDING', 'A'),
-                              '3': ('RUNNING', 'External job'), '5_[1-16%4]': ('PENDING', 'Array job'),
-                              '6': ('RUNNING', 'RustMech-session'), '7': ('RUNNING', 'bash')})
+                             {('1', 'A'): ('RUNNING', 'Mechanical analysis · Gyroid'),
+                              ('2', 'A'): ('PENDING', 'Thermal analysis'),
+                              ('3', 'External job'): ('RUNNING', 'External job'),
+                              ('5_[1-16%4]', 'Array job'): ('PENDING', 'Array job'),
+                              ('6', 'A'): ('RUNNING', 'DOE mesh generation / DOE analysis'),
+                              ('6', 'B'): ('RUNNING', 'FFT Homogenization'),
+                              ('7', 'bash'): ('RUNNING', 'bash'),
+                              ('8', f'ESEN-{esen_id}'): ('RUNNING', 'LAMMPS · run_material.slurm'),
+                              ('9', 'RustMech-remote'): ('RUNNING', 'Mesh preview')})
+            tab.jobs.setCurrentItem(tab.jobs.findItems('FFT Homogenization', Qt.MatchFlag.MatchExactly)[0])
+            tab.show_groups(tab.groups)
+            self.assertEqual(tab.jobs.item(tab.jobs.currentRow(), 2).text(), 'B')
             tab.works.setCurrentCell(1, 0)
             self.assertTrue(tab.jobs.isColumnHidden(2))
-            self.assertEqual([tab.jobs.item(i, 0).text() for i in range(tab.jobs.rowCount())], ['1', '2'])
+            self.assertFalse(tab.jobs.isColumnHidden(3))
+            self.assertEqual([tab.jobs.item(i, 0).text() for i in range(tab.jobs.rowCount())], ['1', '2', '6'])
+            self.assertEqual(tab.jobs.item(2, 3).toolTip(), '<qt>DOE mesh generation<br>DOE analysis</qt>')
             self.assertNotEqual(tab.started.text(), '—')
             self.assertEqual(tab.elapsed.text(), '29:20:40')
             self.assertEqual(tab.remaining.text(), '02:17:15')
@@ -313,7 +344,7 @@ class TrubaTests(unittest.TestCase):
             self.assertEqual(tab.jobs.currentItem().text(), '2')
             self.assertEqual(tab.started.text(), '—')
             self.assertEqual(tab.remaining.text(), '—')
-            tab.works.setCurrentCell(4, 0)
+            tab.works.setCurrentCell(6, 0)
             self.assertEqual(tab.jobs.item(0, 0).text(), '3')
             self.assertEqual(tab.elapsed.text(), '00:25:40')
             dialog.connection_changed.emit(False)

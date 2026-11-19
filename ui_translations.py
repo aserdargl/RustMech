@@ -1030,6 +1030,8 @@ Work name for new jobs|Yeni işler için çalışma adı
 Use the same work name to group multiple submissions.|Birden çok gönderimi gruplamak için aynı çalışma adını kullanın.
 Work name|Çalışma adı
 Slurm job ID|Slurm iş numarası
+Slurm ID|Slurm no.
+Job description|İş açıklaması
 Started at|Başlangıç zamanı
 Elapsed time|Geçen süre
 Time left in Slurm allocation|Slurm süre sınırına kalan
@@ -1071,6 +1073,7 @@ Mesh preview|Ağ önizlemesi
 Surface generation|Yüzey üretimi
 Mechanical analysis|Mekanik analiz
 Mechanical analysis (Kratos)|Mekanik analiz (Kratos)
+Resource session|Kaynak oturumu
 Mesh convergence|Ağ yakınsaması
 DOE mesh generation|DoE ağı üretimi
 DOE analysis|DoE analizi
