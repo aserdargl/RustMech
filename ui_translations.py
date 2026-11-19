@@ -29,6 +29,12 @@ Add Folder|Klasör Ekle
 Select Folder|Klasör Seç
 Upload to TRUBA|TRUBA’ya Aktar
 Upload inputs to the open TRUBA folder|Girdileri açık TRUBA klasörüne doğrudan aktar
+Sync|Eşitle
+Sync the local folder with the open TRUBA subfolder|Yerel klasörü açık TRUBA alt klasörüyle eşitle
+Syncing with {path}…|{path} ile eşitleniyor…
+Folders synced. Uploaded: {sent} · Downloaded: {received}|Klasörler eşitlendi. Gönderilen: {sent} · İndirilen: {received}
+Folder sync conflict: {path}|Klasör eşitleme çakışması: {path}
+Folder sync failed: {error}|Klasör eşitleme başarısız: {error}
 A file or folder with different contents already exists: {path}|Aynı konumda farklı içerikli bir dosya veya klasör var: {path}
 Upload the folder to TRUBA before running selected scripts.|Seçtiğiniz betikleri çalıştırmadan önce klasörü TRUBA’ya aktarın.
 Use ↑ and ↓ in Job order. Run syncs the inputs and submits each checked Slurm script after the previous job ends.|İş sırası görünümünde ↑ ve ↓ ile sırayı ayarlayın. Çalıştır, girdileri eşitler ve işaretli her Slurm betiğini önceki iş sona erince gönderir.

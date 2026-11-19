@@ -2,8 +2,11 @@
 
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack, contextmanager, suppress
-from pathlib import Path, PurePosixPath
-from stat import S_ISDIR, S_ISREG
+import ntpath
+import os
+from pathlib import Path, PurePosixPath, PureWindowsPath
+import re
+from stat import FILE_ATTRIBUTE_REPARSE_POINT, S_ISDIR, S_ISREG
 from tempfile import NamedTemporaryFile
 from threading import Event, Lock
 from uuid import uuid4
@@ -11,6 +14,9 @@ from uuid import uuid4
 from paramiko import SSHException
 
 from truba_ssh import active_session_client
+
+
+SYNC_TEMP_FILE = re.compile(r"\.rustmech-(?:upload-[0-9a-f]{32}|download-[a-z0-9_]{8})\.part")
 
 
 @contextmanager
@@ -194,12 +200,98 @@ def download_file(auth, relative, name, destination):
         source = str(directory / name)
         if not S_ISREG(sftp.lstat(source).st_mode or 0):
             raise ValueError("Select a regular file to download.")
-        local = NamedTemporaryFile(dir=destination.parent, prefix=".rustmech-download-",
-                                   suffix=".part", delete=False)
-        temporary = Path(local.name)
-        try:
-            with local:
-                sftp.getfo(source, local, max_concurrent_prefetch_requests=64)
+        _download_file(sftp, source, destination)
+
+
+def _download_file(sftp, source, destination, *, expected_size=None):
+    local = NamedTemporaryFile(dir=destination.parent, prefix=".rustmech-download-",
+                               suffix=".part", delete=False)
+    temporary = Path(local.name)
+    try:
+        with local:
+            size = sftp.getfo(source, local, max_concurrent_prefetch_requests=64)
+        if expected_size is None:
             temporary.replace(destination)
-        finally:
-            temporary.unlink(missing_ok=True)
+        else:
+            if size != expected_size:
+                raise OSError("Download size mismatch")
+            # Both operations fail if a competing transfer creates the destination.
+            if os.name == "nt":
+                temporary.rename(destination)
+            else:
+                temporary.hardlink_to(destination)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _sync_name(name):
+    if (name in ("", ".", "..") or name.endswith((" ", "."))
+            or any(char in '<>:"/\\|?*' or ord(char) < 32 for char in name)
+            or (ntpath.isreserved(name) if hasattr(ntpath, "isreserved") else PureWindowsPath(name).is_reserved())):
+        raise ValueError(f"Unsupported folder sync path: {name}")
+    return name.casefold()
+
+
+def _sync_kind(attrs):
+    if getattr(attrs, "st_file_attributes", 0) & FILE_ATTRIBUTE_REPARSE_POINT:
+        return None
+    if S_ISDIR(attrs.st_mode or 0):
+        return "directory"
+    if S_ISREG(attrs.st_mode or 0):
+        return "file"
+    return None
+
+
+def sync_tree(auth, relative, source):
+    """Merge two folder trees, rejecting differing paths before transferring."""
+    if not relative.parts or _sync_kind(source.lstat()) != "directory":
+        raise ValueError("Select a local folder and a TRUBA project subfolder.")
+    with _project_directory(auth, relative) as (sftp, directory):
+        if "esen-folders" in relative.parts or "esen-folders" in directory.parts:
+            raise ValueError("Synchronized inputs are read-only.")
+        folders = [(source, directory, True, True)]
+        create_local, create_remote, uploads, downloads = [], [], [], []
+        while folders:
+            local, remote, has_local, has_remote = folders.pop()
+            local_entries = {entry.name: entry.lstat() for entry in local.iterdir()} if has_local else {}
+            remote_entries = ({entry.filename: entry for entry in sftp.listdir_attr(str(remote))}
+                              if has_remote else {})
+            # TRUBA permits distinct Linux names that would collide on Windows.
+            seen = set()
+            for name in sorted(local_entries.keys() | remote_entries.keys()):
+                # ESEN snapshots and in-flight transfer files are managed separately.
+                if name.casefold() == "esen-folders" or SYNC_TEMP_FILE.fullmatch(name):
+                    continue
+                key = _sync_name(name)
+                if key in seen:
+                    raise FileExistsError(str(remote / name))
+                seen.add(key)
+                local_entry = local_entries.get(name)
+                remote_entry = remote_entries.get(name)
+                attrs = local_entry if local_entry is not None else remote_entry
+                kind = _sync_kind(attrs)
+                local_path, remote_path = local / name, remote / name
+                if kind is None or (remote_entry is not None and _sync_kind(remote_entry) != kind):
+                    raise FileExistsError(str(remote_path))
+                if kind == "directory":
+                    if local_entry is None:
+                        create_local.append(local_path)
+                    if remote_entry is None:
+                        create_remote.append(str(remote_path))
+                    folders.append((local_path, remote_path, local_entry is not None, remote_entry is not None))
+                elif remote_entry is None:
+                    uploads.append((local_path, str(remote_path)))
+                elif local_entry is None:
+                    downloads.append((str(remote_path), local_path, remote_entry.st_size))
+                elif not _matches_file(sftp, local_path, str(remote_path), remote_entry):
+                    raise FileExistsError(str(remote_path))
+
+        for path in create_local:
+            path.mkdir()
+        for path in create_remote:
+            sftp.mkdir(path)
+        for path, target in uploads:
+            _publish_file(sftp, path, target)
+        for path, target, size in downloads:
+            _download_file(sftp, path, target, expected_size=size)
+    return len(uploads), len(downloads)

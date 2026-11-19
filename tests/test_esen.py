@@ -457,9 +457,12 @@ class EsenTests(unittest.TestCase):
                     app.processEvents()
                     self.assertEqual(workspace.batch_folder.text(), "Folder")
                     self.assertEqual(workspace.upload.text(), "Send Truba")
-                    toolbar = (workspace.batch_folder, workspace.upload, *workspace._compact_input_actions)
+                    self.assertEqual(workspace.sync.text(), "Eşitle" if locale == "tr" else "Sync")
+                    toolbar = (workspace.batch_folder, workspace.upload, workspace.sync,
+                               *workspace._compact_input_actions)
                     self.assertEqual(len({button.y() for button in toolbar if button.isVisible()}), 1)
                     self.assertEqual(workspace.batch_folder.width(), workspace.upload.width())
+                    self.assertEqual(workspace.sync.width(), workspace.upload.width())
                     self.assertEqual({button.width() for button in workspace._compact_input_actions}, {25})
                     browser = workspace.truba_browser
                     navigation = browser.up, browser.open_folder, browser.refresh, browser.slurm_inputs

@@ -6,7 +6,7 @@ from itertools import islice
 from operator import attrgetter
 import os
 from os.path import commonpath
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import re
 import subprocess
 from threading import Event
@@ -29,6 +29,7 @@ from studio_style import (
     STUDIO_STYLESHEET, SidebarGroupBox, configure_form, field_label,
 )
 from truba_file_browser import TrubaFileBrowser
+from truba_files import project_root, sync_tree
 from ui_language import translate
 
 
@@ -315,6 +316,8 @@ class EsenWorkspace(QDialog):
         self.files_upload = None
         self.upload_task = None
         self.upload_error = ""
+        self.sync_task = None
+        self.sync_message = ""
         self.batch_queue = {}
         self.batch_active = None
         self._active_truba_jobs = {}
@@ -381,6 +384,8 @@ class EsenWorkspace(QDialog):
 
         self.batch_folder = command("Folder", self._pick_batch_folder, hint="Select Folder")
         self.upload = command("Send Truba", self._upload_inputs, hint="Upload inputs to the open TRUBA folder")
+        self.sync = command("Sync", self._sync_folders,
+                            hint="Sync the local folder with the open TRUBA subfolder")
         self.load_files = command("", self._pick_files, hint="Load input files")
         self.pick_script = command("", self._pick_script, hint="LAMMPS input script")
         self.use_as_script = command("", self._use_as_script, hint="Use As Script")
@@ -405,7 +410,7 @@ class EsenWorkspace(QDialog):
         left.addWidget(settings)
         actions = QHBoxLayout()
         actions.setSpacing(INPUT_TOOL_SPACING)
-        for button in (self.batch_folder, self.upload, self.load_files, self.pick_script,
+        for button in (self.batch_folder, self.upload, self.sync, self.load_files, self.pick_script,
                        self.move_up, self.move_down, self.pick_root, self.use_as_script, self.remove_inputs):
             actions.addWidget(button)
         actions.addStretch()
@@ -442,6 +447,12 @@ class EsenWorkspace(QDialog):
         self.transfer_progress.setFixedHeight(CONTROL_HEIGHT)
         self.transfer_progress.hide()
         layout.addWidget(self.transfer_progress)
+        self.sync_status = QLabel()
+        self.sync_status.setObjectName("mutedHintLabel")
+        self.sync_status.setTextFormat(Qt.TextFormat.PlainText)
+        self.sync_status.setWordWrap(True)
+        self.sync_status.hide()
+        layout.addWidget(self.sync_status)
         self.whole_folder = QCheckBox("Include entire job folder")
         self.whole_folder.toggled.connect(self._preview)
         layout.addWidget(self.whole_folder)
@@ -591,7 +602,7 @@ class EsenWorkspace(QDialog):
 
     def _size_command_buttons(self):
         # Reserve space for the shared focus border on both sides.
-        toolbar_labels = (self.batch_folder, self.upload)
+        toolbar_labels = (self.batch_folder, self.upload, self.sync)
         navigation = self.truba_browser.navigation_buttons
         other_buttons = [button for button in self._command_buttons
                          if button not in (*toolbar_labels, *self._compact_input_actions, *navigation)]
@@ -750,6 +761,7 @@ class EsenWorkspace(QDialog):
         self.folder_slurm = False
         self.folder_replay = False
         self.upload_error = ""
+        self.sync_message = ""
 
     def _check_folder_scan(self):
         if self.folder_scan is None or not self.folder_scan[0].done():
@@ -836,6 +848,47 @@ class EsenWorkspace(QDialog):
             return
         self._transfer_inputs(auth)
 
+    def _sync_folders(self):
+        self._buttons()
+        auth = self.truba.analysis_auth()
+        if not self.sync.isEnabled() or auth is None:
+            return
+        directory = self.truba_browser.open_directory(auth)
+        if not directory:
+            return
+        history = self.history_root.resolve()
+        if self.folder_root.is_relative_to(history) or history.is_relative_to(self.folder_root):
+            self.sync_message = translate("Choose a job folder outside the ESEN history directory.")
+            self._preview()
+            return
+        future = self.executor.submit(sync_tree, auth, PurePosixPath(directory), self.folder_root)
+        self.sync_task = future, auth, directory
+        self.upload_error = ""
+        self.sync_message = translate("Syncing with {path}…").format(path=project_root(auth.username) / directory)
+        self.transfer_progress.setRange(0, 0)
+        self.transfer_progress.setFormat("")
+        self.transfer_progress.show()
+        self._preview()
+
+    def _check_sync(self):
+        if self.sync_task is None or not self.sync_task[0].done():
+            return
+        future, auth, directory = self.sync_task
+        self.sync_task = None
+        self.transfer_progress.setRange(0, 100)
+        self.transfer_progress.hide()
+        try:
+            sent, received = future.result()
+            self.sync_message = translate("Folders synced. Uploaded: {sent} · Downloaded: {received}").format(
+                sent=sent, received=received)
+        except FileExistsError as error:
+            self.sync_message = translate("Folder sync conflict: {path}").format(path=error.filename or str(error))
+        except Exception as error:
+            self.sync_message = translate("Folder sync failed: {error}").format(error=error)
+        self.folder_upload = None
+        self._scan_folder(checked=set(self._folder_jobs()))
+        self.truba_browser.refresh_after_upload(auth, directory)
+
     def _transfer_inputs(self, auth, selected=()):
         updates = deque(maxlen=1)
 
@@ -850,7 +903,7 @@ class EsenWorkspace(QDialog):
                 options["files"] = tuple(filter(None, (entry, *extra)))
         elif self.folder_replay:
             source = self._folder_source()
-        self.upload_error = ""
+        self.upload_error = self.sync_message = ""
         if selected:
             previous = self.folder_upload if self.folder_root is not None else self._uploaded_files(auth)
             directory = previous.directory if previous and previous.username == auth.username and not previous.direct else ""
@@ -914,7 +967,7 @@ class EsenWorkspace(QDialog):
         self._preview()
 
     def _load_files(self, files):
-        if not files or self.upload_task:
+        if not files or self.upload_task or self.sync_task:
             return
         paths = [Path(name) for name in files]
         if len(paths) == 1 and paths[0].is_dir():
@@ -1046,6 +1099,9 @@ class EsenWorkspace(QDialog):
         self.whole_folder.setVisible(not folder_mode)
         self.pick_root.setVisible(not folder_mode)
         self.upload.setVisible(remote)
+        self.sync.setVisible(remote)
+        self.sync_status.setText(self.sync_message)
+        self.sync_status.setVisible(remote and bool(self.sync_message))
         self.move_up.setVisible(slurm)
         self.move_down.setVisible(slurm)
         batch_mode = folder_mode or slurm
@@ -1202,7 +1258,7 @@ class EsenWorkspace(QDialog):
     def _start(self):
         target = self.target.currentData()
         auth = self.truba.analysis_auth() if target == "remote" else None
-        if (self.batch_active or self.batch_queue or
+        if (self.sync_task or self.batch_active or self.batch_queue or
                 (target == "remote" and (self.remote_task or not auth or self.upload_task)) or
                 (target == "local" and self.local_task)):
             return
@@ -1423,7 +1479,7 @@ class EsenWorkspace(QDialog):
         self.connection.setVisible(remote and not authenticated)
         self.truba_badge.setVisible(remote and authenticated)
         if remote and authenticated:
-            working = (self.remote_task is not None or self.upload_task is not None
+            working = (self.remote_task is not None or self.upload_task is not None or self.sync_task is not None
                        or auth.username in self._active_truba_jobs.values())
             state = "working" if working else "connected"
             if self.truba_badge.property("state") != state:
@@ -1433,7 +1489,7 @@ class EsenWorkspace(QDialog):
                 self.truba_badge.style().polish(self.truba_badge)
         ready = authenticated and not self.remote_task if remote else not self.local_task
         batch_busy = bool(self.batch_active or self.batch_queue)
-        uploading = self.upload_task is not None
+        uploading = self.upload_task is not None or self.sync_task is not None
         if remote and self.folder_root is not None and not self.folder_slurm:
             ready = ready and self._upload_ready(auth)
         self.start.setEnabled(self.command_valid and ready and not batch_busy and not uploading)
@@ -1443,6 +1499,12 @@ class EsenWorkspace(QDialog):
         self.upload.setEnabled(bool(remote and authenticated and has_inputs
                                     and not self.folder_scan and not uploading and not batch_busy
                                     and not self.truba_browser.is_slurm_snapshot_open()))
+        browser = self.truba_browser
+        sync_directory = browser.open_directory(auth)
+        self.sync.setEnabled(bool(remote and authenticated and self.folder_root and not self.folder_replay
+                                  and not self.folder_scan and not uploading and not batch_busy
+                                  and browser.loaded and browser.task is None
+                                  and sync_directory and "esen-folders" not in PurePosixPath(sync_directory).parts))
         for control in (self.target, self.batch_folder, self.load_files, self.pick_script, self.inputs,
                         self.pick_root, self.whole_folder, self.input_filter, self.input_sort):
             control.setEnabled(not uploading)
@@ -1477,6 +1539,7 @@ class EsenWorkspace(QDialog):
         self.truba_browser.check_task()
         self._check_folder_scan()
         self._check_upload()
+        self._check_sync()
         for field in ("local_task", "remote_task"):
             task = getattr(self, field)
             if task and task[1].done():

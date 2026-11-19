@@ -15,7 +15,7 @@ import pytest
 from paramiko import SSHException
 
 from esen_workspace import EsenWorkspace
-from truba_files import create_directory, download_file, list_directory, project_root, upload_file, upload_tree
+from truba_files import create_directory, download_file, list_directory, project_root, sync_tree, upload_file, upload_tree
 from truba_ssh import RemoteAuth, register_session, unregister_session
 from window_state import WindowStateStore
 
@@ -203,6 +203,112 @@ def test_download_replaces_local_file_only_after_complete_transfer(remote, tmp_p
     with pytest.raises(ValueError, match="regular file"):
         download_file(auth, PurePosixPath(), target.name, target)
     assert sftp.getfo.call_count == 2
+
+
+def test_sync_merges_both_ways_and_preflights_conflicts(remote, tmp_path):
+    auth, sftp = remote
+    folder = PurePosixPath("run")
+    target = project_root(auth.username) / folder
+    server = tmp_path / "server"
+    local = tmp_path / "local"
+    (server / "results").mkdir(parents=True)
+    (server / "esen-folders").mkdir()
+    (local / "inputs").mkdir(parents=True)
+    (local / "empty").mkdir()
+    (local / "inputs/model").write_bytes(b"model")
+    (server / "results/data").write_bytes(b"result")
+    (local / "common").write_bytes(b"same")
+    (server / "common").write_bytes(b"diff")
+
+    def path(name):
+        return server / PurePosixPath(name).relative_to(target).as_posix()
+
+    def entries(name):
+        return [SimpleNamespace(filename=entry.name, st_mode=entry.stat().st_mode,
+                                st_size=entry.stat().st_size) for entry in path(name).iterdir()]
+
+    def open_file(name, mode):
+        stream = path(name).open("xb" if mode == "wx" else mode)
+        stream.set_pipelined = lambda enabled: None
+        return stream
+
+    sftp.listdir_attr.side_effect = entries
+    sftp.mkdir.side_effect = lambda name: path(name).mkdir()
+    sftp.open.side_effect = open_file
+    sftp.stat.side_effect = lambda name: path(name).stat()
+    sftp.rename.side_effect = lambda source, destination: path(source).rename(path(destination))
+    sftp.getfo.side_effect = lambda source, stream, **_: stream.write(path(source).read_bytes())
+
+    with pytest.raises(FileExistsError, match="common"):
+        sync_tree(auth, folder, local)
+    assert not (local / "results").exists()
+    assert not (server / "inputs").exists()
+
+    (server / "common").write_bytes(b"same")
+    assert sync_tree(auth, folder, local) == (1, 1)
+    assert (server / "inputs/model").read_bytes() == b"model"
+    assert (local / "results/data").read_bytes() == b"result"
+    assert (server / "empty").is_dir()
+    assert not (local / "esen-folders").exists()
+    assert sync_tree(auth, folder, local) == (0, 0)
+
+    (server / "new").write_bytes(b"server version")
+
+    def concurrent_download(source, stream, **_):
+        (local / "new").write_bytes(b"local version")
+        return stream.write(path(source).read_bytes())
+
+    sftp.getfo.side_effect = concurrent_download
+    with pytest.raises(FileExistsError):
+        sync_tree(auth, folder, local)
+    assert (local / "new").read_bytes() == b"local version"
+    assert not list(local.glob("*.part"))
+
+
+def test_job_settings_sync_uses_selected_folders(remote, tmp_path, monkeypatch):
+    app = QApplication.instance() or QApplication([])
+    preferences = QSettings(str(tmp_path / "sync.ini"), QSettings.Format.IniFormat)
+    monkeypatch.setattr("esen_workspace.QSettings", lambda *_: preferences)
+    truba = Truba()
+    truba.auth, sftp = remote
+    directory = PurePosixPath("run")
+    root = project_root(truba.auth.username)
+    sftp.listdir_attr.side_effect = lambda path: [
+        SimpleNamespace(filename=directory.name, st_mode=S_IFDIR, st_size=0)
+    ] if path == str(root) else []
+    local = tmp_path / "local"
+    local.mkdir()
+    transfer = MagicMock(return_value=(1, 2))
+    monkeypatch.setattr("esen_workspace.sync_tree", transfer)
+
+    workspace = EsenWorkspace(truba, history=tmp_path / "history")
+    try:
+        workspace.target.setCurrentIndex(workspace.target.findData("remote"))
+        workspace.show()
+        app.processEvents()
+        workspace._load_batch_folder(local)
+        workspace.folder_scan[0].result(timeout=5)
+        browser = workspace.truba_browser
+        browser.task[0].result(timeout=5)
+        workspace._tick()
+        assert not workspace.sync.isEnabled()
+        browser.files.setCurrentItem(browser.files.topLevelItem(0))
+        browser.open_folder.click()
+        browser.task[0].result(timeout=5)
+        workspace._tick()
+        assert workspace.sync.isVisible() and workspace.sync.isEnabled()
+        assert workspace.sync.width() == workspace.upload.width()
+        assert not workspace.sync.autoDefault()
+        workspace.sync.click()
+        assert not workspace.sync.isEnabled()
+        workspace.sync_task[0].result(timeout=5)
+        workspace._tick()
+        transfer.assert_called_once_with(truba.auth, directory, local)
+        assert "Uploaded: 1" in workspace.sync_status.text()
+        assert "Downloaded: 2" in workspace.sync_status.text()
+        assert workspace.history.count() == 0
+    finally:
+        workspace.dispose()
 
 
 def test_workspace_browses_creates_and_restores_three_columns(remote, tmp_path, monkeypatch):
