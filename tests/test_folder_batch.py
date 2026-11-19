@@ -655,6 +655,39 @@ class FolderBatchTests(unittest.TestCase):
         fallback.stop()
         self.assertEqual(restored, [(True, True), specimen.cells], dialog.status.text())
 
+    def test_batch_queue_view_follows_target_and_solver_for_saved_jobs(self):
+        queue = self.queue()
+        specimen = self.prepared()
+        legacy = queue.add_folder_snapshots(
+            specimen_snapshots(specimen, self.root, self.base, ['ansys_mapdl', 'kratos']))
+        local = queue.add_folder_snapshots(
+            specimen_snapshots(specimen, self.root, self.base, ['ansys_mapdl', 'kratos'], execution_target='local'))
+        dialog = self.dialog(queue)
+        dialog.root, dialog.base = self.root, self.base
+        dialog.items = [specimen]
+        dialog.refresh_table()
+        dialog.set_busy(False)
+
+        def visible_jobs():
+            return [(dialog.queue_table.item(index, 0).data(Qt.ItemDataRole.UserRole),
+                     dialog.queue_table.item(index, 1).text(), dialog.queue_table.item(index, 2).text())
+                    for index in range(dialog.queue_table.rowCount())]
+
+        self.assertEqual(visible_jobs(), [(legacy[1].exp_id, 'kratos', 'Current workspace')])
+        self.assertTrue(dialog.enqueue.isEnabled())
+        dialog.enqueue.click()
+        remote = queue.rows[-1]
+        self.assertEqual(visible_jobs(), [(legacy[1].exp_id, 'kratos', 'Current workspace'),
+                                         (remote.exp_id, 'kratos', 'TRUBA')])
+        self.assertTrue(dialog.table.isRowHidden(0))
+
+        dialog.execution_target.setCurrentIndex(dialog.execution_target.findData('local'))
+        dialog.solver.setCurrentIndex(1)
+        self.assertEqual(visible_jobs(), [(legacy[0].exp_id, 'ansys_mapdl', 'Current workspace'),
+                                         (local[0].exp_id, 'ansys_mapdl', 'Local mesh')])
+        self.assertEqual([row.exp_id for row in QueueStore(queue.store.path).load()],
+                         [row.exp_id for row in [*legacy, *local, remote]])
+
     def test_truba_is_default_and_saved_jobs_use_their_target_in_serial_and_parallel(self):
         queue = self.queue()
         dialog = self.dialog(queue)

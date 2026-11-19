@@ -466,22 +466,25 @@ class FolderBatchDialog(QDialog):
     def refresh_queue_view(self, *, busy=None):
         root = str(self.root) if self.root is not None else None
         rows = [row for row in self.queue.rows if row.folder_job and row.folder_job['root'] == root]
+        keys = {row.folder_job['key'] for row in rows}
+        solvers = self.selected_solvers() if keys else ()
+        target = self.execution_target.currentData()
+        # Legacy jobs follow the workspace target and still have a saved solver.
+        rows = [row for row in rows if row.folder_job.get('execution_target') in (None, target)
+                and row.design_settings.solver_backend in solvers]
         self.queue_table.clearSelection()
         self.queue_table.setRowCount(len(rows))
         for index, row in enumerate(rows):
             settings = row.design_settings
-            target = row.folder_job.get('execution_target')
-            target_label = translate({'truba': 'TRUBA', 'local': 'Local mesh'}.get(target, 'Current workspace'))
+            job_target = row.folder_job.get('execution_target')
+            target_label = translate({'truba': 'TRUBA', 'local': 'Local mesh'}.get(job_target, 'Current workspace'))
             for column, value in enumerate((settings.imported_geometry_name, settings.solver_backend, target_label)):
                 item = QTableWidgetItem(value)
                 item.setToolTip(value)
                 item.setData(Qt.ItemDataRole.UserRole, row.exp_id)
                 self.queue_table.setItem(index, column, item)
 
-        keys = {row.folder_job['key'] for row in rows}
-        solvers = self.selected_solvers() if keys else ()
         base = self.batch_settings() if keys else None
-        target = self.execution_target.currentData()
         ready = False
         for index, specimen in enumerate(self.items):
             queued = bool(specimen.cached and keys) and all(
