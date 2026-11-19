@@ -4,6 +4,7 @@ The module itself uses only the standard library so a missing runtime can be
 reported by the cluster's bootstrap Python without importing the application.
 """
 from dataclasses import asdict,replace
+from functools import partial
 import hashlib
 import importlib
 import importlib.metadata
@@ -106,7 +107,7 @@ def probe(request,missing=False):
         for name in (("KratosMultiphysics","KratosMultiphysics.StructuralMechanicsApplication",
                      "KratosMultiphysics.ContactStructuralMechanicsApplication",
                      "KratosMultiphysics.ConstitutiveLawsApplication","KratosMultiphysics.LinearSolversApplication",
-                     "nonlinear_compression") if full or mechanics else ()):
+                     "mechanical_analysis") if full or mechanics else ()):
             importlib.import_module(name)
         capabilities["kratos"] = full or mechanics
     except Exception as error: capabilities["reasons"]["kratos"] = f"Kratos/reporting runtime unavailable: {error}"
@@ -170,12 +171,10 @@ def _local_kratos():
     return ComputeNodeKratos()
 
 
-def _batch(settings,mesh):
-    import nonlinear_compression as reporting
-    folder = reporting.run_analysis(settings,mesh,_local_kratos(),images=False)
-    value = json.loads((folder/"summary.json").read_text())
-    value["run_folder"] = str(folder)
-    return value
+def _batch(settings, mesh, *, result_root):
+    from mechanical_analysis import run_batch_experiment
+
+    return run_batch_experiment(settings, mesh, _local_kratos, result_root=result_root)
 
 
 def run_operation(request,output):
@@ -265,8 +264,7 @@ def _run_operation(request,output):
             for path in case.glob(pattern): shutil.copy2(path,output/path.name)
         if (case/"frames").is_dir(): shutil.copytree(case/"frames",output/"frames")
         return dict(case=".",remote_solver_case=str(case.resolve()))
-    import nonlinear_compression as reporting
-    reporting.ROOT = output.resolve()
+    batch = partial(_batch, result_root=output.resolve())
     if operation=="mechanical":
         mesh_source = request.get("mesh_source","")
         if mesh_source:
@@ -280,16 +278,16 @@ def _run_operation(request,output):
             preview = load_remote_preview(expected,settings=settings)
             mesh = preview.mesh
         else: mesh = generate_volume_mesh(settings)
-        summary = _batch(settings,mesh)
+        summary = batch(settings, mesh)
         return dict(run_folder=summary["run_folder"],summary=summary)
     if operation=="convergence_level":
-        from mesh_convergence import solve_level
-        level = solve_level(settings,generate_volume_mesh,_batch,max_elements=request["max_elements"],selected=request["selected"])
+        from convergence_execution import solve_level
+        level = solve_level(settings,generate_volume_mesh,batch,max_elements=request["max_elements"],selected=request["selected"])
         return dict(level=asdict(level))
     if operation in ("doe_mesh","doe_solve"):
         _stage('Meshing specimen' if operation == 'doe_mesh' else 'Meshing and solving DoE specimen')
-        from doe_studio import ExperimentWorker
-        worker = ExperimentWorker(generate_volume_mesh,_batch)
+        from doe_execution import ExperimentWorker
+        worker = ExperimentWorker(generate_volume_mesh,batch)
         method = worker._solve_row if operation=="doe_solve" else worker._evaluate_row_mesh
         return dict(row=method(request["row"],settings))
     raise ValueError("Unsupported remote operation.")

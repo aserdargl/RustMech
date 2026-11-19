@@ -214,6 +214,8 @@ class RemoteProtocolTests(unittest.TestCase):
         with tarfile.open(path) as archive:
             names = archive.getnames()
         self.assertIn("remote_worker.py",names)
+        for module in ("mechanical_analysis", "mechanical_results", "convergence_execution", "doe_execution"):
+            self.assertIn(f"{module}.py", names)
         self.assertIn("tools/truba/prepare-remote.sh",names)
         self.assertFalse(any("settings.json" in name or name.endswith(".dll") or name.startswith("results/") for name in names))
         script = slurm_script(RemoteContext(),"tester",dict(operation="preview",source_sha256=sha,native_sha256=native))

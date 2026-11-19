@@ -577,12 +577,12 @@ class FolderBatchTests(unittest.TestCase):
         self.assertFalse(queue.rows)
 
     def test_batch_runner_forwards_destination_to_analysis(self):
-        from nonlinear_compression import run_batch_experiment
+        from mechanical_analysis import run_batch_experiment
         folder = self.root / 'solver-run'
         folder.mkdir()
         (folder / 'summary.json').write_text('{"status":"completed"}')
         backend = object()
-        with patch('nonlinear_compression.run_analysis', return_value=folder) as analysis:
+        with patch('mechanical_analysis.run_analysis', return_value=folder) as analysis:
             result = run_batch_experiment(self.base, object(), lambda: backend, output_directory=self.root / 'Result')
         self.assertEqual(analysis.call_args.kwargs, dict(images=False, output_directory=self.root / 'Result'))
         self.assertEqual(result['run_folder'], str(folder))

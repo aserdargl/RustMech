@@ -83,20 +83,20 @@ class AnalysisMeshReuseTests(unittest.TestCase):
                     mapdl.solve.assert_not_called()
 
     def test_analysis_forwards_the_existing_mesh_without_generating_another(self):
-        import nonlinear_compression as studio
+        import mechanical_analysis
 
         settings, mesh = self.meshes["HEX8"]
         backend = MagicMock(capabilities=MAPDL_CAPABILITIES)
         backend.solve.return_value = SolverExecution(error="stop after handoff")
         with TemporaryDirectory() as folder:
             paths = SimpleNamespace(human=Path(folder), raw=Path(folder))
-            with patch.object(studio.RunPaths, "create", return_value=paths), patch.object(
-                studio, "export_geometry", return_value={}
-            ), patch.object(studio, "generate_volume_mesh", side_effect=AssertionError("remeshed")), patch.object(
+            with patch.object(mechanical_analysis.RunPaths, "create", return_value=paths), patch.object(
+                mechanical_analysis, "export_geometry", return_value={}
+            ), patch.object(mechanical_analysis, "generate_volume_mesh", side_effect=AssertionError("remeshed")), patch.object(
                 mesh_engine, "generate_volume_mesh", side_effect=AssertionError("remeshed")
             ):
                 with self.assertRaisesRegex(RuntimeError, "stop after handoff"):
-                    studio.run_analysis(settings, mesh, backend, images=False)
+                    mechanical_analysis.run_analysis(settings, mesh, backend, images=False)
         request = backend.solve.call_args.args[0]
         self.assertIs(request.mesh, mesh)
 

@@ -237,7 +237,7 @@ def fixture_surfaces(settings, displacement=0.):
     """Return fixed and moving fixture surfaces, also used for STL exports."""
     p = profile(settings)
     if not p or p.kind == 'compression':
-        from nonlinear_compression import make_compression_platens
+        from mechanical_results import make_compression_platens
         return make_compression_platens(settings.size, displacement)
     w,t,length = p.dimensions
     if p.kind == 'tension':

@@ -551,7 +551,7 @@ def sync_background_analysis(record, auth):
 
 def run_remote_level(settings,context,max_elements,selected,remote_auth=None,job_marker=None):
     result,_ = run_remote_job(dict(operation="convergence_level",settings=asdict(settings),max_elements=max_elements,selected=selected),context,remote_auth,job_marker)
-    from mesh_convergence import Level
+    from convergence_execution import Level
     from model import settings_from_dict
     value = result["level"]
     value["settings"] = settings_from_dict(value["settings"])
