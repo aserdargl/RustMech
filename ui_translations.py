@@ -393,6 +393,7 @@ Analysis Queue|Analiz Kuyruğu
 Add to Queue|Kuyruğa Ekle
 Add Truba|TRUBA'ya Ekle
 Check at least one ready specimen.|Hazır numunelerden en az birini işaretleyin.
+ready. Select the specimens you want to add, then click the add button.|hazır. Kuyruğa almak istediğiniz numuneleri işaretleyip ekleme düğmesine tıklayın.
 Checking source files before saving jobs to Analysis Queue…|İşler Analiz Kuyruğuna kaydedilmeden önce kaynak dosyalar kontrol ediliyor…
 The selected jobs are already in Analysis Queue.|Seçili işler zaten Analiz Kuyruğunda.
 TRUBA is disconnected. Connect to TRUBA and prepare a resource session before running the queue.|TRUBA bağlantısı yok. Kuyruğu çalıştırmadan önce TRUBA'ya bağlanın ve kaynak oturumunu hazırlayın.

@@ -500,7 +500,7 @@ class FolderBatchTests(unittest.TestCase):
         self.assertTrue((paths.human / '04_Graphs').is_dir())
         self.assertTrue(paths.raw.is_dir())
 
-    def test_ready_rows_checked_and_manual_mode_requires_selection(self):
+    def test_ready_rows_wait_for_selection_and_manual_mode_requires_faces(self):
         dialog = self.dialog()
         self.specimen()
         dialog.folder.setText(str(self.root))
@@ -510,10 +510,13 @@ class FolderBatchTests(unittest.TestCase):
         self.assertIn('Face selection', dialog.table.item(0, PREFLIGHT_COLUMN).text())
         dialog.items[0] = prepare_specimen(self.root / 'part.stl', (0, 0, 1))
         dialog.refresh_table()
-        self.assertEqual(dialog.table.item(0, RUN_COLUMN).checkState(), Qt.CheckState.Checked)
-        dialog.table.item(0, RUN_COLUMN).setCheckState(Qt.CheckState.Unchecked)
-        dialog.refresh_table()
         self.assertEqual(dialog.table.item(0, RUN_COLUMN).checkState(), Qt.CheckState.Unchecked)
+        self.assertFalse(dialog.enqueue.isEnabled())
+        dialog.table.item(0, RUN_COLUMN).setCheckState(Qt.CheckState.Checked)
+        dialog.refresh_table()
+        self.assertEqual(dialog.table.item(0, RUN_COLUMN).checkState(), Qt.CheckState.Checked)
+        self.assertTrue(dialog.enqueue.isEnabled())
+        self.assertFalse(dialog.queue.rows)
         for button in dialog.findChildren(QPushButton):
             self.assertFalse(button.autoDefault())
             self.assertFalse(button.isDefault())
@@ -584,7 +587,7 @@ class FolderBatchTests(unittest.TestCase):
         self.assertIsNone(batch.saved_faces(first))
         self.assertEqual(batch.saved_faces(second), (source_digest(second), selected))
         self.assertIs(batch.table.cellWidget(1, FACES_COLUMN), button)
-        self.assertEqual(batch.table.item(1, RUN_COLUMN).checkState(), Qt.CheckState.Checked)
+        self.assertEqual(batch.table.item(1, RUN_COLUMN).checkState(), Qt.CheckState.Unchecked)
 
         def cancel(editor):
             editor.show()
@@ -611,7 +614,8 @@ class FolderBatchTests(unittest.TestCase):
         reopened.poll()
         self.assertIsNone(reopened.future)
         self.assertEqual(reopened.items[1].cells, selected)
-        reopened.enqueue_ready()
+        reopened.table.item(1, RUN_COLUMN).setCheckState(Qt.CheckState.Checked)
+        reopened.enqueue.click()
         self.finish_enqueue(reopened)
         self.assertEqual(len(reopened.queue.rows), 1)
         self.assertEqual(reopened.queue.rows[0].design_settings.size, 4)
@@ -701,19 +705,19 @@ class FolderBatchTests(unittest.TestCase):
                      dialog.queue_table.item(index, 1).text(), dialog.queue_table.item(index, 2).text())
                     for index in range(dialog.queue_table.rowCount())]
 
-        self.assertEqual(visible_jobs(), [(legacy[1].exp_id, 'kratos', 'Current workspace')])
+        self.assertEqual(visible_jobs(), [])
+        self.assertFalse(dialog.enqueue.isEnabled())
+        dialog.table.item(0, RUN_COLUMN).setCheckState(Qt.CheckState.Checked)
         self.assertTrue(dialog.enqueue.isEnabled())
         dialog.enqueue.click()
         self.finish_enqueue(dialog)
         remote = queue.rows[-1]
-        self.assertEqual(visible_jobs(), [(legacy[1].exp_id, 'kratos', 'Current workspace'),
-                                         (remote.exp_id, 'kratos', 'TRUBA')])
+        self.assertEqual(visible_jobs(), [(remote.exp_id, 'kratos', 'TRUBA')])
         self.assertTrue(dialog.table.isRowHidden(0))
 
         dialog.execution_target.setCurrentIndex(dialog.execution_target.findData('local'))
         dialog.solver.setCurrentIndex(1)
-        self.assertEqual(visible_jobs(), [(legacy[0].exp_id, 'ansys_mapdl', 'Current workspace'),
-                                         (local[0].exp_id, 'ansys_mapdl', 'Local mesh')])
+        self.assertEqual(visible_jobs(), [(local[0].exp_id, 'ansys_mapdl', 'Local mesh')])
         self.assertEqual([row.exp_id for row in QueueStore(queue.store.path).load()],
                          [row.exp_id for row in [*legacy, *local, remote]])
 
@@ -729,6 +733,7 @@ class FolderBatchTests(unittest.TestCase):
         self.assertEqual(dialog.solver.currentText(), 'Kratos')
         self.assertEqual(dialog.mesh_type.currentText(), 'TET4')
         self.assertEqual(dialog.enqueue.text(), 'Add Truba')
+        dialog.table.item(0, RUN_COLUMN).setCheckState(Qt.CheckState.Checked)
         with patch('doe_studio.AnalysisProcess') as serial, patch('truba_parallel.AnalysisProcess') as parallel:
             dialog.enqueue.click()
             self.assertFalse(dialog.enqueue.isEnabled())
@@ -799,6 +804,7 @@ class FolderBatchTests(unittest.TestCase):
         self.assertEqual(dialog.local_mesh_size.value(), self.base.local_mesh_size)
         self.assertEqual(dialog.enqueue.text(), 'Add to Queue')
 
+        dialog.table.item(0, RUN_COLUMN).setCheckState(Qt.CheckState.Checked)
         dialog.enqueue.click()
         self.finish_enqueue(dialog)
         self.assertTrue(dialog.table.isRowHidden(0))
@@ -827,7 +833,7 @@ class FolderBatchTests(unittest.TestCase):
         dialog.set_busy(False)
         dialog.show()
         self.app.processEvents()
-        dialog.table.item(1, RUN_COLUMN).setCheckState(Qt.CheckState.Unchecked)
+        dialog.table.item(0, RUN_COLUMN).setCheckState(Qt.CheckState.Checked)
         dialog.solver.setCurrentIndex(1)
         dialog.enqueue.click()
         self.finish_enqueue(dialog)
@@ -856,6 +862,8 @@ class FolderBatchTests(unittest.TestCase):
         dialog.items = [self.prepared('part1.stl'), self.prepared('part2.stl')]
         dialog.refresh_table()
         dialog.set_busy(False)
+        for index in range(2):
+            dialog.table.item(index, RUN_COLUMN).setCheckState(Qt.CheckState.Checked)
         dialog.enqueue.click()
         self.finish_enqueue(dialog)
         first, second = dialog.queue.rows[1:]
@@ -898,6 +906,8 @@ class FolderBatchTests(unittest.TestCase):
         dialog.set_busy(False)
         Path(dialog.items[1].source).write_bytes(b'changed')
 
+        for index in range(2):
+            dialog.table.item(index, RUN_COLUMN).setCheckState(Qt.CheckState.Checked)
         dialog.enqueue.click()
         self.finish_enqueue(dialog)
 
@@ -921,8 +931,15 @@ class FolderBatchTests(unittest.TestCase):
                 dialog.poll()
             self.assertIsNone(dialog.future)
             self.assertTrue(dialog.items[0].cached)
-            self.assertEqual(dialog.table.item(0, RUN_COLUMN).checkState(), Qt.CheckState.Checked)
+            self.assertEqual(dialog.table.item(0, RUN_COLUMN).checkState(), Qt.CheckState.Unchecked)
+            self.assertFalse(dialog.enqueue.isEnabled())
             self.assertFalse(dialog.queue.rows)
+            self.assertFalse(QueueStore(dialog.queue.store.path).load())
+            dialog.table.item(0, RUN_COLUMN).setCheckState(Qt.CheckState.Checked)
+            QTest.keyClick(dialog.folder, Qt.Key.Key_Return)
+            self.assertTrue(dialog.enqueue.isEnabled())
+            self.assertFalse(dialog.queue.rows)
+            self.assertFalse(QueueStore(dialog.queue.store.path).load())
             process.assert_not_called()
 
     def test_hover_preview_is_saved_beside_prepared_geometry_and_replaced_after_edit(self):

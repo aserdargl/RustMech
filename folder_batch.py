@@ -302,7 +302,7 @@ class FolderBatchDialog(QDialog):
         specimen_layout.setContentsMargins(6, 6, 6, 6)
         panels.addWidget(specimens)
         self.table = QTableWidget(0, 4)
-        self.table.setHorizontalHeaderLabels(['', 'Run', 'Specimen', 'Preflight'])
+        self.table.setHorizontalHeaderLabels(['', 'Add', 'Specimen', 'Preflight'])
         self.face_icon = camera_icon('orthographic')
         self.face_preview = FacePreviewPopup(self)
         edit_header = self.table.horizontalHeaderItem(FACES_COLUMN)
@@ -362,6 +362,7 @@ class FolderBatchDialog(QDialog):
         self.local_mesh_size.valueChanged.connect(self.refresh_queue_view)
         self.mesh_type.currentIndexChanged.connect(self.refresh_queue_view)
         self.queue.queue_changed.connect(self.refresh_queue_view)
+        self.table.itemChanged.connect(self.update_enqueue_button)
         self.update_execution_target()
         self.execution_target.currentIndexChanged.connect(self.update_execution_target)
         self.finished.connect(self._save_preferences)
@@ -476,19 +477,18 @@ class FolderBatchDialog(QDialog):
 
     def refresh_queue_view(self, *, busy=None):
         root = str(self.root) if self.root is not None else None
-        rows = [row for row in self.queue.rows if row.folder_job and row.folder_job['root'] == root]
+        target = self.execution_target.currentData()
+        # Untargeted jobs still follow the main workspace and are managed in Analysis Queue.
+        rows = [row for row in self.queue.rows if row.folder_job and row.folder_job['root'] == root
+                and row.folder_job.get('execution_target') == target]
         keys = {row.folder_job['key'] for row in rows}
         solvers = self.selected_solvers() if keys else ()
-        target = self.execution_target.currentData()
-        # Legacy jobs follow the workspace target and still have a saved solver.
-        rows = [row for row in rows if row.folder_job.get('execution_target') in (None, target)
-                and row.design_settings.solver_backend in solvers]
+        rows = [row for row in rows if row.design_settings.solver_backend in solvers]
         self.queue_table.clearSelection()
         self.queue_table.setRowCount(len(rows))
+        target_label = translate('TRUBA' if target == 'truba' else 'Local mesh')
         for index, row in enumerate(rows):
             settings = row.design_settings
-            job_target = row.folder_job.get('execution_target')
-            target_label = translate({'truba': 'TRUBA', 'local': 'Local mesh'}.get(job_target, 'Current workspace'))
             for column, value in enumerate((settings.imported_geometry_name, settings.solver_backend, target_label)):
                 item = QTableWidgetItem(value)
                 item.setToolTip(value)
@@ -496,17 +496,25 @@ class FolderBatchDialog(QDialog):
                 self.queue_table.setItem(index, column, item)
 
         base = self.batch_settings() if keys else None
-        ready = False
         for index, specimen in enumerate(self.items):
             queued = bool(specimen.cached and keys) and all(
                 metadata['key'] in keys for _, metadata in _prepared_snapshots(
                     specimen, self.root, base, solvers, execution_target=target))
             self.table.setRowHidden(index, queued)
-            ready |= bool(specimen.cached and not queued)
+        self.update_enqueue_button(busy=busy)
+        self.update_remove_button()
+
+    def selected_specimens(self):
+        return [item for index, item in enumerate(self.items)
+                if item.cached and not self.table.isRowHidden(index)
+                and self.table.item(index, RUN_COLUMN).checkState() == Qt.CheckState.Checked]
+
+    def update_enqueue_button(self, item=None, *, busy=None):
+        if item is not None and item.column() != RUN_COLUMN:
+            return
         if busy is None:
             busy = self.future is not None or bool(self.pending)
-        self.enqueue.setEnabled(ready and not busy)
-        self.update_remove_button()
+        self.enqueue.setEnabled(not busy and bool(self.selected_specimens()))
 
     def update_remove_button(self):
         idle = self.future is None and not self.pending
@@ -661,8 +669,7 @@ class FolderBatchDialog(QDialog):
         else:
             self.set_busy(False)
             ready = sum(bool(item.cached) for item in self.items)
-            self.status.setText(f'{ready}/{len(self.items)} ready. Inspect or select faces for the remaining specimens, or leave them unchecked. '
-                                'Use Add to Queue, then open Analysis Queue to start the jobs.')
+            self.status.setText(f'{ready}/{len(self.items)} ' + translate('ready. Select the specimens you want to add, then click the add button.'))
 
     def poll(self):
         if self.future is None or not self.future.done():
@@ -682,6 +689,7 @@ class FolderBatchDialog(QDialog):
     def refresh_table(self):
         checked = {self.table.item(i, SPECIMEN_COLUMN).text(): self.table.item(i, RUN_COLUMN).checkState()
                    for i in range(self.table.rowCount()) if self.table.item(i, RUN_COLUMN).data(Qt.ItemDataRole.UserRole)}
+        blocker = QSignalBlocker(self.table)
         self.table.setRowCount(len(self.items))
         for index, specimen in enumerate(self.items):
             name = Path(specimen.source).relative_to(self.root).as_posix()
@@ -702,8 +710,9 @@ class FolderBatchDialog(QDialog):
                 tip = f'<html>Face preview unavailable<br>{escape(specimen.preview_error)}</html>'
             button.setToolTip(tip)
             check = QTableWidgetItem()
-            check.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsUserCheckable)
-            check.setCheckState(checked.get(name, Qt.CheckState.Checked) if specimen.cached else Qt.CheckState.Unchecked)
+            check.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsUserCheckable if specimen.cached
+                           else Qt.ItemFlag.NoItemFlags)
+            check.setCheckState(checked.get(name, Qt.CheckState.Unchecked) if specimen.cached else Qt.CheckState.Unchecked)
             check.setData(Qt.ItemDataRole.UserRole, bool(specimen.cached))
             self.table.setItem(index, RUN_COLUMN, check)
             preflight = specimen.error or f'Ready | height {specimen.height:g} mm'
@@ -717,6 +726,7 @@ class FolderBatchDialog(QDialog):
                 self.table.setItem(index, column, item)
         self.table.resizeColumnToContents(RUN_COLUMN)
         self.table.resizeColumnToContents(SPECIMEN_COLUMN)
+        blocker.unblock()
 
     def edit_specimen(self, index):
         if self.future is not None:
@@ -740,9 +750,7 @@ class FolderBatchDialog(QDialog):
     def enqueue_ready(self):
         if self.future is not None or self.pending or self.base is None:
             return
-        items = [item for index, item in enumerate(self.items)
-                 if not self.table.isRowHidden(index)
-                 and self.table.item(index, RUN_COLUMN).checkState() == Qt.CheckState.Checked]
+        items = self.selected_specimens()
         if not items:
             self.status.setText(translate('Check at least one ready specimen.'))
             return
