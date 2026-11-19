@@ -13,7 +13,7 @@ from PySide6.QtCore import QSignalBlocker, QSize, Qt, QTimer
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (QAbstractItemView, QApplication, QDialog, QGridLayout, QGroupBox, QHeaderView,
                               QHBoxLayout, QLabel, QLineEdit, QPushButton, QSplitter, QStyle,
-                              QTableWidget, QTableWidgetItem, QToolButton, QVBoxLayout)
+                              QTableWidget, QTableWidgetItem, QToolButton, QVBoxLayout, QWidget)
 
 from camera_toolbar import camera_icon
 from file_dialog import QFileDialog
@@ -23,7 +23,7 @@ from imported_geometry import (SURFACE_EXTENSIONS, SURFACE_FILE_FILTER, SurfaceC
                                align_compression_surface, automatic_compression_selection,
                                compression_direction, read_polygonal_surface, store_surface, surface_cache_directory)
 from model import MIN_MESH_INPUT_MM, settings_from_dict
-from studio_style import (ActionFlowLayout, CompactComboBox, CompactDoubleSpinBox, CONTROL_HEIGHT,
+from studio_style import (CompactComboBox, CompactDoubleSpinBox, CONTROL_HEIGHT,
                           STUDIO_STYLESHEET, field_label, mesh_precision_stepper, stepper_with_unit)
 from ui_language import translate
 from window_state import install_window_state
@@ -300,7 +300,6 @@ class FolderBatchDialog(QDialog):
         specimens = QGroupBox('Specimens')
         specimen_layout = QVBoxLayout(specimens)
         specimen_layout.setContentsMargins(6, 6, 6, 6)
-        panels.addWidget(specimens)
         self.table = QTableWidget(0, 4)
         self.table.setHorizontalHeaderLabels(['', 'Add', 'Specimen', 'Preflight'])
         self.face_icon = camera_icon('orthographic')
@@ -335,18 +334,28 @@ class FolderBatchDialog(QDialog):
         self.remove_from_queue = self.button('Remove from Queue', self.return_queued_specimen)
         self.remove_from_queue.setEnabled(False)
         self.queue_table.itemSelectionChanged.connect(self.update_remove_button)
-        queue_layout.addWidget(self.remove_from_queue, 0, Qt.AlignmentFlag.AlignLeft)
-        panels.addWidget(queued)
-        panels.setSizes([560, 320])
-
-        actions = ActionFlowLayout(equal_width=True)
-        actions.setAlignment(Qt.AlignmentFlag.AlignRight)
         self.enqueue = self.button('Add to Queue', self.enqueue_ready)
         self.show_queue = self.button('Analysis Queue', self.open_queue)
         close = self.button('Close', self.close)
-        for button in (self.enqueue, self.show_queue, close):
-            actions.addWidget(button)
-        layout.addLayout(actions)
+        self.enqueue.setMinimumWidth(self.remove_from_queue.sizeHint().width())
+
+        # Reserve the footer below each card so its actions take no table space.
+        for card, leading, trailing in ((specimens, self.show_queue, self.enqueue),
+                                        (queued, close, self.remove_from_queue)):
+            pane = QWidget()
+            pane_layout = QVBoxLayout(pane)
+            pane_layout.setContentsMargins(0, 0, 0, 0)
+            pane_layout.setSpacing(layout.spacing())
+            pane_layout.addWidget(card, 1)
+            footer = QHBoxLayout()
+            footer.setContentsMargins(7, 0, 7, 0)
+            footer.addWidget(leading)
+            footer.addStretch()
+            footer.addWidget(trailing)
+            pane_layout.addLayout(footer)
+            panels.addWidget(pane)
+        panels.setSizes([560, 320])
+
         self.status = QLabel('Choose a folder and check it. No analysis starts during preparation.')
         self.status.setWordWrap(True)
         layout.addWidget(self.status)

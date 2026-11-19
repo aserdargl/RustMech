@@ -843,10 +843,6 @@ class FolderBatchTests(unittest.TestCase):
         self.assertEqual(dialog.queue_table.rowCount(), 1)
         self.assertEqual(dialog.queue_table.item(0, 0).text(), 'part1.stl')
         self.assertEqual(dialog.queue_table.item(0, 1).text(), 'ansys_mapdl')
-        buttons = [button for button in dialog.findChildren(QPushButton)
-                   if button.text() in ('Add to Queue', 'Analysis Queue', 'Close')]
-        self.assertEqual(len(buttons), 3)
-        self.assertEqual(len({button.size() for button in buttons}), 1)
         dialog.solver.setCurrentIndex(2)
         self.assertFalse(dialog.table.isRowHidden(0))
         dialog.solver.setCurrentIndex(1)
@@ -854,6 +850,23 @@ class FolderBatchTests(unittest.TestCase):
         dialog.queue.delete_selected_rows()
         self.assertFalse(dialog.table.isRowHidden(0))
         self.assertEqual(dialog.queue_table.rowCount(), 0)
+
+    def test_queue_actions_stay_below_and_right_aligned_to_their_tables(self):
+        dialog = self.dialog()
+        dialog.show()
+        self.app.processEvents()
+        splitter = dialog.findChild(QSplitter, 'folderBatchPanels')
+        for position in (splitter.sizes()[0], splitter.width() // 2):
+            splitter.moveSplitter(position, 1)
+            self.app.processEvents()
+            self.assertEqual(dialog.enqueue.size(), dialog.remove_from_queue.size())
+            for table, button in ((dialog.table, dialog.enqueue),
+                                  (dialog.queue_table, dialog.remove_from_queue)):
+                table_corner = table.mapTo(dialog, table.rect().bottomRight())
+                button_corner = button.mapTo(dialog, button.rect().topRight())
+                self.assertEqual(button_corner.x(), table_corner.x())
+                self.assertGreater(button_corner.y(), table_corner.y())
+            self.assertEqual(dialog.table.height(), dialog.queue_table.height())
 
     def test_remove_from_right_panel_persists_and_returns_only_the_selected_job(self):
         dialog = self.dialog()
