@@ -8,6 +8,7 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 import numpy as np
+import pyvista as pv
 from PySide6.QtCore import QSettings, Qt
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QWidget
@@ -87,6 +88,44 @@ class SurfacePreviewUITests(unittest.TestCase):
                     self.assertIs(layers["excluded_fragments"].args[0], fragment)
                     self.assertFalse(self.window.fragment_status.isHidden())
                 self.assertIs(self.window.preview.mesh, mesh)
+
+    def test_completed_mechanical_result_colors_its_own_mesh_in_main_preview(self):
+        window = self.window
+        field = window.result_preview_field
+        plotter = window.plotter
+        self.assertTrue(window.result_preview_controls.isHidden())
+        with TemporaryDirectory() as scratch:
+            folder = Path(scratch)
+            results = folder / "03_Results"
+            results.mkdir()
+            grid = pv.ImageData(dimensions=(2, 2, 2), origin=(10, 20, 30)).cast_to_unstructured_grid()
+            grid.point_data["Von_Mises_MPa"] = np.arange(grid.n_points, dtype=float)
+            grid.point_data["Displacement_Magnitude_mm"] = grid.point_data["Von_Mises_MPa"] / 10
+            grid.save(results / "deformed_shape.vtu")
+
+            window._background_analysis_updated({}, (
+                {"operation": "mechanical", "run_folder": str(folder)}, folder,
+            ))
+            self.assertFalse(window.result_preview_controls.isHidden())
+            self.assertEqual(field.currentIndex(), 0)
+            for array, unit in (("Von_Mises_MPa", "MPa"), ("Displacement_Magnitude_mm", "mm")):
+                with self.subTest(array=array):
+                    field.setCurrentIndex(field.findData(array))
+                    call = plotter.add_mesh.call_args
+                    self.assertEqual(call.kwargs["name"], "mechanical_result")
+                    self.assertEqual(call.kwargs["scalars"], array)
+                    self.assertIn(unit, call.kwargs["scalar_bar_args"]["title"])
+                    self.assertEqual(call.args[0].bounds, grid.bounds)
+                    np.testing.assert_allclose(
+                        np.sort(call.args[0].point_data[array]), np.sort(grid.point_data[array])
+                    )
+                    self.assertTrue(window.mesh_kpis.isHidden())
+
+            plotter.reset_mock()
+            window.display_mode_buttons.button(0).click()
+            self.assertEqual(field.currentIndex(), 0)
+            self.assertFalse(window.mesh_kpis.isHidden())
+            self.assertIs(plotter.add_mesh.call_args_list[0].args[0], window.preview.surface)
 
     def test_fft_preview_uses_solver_voxel_coordinates(self):
         solid = np.zeros((8, 8, 8), dtype=bool)

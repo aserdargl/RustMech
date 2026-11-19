@@ -329,6 +329,10 @@ Displacement|Yer değiştirme
 Displacement (mm)|Yer değiştirme (mm)
 Displ. (mm)|Yer değiştirme (mm)
 Displacement / mm|Yer değiştirme / mm
+Latest mechanical result · Final load step|Son mekanik analiz sonucu · Son yük adımı
+Result field|Sonuç alanı
+Model preview|Model önizlemesi
+von Mises stress / MPa|von Mises gerilmesi / MPa
 Compression|Basma
 Compression (mm)|Basma (mm)
 Compression / mm|Basma / mm

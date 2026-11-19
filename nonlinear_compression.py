@@ -247,6 +247,9 @@ class RustMechDialog(QDialog):
         self.analysis_poll.timeout.connect(self._poll_analysis)
         self.accepted_settings = None
         self.preview = None
+        self._result_preview_folder = None
+        self._result_preview_data = None
+        self._showing_result_preview = False
         self._mesh_requested = False
         self._analysis_after_mesh = None
         self._fft_method_index = None
@@ -1018,7 +1021,7 @@ class RustMechDialog(QDialog):
             mode_layout.addWidget(button)
         self.display_mode_buttons.button(self.mode.currentIndex()).setChecked(True)
         self.display_mode_buttons.idClicked.connect(lambda _: self.workspace_tabs.setCurrentIndex(0))
-        self.display_mode_buttons.idClicked.connect(self.mode.setCurrentIndex)
+        self.display_mode_buttons.idClicked.connect(self._select_model_view)
         self.mode.currentIndexChanged.connect(lambda index: self.display_mode_buttons.button(index).setChecked(True))
 
         self.show_platens_cb = QCheckBox("Show platens")
@@ -1027,6 +1030,24 @@ class RustMechDialog(QDialog):
         self.show_platens_cb.setCursor(Qt.CursorShape.PointingHandCursor)
         self.show_platens_cb.toggled.connect(self.render_preview)
         view_toolbar.addWidget(self.show_platens_cb)
+
+        self.result_preview_controls = QWidget()
+        result_controls_layout = QHBoxLayout(self.result_preview_controls)
+        result_controls_layout.setContentsMargins(0, 0, 0, 0)
+        result_controls_layout.setSpacing(4)
+        result_label = QLabel("Result field")
+        self.result_preview_field = NoWheelComboBox()
+        self.result_preview_field.setAccessibleName("Result field")
+        result_label.setBuddy(self.result_preview_field)
+        result_controls_layout.addWidget(result_label)
+        result_controls_layout.addWidget(self.result_preview_field)
+        self.result_preview_field.addItem("Model preview")
+        self.result_preview_field.addItem("von Mises stress / MPa", "Von_Mises_MPa")
+        self.result_preview_field.addItem("Displacement / mm", "Displacement_Magnitude_mm")
+        self.result_preview_field.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
+        self.result_preview_field.setMaximumWidth(200)
+        self.result_preview_field.currentIndexChanged.connect(self.render_preview)
+        self.result_preview_controls.hide()
 
         # Keep warnings together with the status messages at the bottom.
         self.fragment_status = QLabel()
@@ -1150,11 +1171,10 @@ class RustMechDialog(QDialog):
         self.telemetry_details = telemetry_card
         telemetry_card.hide()
         bottom_telemetry_layout.addWidget(telemetry_card)
-        details_action = camera_menu.addAction("Mesh diagnostics")
-        details_action.setCheckable(True)
-        details_action.toggled.connect(lambda checked: telemetry_card.setVisible(
-            checked and self.setup_tabs.currentIndex() != self._fft_method_index))
-        camera_controls.add_camera_action(details_action, "diagnostics")
+        self._mesh_details_action = camera_menu.addAction("Mesh diagnostics")
+        self._mesh_details_action.setCheckable(True)
+        self._mesh_details_action.toggled.connect(self._sync_preview_readout)
+        camera_controls.add_camera_action(self._mesh_details_action, "diagnostics")
         camera_controls.attach(self.plotter.interactor)
         self._kpi_labels["spacing"].parentWidget().hide()
 
@@ -1242,6 +1262,7 @@ class RustMechDialog(QDialog):
         self.preview_splitter.setStretchFactor(0, 1)
         self.preview_splitter.setStretchFactor(1, 0)
         self.preview_splitter.setSizes([800, 32])
+        right.addWidget(self.result_preview_controls, 0, Qt.AlignmentFlag.AlignLeft)
         right.addWidget(self.preview_splitter, 1)
 
         self.doe_studio = DoEStudioWidget(
@@ -1304,9 +1325,7 @@ class RustMechDialog(QDialog):
             self.sidebar_toggle.setVisible(not flow_active)
             self.display_mode_group.setVisible(not flow_active and not fft_selected)
             self.show_platens_cb.setVisible(not flow_active and not fft_selected)
-            self.mesh_kpis.setVisible(not fft_selected)
-            details_action.setVisible(not fft_selected)
-            telemetry_card.setVisible(not fft_selected and details_action.isChecked())
+            self._sync_preview_readout()
             self.fft_preview_summary.setVisible(fft_selected)
             camera_controls.setVisible(not flow_active)
         self._sync_workspace_context = sync_workspace_context
@@ -1400,6 +1419,8 @@ class RustMechDialog(QDialog):
         self.language_manager.localize_tree(self)
         if self.setup_tabs.currentIndex() == self._fft_method_index:
             self._update_fft_preview_summary(self.collect())
+        elif self.result_preview_field.currentData() is not None:
+            self.render_preview()
         menu_buttons = (
             (self.project_button, (self.project_button.text(),)),
             (self.sidebar_toggle, tuple(translate(name) for name in self.method_button_labels)),
@@ -1819,7 +1840,7 @@ class RustMechDialog(QDialog):
             self.refresh_validity()
             if was_fft != is_fft:
                 self._fft_preview_size = None
-                if is_fft or self.preview is not None:
+                if is_fft or self.preview is not None or self.result_preview_field.currentData() is not None:
                     self.render_preview(reset=True)
                 else:
                     self.plotter.clear()
@@ -2439,6 +2460,7 @@ class RustMechDialog(QDialog):
         self.active_geometry = settings
         self._mesh_requested = False
         self._analysis_after_mesh = None
+        self.result_preview_field.setCurrentIndex(0)
         self.mode.setCurrentIndex(0)
         self.failed_key = None
         self.debounce.stop()
@@ -2453,7 +2475,15 @@ class RustMechDialog(QDialog):
             self.mode.setCurrentIndex(1)
             self.start_preview()
 
+    def _select_model_view(self, index):
+        if self.mode.currentIndex() == index:
+            self.result_preview_field.setCurrentIndex(0)
+        else:
+            self.mode.setCurrentIndex(index)
+
     def _display_mode_changed(self, index):
+        with QSignalBlocker(self.result_preview_field):
+            self.result_preview_field.setCurrentIndex(0)
         if index in (1, 2):
             self._mesh_requested = True
             self.failed_key = None
@@ -2772,13 +2802,71 @@ class RustMechDialog(QDialog):
         self._finish_preview_view(camera, reset or cell_size != self._fft_preview_size)
         self._fft_preview_size = cell_size
 
+    def _sync_preview_readout(self, *_):
+        fft_selected = self.setup_tabs.currentIndex() == self._fft_method_index
+        has_results = self._result_preview_folder is not None
+        self.result_preview_controls.setVisible(has_results and not fft_selected)
+        model_view = not fft_selected and self.result_preview_field.currentData() is None
+        self.mesh_kpis.setVisible(model_view)
+        self._mesh_details_action.setVisible(model_view)
+        self.telemetry_details.setVisible(model_view and self._mesh_details_action.isChecked())
+
+    def _render_result_preview(self, field, reset):
+        from ui_language import translate
+
+        if self._result_preview_data is None:
+            folder = self._result_preview_folder
+            surface = pv.read(folder / "deformed_shape.vtu").extract_surface(algorithm="dataset_surface")
+            fields = ("Von_Mises_MPa", "Displacement_Magnitude_mm")
+            if not surface.n_cells or any(name not in surface.point_data for name in fields):
+                raise ValueError("The result mesh is empty or missing nodal fields.")
+            platens = [
+                pv.read(folder / name) if (folder / name).is_file() else None
+                for name in ("bottom_platen.stl", "top_platen_deformed.stl")
+            ]
+            self._result_preview_data = surface, platens
+
+        surface, platens = self._result_preview_data
+        camera = self.plotter.camera_position
+        self.plotter.clear()
+        self.plotter.enable_lightkit()
+        self.plotter.set_background("#f0f0f0", top="#ffffff")
+        self.plotter.add_mesh(
+            surface, scalars=field, preference="point", cmap="viridis",
+            name="mechanical_result", lighting=False,
+            scalar_bar_args={"title": translate(self.result_preview_field.currentText()),
+                             "color": "#1e293b", "vertical": True,
+                             "height": 0.36, "position_y": 0.04},
+        )
+        if self.show_platens_cb.isChecked():
+            self._add_preview_platens(platens)
+        self.fragment_status.hide()
+        self._finish_preview_view(camera, reset)
+
     def render_preview(self, *_, reset: bool = False) -> None:
         if self.disposed:
             return
+        self._sync_preview_readout()
         if self.setup_tabs.currentIndex() == self._fft_method_index:
             self._render_fft_preview(reset)
             return
+        field = self.result_preview_field.currentData()
+        if field is not None:
+            try:
+                fit_result = not self._showing_result_preview or self._result_preview_data is None
+                self._render_result_preview(field, reset or fit_result)
+                self._showing_result_preview = True
+                return
+            except (OSError, ValueError, RuntimeError) as error:
+                with QSignalBlocker(self.result_preview_field):
+                    self.result_preview_field.setCurrentIndex(0)
+                self._sync_preview_readout()
+                self.status.setText(f"Cannot display this result: {error}")
+        reset = reset or self._showing_result_preview
+        self._showing_result_preview = False
         if not self.preview:
+            self.plotter.clear()
+            self.plotter.render()
             return
         camera = self.plotter.camera_position
         self.plotter.clear()
@@ -2832,24 +2920,7 @@ class RustMechDialog(QDialog):
             from standard_tests import fixture_surfaces
             bottom_platen, top_platen = (fixture_surfaces(self.preview_settings()) if self.preview_settings().test_profile != 'custom' else
                 make_compression_platens(cube_sz, 0.0, self.preview.surface.bounds[:4] if self.preview_settings().imported_geometry_path else None))
-            self.plotter.add_mesh(
-                bottom_platen,
-                color="#475569",
-                opacity=1.0,
-                smooth_shading=False,
-                show_edges=True,
-                edge_color="#1e293b",
-                name="bottom_platen",
-            )
-            self.plotter.add_mesh(
-                top_platen,
-                color="#64748b",
-                opacity=1.0,
-                smooth_shading=False,
-                show_edges=True,
-                edge_color="#1e293b",
-                name="top_platen",
-            )
+            self._add_preview_platens((bottom_platen, top_platen))
         self.fragment_status.setVisible(bool(removed_count))
         self.fragment_status.setText(
             f"Excluded: {removed_count} disconnected elements will be removed. "
@@ -2884,6 +2955,14 @@ class RustMechDialog(QDialog):
             f"Solid {mesh.fraction:.6f}% | Face-connected components {mesh.components} | "
             f"Preview and solver use this same FE mesh.{fragments}"
         )
+
+    def _add_preview_platens(self, platens):
+        for platen, name, color in zip(platens, ("bottom_platen", "top_platen"), ("#475569", "#64748b")):
+            if platen is not None and platen.n_cells:
+                self.plotter.add_mesh(
+                    platen, color=color, smooth_shading=False, show_edges=True,
+                    edge_color="#1e293b", name=name,
+                )
 
     def _finish_preview_view(self, camera, reset):
         self.plotter.add_axes(color="#0f172a", interactive=False)
@@ -3032,6 +3111,7 @@ class RustMechDialog(QDialog):
         dialog.deleteLater()
 
     def load_from_doe_row(self, row_settings: Settings, *, preview=True) -> None:
+        self.result_preview_field.setCurrentIndex(0)
         for combo,value in ((self.test_profile_combo,row_settings.test_profile),(self.architecture_combo,row_settings.specimen_architecture)):
             combo.blockSignals(True)
             combo.setCurrentIndex(max(0,combo.findData(value)))
@@ -3363,6 +3443,18 @@ class RustMechDialog(QDialog):
             else:
                 self.status.setText(f"Analysis completed. Results: {folder}")
             self._update_status_visuals("ready", "● COMPLETED", False)
+        fields_folder = Path(folder) / "03_Results"
+        if (fields_folder / "deformed_shape.vtu").is_file():
+            from ui_language import translate
+
+            self._result_preview_folder = fields_folder
+            self._result_preview_data = None
+            self.result_preview_field.setToolTip(
+                f"{translate('Latest mechanical result · Final load step')}\n{Path(folder)}"
+            )
+            self._sync_preview_readout()
+            if self.result_preview_field.currentData() is not None:
+                self.render_preview()
         try:
             report=json.loads((Path(folder)/"summary.json").read_text(encoding="utf-8"))
             if report.get("solver") == "kratos":
