@@ -863,6 +863,50 @@ class EsenTests(unittest.TestCase):
             self.assertIn("run_second.slurm", workspace.history.item(0).text())
             self.assertIn("Submitted", workspace.history.item(0).text())
 
+    def test_space_checks_only_runnable_files_in_a_multi_selection(self):
+        app = QApplication.instance() or QApplication([])
+        preferences = QSettings(str(self.root / "settings.ini"), QSettings.Format.IniFormat)
+        names = ("run_first.slurm", "run_second.slurm", "data/cell.lmp")
+        for name in names[:2]:
+            (self.source / name).write_text("#!/bin/bash\n", encoding="utf-8")
+        with patch("esen_workspace.QSettings", return_value=preferences):
+            workspace = EsenWorkspace(FakeTruba(), history=self.history)
+        self.addCleanup(workspace.dispose)
+        workspace.show()
+        app.processEvents()
+        workspace._load_files([str(self.source / name) for name in names])
+        QTest.keyClick(workspace.inputs, Qt.Key.Key_A, Qt.KeyboardModifier.ControlModifier)
+        self.assertEqual(len(workspace.inputs.selectedItems()), 3)
+        QTest.keyClick(workspace.inputs, Qt.Key.Key_Space)
+        self.assertEqual(list(workspace._folder_jobs()), list(names[:2]))
+        QTest.keyClick(workspace.inputs, Qt.Key.Key_Space)
+        self.assertEqual(list(workspace._folder_jobs()), [])
+
+    def test_remove_selected_support_files_preserves_main_script_and_disk_files(self):
+        app = QApplication.instance() or QApplication([])
+        preferences = QSettings(str(self.root / "settings.ini"), QSettings.Format.IniFormat)
+        preferences.setValue("esen/target", "local")
+        names = ("in.model", "data/cell.lmp", "potential.meam")
+        (self.source / names[0]).touch()
+        (self.source / names[2]).touch()
+        with patch("esen_workspace.QSettings", return_value=preferences):
+            workspace = EsenWorkspace(FakeTruba(), history=self.history)
+        self.addCleanup(workspace.dispose)
+        workspace.show()
+        app.processEvents()
+        workspace._load_files([str(self.source / name) for name in names])
+        view = workspace.inputs
+        QTest.mouseClick(view.viewport(), Qt.MouseButton.LeftButton, pos=view.visualItemRect(view.item(0)).center())
+        QTest.mouseClick(view.viewport(), Qt.MouseButton.LeftButton, Qt.KeyboardModifier.ShiftModifier,
+                         view.visualItemRect(view.item(2)).center())
+        self.assertEqual(len(view.selectedItems()), 3)
+        self.assertTrue(workspace.remove_inputs.isEnabled())
+        self.assertFalse(workspace.use_as_script.isEnabled())
+        workspace.remove_inputs.click()
+        self.assertEqual(workspace.inputs.count(), 1)
+        self.assertEqual(workspace.inputs.item(0).text(), names[0])
+        self.assertTrue(all((self.source / name).exists() for name in names))
+
     def test_selected_files_upload_and_slurm_runs_in_the_user_order(self):
         app = QApplication.instance() or QApplication([])
         preferences = QSettings(str(self.root / "settings.ini"), QSettings.Format.IniFormat)

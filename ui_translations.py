@@ -59,6 +59,8 @@ Load files…|Dosya yükle…
 LAMMPS input files|LAMMPS girdi dosyaları
 Include entire job folder|İş klasörünün tamamını ekle
 Remove file|Dosyayı çıkar
+Remove selected files|Seçili dosyaları çıkar
+Use Ctrl or Shift to select files. Press Space to check or uncheck selected scripts.|Ctrl veya Shift ile birden fazla dosya seçin. Boşluk tuşuyla seçili betiklerin işaretini değiştirin.
 Use As Script|Betik Olarak Seç
 Run LAMMPS|LAMMPS'i çalıştır
 Job history|İş geçmişi

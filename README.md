@@ -40,6 +40,9 @@ TRUBA’ya aktarır ve her betiği kendi klasöründeki göreli yollarla ayrı b
 Slurm işi olarak gönderir. Aynı aktarım birden fazla işte kullanılır.
 Çalışan işlerin ayrı çalışma kopyaları vardır.
 
+Dosya listesinde Ctrl ile tek tek, Shift ile aralık seçin. Boşluk tuşu
+seçili çalıştırılabilir betiklerin kutularını birlikte işaretler veya temizler.
+
 Kuyruk, hesap, MPI görev sayısı, bellek ve süreyi betiğin `#SBATCH`
 satırlarında belirleyin. ESEN iş takibi için iş adını, çalışma dizinini ve
 standart günlük yollarını ayarlar. MPI ile derlenmiş LAMMPS'i örneğin

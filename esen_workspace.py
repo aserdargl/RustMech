@@ -13,7 +13,7 @@ from time import time
 from PySide6.QtCore import QPoint, QSettings, QSignalBlocker, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
-    QApplication, QCheckBox, QDialog, QFormLayout, QFrame, QHBoxLayout, QLabel,
+    QAbstractItemView, QApplication, QCheckBox, QDialog, QFormLayout, QFrame, QHBoxLayout, QLabel,
     QLineEdit, QListWidget, QListWidgetItem, QMessageBox, QPlainTextEdit, QPushButton,
     QScrollArea, QSizePolicy, QSplitter, QToolTip, QVBoxLayout, QWidget,
 )
@@ -153,6 +153,28 @@ class CompactListWidget(QListWidget):
 class InputFileList(CompactListWidget):
     files_dropped = Signal(list)
 
+    def __init__(self):
+        super().__init__()
+        self.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        help_text = translate("Use Ctrl or Shift to select files. Press Space to check or uncheck selected scripts.")
+        self.setAccessibleDescription(help_text)
+        self.setToolTip(help_text)
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key.Key_Space and event.modifiers() == Qt.KeyboardModifier.NoModifier:
+            items = [item for item in self.selectedItems()
+                     if item.data(Qt.ItemDataRole.CheckStateRole) is not None]
+            if items:
+                check = any(item.checkState() != Qt.CheckState.Checked for item in items)
+                state = Qt.CheckState.Checked if check else Qt.CheckState.Unchecked
+                with QSignalBlocker(self):
+                    for item in items:
+                        item.setCheckState(state)
+                self.itemChanged.emit(items[0])
+                event.accept()
+                return
+        super().keyPressEvent(event)
+
     @staticmethod
     def _local_files(event):
         urls = event.mimeData().urls()
@@ -268,7 +290,7 @@ class EsenWorkspace(QDialog):
         self.load_files = command("Files", self._pick_files, hint="Load input files")
         self.pick_script = command("Script", self._pick_script, hint="LAMMPS input script")
         self.use_as_script = command("Use As Script", self._use_as_script)
-        self.remove_inputs = command("Remove", self._remove_file, hint="Remove file")
+        self.remove_inputs = command("Remove", self._remove_files, hint="Remove selected files")
         self.pick_root = command("Root", self._pick_root, hint="Job folder")
         self.move_up = command("↑", lambda: self._move_script(-1), hint="Move script up")
         self.move_down = command("↓", lambda: self._move_script(1), hint="Move script down")
@@ -292,7 +314,7 @@ class EsenWorkspace(QDialog):
         self.inputs.files_dropped.connect(self._load_files)
         self.inputs.setAccessibleName("LAMMPS input files")
         self.inputs.itemChanged.connect(self._preview)
-        self.inputs.currentRowChanged.connect(self._buttons)
+        self.inputs.itemSelectionChanged.connect(self._buttons)
         layout.addWidget(self.inputs, 1)
         self.whole_folder = QCheckBox("Include entire job folder")
         self.whole_folder.toggled.connect(self._preview)
@@ -621,16 +643,18 @@ class EsenWorkspace(QDialog):
                 yield item.text()
 
     def _script_neighbor(self, direction):
-        row = self.inputs.currentRow()
-        if row < 0 or not jobs.is_slurm_script(self.inputs.item(row).text()):
+        items = self.inputs.selectedItems()
+        if len(items) != 1 or not jobs.is_slurm_script(items[0].text()):
             return None
+        row = self.inputs.row(items[0])
         end = self.inputs.count() if direction > 0 else -1
         return next((index for index in range(row + direction, end, direction)
                      if jobs.is_slurm_script(self.inputs.item(index).text())), None)
 
     def _move_script(self, direction):
-        row, neighbor = self.inputs.currentRow(), self._script_neighbor(direction)
+        neighbor = self._script_neighbor(direction)
         if self._slurm_mode() and neighbor is not None and not self.upload_task:
+            row = self.inputs.row(self.inputs.selectedItems()[0])
             with QSignalBlocker(self.inputs):
                 item = self.inputs.takeItem(row)
                 self.inputs.insertItem(neighbor, item)
@@ -726,19 +750,20 @@ class EsenWorkspace(QDialog):
         self._update_inputs()
 
     def _use_as_script(self):
-        item = self.inputs.currentItem()
-        if item and item.text() in self.extra:
-            name = item.text()
+        items = self.inputs.selectedItems()
+        if len(items) == 1 and items[0].text() in self.extra:
+            name = items[0].text()
             self.extra.remove(name)
             if self.entry:
                 self.extra.insert(0, self.entry)
             self.entry = name
             self._update_inputs()
 
-    def _remove_file(self):
-        item = self.inputs.currentItem()
-        if item and item.text() in self.extra:
-            self.extra.remove(item.text())
+    def _remove_files(self):
+        selected = {item.text() for item in self.inputs.selectedItems()}
+        remaining = [name for name in self.extra if name not in selected]
+        if remaining != self.extra:
+            self.extra = remaining
             self._update_inputs()
 
     def _update_inputs(self):
@@ -1217,9 +1242,9 @@ class EsenWorkspace(QDialog):
         for control in (self.target, self.batch_folder, self.load_files, self.pick_script, self.inputs,
                         self.pick_root, self.whole_folder):
             control.setEnabled(not uploading)
-        item = self.inputs.currentItem()
-        supporting_file_selected = bool(item and item.text() in self.extra)
-        self.use_as_script.setEnabled(supporting_file_selected and not uploading)
+        selected = self.inputs.selectedItems()
+        supporting_file_selected = any(item.text() in self.extra for item in selected)
+        self.use_as_script.setEnabled(len(selected) == 1 and supporting_file_selected and not uploading)
         self.remove_inputs.setEnabled(supporting_file_selected and not uploading)
         self.move_up.setEnabled(not uploading and self._script_neighbor(-1) is not None)
         self.move_down.setEnabled(not uploading and self._script_neighbor(1) is not None)
