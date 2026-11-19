@@ -3,11 +3,13 @@
 import base64
 from io import BytesIO
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
+from stat import S_IFDIR
 import sys
 import tarfile
 from tempfile import TemporaryDirectory
 from threading import Event
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -171,6 +173,7 @@ class EsenTests(unittest.TestCase):
             self.assertIn(f"--job-name=ESEN-{directory.name}", transport.command.call_args.args[0])
 
     def test_folder_upload_preserves_tree_and_jobs_reuse_remote_snapshot(self):
+        destination = "Project 1/New inputs"
         for name in ("study/sub", "study/empty", "Results/previous"):
             (self.source / name).mkdir(parents=True)
         (self.source / "study/sub/in.run").touch()
@@ -189,8 +192,8 @@ class EsenTests(unittest.TestCase):
                     ])
 
             transport.put.side_effect = inspect_upload
-            upload_id = jobs.upload_folder(self.history, self.source, self.auth)
-            remote = jobs.upload_location(upload_id, self.auth.username)
+            upload_id = jobs.upload_folder(self.history, self.source, self.auth, directory=destination)
+            remote = f"/arf/scratch/{self.auth.username}/RustMech/{destination}/esen-folders/{upload_id}"
             transport.put.assert_called_once()
             self.assertEqual(transport.put.call_args.args[1], remote + "/inputs.tar.gz")
             self.assertNotIn("sbatch", str(transport.command.call_args_list))
@@ -200,8 +203,11 @@ class EsenTests(unittest.TestCase):
             settings = dict(partition="debug", account=self.auth.username, walltime="00:02:00",
                             module="", executable="lmp", launcher="srun", resume_input="restart.in")
             for _ in range(2):
-                directory, record = jobs.new_job(self.source, "study/sub/in.run", "remote", None,
-                                                 parent=self.history, folder_upload=(upload_id, self.auth.username))
+                directory, _ = jobs.new_job(
+                    self.source, "study/sub/in.run", "remote", None, parent=self.history,
+                    folder_upload=(upload_id, self.auth.username, destination),
+                )
+                record = jobs.read_job(directory)
                 snapshot = jobs.job_inputs(directory, record)
                 with (patch("esen_jobs.fetch_catalog"),
                       patch("esen_jobs.full_node_resources", return_value=(2, 512))):
@@ -950,6 +956,7 @@ class EsenTests(unittest.TestCase):
     def test_selected_files_upload_and_slurm_runs_in_the_user_order(self):
         app = QApplication.instance() or QApplication([])
         preferences = QSettings(str(self.root / "settings.ini"), QSettings.Format.IniFormat)
+        list_directory = self.enterContext(patch("truba_files.list_directory", return_value=[]))
         names = ("01.slurm", "02.slurm", "data/cell.lmp")
         for name in names[:2]:
             (self.source / name).write_text("#!/bin/bash\n", encoding="utf-8")
@@ -977,23 +984,54 @@ class EsenTests(unittest.TestCase):
               patch("esen_jobs.submit_full_node", side_effect=submit) as launch,
               patch("esen_jobs.refresh_remote", side_effect=complete),
               patch("esen_jobs.remote_files"), patch("esen_jobs.export_remote_results")):
+            destination = "Deneme 1"
+            browser = workspace.truba_browser
+
+            def finish_browsing():
+                browser.task[0].result(timeout=5)
+                browser.check_task()
+
+            def folder(name):
+                return SimpleNamespace(filename=name, st_mode=S_IFDIR, st_size=0)
+
+            if browser.task:
+                finish_browsing()
+            list_directory.return_value = [folder(destination)]
+            browser.refresh.click()
+            finish_browsing()
+            list_directory.return_value = []
+            browser.files.itemActivated.emit(browser.files.topLevelItem(0), 0)
+            finish_browsing()
+
+            list_directory.return_value = [folder("esen-folders")]
             workspace.upload.click()
             upload_id = workspace.upload_task[0].result(timeout=5)
             workspace._tick()
-            transport.return_value.put.assert_called_once()
+            remote = f"/arf/scratch/{self.auth.username}/RustMech/{destination}/esen-folders/{upload_id}"
+            self.assertTrue(transport.return_value.put.call_args.args[1].startswith(remote + "/.incoming-"))
+            self.assertIn(remote + "/inputs", workspace.input_note.text())
+            finish_browsing()
+            list_directory.assert_called_with(self.auth, PurePosixPath(destination))
+            self.assertEqual(browser.files.topLevelItem(0).text(0), "esen-folders")
             snapshot = jobs.upload_snapshot(self.history, upload_id)
             self.assertTrue(all((snapshot / name).is_file() for name in names))
             self.assertFalse((snapshot / self.entry).exists())
             self.assertEqual(workspace.history.count(), 0)
             launch.assert_not_called()
 
+            list_directory.return_value = [folder(destination)]
+            browser.up.click()
+            finish_browsing()
             workspace.start.click()
             self.assertEqual(workspace.upload_task[0].result(timeout=5), upload_id)
             workspace._tick()
             workspace.remote_task[1].result(timeout=5)
             workspace._tick()
             launch.assert_called_once()
-            self.assertEqual(launch.call_args.args[1]["name"], names[1])
+            record = launch.call_args.args[1]
+            self.assertEqual(record["name"], names[1])
+            self.assertEqual(record["upload_directory"], destination)
+            self.assertIn(remote + "/inputs", jobs.remote_output_scan(record))
             workspace._poll_remote()
             workspace.remote_task[1].result(timeout=5)
             workspace._tick()

@@ -28,6 +28,7 @@ Job folder…|İş klasörü…
 Add Folder|Klasör Ekle
 Select Folder|Klasör Seç
 Upload to TRUBA|TRUBA’ya Aktar
+Upload inputs under the open TRUBA folder|Girdileri açık TRUBA klasörünün altına aktar
 Upload the folder to TRUBA before running selected scripts.|Seçtiğiniz betikleri çalıştırmadan önce klasörü TRUBA’ya aktarın.
 Use ↑ and ↓ in Job order. Run syncs the inputs and submits each checked Slurm script after the previous job ends.|İş sırası görünümünde ↑ ve ↓ ile sırayı ayarlayın. Çalıştır, girdileri eşitler ve işaretli her Slurm betiğini önceki iş sona erince gönderir.
 Uploading files to TRUBA…|Dosyalar TRUBA’ya aktarılıyor…

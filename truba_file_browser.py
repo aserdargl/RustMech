@@ -155,6 +155,15 @@ class TrubaFileBrowser(QWidget):
     def _refresh(self, *, success_message=""):
         self._submit("list", truba_files.list_directory, self.directory, success_message=success_message)
 
+    def open_directory(self, auth):
+        if self.auth == auth and self.directory.parts:
+            return self.directory.as_posix()
+        return ""
+
+    def refresh_after_upload(self, auth, directory):
+        if self.isVisible() and self.auth == auth and self.open_directory(auth) == directory:
+            self._refresh()
+
     def _up(self):
         self._submit("list", truba_files.list_directory, self.directory.parent)
 

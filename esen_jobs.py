@@ -9,7 +9,7 @@ import hashlib
 import json
 import ntpath
 import os
-from pathlib import Path, PureWindowsPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 import re
 import shlex
 import shutil
@@ -23,6 +23,7 @@ from uuid import NAMESPACE_URL, uuid4, uuid5
 import esen_restart
 from esen_windows_job import limited_process
 from truba_credentials import state_directory
+from truba_files import project_root
 from truba_jobs import SAFE_NAME, validated_remote_path, write_record
 from truba_remote import RemoteContext, RemoteTransport, safe_extract
 from truba_resources import BASELINES, candidates, fetch_catalog
@@ -125,11 +126,13 @@ def new_job(root, entry, target, ranks, *, parent, batch_folder=None, folder_upl
     if batch_folder is not None:
         record["batch_folder"] = batch_folder
     if folder_upload is not None:
-        upload_id, username = folder_upload
+        upload_id, username, *destination = folder_upload
         subdir = relative_file(entry).parent
         if work_subdir is None:
             work_subdir = subdir.as_posix() if subdir.parts else ""
         record.update(folder_upload=upload_id, username=username, work_subdir=work_subdir)
+        if destination and destination[0]:
+            record["upload_directory"] = destination[0]
     if root.name == "inputs" and root.parent.parent == parent:
         # Reused inputs are stored in job history, while their results belong in the original job folder.
         with suppress(OSError, ValueError):
@@ -189,20 +192,41 @@ def upload_snapshot(history, upload_id):
     return history / ".uploads" / upload_id / "inputs"
 
 
-def upload_location(upload_id, username):
+def upload_location(upload_id, username, directory=""):
     if (not SAFE_NAME.fullmatch(username) or username in (".", "..")
             or not re.fullmatch(r"[0-9a-f]{32}", upload_id)):
         raise ValueError("Invalid ESEN folder upload.")
-    return f"/arf/scratch/{username}/RustMech/esen-folders/{upload_id}"
+    relative = PurePosixPath(directory)
+    if relative.is_absolute() or ".." in relative.parts or "\0" in directory:
+        raise ValueError("This folder is outside the RustMech project.")
+    return str(project_root(username) / relative / "esen-folders" / upload_id)
 
 
-def upload_folder(history, root, auth, *, files=None):
+def _check_upload_directory(transport, username, directory, remote):
+    if not directory:
+        return
+    root = project_root(username)
+    target = shlex.quote(str(root / directory))
+    suffix = shlex.quote("/" + PurePosixPath(directory).as_posix())
+    store = shlex.quote(str(PurePosixPath(remote).parent))
+    snapshot = shlex.quote(remote)
+    transport.command(f"""set -e
+root=$(realpath -e -- {shlex.quote(str(root))})
+cd -P -- {target}
+test "$PWD" = "$root"{suffix}
+test ! -L {store}
+test ! -L {snapshot}
+test ! -L {snapshot}/inputs
+""")
+
+
+def upload_folder(history, root, auth, *, files=None, directory=""):
     """Publish all inputs or the given relative paths as an immutable snapshot."""
     if files is None and history.resolve().is_relative_to(root.resolve()):
         raise ValueError("Choose a job folder outside the ESEN history directory.")
     upload_id = uuid4().hex
     destination = upload_snapshot(history, upload_id).parent
-    remote = upload_location(upload_id, auth.username)
+    remote = upload_location(upload_id, auth.username, directory)
     quoted = shlex.quote(remote)
     destination.parent.mkdir(parents=True, exist_ok=True)
     with TemporaryDirectory(dir=destination.parent) as temporary:
@@ -212,6 +236,7 @@ def upload_folder(history, root, auth, *, files=None):
         with tarfile.open(archive, "w:gz") as bundle:
             bundle.add(snapshot, arcname=".")
         transport = RemoteTransport(RemoteContext(transport="ssh"), auth)
+        _check_upload_directory(transport, auth.username, directory, remote)
         # A unique destination keeps failed transfers away from runnable snapshots.
         transport.command(f"umask 077; mkdir -p -- {quoted}/.incoming")
         try:
@@ -227,15 +252,16 @@ def upload_folder(history, root, auth, *, files=None):
     return upload_id
 
 
-def sync_slurm_folder(history, root, auth, selected, *, files=None):
+def sync_slurm_folder(history, root, auth, selected, *, files=None, directory=""):
     """Publish one content-identified snapshot for the selected Slurm jobs."""
     if files is None and history.resolve().is_relative_to(root.resolve()):
         raise ValueError("Choose a job folder outside the ESEN history directory.")
     uploads = history / ".uploads"
     uploads.mkdir(parents=True, exist_ok=True)
-    project_key = hashlib.sha256(
-        f"{auth.username}\0{os.path.normcase(str(root.resolve()))}".encode()
-    ).hexdigest()
+    project = f"{auth.username}\0{os.path.normcase(str(root.resolve()))}"
+    if directory:
+        project += f"\0{directory}"
+    project_key = hashlib.sha256(project.encode()).hexdigest()
     latest = uploads / f"slurm-{project_key}.json"
     previous_id = None
     with suppress(OSError, ValueError, KeyError):
@@ -255,9 +281,10 @@ def sync_slurm_folder(history, root, auth, selected, *, files=None):
             manifest[path.relative_to(snapshot).as_posix()] = digest
         upload_id = hashlib.sha256(json.dumps(manifest, sort_keys=True).encode()).hexdigest()[:32]
         destination = upload_snapshot(history, upload_id)
-        remote = upload_location(upload_id, auth.username)
+        remote = upload_location(upload_id, auth.username, directory)
         published = shlex.quote(remote + "/inputs")
         transport = RemoteTransport(RemoteContext(transport="ssh"), auth)
+        _check_upload_directory(transport, auth.username, directory, remote)
         if transport.command(f"if test -d {published}; then printf 'READY=1\\n'; fi").strip() != "READY=1":
             previous = {}
             previous_root = ""
@@ -265,7 +292,7 @@ def sync_slurm_folder(history, root, auth, selected, *, files=None):
                 previous_snapshot = upload_snapshot(history, previous_id)
                 with suppress(OSError, ValueError):
                     previous = json.loads((previous_snapshot.parent / "manifest.json").read_text("utf-8"))
-                previous_root = shlex.quote(upload_location(previous_id, auth.username) + "/inputs")
+                previous_root = shlex.quote(upload_location(previous_id, auth.username, directory) + "/inputs")
                 if previous and transport.command(
                     f"if test -d {previous_root}; then printf 'READY=1\\n'; fi"
                 ).strip() != "READY=1":
@@ -538,7 +565,7 @@ def submit_remote(directory, record, files, script, auth):
         batch.write_text(script, encoding="utf-8", newline="\n")
         work = shlex.quote(remote + "/work")
         if upload_id:
-            source = shlex.quote(upload_location(upload_id, auth.username) + "/inputs")
+            source = _quoted_upload_inputs(record)
             transport.command(f"umask 077; mkdir -p -- {shlex.quote(remote)} && "
                               f"cp -a --reflink=auto -- {source} {work}", timeout=1800)
             transport.put(batch, remote + "/run.slurm")
@@ -780,12 +807,17 @@ done
     save_file_list(directory, record, paths, len(names) > FILE_LIMIT)
 
 
+def _quoted_upload_inputs(record):
+    remote = upload_location(record["folder_upload"], record["username"], record.get("upload_directory", ""))
+    return shlex.quote(remote + "/inputs")
+
+
 def remote_output_scan(record, *, archive=False):
     """List changed files from a Slurm work copy and all files for legacy jobs."""
     find = "find -P work -type f " + ("-print0" if archive else "-printf '%P\\0'")
     if not (record.get("folder_upload") and is_slurm_script(record["name"])):
         return find
-    source = shlex.quote(upload_location(record["folder_upload"], record["username"]) + "/inputs")
+    source = _quoted_upload_inputs(record)
     output = "$file" if archive else "${file#work/}"
     return f"""find -P work -type f -print0 | while IFS= read -r -d '' file; do
     original={source}/"${{file#work/}}"
