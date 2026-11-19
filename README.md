@@ -442,11 +442,12 @@ dağıtımına kurun. Ubuntu 26.04 için
 [DAMASK'ın paket kurulumu](https://damask-multiphysics.org/installation/package_manager.html)
 izlenebilir. İlk sürüm DAMASK 3.1.0 ile doğrulandı.
 
-1. Mekanik ayarlarda periyodik bir TPMS veya lattice yapısı seçin. Malzeme
-   panelindeki Young modülü ve Poisson oranı doğrusal elastik katıyı tanımlar.
-2. Yöntem menüsünde **FFT Homogenization** sayfasını açın. Izgarayı, boşluk/katı
-   rijitlik oranını ve Windows'ta WSL dağıtım adını girin. TRUBA hesaplama
-   modunu kapatın ve **Analizi çalıştır** düğmesine basın.
+1. Mekanik ayarlarda periyodik bir TPMS veya lattice yapısı seçin.
+2. Yöntem menüsünde **FFT Homojenleştirme** sayfasını açın. Izgarayı, boşluk/katı
+   rijitlik oranını ve Windows'ta WSL dağıtım adını girin. Ayarların altındaki
+   **Katı faz malzemesi** panelinden malzemeyi seçin veya Young modülü ile Poisson
+   oranını düzenleyin. TRUBA hesaplama modunu kapatın ve **Analizi çalıştır**
+   düğmesine basın.
 3. Tamamlanan koşuda etkin 6×6 rijitlik matrisi MPa cinsinden, örneklenen katı
    hacim oranıyla birlikte gösterilir. **FFT sonuçlarını aç** düğmesi
    `results/FFT_DAMASK_*/` klasörünü açar. Klasörde CSV, girdi özeti, DAMASK

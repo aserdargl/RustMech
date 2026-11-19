@@ -81,6 +81,7 @@ from model import (
     PLATEN_CONTACT_MODES,
     FEMesh,
     GEOMETRY_FIELDS,
+    MATERIAL_FIELDS,
     MESH_TYPES,
     MIN_MESH_INPUT_MM,
     ROOT,
@@ -93,6 +94,7 @@ from model import (
     loading_target_reached,
     require_settings,
     save_settings,
+    settings_from_dict,
     validate_geometry,
     validate_settings,
     write_json,
@@ -2254,11 +2256,25 @@ class RustMechDialog(QDialog):
         ratio_width = self.fft_void_ratio.fontMetrics().horizontalAdvance("0.000000000000") + 22
         self.fft_void_ratio.setFixedWidth(max(self.fft_void_ratio.width(), ratio_width))
         fields.addLayout(form)
-        note = QLabel("DAMASK uses the current TPMS or lattice geometry and the material's E and ν. "
-                      "The void phase has the specified fraction of the solid stiffness.")
+        note = QLabel("The void phase has the specified fraction of the solid stiffness.")
         note.setObjectName("mutedHintLabel")
         note.setWordWrap(True)
         fields.addWidget(note)
+
+        # Seed new FFT drafts from the startup material once, then keep them independent.
+        material = self.material_editor.material_settings()
+        if self._persist_solver_profiles:
+            try:
+                saved_material = json.loads(preferences.value("fft/solidMaterial", "null", type=str))
+                if saved_material is not None:
+                    material = settings_from_dict(saved_material)
+            except (TypeError, ValueError):
+                pass
+        self.fft_material_editor = MaterialEditor(material, library_settings=preferences, elastic_only=True)
+        self.fft_material_editor.changed.connect(self.refresh_validity)
+        for key in ("young_modulus", "poisson_ratio"):
+            self.fft_material_editor.controls[key].valueChanged.connect(self.refresh_validity)
+        fields.addWidget(self.fft_material_editor)
 
         self.fft_matrix = QPlainTextEdit()
         self.fft_matrix.setReadOnly(True)
@@ -2298,6 +2314,12 @@ class RustMechDialog(QDialog):
     def _open_fft_results(self):
         if self.fft_result_folder is not None:
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(self.fft_result_folder)))
+
+    def _fft_settings(self, settings: Settings) -> Settings:
+        material = self.fft_material_editor.material_settings()
+        values = {name: getattr(material, name) for name in MATERIAL_FIELDS}
+        values.update(material_model="linear_elastic", hardening_curve=())
+        return replace(settings, **values)
 
     def _show_fft_results(self, result, folder):
         labels = "    " + "".join(f"{label:>8}" for label in COMPONENTS)
@@ -3006,7 +3028,7 @@ class RustMechDialog(QDialog):
         method = self.setup_tabs.currentIndex()
         idle = self.analysis_job is None and self.future is None
         if method == self._fft_method_index:
-            fft_errors = validate_periodic_fft(settings)
+            fft_errors = validate_periodic_fft(self._fft_settings(settings))
             self._request_fft_preview(settings, valid=not fft_errors)
             if controller is not None and controller.requested:
                 fft_errors.append("Turn off TRUBA calculation mode to run local DAMASK FFT.")
@@ -3246,9 +3268,10 @@ class RustMechDialog(QDialog):
             _, _, count = self._fft_preview_result
             total = grid ** 3
             ratio = self.fft_void_ratio.value()
+            young_modulus = self.fft_material_editor.numeric_values()["young_modulus"]
             text = (f"{grid} × {grid} × {grid} · Voxel spacing: {settings.cell_size / grid:.4g} mm\n"
                     f"Solid voxels: {count:,} ({count / total:.1%}) · Void voxels: {total - count:,}\n"
-                    f"Void stiffness: {ratio * 100:.5g}% of solid · Void E: {ratio * settings.young_modulus:.5g} MPa")
+                    f"Void stiffness: {ratio * 100:.5g}% of solid · Void E: {ratio * young_modulus:.5g} MPa")
         self.fft_preview_summary.setText(translate(text))
 
     def _render_fft_preview(self, reset):
@@ -3596,7 +3619,7 @@ class RustMechDialog(QDialog):
         if not self.apply_button.isEnabled():
             return
         if self.setup_tabs.currentIndex() == self._fft_method_index:
-            self._start_fft(settings)
+            self._start_fft(self._fft_settings(settings))
             return
         if self.preview.mesh is None and not self.remote_controller.requested:
             self._analysis_after_mesh = settings
@@ -3876,6 +3899,10 @@ class RustMechDialog(QDialog):
             return
         if self._solver_profiles_ready and self._persist_solver_profiles:
             self.solver_profile_store.save(self._active_solver_id, profile_values(self.collect()))
+            material = self.fft_material_editor.material_settings()
+            self.solver_profile_store.settings.setValue("fft/solidMaterial", json.dumps(
+                {key: getattr(material, key) for key in MATERIAL_FIELDS}))
+            self.solver_profile_store.settings.sync()
         self.force_stop_analysis()
         if hasattr(self,"remote_controller"):
             self.remote_controller.shutdown()

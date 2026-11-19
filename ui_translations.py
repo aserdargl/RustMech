@@ -891,7 +891,8 @@ Voxels per axis|Eksen başına voksel
 Void / solid stiffness|Boşluk / katı rijitliği
 DAMASK voxel preview unavailable. Check the settings below.|DAMASK voksel önizlemesi kullanılamıyor. Aşağıdaki ayarları kontrol edin.
 Preparing DAMASK voxel preview…|DAMASK voksel önizlemesi hazırlanıyor…
-DAMASK uses the current TPMS or lattice geometry and the material's E and ν. The void phase has the specified fraction of the solid stiffness.|DAMASK mevcut TPMS veya kafes geometrisini ve malzemenin E ile ν değerlerini kullanır. Boşluk fazının rijitliği, katının girilen oranı kadardır.
+The void phase has the specified fraction of the solid stiffness.|Boşluk fazının rijitliği, katının girilen oranı kadardır.
+Solid phase material|Katı faz malzemesi
 Effective stiffness matrix (MPa)|Etkin rijitlik matrisi (MPa)
 Last completed FFT result|Son tamamlanan FFT sonucu
 Open FFT results|FFT sonuçlarını aç

@@ -1,17 +1,23 @@
 """Workspace requests a volume mesh only for an explicit FE/analysis action."""
 from concurrent.futures import Future
 from dataclasses import replace
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from threading import Event
 import unittest
 from unittest.mock import MagicMock, patch
 
 import numpy as np
+from PySide6.QtCore import QSettings, Qt
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QWidget
 
+from material_catalog import builtin_materials
 from mesh_engine import build_preview
 from model import Settings
 from nonlinear_compression import RustMechDialog, _build_fft_preview
 from preview_viewport import MESH_PREVIEW_ACTOR
+from solver_profiles import SolverProfileStore
 
 
 class SurfacePreviewUITests(unittest.TestCase):
@@ -125,6 +131,59 @@ class SurfacePreviewUITests(unittest.TestCase):
         self.assertTrue(window.fft_preview_summary.isHidden())
         self.assertFalse(window.display_mode_group.isHidden())
         self.assertIs(plotter.add_mesh.call_args_list[0].args[0], window.preview.surface)
+
+    def test_fft_material_is_independent_and_used_by_summary_and_solver(self):
+        window = self.window
+        finite_element = window.material_editor.material_settings()
+        window._select_settings_method(window._fft_method_index)
+        editor = window.fft_material_editor
+        entry = next(entry for entry in builtin_materials() if entry.identifier == 'ti64')
+        # Keep the library's shared shortlist untouched by the test.
+        with patch.object(editor, 'library_settings'):
+            editor.add_library_material(entry.card())
+        self.assertEqual(editor.controls['young_modulus'].value(), 110000)
+        editor.edit_button.click()
+        modulus = editor.controls['young_modulus'].lineEdit()
+        window.fft_void_ratio.setValue(0.01)
+        window.fft_distribution.setText('Ubuntu')
+        window._fft_preview_result = _build_fft_preview(self.settings, window.fft_grid.value())
+
+        with patch('nonlinear_compression.DamaskAnalysisProcess') as process:
+            modulus.selectAll()
+            QTest.keyClicks(modulus, '125000')
+            QTest.keyClick(modulus, Qt.Key.Key_Return)
+            process.assert_not_called()
+            self.assertIn('1250 MPa', window.fft_preview_summary.text())
+            editor.controls['poisson_ratio'].setValue(0.31)
+            window.apply()
+            assigned = process.call_args.args[0]
+            self.assertEqual(assigned.material_name, entry.name)
+            self.assertEqual(assigned.material_model, 'linear_elastic')
+            self.assertEqual((assigned.young_modulus, assigned.poisson_ratio), (125000, 0.31))
+        self.assertEqual(window.material_editor.material_settings(), finite_element)
+
+    def test_fft_material_draft_is_restored_separately_from_finite_element(self):
+        with TemporaryDirectory() as directory:
+            path = str(Path(directory) / 'preferences.ini')
+            store = SolverProfileStore(QSettings(path, QSettings.Format.IniFormat))
+            first = RustMechDialog(Settings(material_name='Initial material'), solver_profile_store=store)
+            try:
+                editor = first.fft_material_editor
+                self.assertEqual(editor.name.text(), 'Initial material')
+                editor.edit_button.click()
+                editor.name.setText('FFT alloy')
+                editor.controls['young_modulus'].setValue(123456.789)
+                editor.controls['poisson_ratio'].setValue(0.321)
+            finally:
+                first.close()
+            second = RustMechDialog(Settings(material_name='A different FE material'), solver_profile_store=store)
+            try:
+                material = second.fft_material_editor.material_settings()
+                self.assertEqual(material.material_name, 'FFT alloy')
+                self.assertEqual((material.young_modulus, material.poisson_ratio), (123456.789, 0.321))
+                self.assertEqual(second.material_editor.name.text(), 'A different FE material')
+            finally:
+                second.close()
 
     def test_doe_select_ignores_mesh_errors_and_pending_main_preview(self):
         self.window.controls['mesh_resolution'].setValue(2)

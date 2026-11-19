@@ -61,16 +61,18 @@ class MaterialEditor(SidebarGroupBox):
 
     changed = Signal()
 
-    def __init__(self, settings: Settings, parent=None, *, library_settings=None):
+    def __init__(self, settings: Settings, parent=None, *, library_settings=None, elastic_only=False):
         super().__init__(parent)
+        self.elastic_only = elastic_only
         self.setObjectName("materialGroup")
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setMouseTracking(True)
         # Let wrapped action rows use their required height instead of leaving
         # surplus layout space above and below a size-hint-capped group.
         self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
-        self.setAccessibleName("Material")
-        self.setTitle("Material")
+        title = "Solid phase material" if elastic_only else "Material"
+        self.setAccessibleName(title)
+        self.setTitle(title)
         self.active_path = None
         self.material_card = settings.material_card
         self.controls = {}
@@ -88,11 +90,18 @@ class MaterialEditor(SidebarGroupBox):
         self.material_selector = NoWheelComboBox()
         self.material_selector.setAccessibleName("Material selection")
         self.material_selector.addItem("Current / custom material", "current")
-        name_form.addRow(field_label("Select material", self.material_selector), self.material_selector)
+        selector_label = field_label("Select material", self.material_selector)
+        name_form.addRow(selector_label, self.material_selector)
         self.name = QLineEdit(settings.material_name)
         self.name.setPlaceholderText("e.g. Ti-6Al-4V ELI / 316L SS")
         name_lbl = field_label("Material name", self.name)
         name_form.addRow(name_lbl, self.name)
+        if elastic_only:
+            for label in (selector_label, name_lbl):
+                label.setFixedWidth(90)
+            self.material_selector.setMaximumWidth(200)
+            self.name.setToolTip(self.name.text())
+            self.name.textChanged.connect(self.name.setToolTip)
 
         actions = ActionFlowLayout(equal_width=True)
         actions.setAlignment(Qt.AlignmentFlag.AlignRight)
@@ -110,12 +119,14 @@ class MaterialEditor(SidebarGroupBox):
         self.help_button = QPushButton("Help")
         self.help_button.setToolTip("Tangent modulus guide and approximate datasheet calculator")
         self.help_button.clicked.connect(self.show_tangent_help)
+        elastic_actions = (self.library_button, self.load_button, self.edit_button)
         for button in (self.library_button, self.load_button, self.save_button, self.edit_button, self.delete_button, self.help_button):
             button.setAutoDefault(False)
             button.setDefault(False)
             button.setObjectName("secondaryActionBtn")
             button.setCursor(Qt.CursorShape.PointingHandCursor)
             actions.addWidget(button)
+            button.setHidden(elastic_only and button not in elastic_actions)
         self.delete_button.setObjectName("destructiveActionBtn")
         self.edit_button.setObjectName("materialEditButton")
         self.save_button.clicked.connect(self.save_file)
@@ -136,6 +147,8 @@ class MaterialEditor(SidebarGroupBox):
             self.stress_unit.addItem(unit, factor)
         self.stress_unit.setCurrentText("MPa")
         self.form.addRow(field_label("Stress unit", self.stress_unit), self.stress_unit)
+        if elastic_only:
+            self.stress_unit.setFixedWidth(self.stress_unit.minimumWidth())
 
         self.model = NoWheelComboBox()
         for key, label in MATERIAL_MODELS.items():
@@ -232,6 +245,10 @@ class MaterialEditor(SidebarGroupBox):
         self.name.textChanged.connect(lambda *_: self.changed.emit())
         self.table.itemChanged.connect(lambda *_: self.changed.emit())
         self.update_model()
+        if elastic_only:
+            self.form.setRowVisible(self.model, False)
+            self.form.setRowVisible(self.controls["material_density"], False)
+            self.controls["young_modulus"].setToolTip("Young's modulus")
         self.set_editable(False)
         self.stress_unit.currentIndexChanged.connect(self.change_stress_unit)
         self.update_unit_labels()
@@ -249,16 +266,18 @@ class MaterialEditor(SidebarGroupBox):
 
     def restore_library_choices(self):
         from material_catalog import builtin_materials
-        try:
-            identifiers = json.loads(self.library_settings.value("materials/addedLibraryIds", "[]"))
-        except (ValueError, TypeError):
-            identifiers = []
-        if not isinstance(identifiers, list):
-            identifiers = []
+        identifiers = self._library_identifiers()
         for entry in builtin_materials():
             if entry.kind == "solid" and entry.identifier in identifiers:
                 self.material_selector.addItem(entry.name, entry.identifier)
                 self._selection_values[entry.identifier] = (entry.card().mechanical_values(), None, False)
+
+    def _library_identifiers(self):
+        try:
+            identifiers = json.loads(self.library_settings.value("materials/addedLibraryIds", "[]"))
+        except (ValueError, TypeError):
+            identifiers = []
+        return [key for key in identifiers if isinstance(key, str)] if isinstance(identifiers, list) else []
 
     def cache_current_material(self):
         settings = self.material_settings()
@@ -288,6 +307,8 @@ class MaterialEditor(SidebarGroupBox):
                     (self.name, self.model, self.edit_button, *self.controls.values())]
         self.name.setText(values["material_name"])
         self.name.setCursorPosition(0)
+        if self.elastic_only:
+            self.name.setToolTip(self.name.text())
         self.set_numeric_values(values)
         self.fill_curve(values["hardening_curve"])
         self.material_card = values["material_card"]
@@ -315,7 +336,7 @@ class MaterialEditor(SidebarGroupBox):
             self.material_selector.addItem(card.name, entry.identifier)
             index = self.material_selector.count() - 1
         self.material_selector.setCurrentIndex(index)
-        identifiers = [self.material_selector.itemData(i) for i in range(1, self.material_selector.count())]
+        identifiers = list(dict.fromkeys([*self._library_identifiers(), entry.identifier]))
         self.library_settings.setValue("materials/addedLibraryIds", json.dumps(identifiers))
         self.library_settings.sync()
 
@@ -341,8 +362,9 @@ class MaterialEditor(SidebarGroupBox):
     def update_unit_labels(self) -> None:
         unit = self.stress_unit.currentText()
         for key in self.stress_fields:
+            label = "E" if self.elastic_only and key == "young_modulus" else self.field_specs[key][0]
             self.form.labelForField(self.controls[key]).setText(
-                f"{self.field_specs[key][0]} / {unit}"
+                f"{label} / {unit}"
             )
         self.table.setHorizontalHeaderLabels(["Plastic log strain", f"True stress / {unit}"])
         self.curve_buttons[-1].setToolTip(
@@ -411,17 +433,18 @@ class MaterialEditor(SidebarGroupBox):
         )
 
     def update_model(self, *_) -> None:
-        bilinear = self.model.currentData() == "bilinear_isotropic"
+        model = "linear_elastic" if self.elastic_only else self.model.currentData()
+        bilinear = model == "bilinear_isotropic"
         for key in ("yield_stress", "tangent_modulus"):
             self.form.setRowVisible(self.controls[key], bilinear)
-        self.curve_panel.setVisible(self.model.currentData() == "multilinear_isotropic")
+        self.curve_panel.setVisible(model == "multilinear_isotropic")
         self.model_hint.setText({
             "linear_elastic": "Elastic response only; plastic deformation is not modeled.",
             "bilinear_isotropic": "Bilinear approximation: E, true yield stress and Eₜ. "
                 "Choose the true stress–strain curve when measured hardening data is available.",
             "multilinear_isotropic": "Multilinear isotropic hardening from a true stress–strain curve. "
                 "E defines the elastic part; the table defines plastic hardening.",
-        }.get(self.model.currentData(), ""))
+        }.get(model, ""))
         self.changed.emit()
 
     def extra_values(self) -> dict:
