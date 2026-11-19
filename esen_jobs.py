@@ -17,6 +17,7 @@ import signal
 import subprocess
 import tarfile
 from tempfile import TemporaryDirectory
+from time import monotonic, time
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
 import esen_restart
@@ -356,6 +357,7 @@ def stop_process(process):
 
 
 def run_local(directory, record, files, command, stop, *, memory_mib=0):
+    started = None
     try:
         snapshot = snapshot_inputs(directory, *files, stop=stop)
         work = directory / "work"
@@ -372,25 +374,29 @@ def run_local(directory, record, files, command, stop, *, memory_mib=0):
                 launch = subprocess.Popen(command, cwd=work, stdin=subprocess.DEVNULL, stdout=stdout,
                                           stderr=stderr, env=env, **options)
             with launch as process:
+                started = monotonic()
                 cancel = process.kill if memory_mib else partial(stop_process, process)
                 try:
-                    save_job(directory, record, state="Running", command=command, memory_mib=memory_mib)
+                    save_job(directory, record, state="Running", command=command, memory_mib=memory_mib,
+                             started_at=time())
                     while process.poll() is None:
                         if stop.wait(0.25):
                             cancel()
                             process.wait()
-                            save_job(directory, record, state="Cancelled")
+                            save_job(directory, record, state="Cancelled",
+                                     elapsed_seconds=int(monotonic() - started))
                             return
                 finally:
                     if process.poll() is None:
                         cancel()
                         process.wait()
         save_job(directory, record, state="Completed" if process.returncode == 0 else "Failed",
-                 detail=f"Exit code: {process.returncode}")
+                 detail=f"Exit code: {process.returncode}", elapsed_seconds=int(monotonic() - started))
     except InterruptedError:
         save_job(directory, record, state="Cancelled")
     except Exception as error:
-        save_job(directory, record, state="Failed", detail=str(error))
+        timing = {} if started is None else {"elapsed_seconds": int(monotonic() - started)}
+        save_job(directory, record, state="Failed", detail=str(error), **timing)
 
 
 def remote_script(entry, ranks, partition, account, memory, walltime, module, executable, launcher,
@@ -659,15 +665,31 @@ def resume_remote(directory, record, auth):
     job_id = tagged(reply, "JOB_ID")
     if not re.fullmatch(r"[0-9]+", job_id):
         raise RuntimeError("Invalid Slurm job ID. Refresh to recover the submission.")
-    save_job(directory, record, state="Submitted", job_id=job_id, detail="", cancel_requested=False)
+    save_job(directory, record, state="Submitted", job_id=job_id, detail="", cancel_requested=False,
+             elapsed_seconds=None, script_step="")
+
+
+def slurm_queue_seconds(value):
+    match = re.fullmatch(r"(?:(\d+)-)?(?:(\d+):)?(\d+):(\d{2})", value)
+    if match is None:
+        return None
+    days, hours, minutes, seconds = (int(part or 0) for part in match.groups())
+    return ((days * 24 + hours) * 60 + minutes) * 60 + seconds
+
+
+def script_step(output):
+    steps = re.findall(r"^ESEN_STEP=[^\S\r\n]*([^\r\n]*)", output, re.MULTILINE)
+    return next((step.strip()[:160] for step in reversed(steps) if step.strip()), "")
 
 
 def refresh_status(directory, record, transport, setup, *, managed=False):
-    queue_error = "queue=''" if managed else "exit"
     reply = transport.command(setup + f"""
 if [[ -n "$job" ]]; then
-    queue=$(squeue -h -j "$job" -o '%T|%r') || {queue_error}
-    accounting=$(sacct -n -X -j "$job" --format=State,ExitCode -P) || exit
+    queue=$(squeue -h -j "$job" -o '%T|%M|%r') || queue=''
+    if ! accounting=$(sacct -n -X -j "$job" --format=State,ExitCode,ElapsedRaw -P); then
+        [[ -n "$queue" ]] || exit 1
+        accounting=''
+    fi
 else
     queue= accounting=
 fi
@@ -678,31 +700,52 @@ for log in {' '.join(LOGS)}; do
     printf '\\n'
 done
 """)
+    changes = {}
     if managed:
         job_id = tagged(reply, "JOB_ID")
         if not job_id:
             save_job(directory, record, detail="Slurm has not confirmed this submission. Refresh to check again.")
             return
-        save_job(directory, record, job_id=job_id, has_checkpoint=tagged(reply, "HAS_CHECKPOINT") == "1",
-                 cancel_requested=tagged(reply, "cancelled") == "1")
+        changes.update(job_id=job_id, has_checkpoint=tagged(reply, "HAS_CHECKPOINT") == "1",
+                       cancel_requested=tagged(reply, "cancelled") == "1")
+        if job_id != record.get("job_id"):
+            changes.update(elapsed_seconds=None, script_step="")
     queue = tagged(reply, "QUEUE")
     accounting = tagged(reply, "ACCT")
-    status, _, code = accounting.rstrip("|").partition("|")
-    status = status.split(" ", 1)[0].rstrip("+")
+    accounting_state, code, elapsed, *_ = accounting.split("|") + ["", ""]
+    status = accounting_state.split(" ", 1)[0].rstrip("+")
+    queue_state, _, queue_details = queue.partition("|")
+    queue_time, separator, reason = queue_details.partition("|")
+    if elapsed.isascii() and elapsed.isdecimal():
+        changes["elapsed_seconds"] = int(elapsed)
+    if queue_state == "PENDING":
+        changes["elapsed_seconds"] = 0
+    elif separator and (seconds := slurm_queue_seconds(queue_time)) is not None:
+        changes["elapsed_seconds"] = seconds
     for name in LOGS:
-        (directory / name).write_bytes(base64.b64decode(tagged(reply, re.escape(name)), validate=True))
+        data = base64.b64decode(tagged(reply, re.escape(name)), validate=True)
+        (directory / name).write_bytes(data)
+        if name == LOGS[0] and (step := script_step(data.decode("utf-8", errors="replace"))):
+            changes["script_step"] = step
+    cancelling = changes.get("cancel_requested", record.get("cancel_requested"))
     if managed and tagged(reply, "completed") == "1":
-        save_job(directory, record, state="Completed", detail="")
+        changes.update(state="Completed", detail="")
     elif status in SLURM_TERMINAL and not queue:
         state = {"COMPLETED": "Completed" if code == "0:0" else "Failed", "CANCELLED": "Cancelled"}.get(status, "Failed")
-        if managed and record.get("cancel_requested"):
+        if managed and cancelling:
             state = "Cancelled"
         elif managed and state == "Completed":
             state = "Interrupted"
-        save_job(directory, record, state=state, detail=accounting.rstrip("|"))
-    else:
-        state = "Cancellation requested" if record.get("cancel_requested") else "Running" if queue.startswith("RUNNING|") else "Queued"
-        save_job(directory, record, state=state, detail=queue or "Waiting for Slurm accounting…")
+        changes.update(state=state, detail=f"{accounting_state}|{code}")
+    elif queue or record["state"] not in TERMINAL:
+        state = record["state"]
+        if cancelling:
+            state = "Cancellation requested"
+        elif queue:
+            state = "Running" if queue_state in {"RUNNING", "COMPLETING"} else "Queued"
+        detail = "|".join((queue_state, reason if separator else queue_details)) if queue else "Waiting for Slurm accounting…"
+        changes.update(state=state, detail=detail)
+    save_job(directory, record, **changes)
 
 
 def remote_files(directory, record, auth):

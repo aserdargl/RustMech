@@ -46,6 +46,13 @@ standart günlük yollarını ayarlar. MPI ile derlenmiş LAMMPS'i örneğin
 `mpirun -np "$SLURM_NTASKS" lmp -in 07-cekme.in` ile başlatın. İş durumu,
 günlükler ve çıktılar **İş geçmişi**'nde görünür.
 
+İş geçmişinde Slurm aşaması ve çalışma süresi gösterilir. Süreye kuyrukta
+bekleme ve dosya aktarımı dahil değildir. Bir `run_*.slurm` dosyasının içindeki
+aşamaları da göstermek için betiğin standart çıktısına `ESEN_STEP=` satırları
+yazın. Örneğin LAMMPS çağrısından önce `echo 'ESEN_STEP=LAMMPS çekme analizi'`
+ekleyin. LAMMPS girdi betiğinden adım bildirmek için
+`print "ESEN_STEP=Minimizasyon" screen yes` kullanılabilir.
+
 ### Klasörden LAMMPS girdi betiği gönderimi
 
 **TRUBA analiz klasörü…** ile tek bir analiz klasörünü veya bağımsız analizleri

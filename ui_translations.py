@@ -29,6 +29,11 @@ Upload to TRUBA|TRUBA’ya Aktar
 Upload the folder to TRUBA before running selected scripts.|Seçtiğiniz betikleri çalıştırmadan önce klasörü TRUBA’ya aktarın.
 Use ↑ and ↓ to set the order. Run syncs the inputs and submits each checked Slurm script after the previous job ends.|Sırayı ↑ ve ↓ ile ayarlayın. Çalıştır, girdileri eşitler ve işaretli her Slurm betiğini önceki iş sona erince gönderir.
 Uploading files to TRUBA…|Dosyalar TRUBA’ya aktarılıyor…
+Stage: {stage}|Aşama: {stage}
+Runtime: {time}|Çalışma süresi: {time}
+Slurm allocation runtime: {time}|Slurm tahsisinin çalışma süresi: {time}
+Last reported step: {step}|Son bildirilen adım: {step}
+Collecting results|Sonuçlar alınıyor
 Uploaded to TRUBA: {path}|TRUBA’ya aktarıldı: {path}
 File upload failed: {error}|Dosyalar aktarılamadı: {error}
 Files|Dosyalar
@@ -100,6 +105,8 @@ Select an ESEN job.|Bir ESEN işi seçin.
 Some files are omitted from this list.|Bazı dosyalar bu listede gösterilmiyor.
 Submitting|Gönderiliyor
 Submitted|Gönderildi
+Preparing|Hazırlanıyor
+Running|Çalışıyor
 Queued|Kuyrukta
 Interrupted|Kesintiye uğradı
 Cancellation requested|İptal istendi

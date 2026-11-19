@@ -87,6 +87,7 @@ class EsenTests(unittest.TestCase):
                    "from pathlib import Path; Path('data/cell.lmp').write_text('result'); print('finished')"]
         jobs.run_local(directory, record, self.files, command, Event())
         self.assertEqual(jobs.read_job(directory)["state"], "Completed")
+        self.assertGreaterEqual(jobs.read_job(directory)["elapsed_seconds"], 0)
         self.assertEqual((directory / "work/data/cell.lmp").read_text(), "result")
         self.assertEqual((directory / "inputs/data/cell.lmp").read_text(), "cell")
         self.assertIn("finished", jobs.log_tail(directory / "stdout.log"))
@@ -368,6 +369,42 @@ class EsenTests(unittest.TestCase):
         self.assertTrue((snapshot / "Results/reference.dat").is_file())
         reused, reused_record = jobs.new_job(snapshot, self.entry, "remote", None, parent=self.history)
         self.assertEqual(jobs.result_directory(reused, reused_record).parent, output.parent)
+
+    def test_slurm_runtime_excludes_queue_time_and_saves_the_last_reported_step(self):
+        directory, record = self.new_job()
+        jobs.save_job(directory, record, username=self.auth.username, job_id="456", state="Submitted")
+        step = base64.b64encode(b"ESEN_STEP=Minimization\nESEN_STEP=Equilibration\n").decode()
+        with patch("esen_jobs.RemoteTransport") as factory:
+            transport = factory.return_value
+            transport.command.side_effect = [
+                "QUEUE=PENDING|0:00|Resources\nACCT=PENDING|0:0|0\nstdout.log=\nstderr.log=\n",
+                f"QUEUE=RUNNING|1-02:03:04|node\nACCT=RUNNING|0:0|12\nstdout.log={step}\nstderr.log=\n",
+                "QUEUE=\nACCT=COMPLETED|0:0|94000\nstdout.log=\nstderr.log=\n",
+            ]
+            jobs.refresh_remote(directory, record, self.auth)
+            self.assertEqual((record["state"], record["elapsed_seconds"]), ("Queued", 0))
+            jobs.refresh_remote(directory, record, self.auth)
+            self.assertEqual((record["state"], record["elapsed_seconds"]), ("Running", 93784))
+            jobs.refresh_remote(directory, record, self.auth)
+        saved = jobs.read_job(directory)
+        self.assertEqual((saved["state"], saved["elapsed_seconds"]), ("Completed", 94000))
+        self.assertEqual(saved["script_step"], "Equilibration")
+
+    def test_selected_job_displays_runtime_and_reported_step(self):
+        app = QApplication.instance() or QApplication([])
+        preferences = QSettings(str(self.root / "settings.ini"), QSettings.Format.IniFormat)
+        directory, record = self.new_job()
+        jobs.save_job(directory, record, state="Completed", elapsed_seconds=94000,
+                      script_step="Equilibration")
+        with patch("esen_workspace.QSettings", return_value=preferences):
+            workspace = EsenWorkspace(FakeTruba(), history=self.history)
+        self.addCleanup(workspace.dispose)
+        workspace.show()
+        app.processEvents()
+        self.assertIn("26:06:40", workspace.history.currentItem().text())
+        self.assertIn("26:06:40", workspace.job_progress.text())
+        self.assertIn("Equilibration", workspace.job_progress.text())
+        self.assertTrue(workspace.job_progress.isVisible())
 
     def test_cancel_waits_for_slurm_to_confirm(self):
         directory, record = self.new_job()

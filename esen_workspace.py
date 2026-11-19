@@ -8,6 +8,7 @@ from pathlib import Path
 import re
 import subprocess
 from threading import Event
+from time import time
 
 from PySide6.QtCore import QSettings, QSignalBlocker, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QDesktopServices
@@ -29,6 +30,17 @@ from ui_language import translate
 
 WORKSPACE_TITLE = "Esen"
 ACTIVE_TRUBA_STATES = frozenset({"Submitting", "Submitted", "Queued", "Running", "Cancellation requested"})
+
+
+def job_duration(record, state):
+    seconds = record.get("elapsed_seconds")
+    if record["target"] == "local" and state == "Running" and record.get("started_at") is not None:
+        seconds = int(time() - record["started_at"])
+    if seconds is None:
+        return "—"
+    hours, remainder = divmod(max(0, seconds), 3600)
+    minutes, seconds = divmod(remainder, 60)
+    return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
 
 ESEN_STYLE = """
 QDialog#esenWorkspace { background: #F5F5F3; }
@@ -380,6 +392,12 @@ class EsenWorkspace(QDialog):
 
         result, layout = panel("Logs and files", paper=True)
         right.addWidget(result)
+        self.job_progress = QLabel()
+        self.job_progress.setTextFormat(Qt.TextFormat.PlainText)
+        self.job_progress.setWordWrap(True)
+        self.job_progress.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.job_progress.hide()
+        layout.addWidget(self.job_progress)
         self.status = QLabel()
         self.status.setTextFormat(Qt.TextFormat.PlainText)
         self.status.setWordWrap(True)
@@ -876,11 +894,15 @@ class EsenWorkspace(QDialog):
         else:
             self._active_truba_jobs.pop(directory, None)
         target = translate("This computer") if record["target"] == "local" else "TRUBA"
-        state = translate(self._state(directory, record))
+        state = self._state(directory, record)
+        duration = job_duration(record, state)
         name = record["name"]
         if record.get("batch_folder"):
             name = f"{record['batch_folder']}/{name}"
-        item.setText(f"{name} · {target} · {state}")
+        summary = f"{translate(state)} · {target}"
+        if duration != "—":
+            summary = f"{duration} · {summary}"
+        item.setText(f"{name}\n{summary}")
         if record.get("source"):
             item.setToolTip(record["source"])
 
@@ -1056,6 +1078,10 @@ class EsenWorkspace(QDialog):
         directory = self._selected_directory()
         if directory is None:
             self.record = None
+            uploading = bool(self.upload_task and self.upload_task[2])
+            self.job_progress.setVisible(uploading)
+            if uploading:
+                self.job_progress.setText(translate("Uploading files to TRUBA…"))
             self.status.setText(translate(self.job_error or "Select an ESEN job."))
             self.results.clear()
             self._buttons()
@@ -1064,12 +1090,13 @@ class EsenWorkspace(QDialog):
             self.record = record = jobs.read_job(directory)
         except (OSError, ValueError) as error:
             self.record = None
+            self.job_progress.hide()
             self.status.setText(str(error))
             self._buttons()
             return
         self._update_history_item(self.history.currentItem(), directory, record)
-        state = translate(self._state(directory, record))
-        details = [record.get("job_id", ""), state, record.get("created", ""),
+        state = self._state(directory, record)
+        details = [record.get("job_id", ""), record.get("created", ""),
                    self.job_error or translate(record.get("detail", ""))]
         exported = self._downloaded_results(directory, record)
         if exported is not None:
@@ -1079,6 +1106,25 @@ class EsenWorkspace(QDialog):
                            f"{record['result_export_error']}")
         if record.get("files_omitted"):
             details.append(translate("Some files are omitted from this list."))
+        stage = state
+        if (state == "Completed" and exported is None and not record.get("result_export_error")
+                and self.remote_task and directory == self.remote_task[0]
+                and jobs.result_directory(directory, record) is not None):
+            stage = "Collecting results"
+        step = record.get("script_step", "")
+        if record["target"] == "local":
+            try:
+                step = jobs.script_step(jobs.log_tail(directory / jobs.LOGS[0]))
+            except OSError:
+                pass
+        progress = translate("Stage: {stage}").format(stage=translate(stage))
+        duration_label = ("Slurm allocation runtime: {time}" if record.get("resume_input")
+                          else "Runtime: {time}")
+        progress += " · " + translate(duration_label).format(time=job_duration(record, state))
+        if step:
+            progress += "\n" + translate("Last reported step: {step}").format(step=step)
+        self.job_progress.setText(progress)
+        self.job_progress.show()
         self.status.setText(" · ".join(filter(None, details))[:900])
         self._show_log()
         self._show_files(directory, record)
@@ -1276,7 +1322,7 @@ class EsenWorkspace(QDialog):
             self.job_error = ""
 
         def refresh():
-            if not was_terminal or (manual and record.get("resume_input")):
+            if not was_terminal or (manual and (record.get("resume_input") or record.get("elapsed_seconds") is None)):
                 jobs.refresh_remote(directory, record, auth, cancel=cancel)
             if record["state"] in jobs.TERMINAL and (not was_terminal or "files" not in record or manual):
                 jobs.remote_files(directory, record, auth)
