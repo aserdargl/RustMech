@@ -390,6 +390,8 @@ Add to Queue|Kuyruğa Ekle
 Add Truba|TRUBA'ya Ekle
 Execution|Yürütme
 Execution target|Yürütme hedefi
+Kratos runs on TRUBA. Select TRUBA or choose ANSYS MAPDL for local execution.|Kratos TRUBA'da çalışır. TRUBA'yı seçin veya yerel çalıştırma için ANSYS MAPDL'yi seçin.
+Ready to submit analysis to TRUBA.|Analiz TRUBA'ya gönderilmeye hazır.
 Local mesh|Yerel ağ üretimi
 TRUBA batch analysis|TRUBA toplu analizi
 Enable TRUBA mode and allocate or refresh a resource session before running these jobs.|Bu işleri çalıştırmadan önce TRUBA modunu açın ve bir kaynak oturumu ayırın veya mevcut oturumu yenileyin.

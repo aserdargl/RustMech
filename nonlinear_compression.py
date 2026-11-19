@@ -23,7 +23,7 @@ from threading import Event
 import numpy as np
 import pyvista as pv
 from studio_style import CompactSpinBox, CompactComboBox
-from PySide6.QtCore import QSize, QTimer, Qt, QUrl
+from PySide6.QtCore import QSignalBlocker, QSize, QTimer, Qt, QUrl
 from PySide6.QtGui import QActionGroup, QDesktopServices, QFontDatabase
 from PySide6.QtWidgets import (
     QAbstractSpinBox,
@@ -1177,7 +1177,7 @@ class RustMechDialog(QDialog):
         self.status_banner = QFrame()
         self.status_banner.setObjectName("statusBanner")
         status_layout = QHBoxLayout(self.status_banner)
-        status_layout.setContentsMargins(6, 3, 6, 3)
+        status_layout.setContentsMargins(6, 3, 20, 3)  # Leave room for the window size grip.
         status_layout.setSpacing(4)
 
         self.status_badge = QLabel("● INITIALIZING")
@@ -1202,6 +1202,13 @@ class RustMechDialog(QDialog):
         self._analysis_action_buttons = (cancel, self.apply_button, self.force_stop_button)
         for button in self._analysis_action_buttons:
             status_layout.addWidget(button)
+        self.execution_target = NoWheelComboBox()
+        self.execution_target.addItem("Local", "local")
+        self.execution_target.addItem("TRUBA", "truba")
+        self.execution_target.setAccessibleName("Execution target")
+        self.execution_target.setToolTip("Execution target")
+        self.execution_target.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
+        status_layout.addWidget(self.execution_target)
         from operation_progress import OperationProgress
         self.operation_progress = OperationProgress(self, provider=lambda: (
             self.future is not None or self.analysis_job is not None
@@ -1268,6 +1275,8 @@ class RustMechDialog(QDialog):
             self.workspace_button.setText(workspace_names[index])
             self.workspace_actions.actions()[index].setChecked(True)
             flow_active = index in (2,3)
+            for button in self._analysis_action_buttons:
+                button.setVisible(not flow_active)
             fft_selected = self.setup_tabs.currentIndex() == self._fft_method_index
             if flow_active:
                 title = "Transient Heat Transfer" if index == 3 else "Isothermal Flow"
@@ -1293,7 +1302,7 @@ class RustMechDialog(QDialog):
         self.workspace_tabs.tabBar().hide()
         layout.addWidget(toolbar_frame)
         layout.addWidget(self.workspace_tabs, 1)
-        model_layout.addWidget(self.status_banner)
+        layout.addWidget(self.status_banner)
         model_layout.addWidget(self.operation_progress)
 
         for button_type in (QPushButton, QToolButton):
@@ -1364,6 +1373,7 @@ class RustMechDialog(QDialog):
         self.remote_controller.mode_changed.connect(self._remote_mode_changed)
         self.remote_controller.changed.connect(self._remote_state_changed)
         self.remote_controller.close_ready.connect(self.reject)
+        self.execution_target.currentIndexChanged.connect(self._select_execution_target)
         self.test_profile_combo.currentIndexChanged.connect(self._test_profile_changed)
         self.architecture_combo.currentIndexChanged.connect(self._architecture_changed)
         self.controls['core_fraction'].valueChanged.connect(self._architecture_changed)
@@ -1499,6 +1509,16 @@ class RustMechDialog(QDialog):
             self.brand_title_label.setText('Nonlinear Compression' if not active else f'Standard {kind(settings).title()}')
             self.setWindowTitle('RustMech | '+self.brand_title_label.text())
 
+    def _select_execution_target(self, _index):
+        self.remote_controller.toggle.setChecked(self.execution_target.currentData() == "truba")
+        # The controller can reject a change while an analysis is active.
+        self._sync_execution_target()
+
+    def _sync_execution_target(self):
+        target = "truba" if self.remote_controller.requested else "local"
+        with QSignalBlocker(self.execution_target):
+            self.execution_target.setCurrentIndex(self.execution_target.findData(target))
+
     def _remote_mode_changed(self,enabled):
         if enabled:
             self._local_solver_before_remote = self.solver_combo.currentData()
@@ -1507,6 +1527,7 @@ class RustMechDialog(QDialog):
             self.solver_combo.setCurrentIndex(self.solver_combo.findData(self._local_solver_before_remote))
         self._restart_preview_for_mode = self.future is not None
         self.mesh_cancelled.set()
+        self._analysis_after_mesh = None
         self.debounce.stop()
         self.preview = None
         self.failed_key = None
@@ -1515,6 +1536,7 @@ class RustMechDialog(QDialog):
 
     def _remote_state_changed(self):
         controller = self.remote_controller
+        self._sync_execution_target()
         controller.apply_solver_combo(self.solver_combo)
         self._sync_solver_ui()
         self.flow_workspace.update_execution_availability()
@@ -1522,9 +1544,6 @@ class RustMechDialog(QDialog):
         self.refresh_validity()
         if controller.requested:
             self.brand_subtitle_lbl.setText("TRUBA · remote compute")
-            if (controller.ready and self.future is None and self.preview is None and not controller.closing
-                    and self.setup_tabs.currentIndex() != self._fft_method_index):
-                self.status.setText('TRUBA ready. Click Apply to generate the geometry remotely.')
         else:
             self.brand_subtitle_lbl.setText(self._local_workspace_solver_name())
         self._update_remote_banner()
@@ -2435,11 +2454,18 @@ class RustMechDialog(QDialog):
         ) + self.solver_capabilities.validate(settings)
         controller = getattr(self,"remote_controller",None)
         remote_error = None
-        if controller is not None and controller.requested:
-            try: controller.require(settings.solver_backend,settings)
+        remote = controller is not None and controller.requested
+        if remote:
+            from remote_operations import required_capability
+            try:
+                capability = required_capability(dict(operation="mechanical", settings=dict(
+                    solver_backend=settings.solver_backend, test_profile=settings.test_profile)))
+                controller.require(capability, settings)
             except (ValueError,RuntimeError) as error: errors.append(str(error))
             try: controller.require("mesh",settings)
             except (ValueError,RuntimeError) as error: remote_error = str(error)
+        elif settings.solver_backend == "kratos":
+            errors.append("Kratos runs on TRUBA. Select TRUBA or choose ANSYS MAPDL for local execution.")
         geometry_valid = not validate_geometry(settings, include_mesh=False)
         self.geometry_apply_button.setEnabled(geometry_valid)
         self.structure_apply_button.setEnabled(self.geometry_apply_button.isEnabled())
@@ -2458,7 +2484,7 @@ class RustMechDialog(QDialog):
         if method == self._fft_method_index:
             fft_errors = validate_periodic_fft(self._fft_settings(settings))
             self._request_fft_preview(settings, valid=not fft_errors)
-            remote_fft = controller is not None and controller.requested
+            remote_fft = remote
             self.fft_distribution.setEnabled(os.name == 'nt' and not remote_fft)
             if remote_fft:
                 try:
@@ -2469,7 +2495,7 @@ class RustMechDialog(QDialog):
         else:
             self.apply_button.setEnabled(
                 method == 0 and idle and
-                bool(current and not pending and not errors and not mesh_errors)
+                bool((current or remote) and not pending and not errors and not mesh_errors)
             )
         if self.analysis_job is not None:
             self._show_analysis_progress(self.analysis_job)
@@ -2507,7 +2533,10 @@ class RustMechDialog(QDialog):
             )
             self._update_status_visuals("pending", "● PENDING APPLY", True)
             return
-        if current:
+        if remote and idle:
+            self.status.setText("Ready to submit analysis to TRUBA.")
+            self._update_status_visuals("ready", "● READY TO SOLVE", False)
+        elif current:
             self.status.setText(
                 f"Run analysis reuses this FE mesh and starts {self.solver_capabilities.display_name}."
                 if self.preview.mesh is not None else
@@ -3057,7 +3086,7 @@ class RustMechDialog(QDialog):
         if self.setup_tabs.currentIndex() == self._fft_method_index:
             self._start_fft(self._fft_settings(settings))
             return
-        if self.preview.mesh is None and not self.remote_controller.requested:
+        if not self.remote_controller.requested and self.preview.mesh is None:
             self._analysis_after_mesh = settings
             self._mesh_requested = True
             self.failed_key = None
@@ -3073,7 +3102,10 @@ class RustMechDialog(QDialog):
             if self.remote_controller.requested:
                 from truba_remote import run_remote_mechanics
                 context,auth = self.remote_controller.require(settings.solver_backend,settings)
-                source = getattr(self.preview,"remote_source","")
+                preview = self.preview
+                source = ""
+                if preview is not None and preview.mesh is not None and preview.key == preview_key(settings):
+                    source = getattr(preview, "remote_source", "")
                 self.analysis_job = AnalysisProcess(run_remote_mechanics,settings,context,source,remote_auth=auth)
                 self.truba_dialog.job_list.submitting = True
             else:

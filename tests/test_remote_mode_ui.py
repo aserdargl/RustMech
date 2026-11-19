@@ -82,6 +82,67 @@ class RemoteModeUiTests(unittest.TestCase):
         QTest.keyClick(field,Qt.Key.Key_Return)
         self.assertFalse(self.controller.requested)
 
+    def test_main_execution_target_stays_in_sync_across_workspaces(self):
+        window = self.window
+        target = window.execution_target
+        self.assertEqual(target.currentData(), "local")
+        for index in (0, 2, 3):
+            window.workspace_tabs.setCurrentIndex(index)
+            self.app.processEvents()
+            self.assertTrue(target.isVisible())
+            self.assertEqual(window.apply_button.isVisible(), index == 0)
+            self.assertIs(window.childAt(target.mapTo(window, target.rect().center())), target)
+        with patch.object(window.truba_dialog, "start_connection") as connect:
+            QTest.keyClick(target, Qt.Key.Key_Down)
+            connect.assert_not_called()
+        self.assertTrue(self.controller.requested)
+        self.assertTrue(self.controller.toggle.isChecked())
+        self.assertFalse(window.thermal_workspace.buttons[1].isEnabled())
+        window.flow_workspace.job = MagicMock()
+        try:
+            QTest.keyClick(target, Qt.Key.Key_Up)
+            self.assertEqual(target.currentData(), "truba")
+            self.assertTrue(self.controller.requested)
+        finally:
+            window.flow_workspace.job = None
+        self.controller.toggle.setChecked(False)
+        self.assertEqual(target.currentData(), "local")
+        self.assertTrue(window.thermal_workspace.buttons[1].isEnabled())
+
+    def test_run_submits_remote_mechanics_without_a_preview(self):
+        window = self.window
+        target = window.execution_target
+        QTest.keyClick(target, Qt.Key.Key_Down)
+        self.assertFalse(window.apply_button.isEnabled())
+        self.enable()
+        self.assertIsNone(window.preview)
+        self.assertTrue(window.apply_button.isEnabled(), window.status.text())
+
+        try:
+            with patch("nonlinear_compression.save_settings"), patch(
+                    "nonlinear_compression.AnalysisProcess") as start:
+                start.return_value.remote_status.return_value = None
+                start.return_value.progress_status.return_value = None
+                QTest.mouseClick(window.apply_button, Qt.MouseButton.LeftButton)
+                operation, settings, context, source = start.call_args.args
+                self.assertIs(operation, run_remote_mechanics)
+                self.assertEqual((settings.solver_backend, context.session_id, source), ("kratos", "321", ""))
+        finally:
+            window.analysis_poll.stop()
+            window.analysis_job = None
+
+    def test_local_run_cannot_submit_the_truba_only_kratos_solver(self):
+        from mesh_engine import preview_key
+
+        window = self.window
+        window.solver_combo.setCurrentIndex(window.solver_combo.findData("kratos"))
+        window.preview = SimpleNamespace(key=preview_key(window.collect()), mesh=SimpleNamespace(solve_errors=[]))
+        with patch("nonlinear_compression.AnalysisProcess") as start:
+            window.apply()
+            start.assert_not_called()
+        self.assertFalse(window.apply_button.isEnabled())
+        self.assertIn("Kratos runs on TRUBA", window.status.text())
+
     def test_fft_submits_assigned_material_without_local_wsl(self):
         window = self.window
         window._select_settings_method(window._fft_method_index)
@@ -748,14 +809,17 @@ class RemoteModeUiTests(unittest.TestCase):
             job.force_stop.assert_not_called()
 
     def test_mechanics_cfd_and_cht_dispatch_only_remote_operations(self):
+        from mesh_engine import preview_key
         self.enable()
         self.window.truba_dialog.active_jobs.study_name.setText('A')
-        self.window.preview=SimpleNamespace(mesh=object(),remote_source="/arf/scratch/tester/RustMech/"+"a"*32+"/output/preview")
+        source = "/arf/scratch/tester/RustMech/"+"a"*32+"/output/preview"
+        self.window.preview=SimpleNamespace(mesh=object(), key=preview_key(self.window.collect()), remote_source=source)
         with patch.object(self.window,"refresh_validity"),patch("nonlinear_compression.save_settings"),patch("nonlinear_compression.AnalysisProcess") as start:
             self.window.apply_button.setEnabled(True)
             self.window.apply()
             self.assertIs(start.call_args.args[0],run_remote_mechanics)
             self.assertEqual(start.call_args.args[2].study_name, 'A')
+            self.assertEqual(start.call_args.args[3], source)
             self.window.force_stop_analysis()
         for workspace,module,operation in ((self.window.flow_workspace,"flow_workspace","flow_solve"),
                                             (self.window.thermal_workspace,"thermal_workspace","thermal_solve")):
