@@ -4,8 +4,9 @@
    parametrelerini ayarlayın.
 2. **Designs** yanındaki **Batch Analysis** düğmesine tıklayın ve klasörü seçin.
    STL, OBJ, PLY ve VTP dosyaları alt klasörleriyle birlikte, dosya adına göre
-   doğal sırada taranır (`part2`, `part10` öncesindedir). `Result` klasörleri ve
-   bağlantılı klasörler taranmaz. Koordinatlar mm kabul edilir.
+   doğal sırada taranır (`part2`, `part10` öncesindedir). `BatchAnaylsis`, eski
+   `Result` klasörleri ve bağlantılı klasörler tarama dışında tutulur.
+   Koordinatlar mm kabul edilir.
 3. Basma yönünü seçin: X, Y, Z; ilk numunede seçilen destek/yükleme
    yüzeylerinden yön alma; veya her numunede elle seçim.
 4. **Check folder** ile ön kontrolü çalıştırın. Malzeme ve analiz ayarlarının
@@ -19,8 +20,10 @@
    Numunenin yüksekliği korunur ve işlem ön kontrol sütununda gösterilir.
    Aynı düzlemdeki birden fazla temas yaması
    birlikte seçilir. Yön bilgisi aktarılır; üçgen kimlikleri aktarılmaz.
-5. Kalem simgeli sütunda, numune satırındaki kutu düğmesiyle 3B görünümü açın. **Connected
-   components** listesinden kalacak tek katıyı seçebilirsiniz. Mavi bileşen
+5. Numune satırındaki kutu simgesinin üzerine gelince mesnet ve basma yüzeyleri
+   iki açıdan görünür. Düzenleyicideki değişiklikler kaydedilince önizleme yenilenir.
+   Kutu düğmesiyle açılan 3B görünümde **Connected components** listesinden
+   kalacak tek katıyı seçebilirsiniz. Mavi bileşen
    kalır, kırmızı bileşenler ayıklanır. Destek yeşil, yükleme turuncudur.
    Bir yüzey atamasını değiştirmek için rolü seçin ve modeldeki yüzeye sağ
    tıklayın. Seçimleri uygulamak için **Save and close** düğmesine basın. Kaydedilen
@@ -48,22 +51,26 @@
    hatalı işler aynı kuyruktan yeniden denenebilir. Yeniden açılışta kesilmiş
    işler işaretsizdir; çalıştırmadan önce durumlarını kontrol edin.
 
-Sonuçlar seçilen klasörde tutulur:
+Hazırlık dosyaları ve yeni işlerin sonuçları seçilen klasördeki `BatchAnaylsis`
+altında tutulur. Daha önce kuyruğa eklenen işler kayıtlı sonuç konumunu kullanır.
 
 ```text
 Numuneler/
   numune_01.stl
-  Result/
-    toplu_ozet.csv
-    numune_01-<kimlik>/Mechanical/ansys_mapdl/JOB-<kimlik>/
-      job.json
-      Run_<zaman>/
-        summary.json
-        01_Geometry/
-        02_MeshQuality/
-        03_Results/
-        04_Graphs/
-        Raw/
+  BatchAnaylsis/
+    Prepared/  # Analize hazırlanan VTP kopyaları ve kaydedilen seçimler
+    Images/    # Yüzey önizleme PNG dosyaları
+    Results/
+      toplu_ozet.csv
+      numune_01-<kimlik>/Mechanical/ansys_mapdl/JOB-<kimlik>/
+        job.json
+        Run_<zaman>/
+          summary.json
+          01_Geometry/
+          02_MeshQuality/
+          03_Results/
+          04_Graphs/
+          Raw/
 ```
 
 `job.json` kaynak özetini, yönü, ayarları, durumu ve sonuç ölçümlerini içerir;

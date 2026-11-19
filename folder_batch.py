@@ -2,23 +2,26 @@
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, replace
 from hashlib import sha256
+from html import escape
 import json
 from math import isfinite
 import os
 from pathlib import Path
 import re
 
-from PySide6.QtCore import QSize, QSettings, Qt, QTimer
+from PySide6.QtCore import QSize, Qt, QTimer
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (QAbstractItemView, QApplication, QDialog, QGridLayout, QGroupBox, QHeaderView,
                               QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPushButton,
-                              QSplitter, QTableWidget, QTableWidgetItem, QToolButton, QVBoxLayout)
+                              QSplitter, QTableWidget, QTableWidgetItem, QVBoxLayout)
 
 from camera_toolbar import camera_icon
 from file_dialog import QFileDialog
+from folder_batch_preview import FacePreviewButton, FacePreviewPopup, store_face_preview
+from folder_batch_results import BATCH_DIRECTORY, atomic_text, batch_directory
 from imported_geometry import (SURFACE_EXTENSIONS, SURFACE_FILE_FILTER, SurfaceComponents,
                                align_compression_surface, automatic_compression_selection,
-                               compression_direction, read_polygonal_surface, store_surface)
+                               compression_direction, read_polygonal_surface, store_surface, surface_cache_directory)
 from model import MIN_MESH_INPUT_MM, settings_from_dict
 from studio_style import (ActionFlowLayout, CompactComboBox, CompactDoubleSpinBox, CONTROL_HEIGHT,
                           STUDIO_STYLESHEET, field_label)
@@ -41,6 +44,8 @@ class PreparedSpecimen:
     component: int | None = None
     excluded_components: int = 0
     normalized_direction: tuple | None = None
+    preview: str = ''
+    preview_error: str = ''
 
 
 def discover_specimens(directory):
@@ -51,7 +56,7 @@ def discover_specimens(directory):
     paths = []
     for parent, directories, files in os.walk(root, followlinks=False):
         directories[:] = sorted(name for name in directories
-                                if name.casefold() != 'result'
+                                if name.casefold() not in ('result', BATCH_DIRECTORY.casefold())
                                 and not (Path(parent) / name).is_symlink()
                                 and not (Path(parent) / name).is_junction())
         for name in files:
@@ -77,8 +82,26 @@ def face_assignment_key(path):
     return f'folderBatch/faceAssignments/{identity}'
 
 
-def prepare_specimen(path, direction, saved_faces=None):
+def specimen_name(path, root):
+    relative = Path(path).relative_to(root)
+    name = re.sub(r'[^\w.-]+', '_', relative.stem)[:70] or 'specimen'
+    return name + '-' + sha256(relative.as_posix().encode()).hexdigest()[:8]
+
+
+def face_assignment_file(path, root):
+    return batch_directory(root) / 'Prepared' / f'{specimen_name(path, root)}.json'
+
+
+def prepare_preview(item, root, surface, aligned):
+    try:
+        item.preview = store_face_preview(batch_directory(root) / 'Images', surface, aligned, item.direction)
+    except (OSError, RuntimeError, ValueError) as error:
+        item.preview_error = str(error)
+
+
+def prepare_specimen(path, direction, saved_faces=None, root=None):
     item = PreparedSpecimen(str(path))
+    root = Path(path).parent if root is None else root
     try:
         item.digest = source_digest(path)
         components = SurfaceComponents(read_polygonal_surface(path))
@@ -100,17 +123,20 @@ def prepare_specimen(path, direction, saved_faces=None):
         elif direction is None:
             raise ValueError('Face selection required')
         else:
-            face_surface, item.cells = automatic_compression_selection(surface, direction)
-            if face_surface is not surface:
+            original = surface
+            surface, item.cells = automatic_compression_selection(surface, direction)
+            if surface is not original:
                 item.normalized_direction = tuple(float(value) for value in direction)
-            aligned, item.height = align_compression_surface(face_surface, *item.cells)
+            aligned, item.height = align_compression_surface(surface, *item.cells)
         item.direction = tuple(float(x) for x in direction)
-        item.cached = store_surface(aligned)
+        item.cached = store_surface(aligned, batch_directory(root) / 'Prepared')
         if source_digest(path) != item.digest:
             raise ValueError('Source changed during preparation. Check the folder again.')
     except Exception as error:
         item.error = str(error)
         item.cached = ''
+    else:
+        prepare_preview(item, root, surface, aligned)
     return item
 
 
@@ -144,15 +170,18 @@ def _prepared_snapshots(item, root, base, solvers):
                        size=item.height, test_profile='custom',
                        mesh_type=base.mesh_type if base.mesh_type in ('TET4', 'TET10') else 'TET4',
                        tetra_strategy='netgen' if base.tetra_strategy == 'periodic' else base.tetra_strategy)
-    name = re.sub(r'[^\w.-]+', '_', relative.stem)[:70] or 'specimen'
-    name += '-' + sha256(relative.as_posix().encode()).hexdigest()[:8]
+    name = specimen_name(item.source, root)
+    results = batch_directory(root) / 'Results'
     for solver in solvers:
         snapshot = replace(settings, solver_backend=solver)
-        key = sha256(json.dumps([str(root), relative.as_posix(), item.digest, item.direction, asdict(snapshot)],
+        identity = asdict(snapshot)
+        # Keep deduplication compatible with jobs queued before the workspace moved.
+        identity['imported_geometry_path'] = str(surface_cache_directory() / Path(item.cached).name)
+        key = sha256(json.dumps([str(root), relative.as_posix(), item.digest, item.direction, identity],
                                 sort_keys=True).encode()).hexdigest()
         metadata = dict(root=str(root), source=str(item.source), sha256=item.digest,
                         direction=list(item.direction), key=key,
-                        destination=str(root / 'Result' / name / 'Mechanical' / solver))
+                        results_root=str(results), destination=str(results / name / 'Mechanical' / solver))
         if item.component is not None:
             metadata.update(kept_component=item.component + 1, excluded_components=item.excluded_components)
         if item.normalized_direction is not None:
@@ -245,6 +274,7 @@ class FolderBatchDialog(QDialog):
         self.table = QTableWidget(0, 4)
         self.table.setHorizontalHeaderLabels(['', 'Run', 'Specimen', 'Preflight'])
         self.face_icon = camera_icon('orthographic')
+        self.face_preview = FacePreviewPopup(self)
         edit_header = self.table.horizontalHeaderItem(FACES_COLUMN)
         edit_header.setIcon(QIcon(str(Path(__file__).resolve().parent / 'assets' / 'ui' / 'edit-pencil.svg')))
         edit_header.setToolTip('Edit specimen geometry and faces')
@@ -413,8 +443,12 @@ class FolderBatchDialog(QDialog):
         if path:
             self.folder.setText(path)
 
-    def saved_faces(self, path):
-        value = self.preferences.value(face_assignment_key(path), '')
+    def saved_faces(self, path, root=None):
+        root = root or self.root or Path(path).parent
+        try:
+            value = face_assignment_file(path, root).read_text(encoding='utf-8')
+        except FileNotFoundError:
+            value = self.preferences.value(face_assignment_key(path), '')
         try:
             digest, cells, *geometry = json.loads(value)
             if not (isinstance(digest, str) and isinstance(cells, list) and len(cells) == 2
@@ -435,8 +469,9 @@ class FolderBatchDialog(QDialog):
             pass
         return None
 
-    def pick_faces(self, path, selection=None, direction=None):
+    def pick_faces(self, path, selection=None, direction=None, *, root=None):
         from geometry_import_dialog import GeometryImportDialog
+        root = root or self.root or Path(path).parent
         digest = source_digest(path)
         components = SurfaceComponents(read_polygonal_surface(path))
         selection = selection if selection and selection[0] == digest else None
@@ -456,23 +491,14 @@ class FolderBatchDialog(QDialog):
         def save_selection(aligned, height, cells):
             nonlocal prepared
             axis = compression_direction(dialog.surface, *cells)
-            cached = store_surface(aligned)
+            cached = store_surface(aligned, batch_directory(root) / 'Prepared')
             if source_digest(path) != digest:
                 raise ValueError('Source changed during face selection. Check the folder again.')
-            key = face_assignment_key(path)
-            previous = self.preferences.value(key)
             kept = dialog.component_index if components.count > 1 else None
             geometry = [kept] if kept is not None or dialog.normalized_direction is not None else []
             if dialog.normalized_direction is not None:
                 geometry.append(dialog.normalized_direction)
-            self.preferences.setValue(key, json.dumps([digest, cells, *geometry]))
-            self.preferences.sync()
-            if self.preferences.status() != QSettings.Status.NoError:
-                if previous is None:
-                    self.preferences.remove(key)
-                else:
-                    self.preferences.setValue(key, previous)
-                raise OSError('Could not save the specimen faces.')
+            atomic_text(face_assignment_file(path, root), json.dumps([digest, cells, *geometry]))
             prepared = PreparedSpecimen(str(path), digest, cached, height, tuple(float(x) for x in axis), cells,
                                         component=kept, excluded_components=components.count - 1,
                                         normalized_direction=dialog.normalized_direction)
@@ -486,7 +512,10 @@ class FolderBatchDialog(QDialog):
                                       normalized_direction=selection[3] if initial_cells and len(selection) == 4 else None)
         dialog.setStyleSheet(STUDIO_STYLESHEET)
         try:
-            return prepared if dialog.exec() else None
+            if not dialog.exec() or prepared is None:
+                return None
+            prepare_preview(prepared, root, dialog.surface, dialog.result_surface[0])
+            return prepared
         finally:
             dialog.plotter.close()
             dialog.deleteLater()
@@ -500,13 +529,16 @@ class FolderBatchDialog(QDialog):
             root = Path(self.folder.text()).expanduser().resolve()
             paths = discover_specimens(root)
             if not paths:
-                raise ValueError('No STL, OBJ, PLY or VTP specimens found. Result folders are excluded.')
+                raise ValueError('No STL, OBJ, PLY or VTP specimens found.')
+            workspace = batch_directory(root)
+            for name in ('Prepared', 'Images', 'Results'):
+                (workspace / name).mkdir(parents=True, exist_ok=True)
             base = settings_from_dict(asdict(self.settings_provider()))
             direction = {0: (0, 0, 1), 1: (1, 0, 0), 2: (0, 1, 0)}.get(self.mode.currentIndex())
-            saved = [self.saved_faces(path) for path in paths]
+            saved = [self.saved_faces(path, root) for path in paths]
             first = None
             if self.mode.currentIndex() == 3:
-                first = self.pick_faces(paths[0], saved[0])
+                first = self.pick_faces(paths[0], saved[0], root=root)
                 if first is None:
                     return
                 direction = first.direction
@@ -530,7 +562,7 @@ class FolderBatchDialog(QDialog):
             index, path, direction, selection = self.pending.pop(0)
             self.working_index = index
             self.status.setText(f'Checking {index + 1}/{len(self.items)}: {Path(path).name}')
-            self.future = self.executor.submit(prepare_specimen, path, direction, selection)
+            self.future = self.executor.submit(prepare_specimen, path, direction, selection, self.root)
         else:
             self.set_busy(False)
             ready = sum(bool(item.cached) for item in self.items)
@@ -556,16 +588,20 @@ class FolderBatchDialog(QDialog):
             name = Path(specimen.source).relative_to(self.root).as_posix()
             button = self.table.cellWidget(index, FACES_COLUMN)
             if button is None:
-                button = QToolButton()
+                button = FacePreviewButton(self.face_preview)
                 button.setIcon(self.face_icon)
                 button.setIconSize(QSize(16, 16))
                 button.setFixedSize(CONTROL_HEIGHT, CONTROL_HEIGHT)
                 button.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
                 button.setAccessibleName('Edit specimen geometry and faces')
-                button.setToolTip('Edit specimen geometry and faces')
                 button.clicked.connect(lambda checked=False, row=index: self.edit_specimen(row))
                 self.table.setCellWidget(index, FACES_COLUMN, button)
             button.setAccessibleDescription(name)
+            button.preview_path = specimen.preview
+            tip = 'Edit specimen geometry and faces'
+            if specimen.preview_error:
+                tip = f'<html>Face preview unavailable<br>{escape(specimen.preview_error)}</html>'
+            button.setToolTip(tip)
             check = QTableWidgetItem()
             check.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsUserCheckable)
             check.setCheckState(checked.get(name, Qt.CheckState.Checked) if specimen.cached else Qt.CheckState.Unchecked)
@@ -620,7 +656,7 @@ class FolderBatchDialog(QDialog):
                 raise ValueError('Check at least one ready specimen.')
             added = self.queue.add_folder_snapshots(snapshots)
             self.status.setText(f'{len(added)} jobs added. Identical jobs already in the queue were skipped. '
-                                f'Results: {self.root / "Result"}. Open the queue and explicitly start it.')
+                                f'Results: {batch_directory(self.root) / "Results"}. Open the queue and explicitly start it.')
         except Exception as error:
             QMessageBox.warning(self, 'Folder analysis', str(error))
 

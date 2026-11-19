@@ -7,6 +7,13 @@ import shutil
 from uuid import uuid4
 
 
+BATCH_DIRECTORY = 'BatchAnaylsis'
+
+
+def batch_directory(root):
+    return Path(root) / BATCH_DIRECTORY
+
+
 def atomic_text(path, content):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -77,11 +84,12 @@ def write_folder_reports(rows):
         job = row.folder_job
         atomic_text(Path(job['destination']) / 'job.json',
                     json.dumps(asdict(row), ensure_ascii=False, allow_nan=False, indent=2))
-        grouped.setdefault(job['root'], []).append(row)
+        results = Path(job.get('results_root') or Path(job['root']) / 'Result')
+        grouped.setdefault(results, []).append(row)
     columns = ('source', 'solver', 'direction', 'status', 'max_force_n',
                'effective_modulus_mpa', 'energy_absorption_j', 'run_folder', 'job_id')
     import io
-    for root, jobs in grouped.items():
+    for results, jobs in grouped.items():
         stream = io.StringIO(newline='')
         writer = csv.DictWriter(stream, fieldnames=columns)
         writer.writeheader()
@@ -91,4 +99,4 @@ def write_folder_reports(rows):
                                  max_force_n=row.max_force_n, effective_modulus_mpa=row.effective_modulus_mpa,
                                  energy_absorption_j=row.energy_absorption_j, run_folder=row.run_folder,
                                  job_id=row.exp_id))
-        atomic_text(Path(root) / 'Result' / 'toplu_ozet.csv', '\ufeff' + stream.getvalue())
+        atomic_text(results / 'toplu_ozet.csv', '\ufeff' + stream.getvalue())

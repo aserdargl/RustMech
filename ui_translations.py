@@ -451,6 +451,9 @@ Save|Kaydet
 Save and close|Kaydet ve kapat
 Specimen faces|Numune yüzeyleri
 Edit specimen geometry and faces|Numune geometrisini ve yüzeylerini düzenle
+Face preview unavailable|Yüzey önizlemesi kullanılamıyor
+Support face|Mesnet yüzeyi
+Compression face|Basma yüzeyi
 Connected components|Bağlantılı bileşenler
 Choose one solid to keep. Blue remains, red is excluded.|Kalacak katıyı seçin. Mavi bileşen kalır, kırmızı bileşenler ayıklanır.
 Choose which connected component to keep.|Kalacak bağlantılı bileşeni seçin.

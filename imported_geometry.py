@@ -1,6 +1,7 @@
 """Closed surface import and explicit planar compression-face selection (mm)."""
 from hashlib import sha256
 from pathlib import Path
+from uuid import uuid4
 
 import numpy as np
 import pyvista as pv
@@ -141,14 +142,23 @@ def align_compression_surface(surface, bottom_cell, top_cell):
     return result, height
 
 
-def store_surface(surface):
+def surface_cache_directory():
     from PySide6.QtCore import QStandardPaths
-    directory = Path(QStandardPaths.writableLocation(QStandardPaths.StandardLocation.AppLocalDataLocation)) / 'imported_geometry'
+    return Path(QStandardPaths.writableLocation(QStandardPaths.StandardLocation.AppLocalDataLocation)) / 'imported_geometry'
+
+
+def store_surface(surface, directory=None):
+    directory = Path(directory) if directory is not None else surface_cache_directory()
     directory.mkdir(parents=True, exist_ok=True)
     digest = sha256(surface.points.tobytes() + surface.faces.tobytes()).hexdigest()
     path = directory / f'{digest}.vtp'
     if not path.exists():
-        surface.save(path)
+        temporary = path.with_name(f'{path.stem}.{uuid4().hex}.vtp')
+        try:
+            surface.save(temporary)
+            temporary.replace(path)
+        finally:
+            temporary.unlink(missing_ok=True)
     return str(path)
 
 

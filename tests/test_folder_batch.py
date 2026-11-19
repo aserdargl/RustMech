@@ -13,7 +13,8 @@ from unittest.mock import patch
 
 import numpy as np
 import pyvista as pv
-from PySide6.QtCore import QObject, QSettings, Qt, QTimer, Signal
+from PySide6.QtCore import QEvent, QObject, QSettings, Qt, QTimer, Signal
+from PySide6.QtGui import QHelpEvent, QPixmap
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QAbstractItemView, QApplication, QComboBox, QDialogButtonBox, QLineEdit, QPushButton, QSplitter
 
@@ -22,7 +23,7 @@ from doe_studio import ExperimentWorker
 from folder_batch import (FACES_COLUMN, PREFLIGHT_COLUMN, RUN_COLUMN, SPECIMEN_COLUMN,
                           FolderBatchDialog, discover_specimens, prepare_specimen,
                           source_digest, specimen_snapshots)
-from folder_batch_results import collect_folder_output, run_remote_folder_doe
+from folder_batch_results import batch_directory, collect_folder_output, run_remote_folder_doe
 from geometry_import_dialog import GeometryImportDialog
 from imported_geometry import automatic_compression_faces, compression_direction, read_surface
 from window_state import WindowStateStore
@@ -128,7 +129,8 @@ class FolderBatchTests(unittest.TestCase):
             self.assertEqual(np.count_nonzero(aligned.cell_data['compression_face'] == role), 4)
 
     def test_discovery_natural_order_nested_packages_and_result_exclusion(self):
-        for name in ('part10.stl', 'part2.stl', 'Result/old.stl', 'nested/result/old.stl', 'package/geometry.stl'):
+        for name in ('part10.stl', 'part2.stl', 'Result/old.stl', 'nested/result/old.stl', 'package/geometry.stl',
+                     'BatchAnaylsis/Prepared/cached.stl', 'BatchAnaylsis/Results/generated.stl'):
             self.specimen(name)
         names = [path.relative_to(self.root).as_posix() for path in discover_specimens(self.root)]
         self.assertEqual(names, ['package/geometry.stl', 'part2.stl', 'part10.stl'])
@@ -320,7 +322,7 @@ class FolderBatchTests(unittest.TestCase):
             self.assertEqual(settings.compression, self.base.compression)
             self.assertEqual(settings.young_modulus, self.base.young_modulus)
             self.assertEqual(settings.mesh_type, 'TET4')
-            self.assertTrue(Path(job['destination']).is_relative_to(self.root / 'Result'))
+            self.assertTrue(Path(job['destination']).is_relative_to(batch_directory(self.root) / 'Results'))
 
     def test_enqueue_is_atomic_deduplicated_and_does_not_start(self):
         queue = self.queue()
@@ -330,8 +332,7 @@ class FolderBatchTests(unittest.TestCase):
             self.assertEqual(queue.add_folder_snapshots(jobs), [])
             process.assert_not_called()
         self.assertEqual(len(QueueStore(queue.store.path).load()), 1)
-        self.assertTrue((self.root / 'Result/toplu_ozet.csv').is_file())
-        with (self.root / 'Result/toplu_ozet.csv').open(encoding='utf-8-sig', newline='') as stream:
+        with (batch_directory(self.root) / 'Results/toplu_ozet.csv').open(encoding='utf-8-sig', newline='') as stream:
             csv_rows = list(csv.reader(stream))
         self.assertEqual(len(csv_rows), 2)
         self.assertTrue((Path(rows[0].folder_job['destination']) / 'job.json').is_file())
@@ -363,7 +364,7 @@ class FolderBatchTests(unittest.TestCase):
         self.assertEqual(restored[1].folder_job, queue.rows[1].folder_job)
         report = json.loads((Path(restored[0].folder_job['destination']) / 'job.json').read_text())
         self.assertIn('Failed', report['status'])
-        summary = (self.root / 'Result/toplu_ozet.csv').read_text(encoding='utf-8-sig')
+        summary = (batch_directory(self.root) / 'Results/toplu_ozet.csv').read_text(encoding='utf-8-sig')
         self.assertIn('part1.stl', summary)
         self.assertIn('Completed', summary)
 
@@ -684,7 +685,7 @@ class FolderBatchTests(unittest.TestCase):
             QTest.keyClick(dialog.folder, Qt.Key.Key_Return)
             self.assertFalse(dialog.items)
             dialog.check_folder()
-            for _ in range(200):
+            for _ in range(1000):
                 if dialog.future is None:
                     break
                 QTest.qWait(10)
@@ -694,6 +695,48 @@ class FolderBatchTests(unittest.TestCase):
             self.assertEqual(dialog.table.item(0, RUN_COLUMN).checkState(), Qt.CheckState.Checked)
             self.assertFalse(dialog.queue.rows)
             process.assert_not_called()
+
+    def test_hover_preview_is_saved_beside_prepared_geometry_and_replaced_after_edit(self):
+        path = self.specimen('nested/sample.stl')
+        batch = self.dialog()
+        batch.folder.setText(str(self.root))
+        batch.check_folder()
+        batch.future.result(timeout=15)
+        batch.poll()
+        initial = batch.items[0]
+        workspace = batch_directory(self.root)
+        self.assertEqual(Path(initial.cached).parent, workspace / 'Prepared')
+        self.assertEqual(Path(initial.preview).parent, workspace / 'Images', initial.preview_error)
+        self.assertTrue((workspace / 'Results').is_dir())
+        button = batch.table.cellWidget(0, FACES_COLUMN)
+        self.assertEqual(button.preview_path, initial.preview)
+        batch.show()
+        self.app.processEvents()
+
+        _, _, faces = automatic_compression_faces(read_surface(path), (1, 0, 0))
+
+        def save(editor):
+            editor.show()
+            self.app.processEvents()
+            for role, cell in enumerate(faces):
+                editor.set_role(role)
+                editor.select_cell(cell)
+            editor.confirm.click()
+            return editor.result()
+
+        with patch.object(GeometryImportDialog, 'exec', save):
+            button.click()
+        revised = batch.items[0]
+        self.assertNotEqual(revised.preview, initial.preview, revised.preview_error)
+        self.assertEqual(button.preview_path, revised.preview)
+        self.assertEqual(len(list((workspace / 'Prepared').glob('*.json'))), 1)
+        position = button.rect().center()
+        self.app.sendEvent(button, QHelpEvent(QEvent.Type.ToolTip, position, button.mapToGlobal(position)))
+        self.assertTrue(batch.face_preview.isVisible())
+        self.assertEqual(batch.face_preview.image.pixmap().toImage(), QPixmap(revised.preview).toImage())
+        self.app.sendEvent(button, QEvent(QEvent.Type.Leave))
+        self.assertFalse(batch.face_preview.isVisible())
+        self.assertEqual(batch.saved_faces(path), (source_digest(path), faces))
 
     def test_remote_output_copy_keeps_original_and_is_recorded(self):
         queue = self.queue()
