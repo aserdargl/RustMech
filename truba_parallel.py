@@ -7,9 +7,28 @@ from analysis_process import AnalysisProcess
 
 
 class TrubaParallelMixin:
+    def _uses_truba(self, row):
+        target = (getattr(row, 'folder_job', None) or {}).get('execution_target')
+        if target is not None:
+            return target == 'truba'
+        controller = getattr(self, 'remote_controller', None)
+        return controller is not None and controller.requested
+
+    def _truba_row_settings(self, row, settings):
+        folder_job = getattr(row, 'folder_job', None)
+        if folder_job and folder_job.get('execution_target') == 'truba':
+            return settings
+        execution = self._run_base()
+        if folder_job and settings.solver_backend != execution.solver_backend:
+            raise ValueError('Folder job solver differs from the current TRUBA solver.')
+        return replace(settings, **{key: value for key, value in asdict(execution).items()
+            if key.startswith('kratos_') or key in ('solver_backend', 'cores', 'automatic_cores')})
+
     def _parallel_limit(self):
         controller = getattr(self, 'remote_controller', None)
-        if controller is None or not controller.requested or self._active_mode not in ('solve', 'check'):
+        if controller is None or self._active_mode not in ('solve', 'check'):
+            return 1
+        if not self._parallel_running() and not self._uses_truba(self._rows[self._queue[0]]):
             return 1
         context = controller.context()
         return min(context.parallel_jobs, context.cores, context.memory_mb)
@@ -28,6 +47,8 @@ class TrubaParallelMixin:
             if index in active:
                 continue
             row = self._rows[index]
+            if not self._uses_truba(row):
+                break
             started = time.monotonic()
             row.started_at = datetime.now().isoformat(timespec='seconds')
             row.duration_s = None
@@ -39,12 +60,7 @@ class TrubaParallelMixin:
                 self._updating_table = False
             try:
                 from truba_remote import run_remote_doe
-                settings = row.to_settings(self._run_base())
-                execution = self._run_base()
-                if getattr(row, 'folder_job', None) and settings.solver_backend != execution.solver_backend:
-                    raise ValueError('Folder job solver differs from the current TRUBA solver.')
-                settings = replace(settings, **{key: value for key, value in asdict(execution).items()
-                    if key.startswith('kratos_') or key in ('solver_backend', 'cores', 'automatic_cores')})
+                settings = self._truba_row_settings(row, row.to_settings(self._run_base()))
                 context, auth = self.remote_controller.require('mesh' if self._active_mode == 'check' else settings.solver_backend, settings, allow_handover=True)
                 if getattr(row, 'folder_job', None):
                     from folder_batch_results import run_remote_folder_doe

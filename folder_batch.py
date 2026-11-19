@@ -9,7 +9,7 @@ import os
 from pathlib import Path
 import re
 
-from PySide6.QtCore import QSize, Qt, QTimer
+from PySide6.QtCore import QSignalBlocker, QSize, Qt, QTimer
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (QAbstractItemView, QApplication, QDialog, QGridLayout, QGroupBox, QHeaderView,
                               QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPushButton,
@@ -154,15 +154,15 @@ def matching_cells(selection, components, component):
     return None
 
 
-def specimen_snapshots(item, root, base, solvers):
+def specimen_snapshots(item, root, base, solvers, *, execution_target=None):
     if item.error or not item.cached:
         raise ValueError('Choose valid support and compression faces first.')
     if source_digest(item.source) != item.digest:
         raise ValueError('Source changed after preparation. Check the folder again.')
-    yield from _prepared_snapshots(item, root, base, solvers)
+    yield from _prepared_snapshots(item, root, base, solvers, execution_target=execution_target)
 
 
-def _prepared_snapshots(item, root, base, solvers):
+def _prepared_snapshots(item, root, base, solvers, *, execution_target=None):
     relative = Path(item.source).relative_to(root)
     # Keep the original units and loading magnitude. No automatic strain scaling.
     settings = replace(base, imported_geometry_path=item.cached,
@@ -177,11 +177,15 @@ def _prepared_snapshots(item, root, base, solvers):
         identity = asdict(snapshot)
         # Keep deduplication compatible with jobs queued before the workspace moved.
         identity['imported_geometry_path'] = str(surface_cache_directory() / Path(item.cached).name)
+        if execution_target is not None:
+            identity['execution_target'] = execution_target
         key = sha256(json.dumps([str(root), relative.as_posix(), item.digest, item.direction, identity],
                                 sort_keys=True).encode()).hexdigest()
         metadata = dict(root=str(root), source=str(item.source), sha256=item.digest,
                         direction=list(item.direction), key=key,
                         results_root=str(results), destination=str(results / name / 'Mechanical' / solver))
+        if execution_target is not None:
+            metadata['execution_target'] = execution_target
         if item.component is not None:
             metadata.update(kept_component=item.component + 1, excluded_components=item.excluded_components)
         if item.normalized_direction is not None:
@@ -257,9 +261,18 @@ class FolderBatchDialog(QDialog):
         mesh_layout.addWidget(self.mesh_type, 0, 3)
         mesh_layout.setColumnStretch(4, 1)
         layout.addWidget(mesh)
+        execution_row = QHBoxLayout()
+        self.execution_target = CompactComboBox()
+        self.execution_target.addItem('TRUBA', 'truba')
+        self.execution_target.addItem(translate('Local mesh'), 'local')
+        self.execution_target.setFixedWidth(100)
+        execution_row.addWidget(field_label('Execution target', self.execution_target))
+        execution_row.addWidget(self.execution_target)
         self.check = self.button('Check Folder', self.check_folder, primary=True)
-        layout.addWidget(self.check, 0, Qt.AlignmentFlag.AlignLeft)
-        self.settings_hint = QLabel('Material, loading, contact and solver parameters are captured from the main Mechanic workspace when checking.')
+        execution_row.addWidget(self.check)
+        execution_row.addStretch()
+        layout.addLayout(execution_row)
+        self.settings_hint = QLabel()
         self.settings_hint.setWordWrap(True)
         layout.addWidget(self.settings_hint)
         panels = QSplitter(Qt.Orientation.Horizontal)
@@ -291,8 +304,8 @@ class FolderBatchDialog(QDialog):
         queued = QGroupBox('Analysis Queue')
         queue_layout = QVBoxLayout(queued)
         queue_layout.setContentsMargins(6, 6, 6, 6)
-        self.queue_table = QTableWidget(0, 2)
-        self.queue_table.setHorizontalHeaderLabels(['Specimen', 'Solver'])
+        self.queue_table = QTableWidget(0, 3)
+        self.queue_table.setHorizontalHeaderLabels(['Specimen', 'Solver', 'Execution target'])
         self.queue_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.queue_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.queue_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
@@ -300,6 +313,7 @@ class FolderBatchDialog(QDialog):
         queue_header = self.queue_table.horizontalHeader()
         queue_header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         queue_header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        queue_header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
         queue_layout.addWidget(self.queue_table)
         self.remove_from_queue = self.button('Remove from Queue', self.return_queued_specimen)
         self.remove_from_queue.setEnabled(False)
@@ -330,11 +344,8 @@ class FolderBatchDialog(QDialog):
         self.local_mesh_size.valueChanged.connect(self.refresh_queue_view)
         self.mesh_type.currentIndexChanged.connect(self.refresh_queue_view)
         self.queue.queue_changed.connect(self.refresh_queue_view)
-        controller = getattr(self.queue, 'remote_controller', None)
-        if controller is not None:
-            controller.mode_changed.connect(self.update_enqueue_label)
-        self.update_enqueue_label(controller is not None and controller.requested)
-        self.set_busy(False)
+        self.execution_target.currentIndexChanged.connect(self.update_execution_target)
+        self.update_execution_target()
 
     def add_mesh_size(self, layout, row, label, value, step):
         control = CompactDoubleSpinBox()
@@ -347,10 +358,31 @@ class FolderBatchDialog(QDialog):
         layout.addWidget(control, row, 1)
         return control
 
-    def update_enqueue_label(self, remote):
+    def update_execution_target(self):
+        remote = self.execution_target.currentData() == 'truba'
+        with QSignalBlocker(self.solver), QSignalBlocker(self.mesh_type):
+            if remote:
+                self._local_solver_index = self.solver.currentIndex()
+                self._local_mesh_index = self.mesh_type.currentIndex()
+                self.solver.setCurrentIndex(2)
+                self.mesh_type.setCurrentText('TET4')
+            else:
+                self.solver.setCurrentIndex(self._local_solver_index)
+                self.mesh_type.setCurrentIndex(self._local_mesh_index)
         self.enqueue.setText(translate('Add Truba' if remote else 'Add to Queue'))
-        self.enqueue.setToolTip(translate('Add to the analysis queue. Start it with TRUBA mode active to submit jobs.')
-                                if remote else '')
+        self.update_settings_hint()
+        self.set_busy(self.future is not None or bool(self.pending))
+
+    def update_settings_hint(self):
+        remote = self.execution_target.currentData() == 'truba'
+        text = translate(
+            'TRUBA uses Kratos and TET4 with self-contact disabled. Material, loading and platen contact come from the Mechanic workspace.'
+            if remote else 'The mesh is generated locally. Kratos solves use TRUBA. Analysis settings come from the Mechanic workspace.')
+        if self.base is not None:
+            base = self.base
+            text += (f'\n{base.material_name} | '
+                     f'{base.loading_mode}: {base.compression:g} mm / {base.applied_force:g} N')
+        self.settings_hint.setText(text)
 
     def button(self, text, callback, *, primary=False):
         button = QPushButton(text, self)
@@ -368,12 +400,16 @@ class FolderBatchDialog(QDialog):
         self.root = None
         self.base = None
         self.compression_axis = None
+        self.update_settings_hint()
         self.refresh_queue_view()
 
     def set_busy(self, busy):
-        for widget in (self.folder, self.browse, self.mode, self.solver, self.check,
-                       self.mesh_resolution, self.local_mesh_size, self.mesh_type):
+        for widget in (self.folder, self.browse, self.mode, self.execution_target, self.check,
+                       self.mesh_resolution, self.local_mesh_size):
             widget.setEnabled(not busy)
+        local = self.execution_target.currentData() == 'local'
+        self.solver.setEnabled(local and not busy)
+        self.mesh_type.setEnabled(local and not busy)
         for row in range(self.table.rowCount()):
             self.table.cellWidget(row, FACES_COLUMN).setEnabled(not busy)
         self.refresh_queue_view(busy=busy)
@@ -383,8 +419,11 @@ class FolderBatchDialog(QDialog):
                 3: ['ansys_mapdl', 'kratos']}[self.solver.currentIndex()]
 
     def batch_settings(self):
-        return replace(self.base, mesh_resolution=self.mesh_resolution.value(),
-                       local_mesh_size=self.local_mesh_size.value(), mesh_type=self.mesh_type.currentText())
+        settings = replace(self.base, mesh_resolution=self.mesh_resolution.value(),
+                           local_mesh_size=self.local_mesh_size.value(), mesh_type=self.mesh_type.currentText())
+        if self.execution_target.currentData() == 'truba':
+            settings = replace(settings, self_contact_mode='disabled')
+        return settings
 
     def refresh_queue_view(self, *, busy=None):
         root = str(self.root) if self.root is not None else None
@@ -393,7 +432,9 @@ class FolderBatchDialog(QDialog):
         self.queue_table.setRowCount(len(rows))
         for index, row in enumerate(rows):
             settings = row.design_settings
-            for column, value in enumerate((settings.imported_geometry_name, settings.solver_backend)):
+            target = row.folder_job.get('execution_target')
+            target_label = translate({'truba': 'TRUBA', 'local': 'Local mesh'}.get(target, 'Current workspace'))
+            for column, value in enumerate((settings.imported_geometry_name, settings.solver_backend, target_label)):
                 item = QTableWidgetItem(value)
                 item.setToolTip(value)
                 item.setData(Qt.ItemDataRole.UserRole, row.exp_id)
@@ -402,10 +443,12 @@ class FolderBatchDialog(QDialog):
         keys = {row.folder_job['key'] for row in rows}
         solvers = self.selected_solvers() if keys else ()
         base = self.batch_settings() if keys else None
+        target = self.execution_target.currentData()
         ready = False
         for index, specimen in enumerate(self.items):
             queued = bool(specimen.cached and keys) and all(
-                metadata['key'] in keys for _, metadata in _prepared_snapshots(specimen, self.root, base, solvers))
+                metadata['key'] in keys for _, metadata in _prepared_snapshots(
+                    specimen, self.root, base, solvers, execution_target=target))
             self.table.setRowHidden(index, queued)
             ready |= bool(specimen.cached and not queued)
         if busy is None:
@@ -550,8 +593,7 @@ class FolderBatchDialog(QDialog):
             self.compression_axis = direction
             self.pending = [(i, path, direction, selection) for i, (path, selection) in enumerate(zip(paths, saved))
                             if (direction is not None or selection) and not (first and i == 0)]
-            self.settings_hint.setText(f'Captured: {base.material_name} | '
-                                       f'{base.loading_mode}: {base.compression:g} mm / {base.applied_force:g} N | {base.solver_backend}.')
+            self.update_settings_hint()
             self.refresh_table()
             self.set_busy(bool(self.pending))
             self.launch_next()
@@ -645,14 +687,12 @@ class FolderBatchDialog(QDialog):
         try:
             solvers = self.selected_solvers()
             base = self.batch_settings()
-            controller = getattr(self.queue, 'remote_controller', None)
-            if controller is not None and controller.requested and solvers != [self.base.solver_backend]:
-                raise ValueError('TRUBA uses the current workspace solver. Choose Current workspace or switch to local execution.')
+            target = self.execution_target.currentData()
             snapshots = []
             for index, item in enumerate(self.items):
                 if (not self.table.isRowHidden(index)
                         and self.table.item(index, RUN_COLUMN).checkState() == Qt.CheckState.Checked):
-                    snapshots.extend(specimen_snapshots(item, self.root, base, solvers))
+                    snapshots.extend(specimen_snapshots(item, self.root, base, solvers, execution_target=target))
             if not snapshots:
                 raise ValueError('Check at least one ready specimen.')
             added = self.queue.add_folder_snapshots(snapshots)

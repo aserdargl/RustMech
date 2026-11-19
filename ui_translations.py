@@ -388,7 +388,12 @@ Analysis queue...|Analiz kuyruğu...
 Analysis Queue|Analiz Kuyruğu
 Add to Queue|Kuyruğa Ekle
 Add Truba|TRUBA'ya Ekle
-Add to the analysis queue. Start it with TRUBA mode active to submit jobs.|Analiz kuyruğuna ekler. İşleri göndermek için kuyruğu TRUBA modu açıkken çalıştırın.
+Execution target|Yürütme hedefi
+Local mesh|Yerel ağ üretimi
+TRUBA batch analysis|TRUBA toplu analizi
+Enable TRUBA mode and allocate or refresh a resource session before running these jobs.|Bu işleri çalıştırmadan önce TRUBA modunu açın ve bir kaynak oturumu ayırın veya mevcut oturumu yenileyin.
+TRUBA uses Kratos and TET4 with self-contact disabled. Material, loading and platen contact come from the Mechanic workspace.|TRUBA, öz temas kapalı olarak Kratos ve TET4 kullanır. Malzeme, yükleme ve plaka teması Mekanik çalışma alanından alınır.
+The mesh is generated locally. Kratos solves use TRUBA. Analysis settings come from the Mechanic workspace.|Ağ yerelde üretilir. Kratos çözümü TRUBA'da çalışır. Analiz ayarları Mekanik çalışma alanından alınır.
 Material, loading, contact and solver parameters are captured from the main Mechanic workspace when checking.|Malzeme, yükleme, temas ve çözücü ayarları ön kontrol sırasında ana Mekanik çalışma alanından alınır.
 Remove from Queue|Kuyruktan Çıkar
 Selected job removed from the queue.|Seçili iş kuyruktan çıkarıldı.

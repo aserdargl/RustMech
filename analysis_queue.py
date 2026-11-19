@@ -8,7 +8,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from PySide6.QtCore import QLockFile, Qt, Signal
-from PySide6.QtWidgets import QLabel, QPushButton, QTableWidgetItem
+from PySide6.QtWidgets import QLabel, QMessageBox, QPushButton, QTableWidgetItem
 
 from design_exchange import pool_directory
 from doe_studio import (COL_RUN, COL_STRUCTURE, DoEStudioWidget, DoEStudioWindow,
@@ -160,17 +160,20 @@ class AnalysisQueueWidget(DoEStudioWidget):
         self._updating_table = True
         try:
             count = len(TABLE_COLUMNS)
-            self.table.setColumnCount(count + 3)
-            for offset, title in enumerate(("Material", "Solver", "Elements")):
+            self.table.setColumnCount(count + 4)
+            for offset, title in enumerate(("Material", "Solver", "Elements", "Execution target")):
                 self.table.setHorizontalHeaderItem(count + offset, QTableWidgetItem(title))
             for index, row in enumerate(self._rows):
                 settings = row.design_settings
-                for offset, value in enumerate((settings.material_name, settings.solver_backend, settings.mesh_type)):
+                target = (row.folder_job or {}).get('execution_target')
+                target_label = {'truba': 'TRUBA', 'local': 'Local mesh'}.get(target, 'Current workspace')
+                for offset, value in enumerate((settings.material_name, settings.solver_backend,
+                                                settings.mesh_type, target_label)):
                     item = QTableWidgetItem(str(value))
                     item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
                     self.table.setItem(index, count + offset, item)
             header = self.table.horizontalHeader()
-            for offset in range(3):
+            for offset in range(4):
                 header.moveSection(header.visualIndex(count + offset), 2 + offset)
             self.table.resizeColumnsToContents()
         finally:
@@ -192,6 +195,21 @@ class AnalysisQueueWidget(DoEStudioWidget):
     def _new_dataset_path(self):
         # The queue's results never share a file with a DoE session dataset.
         return self.store.path.parent / "analysis_queue_results.csv"
+
+    def start_batch_solve(self):
+        if self._active_mode is not None or self._active_future is not None:
+            return
+        if any((self._rows[index].folder_job or {}).get('execution_target') == 'truba'
+               for index in self.rows_to_run()):
+            controller = getattr(self, 'remote_controller', None)
+            try:
+                if controller is None or not controller.requested:
+                    raise RuntimeError("Enable TRUBA mode and allocate or refresh a resource session before running these jobs.")
+                controller.require('kratos', allow_handover=True)
+            except (RuntimeError, ValueError) as error:
+                QMessageBox.warning(self, "TRUBA batch analysis", str(error))
+                return
+        super().start_batch_solve()
 
     def add_snapshot(self, settings):
         if self._active_mode is not None:

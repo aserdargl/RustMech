@@ -9,11 +9,11 @@ import tempfile
 import time
 from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import numpy as np
 import pyvista as pv
-from PySide6.QtCore import QEvent, QObject, QSettings, Qt, QTimer, Signal
+from PySide6.QtCore import QEvent, QSettings, Qt, QTimer
 from PySide6.QtGui import QHelpEvent, QPixmap
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QAbstractItemView, QApplication, QComboBox, QDialogButtonBox, QLineEdit, QPushButton, QSplitter
@@ -29,6 +29,7 @@ from geometry_import_dialog import GeometryImportDialog
 from imported_geometry import automatic_compression_faces, compression_direction, read_surface
 from window_state import WindowStateStore
 from model import Settings
+from truba_remote import RemoteContext
 
 
 def process_mesh(settings):
@@ -631,14 +632,72 @@ class FolderBatchTests(unittest.TestCase):
         fallback.stop()
         self.assertEqual(restored, [(True, True), specimen.cells], dialog.status.text())
 
-    def test_batch_mesh_fields_update_queue_identity_and_truba_label_follows_mode(self):
-        class RemoteMode(QObject):
-            mode_changed = Signal(bool)
-            requested = False
-
+    def test_truba_is_default_and_saved_jobs_use_their_target_in_serial_and_parallel(self):
         queue = self.queue()
-        queue.remote_controller = controller = RemoteMode(queue)
         dialog = self.dialog(queue)
+        dialog.root = self.root
+        dialog.base = replace(self.base, mesh_type='TET10', self_contact_mode='frictional')
+        dialog.items = [self.prepared()]
+        dialog.refresh_table()
+        dialog.set_busy(False)
+        self.assertEqual(dialog.execution_target.currentData(), 'truba')
+        self.assertEqual(dialog.solver.currentText(), 'Kratos')
+        self.assertEqual(dialog.mesh_type.currentText(), 'TET4')
+        self.assertEqual(dialog.enqueue.text(), 'Add Truba')
+        with patch('doe_studio.AnalysisProcess') as serial, patch('truba_parallel.AnalysisProcess') as parallel:
+            dialog.enqueue.click()
+            serial.assert_not_called()
+            parallel.assert_not_called()
+        remote, = QueueStore(queue.store.path).load()
+        self.assertEqual(remote.folder_job['execution_target'], 'truba')
+        self.assertEqual(remote.design_settings.solver_backend, 'kratos')
+        self.assertEqual(remote.design_settings.mesh_type, 'TET4')
+        self.assertEqual(remote.design_settings.self_contact_mode, 'disabled')
+        self.assertEqual(dialog.queue_table.item(0, 2).text(), 'TRUBA')
+
+        dialog.execution_target.setCurrentIndex(1)
+        dialog.enqueue.click()
+        self.assertEqual(queue.rows[1].folder_job['execution_target'], 'local')
+        self.assertEqual(queue.rows[1].design_settings.self_contact_mode, 'frictional')
+        self.assertEqual(queue.rows[1].design_settings.solver_backend, 'ansys_mapdl')
+
+        controller = queue.remote_controller = SimpleNamespace(requested=False, require=Mock())
+        with patch('analysis_queue.QMessageBox.warning') as warning, patch('doe_studio.AnalysisProcess') as serial:
+            queue.run_batch_btn.click()
+            warning.assert_called_once()
+            serial.assert_not_called()
+        self.assertEqual([row.status for row in queue.rows], ['Pending', 'Pending'])
+
+        controller.requested = True
+        for slots in (1, 2):
+            with self.subTest(slots=slots):
+                context = RemoteContext(cores=2, parallel_jobs=slots, session_id='123')
+                controller.context = lambda: context
+                controller.require.return_value = (context, None)
+                remote_future, local_future = Future(), Future()
+                serial_results = [remote_future, local_future] if slots == 1 else [local_future]
+                with (patch('doe_studio.AnalysisProcess', side_effect=serial_results) as serial,
+                      patch('truba_parallel.AnalysisProcess', return_value=remote_future) as parallel):
+                    queue.run_batch_btn.click()
+                    dispatch = serial if slots == 1 else parallel
+                    dispatch.assert_called_once()
+                    target, index, settings, _, solve, destination = dispatch.call_args.args
+                    self.assertIs(target, run_remote_folder_doe)
+                    self.assertEqual((index, settings.solver_backend, solve, destination),
+                                     (0, 'kratos', True, remote.folder_job['destination']))
+                    remote_future.set_result(dict(r_idx=0, status='Completed'))
+                    queue._poll_worker()
+                    self.assertEqual(serial.call_args.args[0].__name__, '_solve_row')
+                    self.assertEqual(serial.call_args.args[1], 1)
+                    local_future.set_result(dict(r_idx=1, status='Completed'))
+                    queue._poll_worker()
+                for row in queue.rows:
+                    row.status = 'Pending'
+
+    def test_local_batch_mesh_fields_update_queue_identity(self):
+        queue = self.queue()
+        dialog = self.dialog(queue)
+        dialog.execution_target.setCurrentIndex(1)
         dialog.root, dialog.base = self.root, self.base
         dialog.items = [self.prepared()]
         dialog.refresh_table()
@@ -646,13 +705,6 @@ class FolderBatchTests(unittest.TestCase):
         dialog.set_busy(False)
         self.assertEqual(dialog.mesh_resolution.value(), self.base.mesh_resolution)
         self.assertEqual(dialog.local_mesh_size.value(), self.base.local_mesh_size)
-        self.assertEqual(dialog.enqueue.text(), 'Add to Queue')
-
-        controller.requested = True
-        controller.mode_changed.emit(True)
-        self.assertEqual(dialog.enqueue.text(), 'Add Truba')
-        controller.requested = False
-        controller.mode_changed.emit(False)
         self.assertEqual(dialog.enqueue.text(), 'Add to Queue')
 
         dialog.enqueue.click()
@@ -674,6 +726,7 @@ class FolderBatchTests(unittest.TestCase):
 
     def test_queued_specimens_move_to_right_panel_and_keep_solver_options(self):
         dialog = self.dialog()
+        dialog.execution_target.setCurrentIndex(1)
         dialog.root, dialog.base = self.root, self.base
         dialog.items = [self.prepared('part1.stl'), self.prepared('part2.stl')]
         dialog.refresh_table()

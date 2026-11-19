@@ -1590,7 +1590,8 @@ class DoEStudioWidget(TrubaParallelMixin, QWidget):
         r_idx = self._queue[0]
         row = self._rows[r_idx]
         row.status = "Checking..." if self._active_mode == "check" else "Solving (ANSYS)..."
-        if getattr(self,"remote_controller",None) is not None and self.remote_controller.requested:
+        use_truba = self._uses_truba(row)
+        if use_truba:
             row.status = "TRUBA · checking mesh" if self._active_mode=="check" else "TRUBA · solving"
         self._updating_table = True
         self._write_row_cells(r_idx, row)
@@ -1604,17 +1605,11 @@ class DoEStudioWidget(TrubaParallelMixin, QWidget):
         worker = ExperimentWorker(self._mesh_generator, self._batch_solver_runner,
                                   (row.folder_job or {}).get("destination"))
         try:
-            controller = getattr(self,"remote_controller",None)
-            if controller is not None and controller.requested:
+            if use_truba:
                 from truba_remote import run_remote_doe
-                # Design snapshots retain geometry/materials, but execution follows
-                # the currently selected solver (the remote mode selects Kratos).
-                execution = self._run_base()
-                if row.folder_job and s.solver_backend != execution.solver_backend:
-                    raise ValueError('Folder job solver differs from the current TRUBA solver. Select the saved solver before running.')
-                s = replace(s, **{key: value for key, value in asdict(execution).items()
-                                  if key.startswith('kratos_') or key in ('solver_backend', 'cores', 'automatic_cores')})
-                context,auth = controller.require("mesh" if self._active_mode=="check" else s.solver_backend,s,allow_handover=True)
+                s = self._truba_row_settings(row, s)
+                context,auth = self.remote_controller.require(
+                    "mesh" if self._active_mode=="check" else s.solver_backend, s, allow_handover=True)
                 if row.folder_job:
                     from folder_batch_results import run_remote_folder_doe
                     self._active_future = AnalysisProcess(run_remote_folder_doe, r_idx, s, context,
