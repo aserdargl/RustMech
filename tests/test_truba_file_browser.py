@@ -1,6 +1,7 @@
 """Cover the SFTP browser's project boundary and desktop entry points."""
 
 from contextlib import contextmanager
+import errno
 from hashlib import sha256
 from io import BytesIO
 import os
@@ -409,6 +410,85 @@ def test_run_uses_the_truba_selection_instead_of_checked_local_scripts(remote, t
         assert "remote.slurm" not in workspace.input_note.text()
     finally:
         workspace.dispose()
+
+
+def test_workspace_remembers_the_last_truba_folder_for_each_account(tmp_path, monkeypatch):
+    app = QApplication.instance() or QApplication([])
+    settings_path = str(tmp_path / "settings.ini")
+    monkeypatch.setattr("esen_workspace.QSettings",
+                        lambda *_: QSettings(settings_path, QSettings.Format.IniFormat))
+    truba = Truba()
+    auth = RemoteAuth("first-user", "test-password")
+    other = RemoteAuth("second-user", "test-password")
+    folder = PurePosixPath("Model 1")
+    requests = []
+    available = True
+
+    def listing(account, relative):
+        requests.append((account.username, relative))
+        if relative == folder and not available:
+            raise FileNotFoundError(errno.ENOENT, "Folder not found")
+        if not relative.parts:
+            return [SimpleNamespace(filename=folder.name, st_mode=S_IFDIR, st_size=0)]
+        return [SimpleNamespace(filename="run.slurm", st_mode=S_IFREG, st_size=12)]
+
+    def finish(browser):
+        browser.task[0].exception(timeout=5)
+        browser.check_task()
+
+    def connect(account):
+        truba.auth = account
+        truba.connection_changed.emit(account is not None)
+
+    monkeypatch.setattr("truba_files.list_directory", listing)
+    workspace = EsenWorkspace(truba, history=tmp_path / "history")
+    try:
+        workspace.show()
+        app.processEvents()
+        connect(auth)
+        browser = workspace.truba_browser
+        finish(browser)
+        browser.files.setCurrentItem(browser.files.topLevelItem(0))
+        browser.open_folder.click()
+        finish(browser)
+        assert browser.directory == folder
+
+        connect(None)
+        assert browser.address.text() == ""
+        connect(auth)
+        finish(browser)
+        assert browser.directory == folder
+    finally:
+        workspace.dispose()
+
+    reopened = EsenWorkspace(truba, history=tmp_path / "history")
+    try:
+        reopened.show()
+        app.processEvents()
+        browser = reopened.truba_browser
+        finish(browser)
+        assert browser.address.text() == str(project_root(auth.username) / folder)
+        assert browser.files.topLevelItem(0).text(0) == "run.slurm"
+
+        connect(other)
+        finish(browser)
+        assert browser.directory == PurePosixPath()
+        assert requests[-1] == (other.username, PurePosixPath())
+
+        available = False
+        connect(auth)
+        finish(browser)
+        finish(browser)
+        assert requests[-2:] == [(auth.username, folder), (auth.username, PurePosixPath())]
+        assert browser.directory == PurePosixPath()
+        assert "unavailable" in browser.status.text()
+
+        connect(None)
+        connect(auth)
+        finish(browser)
+        assert requests[-1] == (auth.username, PurePosixPath())
+    finally:
+        reopened.dispose()
 
 
 def test_workspace_browses_creates_and_restores_three_columns(remote, tmp_path, monkeypatch):

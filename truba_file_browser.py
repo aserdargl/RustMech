@@ -33,12 +33,14 @@ FAILURE_MESSAGES = {
 
 
 class TrubaFileBrowser(QWidget):
-    def __init__(self, truba, executor, command):
+    def __init__(self, truba, executor, command, preferences):
         super().__init__()
         self.truba = truba
         self.executor = executor
+        self.preferences = preferences
         self.auth = None
         self.directory = PurePosixPath()
+        self._initial_directory = PurePosixPath()
         self.task = None
         self.loaded = False
         self._uploaded_directory = None
@@ -143,6 +145,11 @@ class TrubaFileBrowser(QWidget):
             self.task = None
         self.auth = auth
         self.directory = PurePosixPath()
+        self._initial_directory = PurePosixPath()
+        if auth is not None:
+            saved = PurePosixPath(self.preferences.value(self._directory_key(), "", type=str))
+            if not saved.is_absolute() and ".." not in saved.parts and "\0" not in str(saved):
+                self._initial_directory = saved
         self.loaded = False
         self._uploaded_directory = None
         self._show_entries([])
@@ -159,6 +166,14 @@ class TrubaFileBrowser(QWidget):
         self.address.setText(path)
         self.address.setToolTip(path)
         self.address.setCursorPosition(0)
+
+    def _directory_key(self):
+        account = self.auth.username.encode("utf-8").hex()
+        return f"esen/trubaFolders/{account}"
+
+    @property
+    def restoring_directory(self):
+        return not self.loaded and bool(self._initial_directory.parts)
 
     def _update_controls(self, *_):
         ready = self.auth is not None and self.task is None
@@ -183,7 +198,8 @@ class TrubaFileBrowser(QWidget):
         self._update_controls()
 
     def _refresh(self, *, success_message=""):
-        self._submit("list", truba_files.list_directory, self.directory, success_message=success_message)
+        directory = self._initial_directory if self.restoring_directory else self.directory
+        self._submit("list", truba_files.list_directory, directory, success_message=success_message)
 
     def open_directory(self, auth):
         if self.auth == auth and self.directory.parts:
@@ -283,13 +299,18 @@ class TrubaFileBrowser(QWidget):
         self.task = None
         try:
             entries = future.result()
-        except ValueError as error:
-            self.status.setText(str(error))
         except ConnectionError:
             self.status.setText("Connect using the main TRUBA button.")
         except Exception as error:
             code = getattr(error, "errno", None)
-            if kind == "upload" and isinstance(error, FileExistsError):
+            unavailable = code in (errno.ENOENT, errno.ENOTDIR, errno.EACCES, errno.EPERM) or isinstance(error, ValueError)
+            if kind == "list" and self.restoring_directory and directory == self._initial_directory and unavailable:
+                self._submit("list", truba_files.list_directory, PurePosixPath(),
+                             success_message="The last TRUBA folder is unavailable. Opened the project folder.")
+                return
+            if isinstance(error, ValueError):
+                message = str(error)
+            elif kind == "upload" and isinstance(error, FileExistsError):
                 message = "A file or folder with that name already exists on TRUBA."
             elif kind in ("list", "mkdir") and code == errno.ENOENT:
                 message = "TRUBA folder was not found."
@@ -312,6 +333,10 @@ class TrubaFileBrowser(QWidget):
                 self.status.setText("File downloaded from TRUBA.")
             else:
                 same_folder = self.directory == directory
+                previous = self.directory if self.loaded else self._initial_directory
+                if directory != previous:
+                    self.preferences.setValue(self._directory_key(), directory.as_posix())
+                    self.preferences.sync()
                 self.directory = directory
                 self.loaded = True
                 self._update_address()

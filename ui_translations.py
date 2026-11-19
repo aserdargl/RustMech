@@ -143,6 +143,7 @@ This folder is empty.|Bu klasör boş.
 Enter a single folder name.|Tek bir klasör adı girin.
 This folder is outside the RustMech project.|Bu klasör RustMech projesinin dışında.
 TRUBA folder was not found.|TRUBA klasörü bulunamadı.
+The last TRUBA folder is unavailable. Opened the project folder.|Son TRUBA klasörüne erişilemedi. Proje klasörü açıldı.
 Permission denied on TRUBA.|TRUBA'da erişim reddedildi.
 Could not load TRUBA files.|TRUBA dosyaları yüklenemedi.
 Could not create the folder. Check if the name already exists.|Klasör oluşturulamadı. Bu adın zaten kullanılıp kullanılmadığını kontrol edin.

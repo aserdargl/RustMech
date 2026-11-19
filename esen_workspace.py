@@ -588,7 +588,7 @@ class EsenWorkspace(QDialog):
         right.setSizes([240, 450])
 
         truba_card, truba_layout = panel("TRUBA files", paper=True)
-        self.truba_browser = TrubaFileBrowser(self.truba, self.executor, command)
+        self.truba_browser = TrubaFileBrowser(self.truba, self.executor, command, self.preferences)
         self.truba_browser.files.itemSelectionChanged.connect(self._select_truba_input)
         self.truba_browser.files.itemClicked.connect(self._select_truba_input)
         truba_layout.addWidget(self.truba_browser, 1)
@@ -1576,6 +1576,7 @@ class EsenWorkspace(QDialog):
         )
         self.upload.setEnabled(bool(remote and authenticated and has_inputs
                                     and not self.folder_scan and not uploading and not batch_busy
+                                    and not self.truba_browser.restoring_directory
                                     and not self.truba_browser.is_slurm_snapshot_open()))
         browser = self.truba_browser
         sync_directory = browser.open_directory(auth)
