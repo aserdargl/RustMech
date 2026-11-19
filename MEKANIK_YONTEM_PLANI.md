@@ -38,3 +38,46 @@ daha ince ızgara ve daha düşük boşluk rijitliğiyle doğrulanmayı gerektir
 3. **Voxel kararını gerçek çözücüyle ver.** `mesh_engine.py` ve mevcut yüzey/ağ kalite kontrollerini kullan. `mapdl_backend.py` ve `kratos_export.py` için desteklenen hücre tiplerini ayrı ayrı doğrula. İlk prototipte kullanılabilir cut-cell aktarımı çıkmazsa yüzeye oturtulmuş HEX ve yerel tetra bölme adaylarını hacim hatası, eleman kalitesi ve aktarım üzerinden karşılaştır. Geçen yöntem için çözücü desteğini ayrı ayrı aç.
 4. **MPM ve Peridynamics için çözücü seçimini referanslarla yap.** Adayların lisansını, Windows ve TRUBA kurulabilirliğini, desteklenen malzeme/temas modellerini, iptal davranışını ve sonuç biçimlerini karşılaştır. Bir aday seçmeden önce küçük vakada bellek ve çalışma süresini ölç. MPM için darbe, sürtünmeli temas ve plastisite, Peridynamics için daha genel kırılma modelleri ilk teslimden sonra gelir.
 5. **Her teslimde uçtan uca kontrol yap.** Örneği aç, yöntem ayarlarını değiştir, analizi açık komutla başlat, iptal ve geçersiz girdi davranışını dene, sonucu görüntüle ve projeyi yeniden aç. Referans girdileri, çözücü sürümü, hata ölçüleri ve ağ/zaman adımı duyarlılığı proje ile tekrarlanabilir olmalı. Arayüzde yöntemi çalışır olarak göstermek için ilgili sayısal referans ve masaüstü akışı birlikte geçmeli.
+
+### Kırpılmış Voxel TET4 prototipi
+
+`trimmed_voxel_mesh.py`, kübik bir Kartezyen ızgaranın her hücresini ortak
+yüzlerde aynı köşegenleri kullanarak altı tetrahedraya böler. Referans alanı
+ızgara köşelerinde örnekler, sıfır geçişlerini kenarlar üzerinde doğrusal
+olarak hesaplar ve kırpılan hücreleri TET4 olarak döndürür. Izgaranın
+örneklemediği ince özellikler kaybolabilir. Çok küçük pozitif hacimli sınır
+elemanları ağda kalır.
+
+Depo kökünde RustMech'in Python ortamıyla çalıştırın.
+
+```powershell
+python benchmark_trimmed_voxels.py --output build/trimmed-voxel-benchmark.json
+```
+
+Varsayılan ızgaralar 8³, 16³ ve 32³'tür. HEX8, analitik alanı hücre
+merkezlerinde örnekleyip RustMech'in mevcut seçim ve ağ oluşturma işlevlerini
+kullanır. Netgen, sabit üçgen referans yüzeyini alır ve global ve yerel hedef
+eleman boyutu olarak ızgara aralığını kullanır. Hacim referansı analitiktir.
+Yüzey hatası, düğümlerde, kenar ortalarında ve üçgen merkezlerinde örneklenen
+iki yönlü en büyük mesafedir. Küre için referans örnekleri analitik yüzeye
+izdüşürülür. Süre üç ağ üretiminin medyanıdır. Bellek sütunu, üretilen VTK
+ağının tahmini depolama boyutunu gösterir.
+
+| Geometri | Izgara | HEX8 hacim % / yüzey mm | Kırpılmış TET4 hacim % / yüzey mm | Netgen TET4 hacim % / yüzey mm |
+| --- | ---: | ---: | ---: | ---: |
+| Eğik düzlem | 8³ | 0,13267 / 0,084127 | ≈0 / ≈0 | ≈0 / ≈0 |
+| Eğik düzlem | 16³ | 0,00553 / 0,042500 | ≈0 / ≈0 | ≈0 / ≈0 |
+| Eğik düzlem | 32³ | 0,02856 / 0,021032 | ≈0 / ≈0 | ≈0 / ≈0 |
+| Küre | 8³ | 1,93753 / 0,101952 | 6,04842 / 0,016368 | 6,21553 / 0,015621 |
+| Küre | 16³ | 0,68586 / 0,052265 | 1,50493 / 0,004029 | 1,73794 / 0,004138 |
+| Küre | 32³ | 0,14175 / 0,026632 | 0,37705 / 0,001011 | 0,66749 / 0,001551 |
+
+Kırpılmış TET4 kürede daha küçük yüzey hatası sağladı, ancak 32³'te hacim
+hatası HEX8'den yüksek kaldı. 32³ kürede kırpılmış ağ 58.499, Netgen ağı
+26.543 eleman üretti. Bu çalıştırmada medyan üretim süresi sırasıyla
+0,249 ve 1,420 saniye, VTK ağının tahmini boyutu 3.180 ve 1.416 KiB oldu.
+En düşük ölçeklenmiş Jacobian sırasıyla yaklaşık 0,0000018 ve 0,26 oldu.
+On sekiz ağın tamamı yüzler üzerinden tek bir bağlantılı bileşen
+oluşturdu ve dış yüzeyde açık veya manifold olmayan kenar saptanmadı.
+Çözücüye geçmeden önce düşük kaliteli sınır elemanlarının yönetimi ve ince
+Gyroid duvarlarının korunması doğrulanacak.
