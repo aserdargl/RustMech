@@ -104,7 +104,7 @@ class LoadContactTests(unittest.TestCase):
         combo = dialog.platen_contact_combos["top"]
         combo.setCurrentIndex(combo.findData("rough"))
         # Form controls live in each SidebarGroupBox's content widget.
-        mesh_group = dialog.controls["mesh_resolution"].parentWidget().parentWidget()
+        mesh_group = dialog._mesh_form.parentWidget().parentWidget()
         loading_group = dialog.loading_mode_combo.parentWidget().parentWidget()
         contact_group = combo.parentWidget().parentWidget()
         fields = mesh_group.parentWidget().layout()

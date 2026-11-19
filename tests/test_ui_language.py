@@ -150,6 +150,14 @@ class LanguageTests(unittest.TestCase):
         with patch('truba_connection.ConnectionWorker') as worker:
             window.show()
             self.app.processEvents()
+            mesh_size = window.controls['mesh_resolution']
+            mesh_size.setLocale(QLocale(QLocale.Language.English))
+            self.assertEqual(window.mesh_precision.value(), 3)
+            self.assertEqual(mesh_size.text(), f'{before.mesh_resolution:.3f}')
+            self.assertEqual(mesh_size.parentWidget().layout().itemAt(1).widget().text(), 'mm')
+            QTest.mouseClick(window.mesh_precision.btn_up, Qt.MouseButton.LeftButton)
+            self.assertEqual(mesh_size.text(), f'{before.mesh_resolution:.4f}')
+            self.assertEqual(self.preferences.value('ui/meshDisplayDecimals', type=int), 4)
             normal_bounds = window.geometry()
             navigation = (window.project_button, window.sidebar_toggle, window.workspace_button,
                           window.doe_button, window.designs_button, window.folder_batch_button)
@@ -160,6 +168,7 @@ class LanguageTests(unittest.TestCase):
             self.assertEqual(window.folder_batch_button.text(), 'Batch Analysis')
             self.manager.set_language('tr')
             self.app.processEvents()
+            self.assertEqual(window._mesh_form.labelForField(window.mesh_precision).text(), 'Ağ ondalık hane sayısı')
             self.assertEqual(window.folder_batch_button.text(), 'Toplu Analiz')
             self.assertEqual(len({button.size().toTuple() for button in toolbar_buttons}), 1)
             self.assertGreaterEqual(window.folder_batch_button.width(),

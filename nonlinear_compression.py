@@ -59,7 +59,9 @@ from damask_fft import (
     COMPONENTS, MIN_GRID, DamaskAnalysisProcess, sample_periodic_cell,
     validate_periodic_fft,
 )
-from studio_style import ActionFlowLayout, CompactDoubleSpinBox, CONTROL_HEIGHT, STUDIO_STYLESHEET, SidebarGroupBox, configure_form, field_label
+from studio_style import (ActionFlowLayout, CompactDoubleSpinBox, CONTROL_HEIGHT, STUDIO_STYLESHEET,
+                          SidebarGroupBox, configure_form, field_label, mesh_precision_stepper,
+                          stepper_with_unit)
 from sidebar_splitter import SidebarSplitter
 from setup_help import GEOMETRY_HELP
 from truba_connection import TrubaConnectionDialog
@@ -389,8 +391,7 @@ class RustMechDialog(QDialog):
 
         from standard_tests import PROFILES, ARCHITECTURES
         test_form = self.add_group(geometry_fields, 'Standard test', settings,
-            [('core_fraction', 'Porous centre length', 10, 100, 5, 1)])
-        self.controls['core_fraction'].setSuffix(' %')
+            [('core_fraction', 'Porous centre length', 10, 100, 5, 1)], units={'core_fraction': '%'})
         self.test_profile_combo = NoWheelComboBox()
         self.test_profile_combo.setObjectName('standardTestCombo')
         self.test_profile_combo.addItem('Custom experiment', 'custom')
@@ -417,6 +418,7 @@ class RustMechDialog(QDialog):
                 ("cell_size", "Period / pore scale", 0.1, 100, 0.5, 3),
                 ("solid_fraction", "Solid fraction", 1, 99, 1, 2),
             ],
+            units={"size": "mm", "cell_size": "mm", "solid_fraction": "%"},
         )
         self.stl_resolution_input = QLineEdit()
         self.stl_resolution_input.setFixedSize(80, CONTROL_HEIGHT)
@@ -441,10 +443,14 @@ class RustMechDialog(QDialog):
                 ("mesh_resolution", "Global mesh size", MIN_MESH_INPUT_MM, 5, 0.05, 3),
                 ("local_mesh_size", "Local mesh size", MIN_MESH_INPUT_MM, 5, 0.001, 3),
             ],
+            units={"mesh_resolution": "mm", "local_mesh_size": "mm"},
         )
-        for name in ("size", "cell_size", "mesh_resolution", "local_mesh_size"):
-            self.controls[name].setSuffix(" mm")
-        self.controls["solid_fraction"].setSuffix(" %")
+        self.mesh_precision = mesh_precision_stepper(
+            self.solver_profile_store.settings, "ui/meshDisplayDecimals",
+            self.controls["mesh_resolution"], self.controls["local_mesh_size"],
+        )
+        mesh_form.addRow(field_label("Mesh decimal places", self.mesh_precision), self.mesh_precision)
+        self._mesh_form = mesh_form
 
         # Insert Family, Structure, and Morphology selectors at the top of Geometry
         self.family_combo = NoWheelComboBox()
@@ -719,8 +725,8 @@ class RustMechDialog(QDialog):
             "Solver and loading",
             settings,
             [
-                ("compression", "Compression / mm", 0.001, 99, 0.1, 3),
-                ("applied_force", "Compression force / N", 1e-9, 1e12, 10, 3),
+                ("compression", "Compression", 0.001, 99, 0.1, 3),
+                ("applied_force", "Compression force", 1e-9, 1e12, 10, 3),
                 (
                     "cores",
                     "CPU cores",
@@ -730,6 +736,7 @@ class RustMechDialog(QDialog):
                     None,
                 ),
             ],
+            units={"compression": "mm", "applied_force": "N"},
         )
         substeps_row = QWidget()
         self._substeps_row = substeps_row
@@ -1480,7 +1487,8 @@ class RustMechDialog(QDialog):
         active=p is not None
         self.test_profile_combo.setToolTip(p.label if active else 'Özel deney / Custom experiment')
         self._test_form.setRowVisible(self.architecture_combo,active)
-        self._test_form.setRowVisible(self.controls['core_fraction'],active and settings.specimen_architecture=='porous_centre')
+        self._test_form.setRowVisible(self.controls['core_fraction'].parentWidget(),
+                                      active and settings.specimen_architecture=='porous_centre')
         self.controls['size'].setEnabled(not active and not bool(self.imported_geometry_path))
         self.family_combo.model().item(self.family_combo.findData('imported')).setEnabled(not active)
         self.clear_import_button.setEnabled(not active)
@@ -1503,7 +1511,7 @@ class RustMechDialog(QDialog):
         else:self.standard_hint.setText('Free geometry and existing compression setup.')
         for combo in self.platen_contact_combos.values():combo.setEnabled(not active)
         self._sync_loading_ui()
-        label=self._geometry_form.labelForField(self.controls['size'])
+        label=self._geometry_form.labelForField(self.controls['size'].parentWidget())
         if label is not None:label.setText('Specimen height' if active else 'Cube size')
         if self.workspace_tabs.currentIndex()==0:
             self.brand_title_label.setText('Nonlinear Compression' if not active else f'Standard {kind(settings).title()}')
@@ -1879,7 +1887,7 @@ class RustMechDialog(QDialog):
         self.plotter.render()
 
     def add_group(
-        self, layout, title: str, settings: Settings, specs
+        self, layout, title: str, settings: Settings, specs, *, units=None
     ) -> QFormLayout:
         group = SidebarGroupBox(title)
         group.setObjectName("studioGroupCard")
@@ -1904,7 +1912,8 @@ class RustMechDialog(QDialog):
             control.setKeyboardTracking(False)
             self.controls[name] = control
             row_lbl = field_label(label, control, tooltip=GEOMETRY_HELP.get(name, ""))
-            form.addRow(row_lbl, control)
+            unit = units.get(name) if units else None
+            form.addRow(row_lbl, stepper_with_unit(control, unit) if unit else control)
         layout.addWidget(group)
         return form
 
@@ -2189,8 +2198,9 @@ class RustMechDialog(QDialog):
 
     def _sync_loading_ui(self):
         force = self.loading_mode_combo.currentData() == "force"
-        self._loading_form.setRowVisible(self.controls["compression"], not force)
-        self._loading_form.setRowVisible(self.controls["applied_force"], force)
+        compression_row = self.controls["compression"].parentWidget()
+        self._loading_form.setRowVisible(compression_row, not force)
+        self._loading_form.setRowVisible(self.controls["applied_force"].parentWidget(), force)
         self.loading_hint_label.setText(
             "Top platen force in −Z; displacement is calculated. Force control may stop at buckling."
             if force else "Top platen displacement in −Z; reaction force is calculated (N).")
@@ -2201,7 +2211,7 @@ class RustMechDialog(QDialog):
             experiment=PROFILES[self.test_profile_combo.currentData()].kind
             direction='+Z' if experiment=='tension' else '−Z'
             self.loading_hint_label.setText(f'{experiment.title()}: actuator {"force" if force else "travel"} in {direction}. Geometry and fixtures are automatic.')
-        label=self._loading_form.labelForField(self.controls['compression'])
+        label=self._loading_form.labelForField(compression_row)
         if label is not None:label.setText('Actuator travel' if active else 'Compression')
 
     def _automatic_contact_changed(self, *_):
@@ -2391,9 +2401,9 @@ class RustMechDialog(QDialog):
 
     def _sync_mesh_type(self) -> None:
         local_size = self.controls["local_mesh_size"]
-        form = local_size.parentWidget().layout()
-        form.setRowVisible(local_size, self.mesh_type_combo.currentData() in TETRAHEDRAL_MESH_TYPES)
-        form.setRowVisible(self.tetra_strategy_combo, self.mesh_type_combo.currentData() in TETRAHEDRAL_MESH_TYPES)
+        tetrahedral = self.mesh_type_combo.currentData() in TETRAHEDRAL_MESH_TYPES
+        self._mesh_form.setRowVisible(local_size.parentWidget(), tetrahedral)
+        self._mesh_form.setRowVisible(self.tetra_strategy_combo, tetrahedral)
         if hasattr(self, "geometry_apply_button"):
             self.geometry_changed()
 

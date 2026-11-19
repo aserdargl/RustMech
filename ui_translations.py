@@ -941,6 +941,8 @@ TURKISH.update({
 })
 _MORE = '''
 Global mesh size|Genel ağ boyutu
+Mesh decimal places|Ağ ondalık hane sayısı
+Compression force|Basma kuvveti
 Voxel spacing|Voksel aralığı
 Solid fraction|Katı oranı
 Meshing method|Ağ oluşturma yöntemi

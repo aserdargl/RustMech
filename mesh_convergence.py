@@ -25,7 +25,8 @@ from file_dialog import QFileDialog
 from model import ANALYSIS_FIELDS, TETRAHEDRAL_MESH_TYPES, validate_settings
 from solver_api import SOLVER_REGISTRY, get_solver_capabilities
 from mesh_convergence_style import CONVERGENCE_STYLESHEET
-from studio_style import CONTROL_HEIGHT, NUMERIC_FIELD_WIDTH, STUDIO_STYLESHEET, CompactDoubleSpinBox, configure_form
+from studio_style import (CONTROL_HEIGHT, NUMERIC_FIELD_WIDTH, STUDIO_STYLESHEET, CompactDoubleSpinBox,
+                          configure_form, stepper_with_unit)
 
 RESULT_HEADERS = ("Mesh / elements", "Mesh (s)", "Solve (s)", "Force (N)",
                   "Modulus (MPa)", "SEA (J/g)", "Max Δ / ref.", "Status")
@@ -174,14 +175,14 @@ class MeshConvergenceWidget(QWidget):
                                          Qt.ItemDataRole.ToolTipRole)
         self.solver_combo.setCurrentIndex(max(0, self.solver_combo.findData(settings.solver_backend)))
         controls.addWidget(self.solver_combo)
-        self.start_size = self._number(settings.mesh_resolution, 1e-9, 1e6, " mm")
-        self.tolerance = self._number(2, 0.01, 100, " %")
+        self.start_size = self._number(settings.mesh_resolution, 1e-9, 1e6)
+        self.tolerance = self._number(2, 0.01, 100)
         for control in (self.start_size, self.tolerance):
             control.setFixedWidth(NUMERIC_FIELD_WIDTH - 2)
         controls.addWidget(QLabel("Starting mesh"))
-        controls.addWidget(self.start_size)
+        controls.addWidget(stepper_with_unit(self.start_size, "mm"))
         controls.addWidget(QLabel("Tolerance"))
-        controls.addWidget(self.tolerance)
+        controls.addWidget(stepper_with_unit(self.tolerance, "%"))
         controls.addStretch(1)
         self.export_button = self._button(controls, "Export CSV", self.export)
         self.apply_button = self._button(controls, "Use this mesh", self.apply_mesh)
@@ -218,14 +219,14 @@ class MeshConvergenceWidget(QWidget):
         self.manual.setEnabled(False)
         self.automatic.toggled.connect(lambda checked: self.manual.setEnabled(not checked))
         form.addRow("Manual global sizes", self.manual)
-        self.local_size = self._number(settings.local_mesh_size, 1e-9, 1e6, " mm")
+        self.local_size = self._number(settings.local_mesh_size, 1e-9, 1e6)
         self.local_size.setToolTip("Starting local size; scales with global size at every level.")
         if settings.mesh_type in TETRAHEDRAL_MESH_TYPES:
-            form.addRow("Starting local size", self.local_size)
+            form.addRow("Starting local size", stepper_with_unit(self.local_size, "mm"))
         self.factor = self._number(1.3, 1.21, 2)
         form.addRow("Refinement factor", self.factor)
-        self.minimum = self._number(settings.mesh_resolution / 10, 1e-9, 1e6, " mm")
-        form.addRow("Minimum global size", self.minimum)
+        self.minimum = self._number(settings.mesh_resolution / 10, 1e-9, 1e6)
+        form.addRow("Minimum global size", stepper_with_unit(self.minimum, "mm"))
         self.max_levels = CompactSpinBox()
         self.max_levels.setRange(3, 100)
         self.max_levels.setValue(12)
@@ -241,9 +242,9 @@ class MeshConvergenceWidget(QWidget):
         self.max_elements.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.max_elements.setFixedWidth(NUMERIC_FIELD_WIDTH)
         form.addRow("Maximum elements", self.max_elements)
-        self.max_minutes = self._number(120, 0.1, 100000, " min")
+        self.max_minutes = self._number(120, 0.1, 100000)
         self.max_minutes.setToolTip("Budget checked between stages/levels; the active solver finishes its current level.")
-        form.addRow("Study time budget", self.max_minutes)
+        form.addRow("Study time budget", stepper_with_unit(self.max_minutes, "min"))
         self.metric_checks, self.absolute = [], []
         for label, _ in METRICS:
             check = QCheckBox(label)
@@ -410,11 +411,10 @@ class MeshConvergenceWidget(QWidget):
             return self.remote_controller.solver_enabled(self.solver_combo.currentData())
         return get_solver_capabilities(self.solver_combo.currentData()).implemented
 
-    def _number(self, value, low, high, suffix=""):
+    def _number(self, value, low, high):
         control = CompactDoubleSpinBox()
         control.setRange(low, high)
         control.setValue(value)
-        control.setSuffix(suffix)
         return control
 
     def _button(self, layout, title, action):

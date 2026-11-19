@@ -6,7 +6,7 @@ from decimal import Decimal
 
 from PySide6.QtCore import QPoint, QRect, QSize, Qt
 from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen, QValidator
-from PySide6.QtWidgets import QAbstractSpinBox, QComboBox, QDoubleSpinBox, QFormLayout, QGroupBox, QLabel, QLineEdit, QLayout, QSizePolicy, QSpinBox, QStyle, QStyleOptionComboBox, QStyleOptionGroupBox, QStylePainter, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QAbstractSpinBox, QComboBox, QDoubleSpinBox, QFormLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QLayout, QSizePolicy, QSpinBox, QStyle, QStyleOptionComboBox, QStyleOptionGroupBox, QStylePainter, QVBoxLayout, QWidget
 
 
 CONTROL_HEIGHT = 25
@@ -284,6 +284,7 @@ class CompactDoubleSpinBox(DatenburgStepperFace, QDoubleSpinBox):
     """Keep up to twelve entered digits without fixed-width decimal padding."""
 
     MAX_DIGITS = 12
+    _display_decimals = None
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -302,6 +303,28 @@ class CompactDoubleSpinBox(DatenburgStepperFace, QDoubleSpinBox):
             text = "0"
         return text.replace(".", self.locale().decimalPoint())
 
+    def setDisplayDecimals(self, decimals: int) -> None:
+        """Round only the visible text, keeping the Qt value and input precision."""
+        self._display_decimals = decimals
+        sample_width = self.field.fontMetrics().horizontalAdvance(self._display_text())
+        self.setFixedWidth(max(NUMERIC_FIELD_WIDTH, sample_width + 24))
+        self._sync_datenburg_text()
+
+    def _display_text(self) -> str:
+        return f"{self.value():.{self._display_decimals}f}".replace(".", self.locale().decimalPoint())
+
+    def _sync_datenburg_text(self, *_):
+        if self._display_decimals is None:
+            super()._sync_datenburg_text()
+        else:
+            self.field.setText(self._display_text())
+
+    def _commit_datenburg_field(self):
+        if (self._display_decimals is not None and not self.field.isModified()
+                and self.field.text() == self._display_text()):
+            return
+        super()._commit_datenburg_field()
+
     def validate(self, text: str, position: int):
         number = text
         if self.prefix() and number.startswith(self.prefix()):
@@ -311,6 +334,33 @@ class CompactDoubleSpinBox(DatenburgStepperFace, QDoubleSpinBox):
         if sum(char.isdigit() for char in number) > self.MAX_DIGITS:
             return QValidator.State.Invalid, text, position
         return super().validate(text, position)
+
+
+def mesh_precision_stepper(preferences, key, *sizes: CompactDoubleSpinBox) -> CompactSpinBox:
+    precision = CompactSpinBox()
+    precision.setRange(0, 9)
+    precision.setValue(preferences.value(key, 3, type=int))
+
+    def apply(decimals):
+        for size in sizes:
+            size.setDisplayDecimals(decimals)
+
+    apply(precision.value())
+    precision.valueChanged.connect(apply)
+    precision.valueChanged.connect(lambda decimals: preferences.setValue(key, decimals))
+    return precision
+
+
+def stepper_with_unit(control: QAbstractSpinBox, unit: str) -> QWidget:
+    """Keep the unit immediately beside the stepper's outer edge."""
+    row = QWidget()
+    layout = QHBoxLayout(row)
+    layout.setContentsMargins(0, 0, 0, 0)
+    layout.setSpacing(1)
+    layout.addWidget(control)
+    layout.addWidget(QLabel(unit))
+    layout.addStretch()
+    return row
 
 
 def configure_form(form: QFormLayout) -> None:

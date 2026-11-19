@@ -5,7 +5,7 @@ from studio_style import CompactSpinBox, CompactComboBox
 from PySide6.QtCore import Signal
 from PySide6.QtGui import QValidator
 from PySide6.QtWidgets import QCheckBox, QComboBox, QFormLayout, QLabel, QLineEdit, QPushButton
-from studio_style import CompactDoubleSpinBox, SidebarGroupBox, configure_form, field_label
+from studio_style import CompactDoubleSpinBox, SidebarGroupBox, configure_form, field_label, stepper_with_unit
 from solver_profiles import KRATOS_FIELDS
 
 
@@ -103,11 +103,10 @@ class KratosSettingsPanel(SidebarGroupBox):
             form.addRow(field_label(title,control),control)
         memory=CompactSpinBox()
         memory.setRange(1,4194304)
-        memory.setSuffix(" MB")
         memory.setKeyboardTracking(False)
         memory.valueChanged.connect(lambda *_: self.changed.emit())
         self.fields["truba_memory_mb"]=memory
-        form.addRow(field_label("Memory",memory),memory)
+        form.addRow(field_label("Memory", memory), stepper_with_unit(memory, "MB"))
         self.recover_button=QPushButton("Retrieve TRUBA job…")
         self.recover_button.setObjectName("secondaryActionBtn")
         self.recover_button.setAutoDefault(False)

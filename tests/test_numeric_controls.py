@@ -6,7 +6,7 @@ from PySide6.QtGui import QValidator
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QWidget
 
-from studio_style import CompactDoubleSpinBox, CompactSpinBox, STUDIO_STYLESHEET
+from studio_style import CompactDoubleSpinBox, CompactSpinBox, STUDIO_STYLESHEET, stepper_with_unit
 from mesh_convergence_style import CONVERGENCE_STYLESHEET
 
 
@@ -43,6 +43,37 @@ class NumericControlTests(unittest.TestCase):
         self.assertEqual(self.spin.text(), "6.5423423")
         self.enter("6.5000")
         self.assertEqual(self.spin.text(), "6.5")
+
+    def test_display_decimals_preserve_unedited_values_and_allow_precise_input(self):
+        self.spin.setValue(0.123456)
+        self.spin.setDisplayDecimals(3)
+        self.assertEqual(self.spin.text(), "0.123")
+        QTest.keyClick(self.spin, Qt.Key.Key_Return)
+        self.assertAlmostEqual(self.spin.value(), 0.123456)
+        self.spin.setSingleStep(0.05)
+        self.spin.stepUp()
+        self.assertAlmostEqual(self.spin.value(), 0.173456)
+        self.assertEqual(self.spin.text(), "0.173")
+        self.enter("0.321234")
+        self.assertAlmostEqual(self.spin.value(), 0.321234)
+        self.assertEqual(self.spin.text(), "0.321")
+        self.spin.setLocale(QLocale(QLocale.Language.Turkish))
+        self.spin.setDisplayDecimals(6)
+        self.assertEqual(self.spin.text(), "0,321234")
+
+    def test_unit_sits_one_pixel_outside_the_stepper(self):
+        spin = CompactDoubleSpinBox()
+        row = stepper_with_unit(spin, "mm")
+        try:
+            row.resize(220, 32)
+            row.show()
+            self.app.processEvents()
+            unit = row.layout().itemAt(1).widget()
+            self.assertEqual(unit.text(), "mm")
+            self.assertEqual(unit.x() - spin.geometry().right() - 1, 1)
+            self.assertNotIn("mm", spin.text())
+        finally:
+            row.close()
 
     def test_twelve_digits_and_rejection_of_thirteenth(self):
         self.enter("6.12345678901")

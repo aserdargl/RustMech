@@ -24,7 +24,7 @@ from imported_geometry import (SURFACE_EXTENSIONS, SURFACE_FILE_FILTER, SurfaceC
                                compression_direction, read_polygonal_surface, store_surface, surface_cache_directory)
 from model import MIN_MESH_INPUT_MM, settings_from_dict
 from studio_style import (ActionFlowLayout, CompactComboBox, CompactDoubleSpinBox, CONTROL_HEIGHT,
-                          STUDIO_STYLESHEET, field_label)
+                          STUDIO_STYLESHEET, field_label, mesh_precision_stepper, stepper_with_unit)
 from ui_language import translate
 from window_state import install_window_state
 
@@ -275,6 +275,10 @@ class FolderBatchDialog(QDialog):
         mesh_layout.addWidget(field_label('Element type', self.mesh_type), 0, 2)
         self.mesh_type.setFixedWidth(100)
         mesh_layout.addWidget(self.mesh_type, 0, 3)
+        self.mesh_precision = mesh_precision_stepper(self.preferences, 'folderBatch/meshDisplayDecimals',
+                                                   self.mesh_resolution, self.local_mesh_size)
+        mesh_layout.addWidget(field_label('Mesh decimal places', self.mesh_precision), 1, 2)
+        mesh_layout.addWidget(self.mesh_precision, 1, 3)
         mesh_layout.setColumnStretch(4, 1)
         layout.addWidget(mesh)
         self.settings_hint = QLabel()
@@ -389,11 +393,10 @@ class FolderBatchDialog(QDialog):
         control = CompactDoubleSpinBox()
         control.setRange(min(MIN_MESH_INPUT_MM, value), max(5, value))
         control.setSingleStep(step)
-        control.setSuffix(' mm')
         control.setKeyboardTracking(False)
         control.setValue(value)
         layout.addWidget(field_label(label, control), row, 0)
-        layout.addWidget(control, row, 1)
+        layout.addWidget(stepper_with_unit(control, 'mm'), row, 1)
         return control
 
     def update_execution_target(self):

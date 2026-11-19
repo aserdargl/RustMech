@@ -462,10 +462,11 @@ class LiveConvergenceTests(unittest.TestCase):
         self.app.processEvents()
         self.assertEqual(widget.run_button.text(), "Run")
         self.assertLess(widget.toolbar.y(), widget.results.y())
-        for control in (widget.solver_combo, widget.start_size, widget.tolerance,
-                        widget.export_button, widget.apply_button,
+        for control in (widget.solver_combo, widget.export_button, widget.apply_button,
                         widget.stop_button, widget.force_stop_button, widget.run_button):
             self.assertIs(control.parentWidget(), widget.toolbar)
+        for control in (widget.start_size, widget.tolerance):
+            self.assertIs(control.parentWidget().parentWidget(), widget.toolbar)
         buttons = (widget.export_button, widget.apply_button, widget.stop_button,
                    widget.force_stop_button, widget.run_button)
         self.assertEqual(len({(button.width(), button.height()) for button in buttons}), 1)

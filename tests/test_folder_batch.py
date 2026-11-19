@@ -13,7 +13,7 @@ from unittest.mock import Mock, patch
 
 import numpy as np
 import pyvista as pv
-from PySide6.QtCore import QEvent, QSettings, Qt, QTimer
+from PySide6.QtCore import QEvent, QLocale, QSettings, Qt, QTimer
 from PySide6.QtGui import QHelpEvent, QPixmap
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QAbstractItemView, QApplication, QComboBox, QDialogButtonBox, QLineEdit, QPushButton, QSplitter
@@ -117,6 +117,23 @@ class FolderBatchTests(unittest.TestCase):
         restarted.execution_target.setCurrentIndex(restarted.execution_target.findData("local"))
         self.assertEqual(restarted.solver.currentIndex(), 1)
         self.assertEqual(restarted.mesh_type.currentText(), "TET10")
+
+    def test_mesh_display_precision_is_saved_without_rounding_batch_values(self):
+        batch = self.dialog()
+        self.assertEqual(batch.mesh_precision.value(), 3)
+        for control in (batch.mesh_resolution, batch.local_mesh_size):
+            control.setLocale(QLocale(QLocale.Language.English))
+            control.setValue(0.123456)
+            self.assertEqual(control.text(), '0.123')
+        QTest.mouseClick(batch.mesh_precision.btn_up, Qt.MouseButton.LeftButton)
+        self.assertEqual(batch.mesh_resolution.text(), '0.1235')
+        self.assertEqual(batch.local_mesh_size.text(), '0.1235')
+        batch.reject()
+
+        restarted = self.dialog()
+        self.assertEqual(restarted.mesh_precision.value(), 4)
+        self.assertAlmostEqual(restarted.mesh_resolution.value(), 0.123456)
+        self.assertAlmostEqual(restarted.local_mesh_size.value(), 0.123456)
 
     def test_axes_offsets_sizes_and_reverse_direction(self):
         for direction, expected in (((1, 0, 0), 4), ((0, 1, 0), 3), ((0, 0, 1), 6), ((0, 0, -1), 6)):
