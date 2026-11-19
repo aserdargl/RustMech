@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (
     QMainWindow, QPlainTextEdit, QProgressBar, QPushButton, QSizePolicy, QSpinBox, QStyleFactory, QVBoxLayout, QWidget,
 )
 
-from app_identity import configure_application
+from app_identity import ICON_PATH, configure_application
 from file_dialog import QFileDialog
 from tools.setupmaker.worker import (
     RELEASE_REPO, REPO_PATTERN, build_python, check_project, read_version, release_version, setup_output_directory, version_parts,
@@ -34,22 +34,87 @@ QLabel[setupSection="true"] {
     color: #0F172A; font-size: 13px; padding: 0 7px;
 }
 QLabel[setupField="true"] { color: #475569; font-size: 11px; }
-QLineEdit[setupInput="true"], QPlainTextEdit#setupLog, QPlainTextEdit#setupNotes {
+QLineEdit[setupInput="true"], QPlainTextEdit#setupNotes {
+    background: #FFFFFF; color: #0F172A; border: 1px solid #CBD5E1;
+    font-size: 11px; selection-color: #0F172A; selection-background-color: #BFDBFE;
+}
+QLineEdit[setupInput="true"] { border-radius: 4px; padding: 0 3px; }
+QPlainTextEdit#setupNotes { border-radius: 5px; padding: 3px; }
+QLineEdit[setupInput="true"]:hover { border-color: #93C5FD; }
+QLineEdit[setupInput="true"]:focus, QPlainTextEdit#setupNotes:focus { border-color: #3B82F6; }
+QLineEdit[setupInput="true"]:disabled, QPlainTextEdit#setupNotes:disabled {
+    background: #F1F5F9; color: #64748B; border-color: #CBD5E1;
+}
+QPlainTextEdit#setupLog {
     background: white; color: #0F172A; border: 1px solid #CBD5E1; border-radius: 4px;
     selection-color: #0F172A; selection-background-color: #C7DFFE;
 }
-QLineEdit[setupInput="true"] { font-size: 11px; padding: 0 5px; }
-QLineEdit[setupInput="true"]:hover, QSpinBox[setupNumber="true"]:hover { border-color: #93C5FD; }
-QLineEdit[setupInput="true"]:focus, QSpinBox[setupNumber="true"]:focus,
-QPlainTextEdit#setupLog:focus, QPlainTextEdit#setupNotes:focus { border-color: #2563EB; }
-QLineEdit[setupInput="true"]:disabled, QPlainTextEdit#setupNotes:disabled {
-    background: #F1F5F9; color: #64748B;
-}
+QPlainTextEdit#setupLog:focus { border-color: #2563EB; }
+
 QSpinBox[setupNumber="true"] {
-    background: #E5E7EB; color: #111827; border: 1px solid #9CA3AF; border-radius: 5px;
-    padding-left: 4px; font-size: 11px;
+    background: #E5E7EB;
+    border: 1px solid #9CA3AF;
+    border-radius: 5px;
+    color: #111827;
+    font-size: 11px;
+    padding: 0px;
+    selection-background-color: #BFDBFE;
+    selection-color: #0F172A;
 }
-QSpinBox[setupNumber="true"]:disabled { color: #64748B; }
+QSpinBox[setupNumber="true"] QLineEdit {
+    padding: 0px;
+    margin: 0px;
+}
+QSpinBox[setupNumber="true"]:hover {
+    background: #ECEFF1;
+    border-color: #6B7280;
+}
+QSpinBox[setupNumber="true"]:focus {
+    background: #F8FAFC;
+    border-color: #2563EB;
+}
+QSpinBox[setupNumber="true"]::up-button,
+QSpinBox[setupNumber="true"]::down-button {
+    subcontrol-origin: padding;
+    width: 16px;
+    right: 2px;
+    border: none;
+    border-radius: 4px;
+    background: transparent;
+    margin: 0;
+    padding: 0px;
+}
+QSpinBox[setupNumber="true"]::up-button {
+    subcontrol-position: top right;
+    top: 1px;
+    height: 11px;
+}
+QSpinBox[setupNumber="true"]::down-button {
+    subcontrol-position: bottom right;
+    bottom: 1px;
+    height: 11px;
+}
+QSpinBox[setupNumber="true"]::up-arrow {
+    width: 8px;
+    height: 8px;
+    image: url("@UP@");
+}
+QSpinBox[setupNumber="true"]::down-arrow {
+    width: 8px;
+    height: 8px;
+    image: url("@DOWN@");
+}
+QSpinBox[setupNumber="true"]::up-button:hover,
+QSpinBox[setupNumber="true"]::down-button:hover {
+    background: rgba(37, 99, 235, 0.10);
+}
+QSpinBox[setupNumber="true"]::up-button:pressed,
+QSpinBox[setupNumber="true"]::down-button:pressed {
+    background: rgba(37, 99, 235, 0.18);
+}
+QSpinBox[setupNumber="true"]:disabled { background: #E5E7EB; color: #64748B; border-color: #9CA3AF; }
+QSpinBox[setupNumber="true"]::up-button:disabled,
+QSpinBox[setupNumber="true"]::down-button:disabled { background: transparent; }
 QProgressBar#setupProgress {
     border: 1px solid #CBD5E1; border-radius: 4px; background: white; color: #0F172A; text-align: center;
 }
@@ -65,7 +130,9 @@ QPushButton[setupButton="true"][setupPrimary="true"]:focus { border: 1px solid #
 QPushButton[setupButton="true"]:pressed { background: #DFE8F3; }
 QPushButton[setupButton="true"][setupPrimary="true"]:pressed { background: #204D89; }
 QPushButton[setupButton="true"]:disabled { background: #F1F5F9; color: #64748B; border-color: #CBD5E1; }
-"""
+""".replace("@UP@", ICON_PATH.with_name("spin-up-blue.svg").as_posix()).replace(
+    "@DOWN@", ICON_PATH.with_name("spin-down-blue.svg").as_posix()
+)
 
 CONTROL_HEIGHT = 25
 WINDOW_SIZE = (650, 570)
