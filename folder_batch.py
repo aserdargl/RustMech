@@ -445,7 +445,7 @@ class FolderBatchDialog(QDialog):
         remote = self.execution_target.currentData() == 'truba'
         text = translate(
             'TRUBA uses Kratos with self-contact disabled. TET10 uses displacement control and penalty mortar. Material and loading come from the Mechanic workspace.'
-            if remote else 'The mesh is generated locally. Kratos solves use TRUBA. Analysis settings come from the Mechanic workspace.')
+            if remote else 'Mesh and solution run locally. Analysis settings come from the Mechanic workspace.')
         if self.base is not None:
             base = self.base
             text += (f'\n{base.material_name} | '

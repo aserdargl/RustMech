@@ -67,6 +67,7 @@ from setup_help import GEOMETRY_HELP
 from truba_connection import TrubaConnectionDialog
 from window_state import show_restored_window
 from kratos_settings import KratosSettingsPanel
+from local_kratos import INSTALL_REQUIRED, local_kratos_python
 from solver_profiles import SolverProfileStore, profile_values
 from doe_studio import DoEStudioWidget, DoEStudioWindow
 from preview_viewport import MESH_PREVIEW_ACTOR, create_preview_viewport
@@ -2121,6 +2122,7 @@ class RustMechDialog(QDialog):
         kratos = cap.identifier == "kratos"
         self.kratos_panel.setVisible(kratos)
         remote = getattr(self, "remote_controller", None)
+        self.kratos_panel.set_execution_target(remote is not None and remote.requested)
         flexure = kratos and self.test_profile_combo.currentData() == 'iso178_preferred'
         for index in range(self.mesh_type_combo.count()):
             mesh_type = self.mesh_type_combo.itemData(index)
@@ -2546,8 +2548,8 @@ class RustMechDialog(QDialog):
             except (ValueError,RuntimeError) as error: errors.append(str(error))
             try: controller.require("mesh",settings)
             except (ValueError,RuntimeError) as error: remote_error = str(error)
-        elif settings.solver_backend == "kratos":
-            errors.append("Kratos runs on TRUBA. Select TRUBA or choose ANSYS MAPDL for local execution.")
+        elif settings.solver_backend == "kratos" and local_kratos_python() is None:
+            errors.append(INSTALL_REQUIRED)
         geometry_valid = not validate_geometry(settings, include_mesh=False)
         self.geometry_apply_button.setEnabled(geometry_valid)
         self.structure_apply_button.setEnabled(self.geometry_apply_button.isEnabled())
@@ -3271,8 +3273,7 @@ class RustMechDialog(QDialog):
                 self.analysis_job = AnalysisProcess(run_remote_mechanics,settings,context,source,remote_auth=auth)
                 self.truba_dialog.job_list.submitting = True
             else:
-                self.analysis_job = AnalysisProcess(run_single_analysis, settings, self.preview.mesh,
-                                                   remote_auth=self.truba_dialog.analysis_auth() if settings.solver_backend == "kratos" else None)
+                self.analysis_job = AnalysisProcess(run_single_analysis, settings, self.preview.mesh)
         except Exception as exc:
             QMessageBox.critical(self, "Cannot start analysis", str(exc))
             return
@@ -3602,6 +3603,7 @@ class RustMechDialog(QDialog):
                              controller.session_future, controller.release_future))
         wait(future for future in detached if future is not None)
         self.force_stop_analysis()
+        self.kratos_panel.stop_install()
         if hasattr(self,"remote_controller"):
             self.remote_controller.shutdown()
         self.disposed = True

@@ -46,7 +46,9 @@ class AnalysisProcess:
         self._remote_marker=None
         self._generic_remote_target=bool(getattr(target,"remote_job_target",False))
         self.background_submission = bool(getattr(target, "remote_submit_target", False))
-        if getattr(target,"remote_job_target",False) or (target in (run_single_analysis,run_resume_analysis) and (target is run_resume_analysis or args[0].solver_backend == "kratos")):
+        if self._generic_remote_target or target is run_resume_analysis or (
+            target is run_single_analysis and remote_auth is not None and args[0].solver_backend == "kratos"
+        ):
             self._remote_marker=Path(self._scratch.name)/"remote_job.json"
             args=(*args,remote_auth,str(self._remote_marker))
         self._remote_future = None

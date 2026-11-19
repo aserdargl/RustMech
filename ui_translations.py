@@ -419,13 +419,17 @@ TRUBA is disconnected. Connect to TRUBA and prepare a resource session before ru
 Source changed after preparation. Check the folder again.|Kaynak dosya hazırlıktan sonra değişti. Klasörü yeniden kontrol edin.
 Execution|Yürütme
 Execution target|Yürütme hedefi
-Kratos runs on TRUBA. Select TRUBA or choose ANSYS MAPDL for local execution.|Kratos TRUBA'da çalışır. TRUBA'yı seçin veya yerel çalıştırma için ANSYS MAPDL'yi seçin.
+Install local Kratos from the Kratos settings before running this analysis.|Bu analizi çalıştırmadan önce Kratos ayarlarından yerel Kratos'u kurun.
+Install local Kratos|Yerel Kratos'u Kur
+Installing and checking Kratos…|Kratos kuruluyor ve doğrulanıyor…
+Local Kratos installation is available on Windows.|Yerel Kratos Windows'ta kurulabilir.
+Local Kratos requires 64-bit Python 3.14 and an internet connection for setup.|Yerel Kratos kurulumu için 64 bit Python 3.14 ve internet bağlantısı gerekir.
 Ready to submit analysis to TRUBA.|Analiz TRUBA'ya gönderilmeye hazır.
 Local mesh|Yerel ağ üretimi
 TRUBA batch analysis|TRUBA toplu analizi
 Enable TRUBA mode and allocate or refresh a resource session before running these jobs.|Bu işleri çalıştırmadan önce TRUBA modunu açın ve bir kaynak oturumu ayırın veya mevcut oturumu yenileyin.
 TRUBA uses Kratos with self-contact disabled. TET10 uses displacement control and penalty mortar. Material and loading come from the Mechanic workspace.|TRUBA, öz temas kapalı olarak Kratos kullanır. TET10 için yer değiştirme kontrolü ve ceza mortar kullanılır. Malzeme ve yükleme Mekanik çalışma alanından alınır.
-The mesh is generated locally. Kratos solves use TRUBA. Analysis settings come from the Mechanic workspace.|Ağ yerelde üretilir. Kratos çözümü TRUBA'da çalışır. Analiz ayarları Mekanik çalışma alanından alınır.
+Mesh and solution run locally. Analysis settings come from the Mechanic workspace.|Ağ ve çözüm yerelde çalışır. Analiz ayarları Mekanik çalışma alanından alınır.
 Material, loading, contact and solver parameters are captured from the main Mechanic workspace when checking.|Malzeme, yükleme, temas ve çözücü ayarları ön kontrol sırasında ana Mekanik çalışma alanından alınır.
 Remove from Queue|Kuyruktan Çıkar
 Selected job removed from the queue.|Seçili iş kuyruktan çıkarıldı.

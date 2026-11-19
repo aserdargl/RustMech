@@ -1,9 +1,12 @@
-"""Exact-mesh Kratos execution through TRUBA and lazy result access."""
+"""Exact-mesh Kratos execution on Windows or TRUBA and lazy result access."""
 import json
+import os
 from pathlib import Path
 import re
+import subprocess
 import numpy as np
 from kratos_export import export_kratos, mesh_digest
+from local_kratos import INSTALL_REQUIRED, local_kratos_python, system_dll_search
 from solver_api import KRATOS_CAPABILITIES, SolverExecution, map_node_values
 from truba_jobs import HOST, run_remote, write_record
 
@@ -97,6 +100,67 @@ class KratosResults:
         return step["bottom_reaction"],step["top_reaction"]
 
 
+class LocalKratosBackend:
+    capabilities = KRATOS_CAPABILITIES
+
+    def solve(self, request):
+        from analysis_process import report_analysis_step
+
+        execution = SolverExecution(diagnostics={"execution": "local", "solver": "kratos",
+                                                 "local_directory": str(request.run_directory.resolve()),
+                                                 "mesh_source": "provided_fe_mesh", "specimen_remeshed": False})
+        errors = self.capabilities.validate(request.settings) + request.mesh.solve_errors
+        python = local_kratos_python()
+        if errors or python is None:
+            execution.error = "\n".join(errors) if errors else INSTALL_REQUIRED
+            return execution
+
+        raw = request.run_directory
+        export_kratos(request.mesh, request.settings, raw)
+        log_path = raw / "kratos.log"
+        environment = os.environ.copy()
+        environment.pop("SLURM_JOB_ID", None)
+        environment.update(OMP_NUM_THREADS=str(request.settings.cores), OPENBLAS_NUM_THREADS="1")
+        try:
+            with log_path.open("w", encoding="utf-8") as log, system_dll_search(), subprocess.Popen(
+                [str(python), "-E", "-s", "-u", "kratos_driver.py"], cwd=raw, env=environment,
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8",
+                errors="replace", creationflags=subprocess.CREATE_NO_WINDOW,
+            ) as process:
+                execution.solve_attempted = True
+                for line in process.stdout:
+                    log.write(line)
+                    increment = re.fullmatch(r"RUSTMECH_STEP=(\d+) LOAD=(\S+)\s*", line)
+                    if increment:
+                        log.flush()
+                        report_analysis_step(f"Kratos · increment {increment[1]} · load {increment[2]}")
+                exit_code = process.wait()
+
+            reader = KratosResults(raw / "results", request.mesh, request.settings)
+            if reader.manifest.get("slurm_job_id") is not None:
+                raise ValueError("Kratos results have an invalid local execution record.")
+            verify_self_contact(reader, request.settings)
+            execution.results = reader
+            execution.diagnostics.update(mesh_import_verified=True, exit_code=exit_code,
+                                         effective_tolerances=reader.manifest.get("effective_tolerances", {}))
+            if exit_code or not reader.manifest.get("complete"):
+                detail = reader.manifest.get("error") or "Kratos stopped before the requested final load."
+                execution.error = f"{detail}\nKratos log: {log_path}"
+        except (OSError, ValueError) as error:
+            execution.error = f"{error}\nKratos log: {log_path}"
+        return execution
+
+
+def verify_self_contact(reader, settings):
+    if settings.self_contact_mode == "disabled":
+        return
+    coefficient = settings.self_friction_coeff if settings.self_contact_mode == "frictional" else 0.0
+    if not np.isclose(reader.manifest.get("self_contact_coefficient", np.nan), coefficient, rtol=0, atol=1e-12):
+        raise ValueError("Kratos did not verify the requested self-contact friction coefficient.")
+    if any(step.get("self_contact", {}).get("coulomb_limit_ratio", 0.0) > 1.01 for step in reader.steps):
+        raise ValueError("The self-contact traction exceeds the requested Coulomb limit.")
+
+
 class KratosBackend:
     def __init__(self,auth=None,marker=None,capabilities=KRATOS_CAPABILITIES):
         self.auth=auth
@@ -139,12 +203,7 @@ class KratosBackend:
                 effective_tolerances=reader.manifest.get('effective_tolerances',{}))
             if str(reader.manifest.get("slurm_job_id")) != str(record.get("job_id")):
                 raise ValueError("Downloaded results do not belong to the submitted SLURM job")
-            if request.settings.self_contact_mode!='disabled':
-                coefficient=request.settings.self_friction_coeff if request.settings.self_contact_mode=='frictional' else 0.
-                if not np.isclose(reader.manifest.get('self_contact_coefficient',np.nan),coefficient,rtol=0,atol=1e-12):
-                    raise ValueError('The downloaded self-contact result does not verify the requested friction coefficient. Run the analysis again with this adapter.')
-                if any(step.get('self_contact',{}).get('coulomb_limit_ratio',0.)>1.01 for step in reader.steps):
-                    raise ValueError('The self-contact traction exceeds the requested Coulomb limit.')
+            verify_self_contact(reader, request.settings)
             execution.results=reader
             execution.diagnostics["mesh_import_verified"]=True
             slurm_status=(request.run_directory/"results/slurm_status.txt").read_text().strip()

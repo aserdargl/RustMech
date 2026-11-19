@@ -150,7 +150,7 @@ KRATOS_CAPABILITIES = SolverCapabilities(
     unavailable_reason=(
         ""
     ),
-    ui_hint="TRUBA · nonlinear static · HEX8 / HEX20 / TET4 / TET10 · OpenMP",
+    ui_hint="Nonlinear static · HEX8 / HEX20 / TET4 / TET10 · OpenMP",
     supported_mesh_types=MESH_TYPES,
 )
 
@@ -175,9 +175,11 @@ def create_solver_backend(identifier: str = "ansys_mapdl", remote_auth=None, job
 
         return create_openfoam_backend()
     if identifier == "kratos":
-        from kratos_backend import create_kratos_backend
+        from kratos_backend import LocalKratosBackend, create_kratos_backend
 
-        return create_kratos_backend(remote_auth,job_marker)
+        if remote_auth is not None or job_marker is not None:
+            return create_kratos_backend(remote_auth, job_marker)
+        return LocalKratosBackend()
     raise ValueError(f"Unsupported solver backend: {identifier}")
 
 

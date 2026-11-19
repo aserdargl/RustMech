@@ -131,17 +131,36 @@ class RemoteModeUiTests(unittest.TestCase):
             window.analysis_poll.stop()
             window.analysis_job = None
 
-    def test_local_run_cannot_submit_the_truba_only_kratos_solver(self):
+    def test_local_kratos_requires_installation_and_runs_without_truba_auth(self):
         from mesh_engine import preview_key
+        from analysis_process import run_single_analysis
+        from local_kratos import INSTALL_REQUIRED
 
         window = self.window
         window.solver_combo.setCurrentIndex(window.solver_combo.findData("kratos"))
         window.preview = SimpleNamespace(key=preview_key(window.collect()), mesh=SimpleNamespace(solve_errors=[]))
-        with patch("nonlinear_compression.AnalysisProcess") as start:
+        with patch("nonlinear_compression.local_kratos_python", return_value=None), \
+                patch("nonlinear_compression.AnalysisProcess") as start:
             window.apply()
             start.assert_not_called()
         self.assertFalse(window.apply_button.isEnabled())
-        self.assertIn("Kratos runs on TRUBA", window.status.text())
+        self.assertIn(INSTALL_REQUIRED, window.status.text())
+
+        with patch("nonlinear_compression.local_kratos_python", return_value="python.exe"), \
+                patch("nonlinear_compression.save_settings"), \
+                patch("nonlinear_compression.AnalysisProcess") as start, \
+                patch.object(window.truba_dialog, "analysis_auth") as auth:
+            try:
+                window.apply()
+                args, kwargs = start.call_args
+                self.assertEqual(args[0], run_single_analysis)
+                self.assertEqual(args[1].solver_backend, "kratos")
+                self.assertIs(args[2], window.preview.mesh)
+                self.assertEqual(kwargs, {})
+                auth.assert_not_called()
+            finally:
+                window.analysis_poll.stop()
+                window.analysis_job = None
 
     def test_fft_submits_assigned_material_without_local_wsl(self):
         window = self.window

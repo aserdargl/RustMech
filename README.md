@@ -493,6 +493,21 @@ girdileri mühendislik kayma şekil değiştirmesidir. Boşluk, seçilen oranla
 yoğunluğuna ve boşluk rijitliğine duyarlılığını değerlendirin. Yakınsamayan
 veya iptal edilen koşulda etkin rijitlik CSV'si yayımlanmaz.
 
+## Windows'ta yerel Kratos
+
+Mekanik çalışma alanında **Yerel** hesaplama hedefini ve **Kratos Multiphysics**
+çözücüsünü seçin. İlk kullanımda Kratos ayarlarındaki **Yerel Kratos'u Kur**
+düğmesi, 64 bit CPython 3.14 ve internet bağlantısıyla Kratos 10.4.4'ü
+`%LOCALAPPDATA%\RustMech\Kratos\10.4.4` altında yalıtılmış bir ortama kurar.
+Kurulum paketleri doğrular ve ayrıntıları aynı klasördeki `install.log`
+dosyasına yazar. Kaynak kopyadan aynı kurulum `python -m local_kratos` ile
+başlatılabilir.
+
+Kurulum tamamlanınca **Analizi Çalıştır**, mevcut sonlu eleman ağını bu
+bilgisayardaki Kratos'a iletir. Çözümün günlüğü ham sonuç klasöründe
+`kratos.log` olarak kaydedilir. Yerel analiz için TRUBA hesabı veya ANSYS
+lisansı gerekmez.
+
 ## İsteğe bağlı TRUBA hesaplama modu
 
 TRUBA panelindeki **Run mesh generation, convergence and analyses on TRUBA**
