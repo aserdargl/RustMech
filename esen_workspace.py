@@ -27,6 +27,7 @@ from ui_language import translate
 
 
 WORKSPACE_TITLE = "ESEN STUDIES"
+ACTIVE_TRUBA_STATES = frozenset({"Submitted", "Queued", "Running", "Cancellation requested"})
 
 ESEN_STYLE = """
 QDialog#esenWorkspace { background: #F5F5F3; }
@@ -41,6 +42,8 @@ QFrame[esenCard="paper"] { background: #FFFFFF; border: 1px solid #D5DBE2; borde
 }
 #esenWorkspace QPlainTextEdit { font-family: Consolas; font-size: 12px; }
 #esenFieldLabel { color: #475569; font-size: 11px; }
+#esenWorkspace #trubaConnectionBadge { margin: 0; }
+#esenWorkspace #trubaConnectionBadge[state="working"] { color: #713F12; background: #FFF4CE; }
 #esenWorkspace QPushButton { padding: 0 7px; }
 #esenRun { color: #FFFFFF; background: #285EA6; }
 #esenRun:hover { background: #245692; }
@@ -156,6 +159,7 @@ class EsenWorkspace(QDialog):
         self.preferences = QSettings("RustMech", "RustMech")
         self.executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="esen")
         self.local_task = self.remote_task = None
+        self._active_truba_jobs = {}
         self.local_stop = Event()
         self.record = None
         self.input_root = None
@@ -177,7 +181,7 @@ class EsenWorkspace(QDialog):
         self.timer.start()
         self.poll_timer = QTimer(self)
         self.poll_timer.setInterval(5000)
-        self.poll_timer.timeout.connect(self._auto_refresh)
+        self.poll_timer.timeout.connect(self._poll_remote)
         self.poll_timer.start()
         self.truba.connection_changed.connect(self._connection_changed)
 
@@ -223,7 +227,16 @@ class EsenWorkspace(QDialog):
         self.local_exe = QLineEdit("lmp")
         self.local_mpi = QLineEdit()
         self.local_mpi.setPlaceholderText("Automatic")
-        self._form_row(form, "Run on", self.target)
+        self.truba_badge = QLabel()
+        self.truba_badge.setObjectName("trubaConnectionBadge")
+        self.truba_badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.truba_badge.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        target_row = QHBoxLayout()
+        target_row.setSpacing(6)
+        target_row.addWidget(self.target)
+        target_row.addWidget(self.truba_badge)
+        target_row.addStretch()
+        self._form_row(form, "Run on", self.target, field_layout=target_row)
         self._form_row(form, "Local CPU cores", self.ranks)
         self._form_row(form, "Local RAM limit (MiB)", self.local_memory)
         self._form_row(form, "LAMMPS executable", self.local_exe)
@@ -241,7 +254,7 @@ class EsenWorkspace(QDialog):
         self.resume_input.setToolTip(translate("Include a restart input in the job files to enable checkpoint recovery and the 70-hour handover."))
         self._form_row(form, "Queue", self.partition)
         self._form_row(form, "Wall time (HH:MM:SS)", self.walltime)
-        self.connection = QLabel()
+        self.connection = QLabel("Connect using the main TRUBA button.")
         self.connection.setWordWrap(True)
         layout.addWidget(self.connection)
         self.truba_settings = SidebarGroupBox("Advanced TRUBA settings")
@@ -340,7 +353,7 @@ class EsenWorkspace(QDialog):
         right.setSizes([240, 450])
 
     @staticmethod
-    def _form_row(form, name, field):
+    def _form_row(form, name, field, *, field_layout=None):
         label = field_label(name, field)
         label.setObjectName("esenFieldLabel")
         if isinstance(field, CompactComboBox):
@@ -349,7 +362,7 @@ class EsenWorkspace(QDialog):
             label.setToolTip(name)
             field.textChanged.connect(field.setToolTip)
             field.setToolTip(field.text())
-        form.addRow(label, field)
+        form.addRow(label, field if field_layout is None else field_layout)
 
     def _load_profiles(self):
         for key in ("local_exe", "local_mpi", "account", "walltime", "module", "remote_exe"):
@@ -511,9 +524,7 @@ class EsenWorkspace(QDialog):
             self.job_form.setRowVisible(field, not remote)
         self.job_form.setRowVisible(self.partition, remote)
         self.job_form.setRowVisible(self.walltime, remote)
-        self.connection.setVisible(remote)
         self.truba_settings.setVisible(remote)
-        self.connection.setText("Connected to TRUBA" if self.truba.analysis_auth() else "Connect using the main TRUBA button.")
         try:
             invocation = self._command()
             self.preview.setPlainText(invocation if remote else subprocess.list2cmdline(invocation))
@@ -557,18 +568,24 @@ class EsenWorkspace(QDialog):
             self.history.setCurrentRow(0)
 
     def _history_item(self, directory, record, *, prepend=False):
-        item = QListWidgetItem(self._history_label(directory, record))
+        item = QListWidgetItem()
         item.setData(Qt.ItemDataRole.UserRole, str(directory))
+        self._update_history_item(item, directory, record)
         if prepend:
             self.history.insertItem(0, item)
             self.history.setCurrentItem(item)
         else:
             self.history.addItem(item)
 
-    def _history_label(self, directory, record):
+    def _update_history_item(self, item, directory, record):
+        username = record.get("username")
+        if record["target"] == "remote" and username and record["state"] in ACTIVE_TRUBA_STATES:
+            self._active_truba_jobs[directory] = username
+        else:
+            self._active_truba_jobs.pop(directory, None)
         target = translate("This computer") if record["target"] == "local" else "TRUBA"
         state = translate(self._state(directory, record))
-        return f"{record['name']} · {target} · {state}"
+        item.setText(f"{record['name']} · {target} · {state}")
 
     def _state(self, directory, record):
         if record["state"] == "Preparing" and directory not in self._active_directories():
@@ -630,7 +647,7 @@ class EsenWorkspace(QDialog):
             self.status.setText(str(error))
             self._buttons()
             return
-        self.history.currentItem().setText(self._history_label(directory, record))
+        self._update_history_item(self.history.currentItem(), directory, record)
         state = translate(self._state(directory, record))
         details = [record.get("job_id", ""), state, record.get("created", ""),
                    self.job_error or translate(record.get("detail", ""))]
@@ -678,8 +695,19 @@ class EsenWorkspace(QDialog):
         if not hasattr(self, "download"):
             return
         directory, record = self._selected_directory(), self.record
-        authenticated = self.truba.analysis_auth() is not None
+        auth = self.truba.analysis_auth()
+        authenticated = auth is not None
         remote = self.target.currentData() == "remote"
+        self.connection.setVisible(remote and not authenticated)
+        self.truba_badge.setVisible(remote and authenticated)
+        if remote and authenticated:
+            working = self.remote_task is not None or auth.username in self._active_truba_jobs.values()
+            state = "working" if working else "connected"
+            if self.truba_badge.property("state") != state:
+                self.truba_badge.setProperty("state", state)
+                self.truba_badge.setText(translate("Working" if working else "Connected"))
+                self.truba_badge.style().unpolish(self.truba_badge)
+                self.truba_badge.style().polish(self.truba_badge)
         self.start.setEnabled(self.command_valid and ((authenticated and not self.remote_task) if remote else not self.local_task))
         item = self.inputs.currentItem()
         supporting_file_selected = bool(item and item.text() in self.extra)
@@ -713,12 +741,14 @@ class EsenWorkspace(QDialog):
                     for row in range(self.history.count()):
                         item = self.history.item(row)
                         if item.data(Qt.ItemDataRole.UserRole) == str(directory):
-                            item.setText(self._history_label(directory, record))
+                            self._update_history_item(item, directory, record)
                             break
                     else:
                         self._history_item(directory, record, prepend=True)
                 except Exception as error:
-                    if field == "remote_task" or directory == self._selected_directory():
+                    if directory == self._selected_directory() or (
+                        field == "remote_task" and directory not in self._active_truba_jobs
+                    ):
                         self.job_error = str(error)
         if self.isVisible():
             self._show_selected()
@@ -749,8 +779,26 @@ class EsenWorkspace(QDialog):
         if self.isVisible():
             self._refresh_remote(manual=manual)
 
-    def _refresh_remote(self, *, manual=False, cancel=False):
-        directory, record = self._selected_directory(), self.record
+    def _poll_remote(self):
+        auth = self.truba.analysis_auth()
+        if not self.isVisible() or self.remote_task or not auth:
+            return
+        directory = next((path for path, username in self._active_truba_jobs.items()
+                          if username == auth.username), None)
+        if directory is None:
+            self._auto_refresh()
+            return
+        # Reuse the existing poll interval while giving each active job a turn.
+        self._active_truba_jobs[directory] = self._active_truba_jobs.pop(directory)
+        try:
+            record = jobs.read_job(directory)
+        except (OSError, ValueError):
+            self._active_truba_jobs.pop(directory, None)
+            return
+        self._refresh_remote(job=(directory, record))
+
+    def _refresh_remote(self, *, manual=False, cancel=False, job=None):
+        directory, record = (self._selected_directory(), self.record) if job is None else job
         auth = self.truba.analysis_auth()
         if not directory or not record or not auth or self.remote_task or not record.get("username"):
             return
@@ -760,8 +808,10 @@ class EsenWorkspace(QDialog):
         if record.get("remote_run") and not manual:
             return
         if record["state"] in jobs.TERMINAL and (not record.get("job_id") or ("files" in record and not manual)):
+            self._active_truba_jobs.pop(directory, None)
             return
-        self.job_error = ""
+        if directory == self._selected_directory():
+            self.job_error = ""
 
         def refresh():
             if record["state"] not in jobs.TERMINAL or (manual and record.get("resume_input")):

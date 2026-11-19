@@ -23,9 +23,10 @@ from window_state import WindowStateStore
 
 class FakeTruba(QObject):
     connection_changed = Signal(bool)
+    auth = None
 
     def analysis_auth(self):
-        return None
+        return self.auth
 
 
 class EsenTests(unittest.TestCase):
@@ -283,6 +284,60 @@ class EsenTests(unittest.TestCase):
         workspace.target.setCurrentIndex(workspace.target.findData("local"))
         self.assertTrue(workspace.local_memory.isVisible())
         self.assertEqual(workspace.local_memory.value(), 1536)
+
+    def test_truba_badge_follows_connection_and_jobs_while_viewing_other_history(self):
+        app = QApplication.instance() or QApplication([])
+        preferences = QSettings(str(self.root / "settings.ini"), QSettings.Format.IniFormat)
+        self.new_job(target="local")
+        truba = FakeTruba()
+        with patch("esen_workspace.QSettings", return_value=preferences):
+            workspace = EsenWorkspace(truba, history=self.history)
+        self.addCleanup(workspace.dispose)
+        workspace.show()
+        app.processEvents()
+        self.assertTrue(workspace.connection.isVisible())
+        self.assertFalse(workspace.truba_badge.isVisible())
+
+        truba.auth = self.auth
+        truba.connection_changed.emit(True)
+        self.assertFalse(workspace.connection.isVisible())
+        self.assertTrue(workspace.truba_badge.isVisible())
+        self.assertEqual(workspace.truba_badge.text(), "Connected")
+        workspace._load_files([str(self.source / self.entry)])
+        submitted = Event()
+
+        def submit(directory, record, *_):
+            self.assertTrue(submitted.wait(timeout=5))
+            jobs.save_job(directory, record, state="Submitted", job_id="456", username=self.auth.username)
+
+        with patch("esen_jobs.submit_full_node", side_effect=submit):
+            workspace.start.click()
+            directory, future = workspace.remote_task
+            submitted.set()
+            self.assertEqual(workspace.truba_badge.text(), "Working")
+            future.result(timeout=5)
+            workspace._tick()
+        workspace.history.setCurrentRow(1)
+        self.assertEqual(workspace.record["target"], "local")
+        self.assertEqual(workspace.truba_badge.text(), "Working")
+
+        def complete(directory, record, *_, **__):
+            jobs.save_job(directory, record, state="Completed")
+
+        with patch("esen_jobs.refresh_remote", side_effect=complete) as refresh, patch("esen_jobs.remote_files"):
+            workspace._poll_remote()
+            workspace.remote_task[1].result(timeout=5)
+            workspace._tick()
+        self.assertEqual(refresh.call_args.args[0], directory)
+        self.assertEqual(workspace.truba_badge.text(), "Connected")
+
+        workspace.target.setCurrentIndex(workspace.target.findData("local"))
+        self.assertFalse(workspace.truba_badge.isVisible())
+        truba.auth = None
+        truba.connection_changed.emit(False)
+        workspace.target.setCurrentIndex(workspace.target.findData("remote"))
+        self.assertTrue(workspace.connection.isVisible())
+        self.assertFalse(workspace.truba_badge.isVisible())
 
     def test_drop_selects_unique_conventional_script_and_preserves_paths(self):
         app = QApplication.instance() or QApplication([])

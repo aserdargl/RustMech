@@ -520,6 +520,7 @@ Remember password for this Windows user|Bu Windows kullanıcısı için parolay�
 Forget saved password|Kayıtlı parolayı unut
 Connect|Bağlan
 Connected|Bağlı
+Working|Çalışıyor
 Disconnect|Bağlantıyı kes
 Disconnected|Bağlı değil
 Connecting...|Bağlanıyor...
