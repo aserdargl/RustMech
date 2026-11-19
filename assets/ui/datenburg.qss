@@ -171,14 +171,16 @@ QCheckBox::indicator:checked {
 QCheckBox::indicator:hover { border-color: #2563EB; }
 QCheckBox::indicator:disabled { background: #EBEBEB; border-color: #D6D6D6; }
 QCheckBox:focus { color: #404040; }
-QTableWidget, QListWidget, QTextEdit, QPlainTextEdit {
+QTableWidget, QTableView#esenActiveJobs, QListWidget, QTextEdit, QPlainTextEdit {
     background: #FFFFFF; alternate-background-color: #F8FAFC;
     color: #111827; border: 1px solid #AAAAAA; border-radius: 2px;
     gridline-color: #D6D6D6; selection-background-color: #E5E5E5;
     selection-color: #111827; font-size: 12px;
 }
-QTableWidget::item, QListWidget::item { padding: 1px 3px; border: none; }
-QTableWidget::item:selected, QListWidget::item:selected { background: #E5E5E5; color: #111827; }
+QTableWidget::item, QTableView#esenActiveJobs::item, QListWidget::item { padding: 1px 3px; border: none; }
+QTableWidget::item:selected, QTableView#esenActiveJobs::item:selected, QListWidget::item:selected {
+    background: #E5E5E5; color: #111827;
+}
 QHeaderView::section {
     background: #E8E8E8; color: #111827; font-size: 12px; font-weight: 400;
     padding: 3px 4px; border: none; border-right: 1px solid #CBD5E1; border-bottom: 1px solid #CBD5E1;

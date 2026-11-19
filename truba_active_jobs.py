@@ -23,6 +23,29 @@ from ui_language import translate
 
 # Job names and command paths may contain ordinary punctuation.
 QUEUE_SEPARATOR = '\x1f'
+SLURM_JOB_HEADERS = (
+    'Slurm ID', 'Status', 'Work name', 'Job description', 'Script / command', 'CPUs',
+    'Nodes', 'Partition', 'Started at', 'Elapsed time', 'Time left',
+)
+
+
+def configure_slurm_job_table(table):
+    table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+    table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+    table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+    table.setWordWrap(False)
+    table.setHorizontalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
+    row_numbers = table.verticalHeader()
+    row_numbers.setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
+    row_numbers.setSectionsClickable(False)
+    row_numbers.show()
+    header = table.horizontalHeader()
+    header.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+    for column, width in ((2, 88), (3, 134), (4, 128)):
+        header.setSectionResizeMode(column, QHeaderView.ResizeMode.Interactive)
+        table.setColumnWidth(column, width)
+    for column in (2, 4, 7):
+        table.setItemDelegateForColumn(column, QItemDelegate(table))
 
 
 @dataclass(frozen=True)
@@ -97,9 +120,9 @@ def query_active_jobs(auth, state_dir):
     return dict(groups)
 
 
-def display_start(job):
+def display_start(value):
     try:
-        utc = datetime.fromisoformat(job.start).replace(tzinfo=timezone.utc)
+        utc = datetime.fromisoformat(value).replace(tzinfo=timezone.utc)
     except ValueError:
         return '—'
     return utc.astimezone().strftime('%d.%m.%Y %H:%M:%S %z')
@@ -194,24 +217,9 @@ class TrubaActiveJobs(QWidget):
         self.splitter.setChildrenCollapsible(False)
         self.works = self._table(['Work name'])
         self.works.setItemDelegate(QItemDelegate(self.works))
-        self.jobs = self._table([
-            'Slurm ID', 'Status', 'Work name', 'Job description', 'Script / command', 'CPUs',
-            'Nodes', 'Partition', 'Started at', 'Elapsed time', 'Time left',
-        ])
-        row_numbers = self.jobs.verticalHeader()
-        row_numbers.setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
-        row_numbers.setSectionsClickable(False)
-        row_numbers.show()
-        self.jobs.setHorizontalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
-        header = self.jobs.horizontalHeader()
-        header.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
-        for column in (2, 3, 4):
-            header.setSectionResizeMode(column, QHeaderView.ResizeMode.Interactive)
-        self.jobs.setColumnWidth(2, 88)
-        self.jobs.setColumnWidth(3, 134)
-        self.jobs.setColumnWidth(4, 128)
-        for column in (2, 4, 7):
-            self.jobs.setItemDelegateForColumn(column, QItemDelegate(self.jobs))
+        self.jobs = QTableWidget(0, len(SLURM_JOB_HEADERS))
+        self.jobs.setHorizontalHeaderLabels(SLURM_JOB_HEADERS)
+        configure_slurm_job_table(self.jobs)
         self.splitter.addWidget(self.works)
         self.splitter.addWidget(self.jobs)
         self.splitter.setStretchFactor(0, 0)
@@ -356,7 +364,7 @@ class TrubaActiveJobs(QWidget):
                 started = job.state not in ('PENDING', 'CONFIGURING')
                 values = (
                     job.cpus, job.nodes, job.partition,
-                    display_start(job) if started else '—',
+                    display_start(job.start) if started else '—',
                     display_duration(job.elapsed) if started else '—',
                     display_duration(job.remaining) if started else '—',
                 )

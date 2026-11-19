@@ -164,6 +164,7 @@ Permission denied on TRUBA.|TRUBA'da erişim reddedildi.
 Could not load TRUBA files.|TRUBA dosyaları yüklenemedi.
 Could not create the folder. Check if the name already exists.|Klasör oluşturulamadı. Bu adın zaten kullanılıp kullanılmadığını kontrol edin.
 Logs and files|Günlükler ve dosyalar
+Queued and running jobs|Kuyruktaki ve çalışan işler
 Standard output|Standart çıktı
 Standard error|Standart hata
 Job log tail|İş günlüğünün son satırları

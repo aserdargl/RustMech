@@ -549,7 +549,7 @@ def submit_full_node(directory, record, files, settings, auth):
         ranks, memory, walltime = full_node_resources(settings["partition"], catalog)
         script = remote_script(files[1], ranks, memory=memory, walltime=walltime, **settings,
                                work_subdir=record.get("work_subdir", ""))
-        changes = dict(ranks=ranks, memory_mib=memory)
+        changes = dict(ranks=ranks, memory_mib=memory, partition=settings["partition"])
         if settings.get("resume_input"):
             changes["resume_input"] = settings["resume_input"]
         save_job(directory, record, **changes)
@@ -793,7 +793,7 @@ def resume_remote(directory, record, auth):
     if not re.fullmatch(r"[0-9]+", job_id):
         raise RuntimeError("Invalid Slurm job ID. Refresh to recover the submission.")
     save_job(directory, record, state="Submitted", job_id=job_id, detail="", cancel_requested=False,
-             elapsed_seconds=None, script_step="")
+             elapsed_seconds=None, script_step="", slurm={})
 
 
 def slurm_queue_seconds(value):
@@ -812,8 +812,9 @@ def script_step(output):
 def refresh_status(directory, record, transport, setup, *, managed=False):
     reply = transport.command(setup + f"""
 if [[ -n "$job" ]]; then
-    queue=$(squeue -h -j "$job" -o '%T|%M|%r') || queue=''
-    if ! accounting=$(sacct -n -X -j "$job" --format=State,ExitCode,ElapsedRaw -P); then
+    export TZ=UTC SLURM_TIME_FORMAT='%Y-%m-%dT%H:%M:%S'
+    queue=$(squeue -h -j "$job" -o '%T|%M|%S|%L|%C|%D|%P|%r') || queue=''
+    if ! accounting=$(sacct -n -X -j "$job" --format=State,ExitCode,ElapsedRaw,Start,AllocCPUS,AllocNodes,Partition -P); then
         [[ -n "$queue" ]] || exit 1
         accounting=''
     fi
@@ -836,18 +837,29 @@ done
         changes.update(job_id=job_id, has_checkpoint=tagged(reply, "HAS_CHECKPOINT") == "1",
                        cancel_requested=tagged(reply, "cancelled") == "1")
         if job_id != record.get("job_id"):
-            changes.update(elapsed_seconds=None, script_step="")
+            changes.update(elapsed_seconds=None, script_step="", slurm={})
     queue = tagged(reply, "QUEUE")
     accounting = tagged(reply, "ACCT")
-    accounting_state, code, elapsed, *_ = accounting.split("|") + ["", ""]
+    accounting_state, code, elapsed, start, cpus, nodes, partition, *_ = accounting.split("|") + [""] * 6
     status = accounting_state.split(" ", 1)[0].rstrip("+")
-    queue_state, _, queue_details = queue.partition("|")
-    queue_time, separator, reason = queue_details.partition("|")
+    slurm = changes.get("slurm", record.get("slurm", {})).copy()
+    queue_state, queue_time, queue_start, remaining, queue_cpus, queue_nodes, queue_partition, reason, *_ = (
+        queue.split("|", 7) + [""] * 7
+    )
+    if queue:
+        fields = dict(cpus=queue_cpus, nodes=queue_nodes, partition=queue_partition)
+        if queue_state not in {"PENDING", "CONFIGURING"}:
+            fields.update(start=queue_start, remaining=remaining)
+    else:
+        fields = dict(start=start, cpus=cpus, nodes=nodes, partition=partition)
+    slurm.update({field: value for field, value in fields.items() if value and value not in {"N/A", "Unknown"}})
+    if slurm:
+        changes["slurm"] = slurm
     if elapsed.isascii() and elapsed.isdecimal():
         changes["elapsed_seconds"] = int(elapsed)
     if queue_state == "PENDING":
         changes["elapsed_seconds"] = 0
-    elif separator and (seconds := slurm_queue_seconds(queue_time)) is not None:
+    elif (seconds := slurm_queue_seconds(queue_time)) is not None:
         changes["elapsed_seconds"] = seconds
     for name in LOGS:
         data = base64.b64decode(tagged(reply, re.escape(name)), validate=True)
@@ -870,7 +882,7 @@ done
             state = "Cancellation requested"
         elif queue:
             state = "Running" if queue_state in {"RUNNING", "COMPLETING"} else "Queued"
-        detail = "|".join((queue_state, reason if separator else queue_details)) if queue else "Waiting for Slurm accounting…"
+        detail = "|".join((queue_state, reason)) if queue else "Waiting for Slurm accounting…"
         changes.update(state=state, detail=detail)
     save_job(directory, record, **changes)
 

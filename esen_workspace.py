@@ -2,6 +2,8 @@
 
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
+from html import escape
 from itertools import islice
 from operator import attrgetter
 import os
@@ -12,12 +14,16 @@ import subprocess
 from threading import Event
 from time import time
 
-from PySide6.QtCore import QModelIndex, QItemSelectionModel, QPoint, QSettings, QSignalBlocker, QSize, Qt, QTimer, QUrl, Signal
+from PySide6.QtCore import (
+    QModelIndex, QItemSelectionModel, QPoint, QSettings, QSignalBlocker, QSize, QSortFilterProxyModel,
+    Qt, QTimer, QUrl, Signal,
+)
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QCheckBox, QDialog, QFormLayout, QFrame, QHeaderView, QHBoxLayout, QLabel,
     QLineEdit, QListWidget, QListWidgetItem, QMessageBox, QPlainTextEdit, QProgressBar, QPushButton,
-    QScrollArea, QSizePolicy, QSplitter, QStyle, QToolTip, QTreeWidget, QTreeWidgetItem, QVBoxLayout,
+    QScrollArea, QSizePolicy, QSplitter, QStyle, QTableView, QTableWidget, QTableWidgetItem,
+    QToolTip, QTreeWidget, QTreeWidgetItem, QVBoxLayout,
 )
 
 from datenburg_widgets import qss_asset_url
@@ -28,6 +34,7 @@ from studio_style import (
     ActionFlowLayout, CompactComboBox, CompactSpinBox, CONTROL_HEIGHT,
     STUDIO_STYLESHEET, SidebarGroupBox, configure_form, field_label,
 )
+from truba_active_jobs import SLURM_JOB_HEADERS, configure_slurm_job_table, display_duration, display_start
 from truba_file_browser import TrubaFileBrowser, modified_date_text
 from truba_files import project_root, sync_tree
 from ui_language import translate
@@ -39,6 +46,7 @@ PANEL_PADDING = 7
 INPUT_TOOL_SPACING = 2
 HISTORY_REMOTE_ACTIVE_ROLE = Qt.ItemDataRole.UserRole + 1
 HISTORY_REFRESH_OWNER_ROLE = Qt.ItemDataRole.UserRole + 2
+HISTORY_QUEUE_ROLE = Qt.ItemDataRole.UserRole + 3
 
 
 def job_duration(record, state):
@@ -151,17 +159,15 @@ def code_view(name):
     return edit
 
 
-class CompactListWidget(QListWidget):
-    """Fill spare panel space without forcing scrollbars from the list's size hint."""
+class EsenQueueModel(QSortFilterProxyModel):
+    def filterAcceptsRow(self, row, parent):
+        model = self.sourceModel()
+        return bool(model.index(row, 0, parent).data(HISTORY_QUEUE_ROLE))
 
-    def __init__(self):
-        super().__init__()
-        self.setMinimumHeight(63)
-
-    def sizeHint(self):
-        size = super().sizeHint()
-        size.setHeight(self.minimumHeight())
-        return size
+    def headerData(self, section, orientation, role=Qt.ItemDataRole.DisplayRole):
+        if orientation == Qt.Orientation.Vertical and role == Qt.ItemDataRole.DisplayRole:
+            return section + 1
+        return super().headerData(section, orientation, role)
 
 
 class InputFileItem(QTreeWidgetItem):
@@ -568,7 +574,9 @@ class EsenWorkspace(QDialog):
 
         self.delete_job = command("Delete", self._delete_history_job, role="destructiveActionBtn",
                                   hint="Remove job from history")
-        self.history = CompactListWidget()
+        self.history = QTableWidget(0, len(SLURM_JOB_HEADERS))
+        self.history.setHorizontalHeaderLabels(SLURM_JOB_HEADERS)
+        self._configure_history_table(self.history)
         self.history.setAccessibleName("ESEN job history")
         self.history.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.select_history = command("Select all", self.history.selectAll)
@@ -607,8 +615,14 @@ class EsenWorkspace(QDialog):
         self.input_note.setWordWrap(True)
         layout.addWidget(self.input_note)
 
-        result, layout = panel("Logs and files", paper=True)
-        right.addWidget(result)
+        result, layout = panel("Logs and files", paper=True, scrollable=True)
+        result.setMinimumHeight(115)
+        results_splitter = QSplitter(Qt.Orientation.Vertical)
+        results_splitter.setObjectName("esenLogsAndActiveJobs")
+        results_splitter.setChildrenCollapsible(False)
+        results_splitter.setHandleWidth(7)
+        right.addWidget(results_splitter)
+        results_splitter.addWidget(result)
         self.job_progress = QLabel()
         self.job_progress.setTextFormat(Qt.TextFormat.PlainText)
         self.job_progress.setWordWrap(True)
@@ -624,8 +638,12 @@ class EsenWorkspace(QDialog):
         self.log_type.currentIndexChanged.connect(self._show_log)
         layout.addWidget(self.log_type)
         self.log = code_view("Job log tail")
+        self.log.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Ignored)
+        self.log.setMinimumHeight(45)
         layout.addWidget(self.log, 2)
         self.results = QListWidget()
+        self.results.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Ignored)
+        self.results.setMinimumHeight(38)
         self.results.setAccessibleName("Result files")
         self.results.currentItemChanged.connect(self._buttons)
         layout.addWidget(self.results, 1)
@@ -634,7 +652,20 @@ class EsenWorkspace(QDialog):
         self.open_results_folder = command("Results", self._open_results_directory, hint="Open result folder")
         self.download = command("Download", self._download, hint="Download file")
         layout.addLayout(button_row(self.open_file, self.download, self.open_folder, self.open_results_folder))
-        right.setSizes([240, 450])
+        active_jobs, layout = panel("Queued and running jobs", paper=True)
+        self.queue_model = EsenQueueModel(self)
+        self.queue_model.setSourceModel(self.history.model())
+        self.active_jobs = QTableView()
+        self.active_jobs.setObjectName("esenActiveJobs")
+        self.active_jobs.setModel(self.queue_model)
+        self._configure_history_table(self.active_jobs)
+        self.active_jobs.setAccessibleName("Queued and running jobs")
+        self.active_jobs.clicked.connect(self._select_active_job)
+        self.active_jobs.activated.connect(self._select_active_job)
+        layout.addWidget(self.active_jobs)
+        results_splitter.addWidget(active_jobs)
+        results_splitter.setSizes([320, 175])
+        right.setSizes([190, 500])
 
         truba_card, truba_layout = panel("TRUBA files", paper=True)
         self.truba_browser = TrubaFileBrowser(self.truba, self.executor, command, self.preferences)
@@ -655,6 +686,15 @@ class EsenWorkspace(QDialog):
         footer.addWidget(self.clear_reuse)
         footer.addWidget(self.start)
         outer.addLayout(footer)
+
+    @staticmethod
+    def _configure_history_table(table):
+        configure_slurm_job_table(table)
+        table.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Ignored)
+        table.setMinimumSize(0, 74)
+        header = table.horizontalHeader()
+        for position, column in enumerate((4, 5, 6, 7), start=2):
+            header.moveSection(header.visualIndex(column), position)
 
     def _size_command_buttons(self):
         # Reserve space for the shared focus border on both sides.
@@ -1373,19 +1413,19 @@ class EsenWorkspace(QDialog):
                 continue
         for record, directory in sorted(records, key=lambda pair: pair[0].get("created", ""), reverse=True):
             self._history_item(directory, record)
-        if self.history.count():
-            self.history.setCurrentRow(0)
+        if self.history.rowCount():
+            self.history.setCurrentCell(0, 0)
 
     def _history_item(self, directory, record, *, prepend=False):
-        item = QListWidgetItem()
+        row = 0 if prepend else self.history.rowCount()
+        self.history.insertRow(row)
+        item = QTableWidgetItem()
         item.setData(Qt.ItemDataRole.UserRole, str(directory))
+        self.history.setItem(row, 0, item)
         self._update_history_item(item, directory, record)
-        if prepend:
-            self.history.insertItem(0, item)
-            if len(self.history.selectedItems()) <= 1:
-                self.history.setCurrentItem(item, QItemSelectionModel.SelectionFlag.ClearAndSelect)
-        else:
-            self.history.addItem(item)
+        if prepend and len(self._history_selection()) <= 1:
+            self.history.setCurrentItem(item, QItemSelectionModel.SelectionFlag.ClearAndSelect
+                                        | QItemSelectionModel.SelectionFlag.Rows)
         return item
 
     def _update_history_item(self, item, directory, record):
@@ -1399,18 +1439,39 @@ class EsenWorkspace(QDialog):
             self._active_truba_jobs[directory] = username
         else:
             self._active_truba_jobs.pop(directory, None)
-        target = translate("This computer") if record["target"] == "local" else "TRUBA"
         state = self._state(directory, record)
-        duration = job_duration(record, state)
-        name = record["name"]
-        if record.get("batch_folder"):
-            name = f"{record['batch_folder']}/{name}"
-        summary = f"{translate(state)} · {target}"
-        if duration != "—":
-            summary = f"{duration} · {summary}"
-        item.setText(f"{name}\n{summary}")
-        if record.get("source"):
-            item.setToolTip(record["source"])
+        local = record["target"] == "local"
+        attached = record.get("remote_run")
+        script_name = "—" if attached else record["name"]
+        work_name = record["name"] if attached else record.get("batch_folder") or "—"
+        slurm = record.get("slurm", {})
+        start = slurm.get("start", "")
+        if local and record.get("started_at") is not None:
+            start = datetime.fromtimestamp(record["started_at"], timezone.utc).isoformat()
+        values = (
+            record.get("job_id") or "—", state, work_name, "This computer" if local else "TRUBA", script_name,
+            slurm.get("cpus") or record.get("ranks") or "—", slurm.get("nodes") or "—",
+            slurm.get("partition") or record.get("partition") or "—",
+            display_start(start) if state != "Queued" else "—",
+            job_duration(record, state) if state != "Queued" else "—",
+            display_duration(slurm.get("remaining", "")) if state == "Running" else "—",
+        )
+        row = item.row()
+        for column, value in enumerate(values):
+            cell = self.history.item(row, column)
+            if cell is None:
+                cell = QTableWidgetItem()
+                self.history.setItem(row, column, cell)
+            cell.setText(str(value))
+        if attached:
+            self.history.item(row, 2).setToolTip(f"<qt>{escape(attached)}</qt>")
+        else:
+            source = record.get("truba_input_folder") or record.get("source")
+            script = escape(script_name)
+            if source:
+                script += "<br>" + escape(source)
+            self.history.item(row, 4).setToolTip(f"<qt>{script}</qt>")
+        item.setData(HISTORY_QUEUE_ROLE, state in {"Queued", "Running"})
 
     def _state(self, directory, record):
         if record["state"] == "Preparing" and directory in self.batch_queue:
@@ -1425,10 +1486,10 @@ class EsenWorkspace(QDialog):
         return [task[0] for task in (self.local_task, self.remote_task) if task]
 
     def _history_focus(self):
-        current = self.history.currentItem()
+        current = self.history.item(self.history.currentRow(), 0)
         if current is not None and current.isSelected():
             return current
-        return next(iter(self.history.selectedItems()), None)
+        return next(iter(self._history_selection()), None)
 
     @staticmethod
     def _history_directory(item):
@@ -1438,7 +1499,13 @@ class EsenWorkspace(QDialog):
         return self._history_directory(self._history_focus())
 
     def _history_selection(self):
-        return sorted(self.history.selectedItems(), key=self.history.row)
+        rows = self.history.selectionModel().selectedRows()
+        return [self.history.item(row, 0) for row in sorted(index.row() for index in rows)]
+
+    def _select_active_job(self, index):
+        row = self.queue_model.mapToSource(index).row()
+        if row >= 0:
+            self.history.setCurrentCell(row, 0)
 
     def _can_delete_job(self, directory, remote_active):
         return (directory != self.batch_active and directory not in self._active_directories()
@@ -1475,7 +1542,7 @@ class EsenWorkspace(QDialog):
                     continue
                 self.batch_queue.pop(directory, None)
                 self._active_truba_jobs.pop(directory, None)
-                self.history.takeItem(self.history.row(item))
+                self.history.removeRow(item.row())
         self._select_job()
         if errors:
             self.job_error = "\n".join(errors)
@@ -1663,10 +1730,16 @@ class EsenWorkspace(QDialog):
         else:
             self._run_local(directory, record, files, *options)
         item = self._update_finished_job(directory, record)
-        if len(self.history.selectedItems()) <= 1:
-            self.history.setCurrentItem(item, QItemSelectionModel.SelectionFlag.ClearAndSelect)
+        if len(self._history_selection()) <= 1:
+            self.history.setCurrentCell(item.row(), 0)
 
     def _select_job(self, *_):
+        item = self._history_focus()
+        proxy_index = self.queue_model.mapFromSource(self.history.indexFromItem(item)) if item else QModelIndex()
+        selection = self.active_jobs.selectionModel()
+        if not selection.currentIndex().isValid() or selection.currentIndex().row() != proxy_index.row():
+            selection.setCurrentIndex(proxy_index, QItemSelectionModel.SelectionFlag.ClearAndSelect
+                                      | QItemSelectionModel.SelectionFlag.Rows)
         directory = self._selected_directory()
         if self._history_preview == directory:
             self._buttons()
@@ -1676,7 +1749,7 @@ class EsenWorkspace(QDialog):
         self._result_key = None
         self.log.clear()
         self._show_selected()
-        if len(self.history.selectedItems()) == 1:
+        if len(self._history_selection()) == 1:
             self._auto_refresh(manual=bool(self.record and self.record.get("remote_run")))
 
     def _show_selected(self):
@@ -1833,9 +1906,9 @@ class EsenWorkspace(QDialog):
         self.remove_inputs.setEnabled(supporting_file_selected and not uploading)
         self.move_up.setEnabled(not uploading and self._script_neighbor(-1) is not None)
         self.move_down.setEnabled(not uploading and self._script_neighbor(1) is not None)
-        selection = self.history.selectedItems()
+        selection = self._history_selection()
         multiple = len(selection) > 1
-        self.select_history.setEnabled(self.history.count() > len(selection))
+        self.select_history.setEnabled(self.history.rowCount() > len(selection))
         self.delete_job.setEnabled(any(
             self._can_delete_job(self._history_directory(item), item.data(HISTORY_REMOTE_ACTIVE_ROLE))
             for item in selection
@@ -1868,6 +1941,13 @@ class EsenWorkspace(QDialog):
         self._check_run_list()
         for field in ("local_task", "remote_task"):
             task = getattr(self, field)
+            if task and not task[1].done() and self.isVisible() and task[0] != self._selected_directory():
+                try:
+                    record = jobs.read_job(task[0])
+                except (OSError, ValueError):
+                    pass
+                else:
+                    self._update_finished_job(task[0], record)
             if task and task[1].done():
                 directory, future = task
                 setattr(self, field, None)
@@ -1888,8 +1968,8 @@ class EsenWorkspace(QDialog):
             self._show_selected()
 
     def _update_finished_job(self, directory, record):
-        for row in range(self.history.count()):
-            item = self.history.item(row)
+        for row in range(self.history.rowCount()):
+            item = self.history.item(row, 0)
             if item.data(Qt.ItemDataRole.UserRole) == str(directory):
                 self._update_history_item(item, directory, record)
                 return item
@@ -1905,13 +1985,13 @@ class EsenWorkspace(QDialog):
             self.job_error = str(error)
             self._show_selected()
             return
-        for index in range(self.history.count()):
-            item = self.history.item(index)
+        for index in range(self.history.rowCount()):
+            item = self.history.item(index, 0)
             if item.data(Qt.ItemDataRole.UserRole) == str(directory):
-                if self.history.currentItem() == item:
+                if self._history_focus() == item:
                     self._refresh_remote(manual=True)
                 else:
-                    self.history.setCurrentItem(item, QItemSelectionModel.SelectionFlag.ClearAndSelect)
+                    self.history.setCurrentCell(index, 0)
                 return
         self.job_error = ""
         self.remote_task = (directory, self.executor.submit(jobs.attach_remote_run, directory, path, auth))
@@ -1991,7 +2071,8 @@ class EsenWorkspace(QDialog):
             self.job_error = ""
 
         def refresh():
-            if not was_terminal or (manual and (record.get("resume_input") or record.get("elapsed_seconds") is None)):
+            if not was_terminal or (manual and (record.get("resume_input") or record.get("elapsed_seconds") is None
+                                                or not record.get("slurm"))):
                 jobs.refresh_remote(directory, record, auth, cancel=cancel)
             if record["state"] in jobs.TERMINAL and (not was_terminal or "files" not in record or manual):
                 jobs.remote_files(directory, record, auth)
@@ -2078,8 +2159,8 @@ class EsenWorkspace(QDialog):
                 self.folder_replay = True
                 self.resume_input.setText(self.record.get("resume_input", ""))
                 if self.record.get("batch_folder") and self._unsent_slurm_job(self.record):
-                    for row in range(self.history.count()):
-                        path = Path(self.history.item(row).data(Qt.ItemDataRole.UserRole))
+                    for row in range(self.history.rowCount()):
+                        path = self._history_directory(self.history.item(row, 0))
                         try:
                             record = jobs.read_job(path)
                         except (OSError, ValueError):

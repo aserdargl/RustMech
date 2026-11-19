@@ -1,6 +1,7 @@
 """Focused regression coverage for ESEN file loading and job lifecycle."""
 
 import base64
+from concurrent.futures import Future
 from io import BytesIO
 import os
 from pathlib import Path, PurePosixPath
@@ -446,17 +447,20 @@ class EsenTests(unittest.TestCase):
         with patch("esen_jobs.RemoteTransport") as factory:
             transport = factory.return_value
             transport.command.side_effect = [
-                "QUEUE=PENDING|0:00|Resources\nACCT=PENDING|0:0|0\nstdout.log=\nstderr.log=\n",
-                f"QUEUE=RUNNING|1-02:03:04|node\nACCT=RUNNING|0:0|12\nstdout.log={step}\nstderr.log=\n",
-                "QUEUE=\nACCT=COMPLETED|0:0|94000\nstdout.log=\nstderr.log=\n",
+                "QUEUE=PENDING|0:00|2026-11-20T05:00:00|48:00:00|40|1|orfoz|Resources\nACCT=PENDING|0:0|0\nstdout.log=\nstderr.log=\n",
+                f"QUEUE=RUNNING|1-02:03:04|2026-11-20T05:00:00|21:56:56|40|1|orfoz|node\nACCT=RUNNING|0:0|12\nstdout.log={step}\nstderr.log=\n",
+                "QUEUE=\nACCT=COMPLETED|0:0|94000|2026-11-20T05:00:00|40|1|orfoz\nstdout.log=\nstderr.log=\n",
             ]
             jobs.refresh_remote(directory, record, self.auth)
             self.assertEqual((record["state"], record["elapsed_seconds"]), ("Queued", 0))
+            self.assertEqual(record["slurm"], dict(cpus="40", nodes="1", partition="orfoz"))
             jobs.refresh_remote(directory, record, self.auth)
             self.assertEqual((record["state"], record["elapsed_seconds"]), ("Running", 93784))
+            self.assertEqual(record["slurm"]["remaining"], "21:56:56")
             jobs.refresh_remote(directory, record, self.auth)
         saved = jobs.read_job(directory)
         self.assertEqual((saved["state"], saved["elapsed_seconds"]), ("Completed", 94000))
+        self.assertEqual(saved["slurm"]["start"], "2026-11-20T05:00:00")
         self.assertEqual(saved["script_step"], "Equilibration")
 
     def test_selected_job_displays_runtime_and_reported_step(self):
@@ -470,10 +474,57 @@ class EsenTests(unittest.TestCase):
         self.addCleanup(workspace.dispose)
         workspace.show()
         app.processEvents()
-        self.assertIn("26:06:40", workspace.history.currentItem().text())
+        self.assertEqual(workspace.history.item(0, 9).text(), "26:06:40")
         self.assertIn("26:06:40", workspace.job_progress.text())
         self.assertIn("Equilibration", workspace.job_progress.text())
         self.assertTrue(workspace.job_progress.isVisible())
+
+    def test_history_tables_share_details_and_only_show_queued_and_running_on_right(self):
+        app = QApplication.instance() or QApplication([])
+        preferences = QSettings(str(self.root / "settings.ini"), QSettings.Format.IniFormat)
+        submitted, queued, running, completed, preparing = (self.new_job() for _ in range(5))
+        for job, state, job_id in (
+            (submitted, "Submitted", "111"), (queued, "Queued", "222"),
+            (running, "Running", "333"), (completed, "Completed", "444"),
+        ):
+            jobs.save_job(*job, state=state, job_id=job_id, username=self.auth.username)
+        jobs.save_job(*running, elapsed_seconds=63,
+                      slurm=dict(start="2026-11-20T05:00:00", remaining="10:12", cpus="40", nodes="2",
+                                 partition="orfoz"))
+        (running[0] / "stdout.log").write_text("running job log", encoding="utf-8")
+        with patch("esen_workspace.QSettings", return_value=preferences):
+            workspace = EsenWorkspace(FakeTruba(), history=self.history)
+        self.addCleanup(workspace.dispose)
+        workspace.show()
+        app.processEvents()
+        future = Future()
+        workspace.remote_task = preparing[0], future
+        workspace._update_finished_job(*preparing)
+        self.assertEqual(workspace.history.rowCount(), 5)
+        self.assertEqual({workspace.history.item(row, 1).text() for row in range(5)},
+                         {"Preparing", "Submitted", "Queued", "Running", "Completed"})
+        proxy = workspace.active_jobs.model()
+        self.assertEqual(proxy.rowCount(), 2)
+        self.assertEqual([proxy.headerData(row, Qt.Orientation.Vertical) for row in range(2)], [1, 2])
+        row = next(row for row in range(2) if proxy.index(row, 0).data() == "333")
+        self.assertEqual([proxy.index(row, column).data() for column in (4, 5, 6, 7, 9, 10)],
+                         [self.entry, "40", "2", "orfoz", "00:01:03", "00:10:12"])
+        self.assertNotEqual(proxy.index(row, 8).data(), "—")
+        workspace.active_jobs.scrollTo(proxy.index(row, 0))
+        position = workspace.active_jobs.visualRect(proxy.index(row, 0)).center()
+        QTest.mouseClick(workspace.active_jobs.viewport(), Qt.MouseButton.LeftButton, pos=position)
+        self.assertEqual(workspace._selected_directory(), running[0])
+        self.assertIn("running job log", workspace.log.toPlainText())
+        jobs.save_job(*preparing, state="Submitting")
+        workspace._tick()
+        preparing_row = next(row for row in range(workspace.history.rowCount())
+                             if workspace.history.item(row, 0).data(Qt.ItemDataRole.UserRole) == str(preparing[0]))
+        self.assertEqual(workspace.history.item(preparing_row, 1).text(), "Submitting")
+        jobs.save_job(*running, state="Completed")
+        workspace._show_selected()
+        self.assertEqual(proxy.rowCount(), 1)
+        self.assertEqual(proxy.index(0, 0).data(), "222")
+        future.set_result(None)
 
     def test_cancel_waits_for_slurm_to_confirm(self):
         directory, record = self.new_job()
@@ -481,7 +532,7 @@ class EsenTests(unittest.TestCase):
         with patch("esen_jobs.RemoteTransport") as factory:
             transport = factory.return_value
             transport.command.side_effect = [
-                "", "QUEUE=COMPLETING|node\nACCT=RUNNING|0:0\nstdout.log=\nstderr.log=\n",
+                "", "QUEUE=COMPLETING|00:10|2026-11-20T05:00:00|2:00:00|40|1|orfoz|node\nACCT=RUNNING|0:0\nstdout.log=\nstderr.log=\n",
                 "QUEUE=\nACCT=CANCELLED by 42|0:15\nstdout.log=\nstderr.log=\n",
             ]
             jobs.refresh_remote(directory, record, self.auth, cancel=True)
@@ -616,7 +667,7 @@ class EsenTests(unittest.TestCase):
             QTest.mouseClick(workspace.load_files, Qt.MouseButton.LeftButton)
         self.assertEqual(workspace.input_root, self.source)
         self.assertFalse(workspace.start.isEnabled())
-        self.assertEqual(workspace.history.count(), 0)
+        self.assertEqual(workspace.history.rowCount(), 0)
         QTest.mouseClick(workspace.use_as_script, Qt.MouseButton.LeftButton)
         self.assertEqual(workspace.entry, self.entry)
         self.assertEqual(workspace.extra, ["data/cell.lmp"])
@@ -634,7 +685,7 @@ class EsenTests(unittest.TestCase):
         self.assertFalse(workspace.account.isVisible())
         self.assertIn("#SBATCH --account=custom-account", workspace.preview.toPlainText())
         self.assertTrue(workspace.isVisible())
-        self.assertEqual(workspace.history.count(), 0)
+        self.assertEqual(workspace.history.rowCount(), 0)
 
         workspace.target.setCurrentIndex(workspace.target.findData("local"))
         self.assertFalse(header.isVisible())
@@ -689,7 +740,7 @@ class EsenTests(unittest.TestCase):
             self.assertEqual(workspace.truba_badge.text(), "Working")
             future.result(timeout=5)
             workspace._tick()
-        workspace.history.setCurrentRow(1)
+        workspace.history.setCurrentCell(1, 0)
         self.assertEqual(workspace.record["target"], "local")
         self.assertEqual(workspace.truba_badge.text(), "Working")
 
@@ -737,7 +788,7 @@ class EsenTests(unittest.TestCase):
             QTest.mouseClick(button, Qt.MouseButton.LeftButton)
             open_url.assert_called_once_with(QUrl.fromLocalFile(str(result_folder)))
 
-        workspace.history.setCurrentRow(-1)
+        workspace.history.setCurrentCell(-1, -1)
         self.assertFalse(button.isEnabled())
 
     def test_drop_selects_unique_conventional_script_and_preserves_paths(self):
@@ -763,7 +814,7 @@ class EsenTests(unittest.TestCase):
         self.assertTrue(drop.isAccepted())
         self.assertEqual(workspace.entry, "in.cell")
         self.assertEqual(workspace.extra, ["data/cell.lmp"])
-        self.assertEqual(workspace.history.count(), 0)
+        self.assertEqual(workspace.history.rowCount(), 0)
 
     def test_workspace_reopens_with_maximized_geometry_and_splitter(self):
         app = QApplication.instance() or QApplication([])
@@ -785,6 +836,9 @@ class EsenTests(unittest.TestCase):
         splitter = store.splitters(first)[0]
         splitter.setSizes([340, 430])
         expected = splitter.sizes()
+        results = next(split for split in store.splitters(first) if split.objectName() == "esenLogsAndActiveJobs")
+        results.moveSplitter(results.sizes()[0] - 45, 1)
+        expected_results = results.sizes()
         normal = first.normalGeometry()
         first.close()
         with patch("esen_workspace.QSettings", return_value=preferences):
@@ -797,6 +851,8 @@ class EsenTests(unittest.TestCase):
         self.assertEqual(second.normalGeometry(), normal)
         actual = store.splitters(second)[0].sizes()
         self.assertAlmostEqual(actual[0] / sum(actual), expected[0] / sum(expected), delta=0.03)
+        reopened_results = next(split for split in store.splitters(second) if split.objectName() == results.objectName())
+        self.assertEqual(reopened_results.sizes(), expected_results)
 
     def load_batch(self, workspace):
         with patch("esen_workspace.QFileDialog.getExistingDirectory", return_value=str(self.source)):
@@ -872,7 +928,7 @@ class EsenTests(unittest.TestCase):
         with (patch("esen_jobs.run_local", side_effect=run) as launch,
               patch("esen_jobs.local_command", side_effect=lambda entry, *_: ["lmp", entry])):
             self.load_batch(workspace)
-            self.assertEqual(workspace.history.count(), 0)
+            self.assertEqual(workspace.history.rowCount(), 0)
             items = {item.path: item for item in workspace.inputs.items()}
             self.assertEqual(list(items), ["in.first", "in.second", "in.skip", self.entry,
                                            "data/cell.lmp", "study/run.IN"])
@@ -901,8 +957,8 @@ class EsenTests(unittest.TestCase):
                              [(self.source.resolve(), "in.first"), (self.source.resolve(), "in.second"),
                               (sub.resolve(), "run.IN")])
         self.assertTrue(workspace.start.isEnabled())
-        self.assertEqual(workspace.history.count(), 3)
-        self.assertIn("Failed", workspace.history.item(2).text())
+        self.assertEqual(workspace.history.rowCount(), 3)
+        self.assertEqual(workspace.history.item(2, 1).text(), "Failed")
 
     def test_truba_folder_waits_for_slurm_completion_before_submitting_next_script(self):
         app = QApplication.instance() or QApplication([])
@@ -973,9 +1029,9 @@ class EsenTests(unittest.TestCase):
             snapshot = jobs.upload_snapshot(self.history, workspace.folder_upload[0])
             self.assertEqual([call.args[2][:2] for call in launch.call_args_list],
                              [(snapshot / "01", "in.solver"), (snapshot / "02", "in.run")])
-        self.assertEqual(workspace.history.count(), 2)
-        self.assertIn("01/in.solver", workspace.history.item(1).text())
-        self.assertIn("Completed", workspace.history.item(1).text())
+        self.assertEqual(workspace.history.rowCount(), 2)
+        self.assertEqual(workspace.history.item(1, 4).text(), "01/in.solver")
+        self.assertEqual(workspace.history.item(1, 1).text(), "Completed")
         self.assertFalse(workspace.start.isEnabled())
         workspace.use_inputs.click()
         workspace.folder_scan[0].result(timeout=5)
@@ -1013,7 +1069,7 @@ class EsenTests(unittest.TestCase):
             workspace._tick()
             self.assertIn("sync interrupted", workspace.input_note.text())
             launch.assert_not_called()
-            self.assertEqual(workspace.history.count(), 0)
+            self.assertEqual(workspace.history.rowCount(), 0)
             self.assertTrue(workspace.start.isEnabled())
             upload_id = "b" * 32
             sync.side_effect = None
@@ -1032,9 +1088,9 @@ class EsenTests(unittest.TestCase):
                 workspace._tick()
             sync.assert_called_with(self.history, self.source.resolve(), self.auth, ("run_second.slurm",), progress=ANY)
             launch.assert_called_once()
-            self.assertEqual(workspace.history.count(), 1)
-            self.assertIn("run_second.slurm", workspace.history.item(0).text())
-            self.assertIn("Submitted", workspace.history.item(0).text())
+            self.assertEqual(workspace.history.rowCount(), 1)
+            self.assertEqual(workspace.history.item(0, 4).text(), "run_second.slurm")
+            self.assertEqual(workspace.history.item(0, 1).text(), "Submitted")
 
     def test_run_submits_an_uploaded_run_list_without_local_inputs(self):
         app = QApplication.instance() or QApplication([])
@@ -1058,7 +1114,7 @@ class EsenTests(unittest.TestCase):
                          QDateTime.fromSecsSinceEpoch(timestamp).toString("yyyy-MM-dd HH:mm"))
         self.assertEqual(browser.selected_file(self.auth), (folder, jobs.RUN_LIST))
         self.assertTrue(workspace.start.isEnabled())
-        self.assertEqual(workspace.history.count(), 0)
+        self.assertEqual(workspace.history.rowCount(), 0)
 
         def submit(directory, record, files, settings, auth):
             jobs.save_job(directory, record, state="Submitted", job_id="123", username=auth.username)
@@ -1077,8 +1133,8 @@ class EsenTests(unittest.TestCase):
                               for call in launch.call_args_list],
                              [("uploaded runs/case B", "launch.slurm"), ("uploaded runs/case A", "run.slurm")])
             sync.assert_not_called()
-        self.assertEqual(workspace.history.count(), 2)
-        self.assertTrue(all("Submitted" in workspace.history.item(i).text() for i in range(2)))
+        self.assertEqual(workspace.history.rowCount(), 2)
+        self.assertTrue(all(workspace.history.item(i, 1).text() == "Submitted" for i in range(2)))
 
     def test_space_checks_only_runnable_files_in_a_multi_selection(self):
         app = QApplication.instance() or QApplication([])
@@ -1221,7 +1277,7 @@ class EsenTests(unittest.TestCase):
             snapshot = jobs.upload_snapshot(self.history, upload_id)
             self.assertTrue(all((snapshot / name).is_file() for name in names))
             self.assertFalse((snapshot / self.entry).exists())
-            self.assertEqual(workspace.history.count(), 0)
+            self.assertEqual(workspace.history.rowCount(), 0)
             launch.assert_not_called()
 
             list_directory.return_value = [folder(destination)]
@@ -1278,10 +1334,9 @@ class EsenTests(unittest.TestCase):
               patch("truba_files.list_directory", return_value=[])):
             workspace = EsenWorkspace(truba, history=self.history)
         self.addCleanup(workspace.dispose)
-        workspace.history.setCurrentItem(next(
-            item for item in (workspace.history.item(row) for row in range(workspace.history.count()))
-            if item.data(Qt.ItemDataRole.UserRole) == str(unsent[0])
-        ))
+        row = next(row for row in range(workspace.history.rowCount())
+                   if workspace.history.item(row, 0).data(Qt.ItemDataRole.UserRole) == str(unsent[0]))
+        workspace.history.setCurrentCell(row, 0)
         self.assertTrue(workspace.use_inputs.isEnabled())
         workspace.use_inputs.click()
         workspace.folder_scan[0].result(timeout=5)
@@ -1299,7 +1354,7 @@ class EsenTests(unittest.TestCase):
                 workspace._tick()
             self.assertEqual([call.args[0] for call in launch.call_args_list], unsent)
             sync.assert_not_called()
-        self.assertEqual(workspace.history.count(), 3)
+        self.assertEqual(workspace.history.rowCount(), 3)
         self.assertEqual(jobs.read_job(accepted)["job_id"], "7019602")
 
     def test_select_all_removes_only_inactive_history_entries(self):
@@ -1317,15 +1372,15 @@ class EsenTests(unittest.TestCase):
         workspace.show()
         app.processEvents()
         QTest.keyClick(workspace.history, Qt.Key.Key_A, Qt.KeyboardModifier.ControlModifier)
-        self.assertEqual(len(workspace.history.selectedItems()), 3)
+        self.assertEqual(len(workspace.history.selectionModel().selectedRows()), 3)
         workspace.history.clearSelection()
         workspace.select_history.click()
-        self.assertEqual(len(workspace.history.selectedItems()), 3)
+        self.assertEqual(len(workspace.history.selectionModel().selectedRows()), 3)
         with patch.object(QMessageBox, "question", return_value=QMessageBox.StandardButton.Yes) as confirm:
             workspace.delete_job.click()
         confirm.assert_called_once()
         self.assertIn("2", confirm.call_args.args[2])
-        self.assertEqual(workspace.history.count(), 1)
+        self.assertEqual(workspace.history.rowCount(), 1)
         self.assertTrue(jobs.read_job(first)["hidden_from_history"])
         self.assertTrue(jobs.read_job(second)["hidden_from_history"])
         self.assertFalse(jobs.read_job(active).get("hidden_from_history", False))
@@ -1348,13 +1403,13 @@ class EsenTests(unittest.TestCase):
         workspace.select_history.click()
         workspace.use_inputs.click()
         self.assertEqual(len(workspace.reuse_batch), 2)
-        self.assertEqual(workspace.history.count(), 2)
+        self.assertEqual(workspace.history.rowCount(), 2)
         self.assertFalse(workspace.batch_queue)
         with (patch("esen_jobs.local_command", return_value=["lmp"]),
               patch.object(workspace, "_run_next_batch_job")):
             workspace.start.click()
-        self.assertEqual(workspace.history.count(), 4)
-        self.assertEqual(len(workspace.history.selectedItems()), 2)
+        self.assertEqual(workspace.history.rowCount(), 4)
+        self.assertEqual(len(workspace.history.selectionModel().selectedRows()), 2)
         self.assertEqual({record["target"]: files[0] for record, files, _ in workspace.batch_queue.values()}, originals)
         self.assertFalse(workspace.reuse_batch)
 
@@ -1382,7 +1437,7 @@ class EsenTests(unittest.TestCase):
             self.assertIsNone(workspace.remote_task)
             self.assertEqual(refresh.call_count, 2)
             self.assertEqual({call.args[0] for call in refresh.call_args_list}, expected)
-        self.assertEqual(len(workspace.history.selectedItems()), 3)
+        self.assertEqual(len(workspace.history.selectionModel().selectedRows()), 3)
 
     def test_remove_history_entry_preserves_job_files_and_is_persistent(self):
         app = QApplication.instance() or QApplication([])
@@ -1401,14 +1456,14 @@ class EsenTests(unittest.TestCase):
             workspace._show_selected()
             with patch("esen_workspace.QMessageBox.question", return_value=QMessageBox.StandardButton.No):
                 workspace.delete_job.click()
-            self.assertEqual(workspace.history.count(), 1)
+            self.assertEqual(workspace.history.rowCount(), 1)
             with patch("esen_workspace.QMessageBox.question", return_value=QMessageBox.StandardButton.Yes):
                 workspace.delete_job.click()
-            self.assertEqual(workspace.history.count(), 0)
+            self.assertEqual(workspace.history.rowCount(), 0)
             self.assertEqual(output.read_text(encoding="utf-8"), "result")
             reopened = EsenWorkspace(FakeTruba(), history=self.history)
             self.addCleanup(reopened.dispose)
-            self.assertEqual(reopened.history.count(), 0)
+            self.assertEqual(reopened.history.rowCount(), 0)
 
 
 if __name__ == "__main__":
