@@ -165,7 +165,7 @@ class FolderBatchDialog(QDialog):
         controls.addWidget(self.solver)
         controls.addStretch()
         layout.addLayout(controls)
-        self.check = self.button('Check folder', self.check_folder)
+        self.check = self.button('Check Folder', self.check_folder, primary=True)
         layout.addWidget(self.check, 0, Qt.AlignmentFlag.AlignLeft)
         self.settings_hint = QLabel('Material, mesh, loading, contact and solver parameters are captured from the main Mechanic workspace when checking. '
                                    'Displacement stays in mm; force stays in N. Imported geometries use tetrahedral elements.')
@@ -201,8 +201,11 @@ class FolderBatchDialog(QDialog):
         self.mode.currentIndexChanged.connect(self.invalidate)
         self.set_busy(False)
 
-    def button(self, text, callback):
+    def button(self, text, callback, *, primary=False):
         button = QPushButton(text, self)
+        if primary:
+            button.setProperty('primary', True)
+            button.setStyleSheet('QPushButton { padding: 0 8px; } QPushButton:focus { padding: 0 7px; }')
         button.setAutoDefault(False)
         button.setDefault(False)
         button.clicked.connect(callback)
