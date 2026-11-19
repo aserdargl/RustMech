@@ -14,7 +14,7 @@ class OperationProgress(QWidget):
     Keeping lifecycle ownership in the workspace also covers failure and cancel.
     """
 
-    def __init__(self, parent=None, provider=None):
+    def __init__(self, parent=None, provider=None, *, bar_at_end=False):
         super().__init__(parent)
         self.setObjectName("operationProgress")
         policy = QSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
@@ -34,8 +34,13 @@ class OperationProgress(QWidget):
         self.label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
         self.label.setMinimumWidth(0)
         self.label.setFixedHeight(CONTROL_HEIGHT)
-        row.addWidget(self.bar)
+        if bar_at_end:
+            self.label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        else:
+            row.addWidget(self.bar)
         row.addWidget(self.label, 1)
+        if bar_at_end:
+            row.addWidget(self.bar)
         self.hide()
         self._provider = provider
         self._manual_steps = []

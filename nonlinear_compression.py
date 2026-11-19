@@ -1189,7 +1189,6 @@ class RustMechDialog(QDialog):
 
         self.status_badge = QLabel("● INITIALIZING")
         self.status_badge.setObjectName("statusBadge")
-        status_layout.addStretch()
 
         self.status = QLabel("Generating geometry in background...")
         self.status.setWordWrap(True)
@@ -1206,6 +1205,11 @@ class RustMechDialog(QDialog):
         readout.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         kpi_row.addWidget(readout, 1)
         self.status.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        from operation_progress import OperationProgress
+        self.local_analysis_progress = OperationProgress(self, provider=lambda: (
+            self._local_analysis_in_progress(), self.status.text(),
+        ), bar_at_end=True)
+        status_layout.addWidget(self.local_analysis_progress, 1)
         self._analysis_action_buttons = (cancel, self.apply_button, self.force_stop_button)
         for button in self._analysis_action_buttons:
             status_layout.addWidget(button)
@@ -1216,10 +1220,11 @@ class RustMechDialog(QDialog):
         self.execution_target.setToolTip("Execution target")
         self.execution_target.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
         status_layout.addWidget(self.execution_target)
-        from operation_progress import OperationProgress
         self.operation_progress = OperationProgress(self, provider=lambda: (
-            self.future is not None or self.analysis_job is not None
-            or getattr(getattr(self, "remote_controller", None), "closing", False),
+            not self._local_analysis_in_progress() and (
+                self.future is not None or self.analysis_job is not None
+                or getattr(getattr(self, "remote_controller", None), "closing", False)
+            ),
             self.status.text(),
         ))
         self.mesh_progress = self.operation_progress.bar
@@ -3088,6 +3093,11 @@ class RustMechDialog(QDialog):
     def reset_view(self, *_) -> None:
         self._set_camera_preset("iso")
 
+    def _local_analysis_in_progress(self):
+        if self.analysis_job is not None:
+            return getattr(self.analysis_job, "is_remote", False) is not True
+        return self._analysis_after_mesh is not None and self.future is not None
+
     def apply(self) -> None:
         settings = self.collect()
         self.refresh_validity()
@@ -3233,6 +3243,7 @@ class RustMechDialog(QDialog):
         self.analysis_job = None
         self.truba_dialog.job_list.submitting = False
         self.analysis_poll.stop()
+        self.local_analysis_progress.refresh()
         self.force_stop_button.setEnabled(False)
         self.refresh_validity()
         self.status.setText("Analysis cancelled. Analysis and solver processes forcibly terminated.")
@@ -3249,6 +3260,7 @@ class RustMechDialog(QDialog):
         else:
             stage = job.progress_status() if hasattr(job, "progress_status") else None
             self.status.setText(stage or "Analysis running...")
+        self.local_analysis_progress.refresh()
 
     def _show_background_analysis(self, record):
         from truba_job_list import background_status
@@ -3276,6 +3288,7 @@ class RustMechDialog(QDialog):
         job, self.analysis_job = self.analysis_job, None
         self.truba_dialog.job_list.submitting = False
         self.analysis_poll.stop()
+        self.local_analysis_progress.refresh()
         self.force_stop_button.setEnabled(False)
         self.refresh_validity()
         try:
