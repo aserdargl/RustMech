@@ -23,21 +23,23 @@ LAMMPS module|LAMMPS modülü
 Linux executable|Linux programı
 Input script…|Girdi betiği…
 Job folder…|İş klasörü…
-TRUBA analysis folder…|TRUBA analiz klasörü…
-TRUBA analysis folder|TRUBA analiz klasörü
-TRUBA folder submission|TRUBA toplu gönderim
-Discovered LAMMPS jobs|Bulunan LAMMPS işleri
-Analysis folder|Analiz klasörü
-Main script|Ana betik
-Choose main script…|Ana betiği seçin…
+Add folder…|Klasör ekle…
+Files…|Dosyalar…
+Script…|Betik…
+Root…|Kök klasör…
+Remove|Çıkar
+Reuse|Girdiyi al
+Resume|Sürdür
+Attach|Bağla
+Download|İndir
+Choose an existing folder.|Mevcut bir klasör seçin.
+Select files or a single folder.|Dosya veya tek bir klasör seçin.
+Select a script to run.|Çalıştırmak için bir betik seçin.
+Add a folder or drop inputs here.|Klasör ekleyin veya girdileri buraya bırakın.
+{count} selected · Run in list order|{count} betik seçili · Liste sırasıyla çalışır
 Scanning for LAMMPS input scripts…|LAMMPS girdi betikleri aranıyor…
 No LAMMPS input scripts named in.* or *.in were found.|in.* veya *.in adında LAMMPS girdi betiği bulunamadı.
-Choose a main script for each checked folder.|İşaretli her klasör için bir ana betik seçin.
-Checked folders use the current TRUBA settings and run as separate jobs.|İşaretli klasörler mevcut TRUBA ayarlarıyla ayrı işler olarak çalışır.
-Send to TRUBA|TRUBA’ya gönder
-Waiting to submit|Gönderim bekliyor
-An analysis folder is already being submitted.|Bir analiz klasörünün gönderimi zaten sürüyor.
-TRUBA disconnected before this job was submitted.|Bu iş gönderilmeden önce TRUBA bağlantısı kesildi.
+Waiting to run|Çalıştırma sırasını bekliyor
 Choose a job folder outside the ESEN history directory.|ESEN iş geçmişini içermeyen bir iş klasörü seçin.
 Load files…|Dosya yükle…
 LAMMPS input files|LAMMPS girdi dosyaları

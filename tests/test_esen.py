@@ -475,93 +475,110 @@ class EsenTests(unittest.TestCase):
         actual = store.splitters(second)[0].sizes()
         self.assertAlmostEqual(actual[0] / sum(actual), expected[0] / sum(expected), delta=0.03)
 
-    def test_analysis_folder_review_submits_checked_folders_as_independent_jobs(self):
-        app = QApplication.instance() or QApplication([])
-        first = self.source / "01-single"
-        second = self.source / "02-study" / "case"
-        ignored = self.source / "03-helper"
-        previous = self.source / "Results" / "old"
-        for folder in (first, second, ignored, previous):
-            folder.mkdir(parents=True)
-            (folder / "in.run").touch()
-        (second / "restart.IN").touch()
-        first, second = first.resolve(), second.resolve()
+    def load_batch(self, workspace):
+        with patch("esen_workspace.QFileDialog.getExistingDirectory", return_value=str(self.source)):
+            workspace.batch_folder.click()
+        workspace.folder_scan.result(timeout=5)
+        workspace._tick()
 
-        truba = FakeTruba()
+    def test_folder_loads_directly_and_runs_checked_local_scripts_in_order(self):
+        app = QApplication.instance() or QApplication([])
         preferences = QSettings(str(self.root / "settings.ini"), QSettings.Format.IniFormat)
+        sub = self.source / "study"
+        ignored = self.source / "Results" / "previous"
+        for folder in (sub, ignored):
+            folder.mkdir(parents=True)
+            (folder / "run.IN").touch()
+        for name in ("in.second", "in.first", "in.skip"):
+            (self.source / name).touch()
+        with patch("esen_workspace.QSettings", return_value=preferences):
+            workspace = EsenWorkspace(FakeTruba(), history=self.history)
+        self.addCleanup(workspace.dispose)
+        workspace.show()
+        app.processEvents()
+        workspace.target.setCurrentIndex(workspace.target.findData("local"))
+
+        def run(directory, record, files, invocation, _stop, *, memory_mib):
+            self.assertEqual(invocation, ["lmp", files[1]])
+            self.assertEqual(files[2:], ((), True))
+            self.assertEqual(memory_mib, 1536)
+            state = "Failed" if record["name"] == "in.first" else "Completed"
+            jobs.save_job(directory, record, state=state)
+
+        with (patch("esen_jobs.run_local", side_effect=run) as launch,
+              patch("esen_jobs.local_command", side_effect=lambda entry, *_: ["lmp", entry])):
+            self.load_batch(workspace)
+            self.assertEqual(workspace.history.count(), 0)
+            self.assertEqual([workspace.inputs.item(i).text() for i in range(workspace.inputs.count())],
+                             ["in.first", "in.second", "in.skip", "study/run.IN"])
+            workspace.inputs.item(2).setCheckState(Qt.CheckState.Unchecked)
+            workspace.local_memory.setValue(1536)
+            workspace.start.click()
+            self.assertFalse(workspace.start.isEnabled())
+            self.assertEqual(len(workspace.batch_queue), 2)
+            workspace.local_memory.setValue(2048)
+            for expected_count in range(1, 4):
+                workspace.local_task[1].result(timeout=5)
+                self.assertEqual(launch.call_count, expected_count)
+                workspace._tick()
+            self.assertEqual([call.args[2][:2] for call in launch.call_args_list],
+                             [(self.source.resolve(), "in.first"), (self.source.resolve(), "in.second"),
+                              (sub.resolve(), "run.IN")])
+        self.assertTrue(workspace.start.isEnabled())
+        self.assertEqual(workspace.history.count(), 3)
+        self.assertIn("Failed", workspace.history.item(2).text())
+
+    def test_truba_folder_waits_for_slurm_completion_before_submitting_next_script(self):
+        app = QApplication.instance() or QApplication([])
+        preferences = QSettings(str(self.root / "settings.ini"), QSettings.Format.IniFormat)
+        first = self.source / "01"
+        second = self.source / "02"
+        for folder in (second, first):
+            folder.mkdir()
+            (folder / "in.run").touch()
+        truba = FakeTruba()
         with patch("esen_workspace.QSettings", return_value=preferences):
             workspace = EsenWorkspace(truba, history=self.history)
         self.addCleanup(workspace.dispose)
         workspace.show()
         app.processEvents()
-        with patch("esen_workspace.QFileDialog.getExistingDirectory", return_value=str(self.source)):
-            workspace.batch_folder.click()
-        review = workspace.batch_dialog
-        review.scan.result(timeout=5)
-        review._check_scan()
-        self.assertEqual(review.table.rowCount(), 3)
-        self.assertEqual(review.table.cellWidget(0, 1).currentData(), "in.run")
-        ambiguous = review.table.cellWidget(1, 1)
-        self.assertIsNone(ambiguous.currentData())
-        self.assertFalse(review.submit.isEnabled())
+        self.load_batch(workspace)
+        self.assertFalse(workspace.start.isEnabled())
         truba.auth = self.auth
         truba.connection_changed.emit(True)
-        self.assertFalse(review.submit.isEnabled())
-        ambiguous.setCurrentIndex(ambiguous.findData("restart.IN"))
-        review.table.item(2, 0).setCheckState(Qt.CheckState.Unchecked)
-        self.assertTrue(review.submit.isEnabled())
-        QTest.keyClick(ambiguous, Qt.Key.Key_Return)
-        self.assertEqual(workspace.history.count(), 0)
+        self.assertTrue(workspace.start.isEnabled())
 
         def submit(directory, record, files, settings, auth):
-            self.assertEqual((files[2], files[3]), ((), True))
             self.assertEqual(auth, self.auth)
             self.assertEqual(settings["walltime"], "00:30:00")
-            if files[0] == first:
-                jobs.save_job(directory, record, state="Failed", detail="Fixture rejection")
-            else:
-                jobs.save_job(directory, record, state="Submitted", job_id="789", username=auth.username)
+            jobs.save_job(directory, record, state="Submitted", job_id="789", username=auth.username)
 
-        with patch("esen_jobs.submit_full_node", side_effect=submit) as launch:
-            review.submit.click()
-            for _ in range(2):
+        def complete(directory, record, _auth, *, cancel):
+            self.assertFalse(cancel)
+            jobs.save_job(directory, record, state="Completed")
+
+        with (patch("esen_jobs.submit_full_node", side_effect=submit) as launch,
+              patch("esen_jobs.remote_files"), patch("esen_jobs.export_remote_results")):
+            workspace.start.click()
+            workspace.remote_task[1].result(timeout=5)
+            workspace._tick()
+            self.assertIsNone(workspace.remote_task)
+            self.assertEqual(launch.call_count, 1)
+            self.assertFalse(workspace.start.isEnabled())
+            self.assertEqual(len(workspace.batch_queue), 1)
+            workspace.walltime.setText("01:00:00")
+            with patch("esen_jobs.refresh_remote", side_effect=complete):
+                workspace._poll_remote()
                 workspace.remote_task[1].result(timeout=5)
                 workspace._tick()
+            workspace.remote_task[1].result(timeout=5)
+            workspace._tick()
             self.assertEqual([call.args[2][:2] for call in launch.call_args_list],
-                             [(first, "in.run"), (second, "restart.IN")])
-
-        self.assertIsNone(workspace.batch_dialog)
+                             [(first.resolve(), "in.run"), (second.resolve(), "in.run")])
         self.assertEqual(workspace.history.count(), 2)
-        self.assertIn("02-study/case/restart.IN", workspace.history.item(0).text())
-        self.assertIn("Failed", workspace.history.item(1).text())
-        submitted, = workspace._active_truba_jobs
-        record = jobs.read_job(submitted)
-        self.assertEqual(jobs.result_directory(submitted, record).parent, second / "Results")
-
-    def test_analysis_folder_review_restores_maximized_and_normal_geometry(self):
-        app = QApplication.instance() or QApplication([])
-        preferences = QSettings(str(self.root / "settings.ini"), QSettings.Format.IniFormat)
-        store = WindowStateStore(app, preferences)
-        self.addCleanup(app.removeEventFilter, store)
-        with patch("esen_workspace.QSettings", return_value=preferences):
-            workspace = EsenWorkspace(FakeTruba(), history=self.history)
-        self.addCleanup(workspace.dispose)
-        workspace.show()
-        with patch("esen_workspace.QFileDialog.getExistingDirectory", return_value=str(self.source)):
-            workspace.batch_folder.click()
-            review = workspace.batch_dialog
-            review.resize(590, 345)
-            review.move(35, 45)
-            app.processEvents()
-            review.showMaximized()
-            app.processEvents()
-            normal = review.normalGeometry()
-            review.close()
-            workspace.batch_folder.click()
-            restored = workspace.batch_dialog
-            app.processEvents()
-        self.assertTrue(restored.isMaximized())
-        self.assertEqual(restored.normalGeometry(), normal)
+        self.assertIn("01/in.run", workspace.history.item(1).text())
+        self.assertIn("Completed", workspace.history.item(1).text())
+        self.assertFalse(workspace.start.isEnabled())
 
 
 if __name__ == "__main__":
