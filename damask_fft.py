@@ -14,6 +14,7 @@ from tempfile import mkdtemp
 import numpy as np
 
 from analysis_process import AnalysisProcess, report_analysis_step
+from mesh_resources import require_memory
 from model import ROOT, validate_geometry, write_json
 from periodic_sampling import has_repeating_cell, sample_priority_grid
 
@@ -21,7 +22,7 @@ from periodic_sampling import has_repeating_cell, sample_priority_grid
 COMPONENTS = ("xx", "yy", "zz", "yz", "xz", "xy")
 TENSOR_INDICES = ((0, 0), (1, 1), (2, 2), (1, 2), (0, 2), (0, 1))
 STRAIN = 1e-4
-MIN_GRID, MAX_GRID = 8, 64
+MIN_GRID = 8
 RESULT_FILE = "stiffness_mpa.csv"
 CANCEL_FILE = ".cancel"
 
@@ -31,6 +32,7 @@ _LINUX_DRIVER = """
 import json
 import os
 from pathlib import Path
+import resource
 import shutil
 import signal
 import subprocess
@@ -49,6 +51,10 @@ if solver is None:
     sys.exit('Install the DAMASK grid solver in this Linux environment.')
 if cancel.exists():
     sys.exit('DAMASK analysis cancelled.')
+# The Fortran VTI reader uses stack buffers that grow with the grid.
+soft_stack, hard_stack = resource.getrlimit(resource.RLIMIT_STACK)
+if soft_stack != hard_stack:
+    resource.setrlimit(resource.RLIMIT_STACK, (hard_stack, hard_stack))
 with open(case + '.log', 'w') as log:
     child = subprocess.Popen(
         [solver, '--load', case + '.yaml', '--geom', 'cell.vti', '--material',
@@ -125,6 +131,8 @@ def validate_periodic_fft(settings):
 def sample_periodic_cell(settings, grid):
     """Return the DAMASK solid phase at the centers of the periodic voxels."""
     _validate_grid(grid)
+    # The float32 field and boolean phase mask overlap during thresholding.
+    require_memory(grid**3 * 5, "DAMASK voxel sampling")
     from mesh_engine import geometry_threshold
 
     axis = (np.arange(grid) + 0.5) * (settings.cell_size / grid)
@@ -151,8 +159,8 @@ def run_periodic_fft(settings, grid, void_ratio, distribution, folder):
 
 
 def _validate_grid(grid):
-    if not isinstance(grid, int) or not MIN_GRID <= grid <= MAX_GRID:
-        raise ValueError(f"FFT grid must contain {MIN_GRID}–{MAX_GRID} voxels per axis.")
+    if not isinstance(grid, int) or grid < MIN_GRID:
+        raise ValueError(f"FFT grid must contain at least {MIN_GRID} voxels per axis.")
 
 
 def solve_cell(solid, size_mm, young_mpa, poisson, void_ratio, distribution, folder,
@@ -236,6 +244,10 @@ def solve_cell(solid, size_mm, young_mpa, poisson, void_ratio, distribution, fol
 
 
 def _write_geometry(path, solid, size_m):
+    if solid.size * 4 > np.iinfo(np.uint32).max:
+        raise ValueError("This grid exceeds the DAMASK VTI material data size supported by RustMech.")
+    # The encoded VTI text and its binary input coexist during export.
+    require_memory(solid.size * 24, "DAMASK geometry export")
     n = solid.shape[0]
     extent = f"0 {n} 0 {n} 0 {n}"
     spacing = " ".join([str(size_m / n)] * 3)

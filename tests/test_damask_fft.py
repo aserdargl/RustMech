@@ -17,8 +17,9 @@ from model import Settings
 class DamaskInputTests(unittest.TestCase):
     def test_solver_receives_the_same_periodic_mask_as_the_preview(self):
         settings = Settings()
-        grid = 16
+        grid = 128
         expected = sample_periodic_cell(settings, grid)
+        self.assertEqual(expected.shape, (128, 128, 128))
         self.assertTrue(expected.any())
         self.assertFalse(expected.all())
         with TemporaryDirectory() as directory, patch('damask_fft.solve_cell') as solve:
@@ -27,6 +28,13 @@ class DamaskInputTests(unittest.TestCase):
         np.testing.assert_array_equal(solid, expected)
         self.assertEqual(cell_size, settings.cell_size)
         self.assertEqual(ratio, 0.02)
+
+    def test_sampling_checks_memory_before_allocating_an_oversized_grid(self):
+        with patch('mesh_resources.available_memory', return_value=1 << 30), \
+                patch('damask_fft.np.arange') as axis:
+            with self.assertRaisesRegex(MemoryError, 'DAMASK voxel sampling'):
+                sample_periodic_cell(Settings(), 100_000)
+        axis.assert_not_called()
 
 
 @unittest.skipUnless(os.environ.get("RUSTMECH_TEST_DAMASK"),

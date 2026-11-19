@@ -58,7 +58,7 @@ from PySide6.QtWidgets import (
 
 from analysis_process import AnalysisProcess, run_single_analysis, run_resume_analysis
 from damask_fft import (
-    COMPONENTS, MAX_GRID, MIN_GRID, DamaskAnalysisProcess, sample_periodic_cell,
+    COMPONENTS, MIN_GRID, DamaskAnalysisProcess, sample_periodic_cell,
     validate_periodic_fft,
 )
 from studio_style import ActionFlowLayout, CompactDoubleSpinBox, CONTROL_HEIGHT, STUDIO_STYLESHEET, SidebarGroupBox, configure_form, field_label
@@ -782,14 +782,19 @@ class NoWheelComboBox(CompactComboBox):
 
 
 def _build_fft_preview(settings: Settings, grid: int):
+    from mesh_resources import require_memory
+
     solid = sample_periodic_cell(settings, grid)
+    solid_count = int(np.count_nonzero(solid))
+    # Allow for VTK's intermediate hexahedra, points and extracted faces.
+    require_memory(solid.size * 16 + solid_count * 384, "DAMASK voxel preview")
     spacing = settings.cell_size / grid
     image = pv.ImageData(dimensions=(grid + 1,) * 3, spacing=(spacing,) * 3)
     image.cell_data["solid"] = solid.ravel(order="F").astype(np.uint8)
     # Keep the exposed voxel faces, including the walls of open pores.
     surface = image.threshold(0.5, scalars="solid").extract_surface(
         pass_pointid=False, pass_cellid=False, algorithm="dataset_surface")
-    return image.outline(), surface, int(np.count_nonzero(solid))
+    return image.outline(), surface, solid_count
 
 
 class RustMechDialog(QDialog):
@@ -2231,7 +2236,7 @@ class RustMechDialog(QDialog):
     def _add_fft_controls(self, fields) -> None:
         preferences = self.solver_profile_store.settings
         self.fft_grid = CompactSpinBox()
-        self.fft_grid.setRange(MIN_GRID, MAX_GRID)
+        self.fft_grid.setRange(MIN_GRID, (1 << 31) - 1)  # QSpinBox's native integer range.
         self.fft_grid.setValue(preferences.value("fft/grid", 24, type=int))
         self.fft_grid.valueChanged.connect(self.refresh_validity)
         self.fft_void_ratio = CompactDoubleSpinBox()
