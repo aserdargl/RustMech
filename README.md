@@ -538,7 +538,7 @@ TRUBA modunda mevcut destek:
 | DoE mesh kontrolü / analiz | Satırın mesh ve çözüm işlemleri TRUBA'da |
 | Flow (CFD) | Akış ağı, OpenFOAM çözümü ve sonuç hazırlama TRUBA'da |
 | Thermal (CHT) | Su/katı ağı, zamana bağlı CHT ve 3B karelerin hazırlanması TRUBA'da |
-| İçe aktarılan STL/VTK parçası | Hizalanmış yüzey yüklenir; TET4/TET10 ağ TRUBA'da, desteklenen TET4 basma çözümü Kratos ile |
+| İçe aktarılan STL/VTK parçası | Hizalanmış yüzey yüklenir. TET4/TET10 ağ ve desteklenen Kratos basma çözümü TRUBA'da çalışır. |
 | Standart deney geometrileri | Basma, çekme ve eğilme geometrisi/ağı TRUBA'da; mevcut çekme/eğilme çözümleri ANSYS'e bağlı olduğu için kapalı |
 
 İçe aktarılan parçanın önizlemesi ve çözümü ayrı iş klasörlerinde çalışabilir.
@@ -571,9 +571,11 @@ Kratos OpenMP kullanır; ilk genel uzak OpenFOAM akışı tek süreçlidir, çok
 MPI dağıtımı eklenmemiştir.
 
 Ana çalışma alanındaki otomatik Kratos CPU sayısı uzak tahsisle sınırlandırılır;
-elle girilen sayı tahsisi aşarsa analiz başlamaz. HEX20/TET10, uzak ortamın mesh
-kontrolünden geçmişse önizleme için seçilebilir; Kratos çözümü için HEX8/TET4
-seçilmelidir. Mesh üretme hakkı ile çözücünün eleman desteği ayrı denetlenir.
+elle girilen sayı tahsisi aşarsa analiz başlamaz. Uzak ortamın mesh kontrolünden
+geçen HEX8, HEX20, TET4 ve TET10 ağları Kratos ile çözülebilir. HEX20/TET10 basmada
+yer değiştirme kontrolü, ceza mortar ve kapalı öz temas kullanılır. Katı elemanlar
+ikinci derecede kalır; plaka teması, köşe ve kenar düğümlerini kullanan doğrusal üçgenlerle
+yaklaştırılır. Üç nokta eğme ve öz temas için HEX8 gerekir.
 
 Uzak mod açıkken başarısız bir kontrol veya bağlantı nedeniyle **yerel mesh ya da
 çözüm başlatılmaz**. Mod kapatıldığında önceki normal çözücü seçimi geri yüklenir;

@@ -10,7 +10,7 @@ from unittest.mock import patch
 import numpy as np
 from model import Settings
 from kratos_backend import KratosResults, KratosBackend
-from kratos_export import export_kratos, mesh_digest
+from kratos_export import export_kratos, mesh_digest, specimen_surfaces
 from solver_api import KRATOS_CAPABILITIES, AnalysisRequest
 from tools.verify_kratos_pipeline import cube_mesh
 from truba_jobs import RemoteAuth, shell_job_settings, validated_remote_path, run_remote
@@ -34,7 +34,7 @@ class KratosIntegrityTests(unittest.TestCase):
         (self.root/'manifest.json').write_text(json.dumps(self.manifest))
         np.savez(self.root/'step_000001.npz',ids=self.ids if ids is None else ids,
                  displacement=np.zeros((len(self.ids),3)) if displacement is None else displacement,
-                 equivalent_stress=np.ones(len(self.ids)))
+                 equivalent_stress=np.ones(len(self.ids if ids is None else ids)))
 
     def test_maps_requested_node_order(self):
         result=KratosResults(self.root,self.mesh)
@@ -81,6 +81,41 @@ class KratosIntegrityTests(unittest.TestCase):
         h=1./6
         required=(.5-h/2)/(h/2)
         self.assertGreater(factor,required)
+
+    def test_quadratic_solids_keep_mesh_and_use_all_platen_nodes(self):
+        for mesh_type, width, facets_per_face in (('HEX20', 20, 6), ('TET10', 10, 4)):
+            with self.subTest(mesh_type=mesh_type):
+                mesh = cube_mesh(tetra=mesh_type=='TET10', quadratic=True)
+                grid = mesh.grid
+                ids = np.asarray(grid.point_data['ansys_node_num'])
+                settings = Settings(solver_backend='kratos', mesh_type=mesh_type,
+                                    self_contact_mode='disabled', kratos_contact_method='penalty')
+                self.assertEqual(KRATOS_CAPABILITIES.validate(settings), [])
+                payload = export_kratos(mesh, settings, self.root)
+                cells = grid.cell_connectivity.reshape(-1, width)
+                with np.load(self.root/'mesh_input.npz') as exported:
+                    np.testing.assert_array_equal(exported['cells'], cells)
+                order = payload.get('solver_cell_order', tuple(range(width)))
+                if mesh_type == 'HEX20':
+                    self.assertEqual(order[12:], (16, 17, 18, 19, 12, 13, 14, 15))
+                deck = (self.root/'model.mdpa').read_text().splitlines()
+                start = deck.index(f'Begin Elements TotalLagrangianElement3D{width}N')
+                self.assertEqual(list(map(int, deck[start+1].split()[2:])), ids[cells[0, list(order)]].tolist())
+
+                faces = specimen_surfaces(grid, ids, grid.points, quadratic=True)
+                for side, z, direction in (('BottomSpecimen', 0, -1), ('TopSpecimen', 1, 1)):
+                    self.assertEqual(len(faces[side]), (4 if width == 20 else 8) * facets_per_face)
+                    triangles = np.array(faces[side])
+                    np.testing.assert_array_equal(np.unique(triangles), ids[grid.points[:, 2]==z])
+                    a, b, c = np.moveaxis(grid.points[triangles-1], 1, 0)
+                    signed_areas = np.cross(b-a, c-a)[:, 2] * direction / 2
+                    self.assertTrue(np.all(signed_areas > 0))
+                    self.assertAlmostEqual(signed_areas.sum(), 1.)
+
+                self.manifest['mesh_digest'] = payload['mesh_digest']
+                self.save(ids=ids, displacement=np.zeros((len(ids), 3)))
+                reader = KratosResults(self.root, mesh, settings)
+                np.testing.assert_array_equal(reader.equivalent_stress(0, ids[::-1]), np.ones(len(ids)))
 
     def test_job_resources_and_remote_path_reject_injection(self):
         for settings in (Settings(truba_partition='debug\n#SBATCH --nodes=999'),

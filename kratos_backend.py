@@ -23,9 +23,8 @@ class KratosResults:
                 or self.manifest.get('load_sign')!=load_sign(settings)):
             raise ValueError('Kratos result test profile or loading direction does not match the request.')
         grid=mesh.grid
-        count=8 if np.all(grid.celltypes == 12) else 4
         ids=np.asarray(grid.point_data["ansys_node_num"])
-        expected=mesh_digest(grid.points,grid.cell_connectivity.reshape(-1,count),ids)
+        expected=mesh_digest(grid.points,grid.cell_connectivity,ids)
         if (self.manifest.get("schema_version") != 1 or not self.manifest.get("mesh_verified")
                 or self.manifest.get("mesh_digest") != expected):
             raise ValueError("Kratos result mesh does not match the submitted RustMech mesh")

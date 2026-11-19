@@ -369,7 +369,7 @@ class FolderBatchDialog(QDialog):
         self.solver.currentIndexChanged.connect(self.refresh_queue_view)
         self.mesh_resolution.valueChanged.connect(self.refresh_queue_view)
         self.local_mesh_size.valueChanged.connect(self.refresh_queue_view)
-        self.mesh_type.currentIndexChanged.connect(self.refresh_queue_view)
+        self.mesh_type.currentIndexChanged.connect(self._mesh_type_changed)
         self.queue.queue_changed.connect(self.refresh_queue_view)
         self.table.itemChanged.connect(self.update_enqueue_button)
         self.update_execution_target()
@@ -385,6 +385,9 @@ class FolderBatchDialog(QDialog):
                 combo.setCurrentIndex(index)
         self._local_solver_index = self.solver.currentIndex()
         self._local_mesh_index = self.mesh_type.currentIndex()
+        self._truba_mesh_type = self.preferences.value("folderBatch/truba_mesh_type", "TET4", type=str)
+        if self._truba_mesh_type not in ('TET4', 'TET10'):
+            self._truba_mesh_type = 'TET4'
         for name in ("mesh_resolution", "local_mesh_size"):
             control = getattr(self, name)
             value = self.preferences.value(f"folderBatch/{name}", control.value(), type=float)
@@ -399,6 +402,7 @@ class FolderBatchDialog(QDialog):
             "mode": self.mode.currentIndex(),
             "solver": self._local_solver_index if remote else self.solver.currentIndex(),
             "mesh_type": self._local_mesh_index if remote else self.mesh_type.currentIndex(),
+            "truba_mesh_type": self._truba_mesh_type,
             "execution_target": self.execution_target.currentIndex(),
             "mesh_resolution": self.mesh_resolution.value(),
             "local_mesh_size": self.local_mesh_size.value(),
@@ -417,6 +421,11 @@ class FolderBatchDialog(QDialog):
         layout.addWidget(stepper_with_unit(control, 'mm'), row, 1)
         return control
 
+    def _mesh_type_changed(self):
+        if self.execution_target.currentData() == 'truba':
+            self._truba_mesh_type = self.mesh_type.currentText()
+        self.refresh_queue_view()
+
     def update_execution_target(self):
         remote = self.execution_target.currentData() == 'truba'
         with QSignalBlocker(self.solver), QSignalBlocker(self.mesh_type):
@@ -424,7 +433,7 @@ class FolderBatchDialog(QDialog):
                 self._local_solver_index = self.solver.currentIndex()
                 self._local_mesh_index = self.mesh_type.currentIndex()
                 self.solver.setCurrentIndex(2)
-                self.mesh_type.setCurrentText('TET4')
+                self.mesh_type.setCurrentText(self._truba_mesh_type)
             else:
                 self.solver.setCurrentIndex(self._local_solver_index)
                 self.mesh_type.setCurrentIndex(self._local_mesh_index)
@@ -435,7 +444,7 @@ class FolderBatchDialog(QDialog):
     def update_settings_hint(self):
         remote = self.execution_target.currentData() == 'truba'
         text = translate(
-            'TRUBA uses Kratos and TET4 with self-contact disabled. Material, loading and platen contact come from the Mechanic workspace.'
+            'TRUBA uses Kratos with self-contact disabled. TET10 uses displacement control and penalty mortar. Material and loading come from the Mechanic workspace.'
             if remote else 'The mesh is generated locally. Kratos solves use TRUBA. Analysis settings come from the Mechanic workspace.')
         if self.base is not None:
             base = self.base
@@ -468,7 +477,7 @@ class FolderBatchDialog(QDialog):
             widget.setEnabled(not busy)
         local = self.execution_target.currentData() == 'local'
         self.solver.setEnabled(local and not busy)
-        self.mesh_type.setEnabled(local and not busy)
+        self.mesh_type.setEnabled(not busy)
         for row in range(self.table.rowCount()):
             self.table.cellWidget(row, FACES_COLUMN).setEnabled(not busy)
         self.refresh_queue_view(busy=busy)
@@ -482,6 +491,8 @@ class FolderBatchDialog(QDialog):
                            local_mesh_size=self.local_mesh_size.value(), mesh_type=self.mesh_type.currentText())
         if self.execution_target.currentData() == 'truba':
             settings = replace(settings, self_contact_mode='disabled')
+            if settings.mesh_type == 'TET10':
+                settings = replace(settings, kratos_contact_method='penalty')
         return settings
 
     def refresh_queue_view(self, *, busy=None):

@@ -687,7 +687,7 @@ class RemoteModeUiTests(unittest.TestCase):
             local.assert_not_called()
         self.window.future=None
 
-    def test_remote_high_order_mesh_preview_does_not_enable_unsupported_solve(self):
+    def test_remote_high_order_mesh_supports_penalty_compression(self):
         self.enable()
         combo = self.window.mesh_type_combo
         for mesh_type in ('HEX20', 'TET10'):
@@ -695,10 +695,9 @@ class RemoteModeUiTests(unittest.TestCase):
             self.assertTrue(combo.model().item(index).isEnabled())
             combo.setCurrentIndex(index)
             settings = self.window.collect()
+            self.assertEqual(settings.kratos_contact_method, 'penalty')
             self.controller.require('mesh', settings)
-            with self.assertRaisesRegex(RuntimeError, 'HEX8, TET4'):
-                self.controller.require('kratos', settings)
-            self.assertFalse(self.window.apply_button.isEnabled())
+            self.controller.require('kratos', settings)
 
     def test_automatic_solver_cores_follow_remote_allocation_and_restore_locally(self):
         # Exercise manual allocation independently of the default Auto policy.

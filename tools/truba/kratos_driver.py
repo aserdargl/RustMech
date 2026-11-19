@@ -72,6 +72,8 @@ class CompressionAnalysis(StructuralMechanicsAnalysis):
         actual = np.array([[part.Nodes[int(n)].X0, part.Nodes[int(n)].Y0, part.Nodes[int(n)].Z0] for n in ids])
         if not np.allclose(points,actual,rtol=0,atol=1e-12):
             raise ValueError("Imported specimen coordinates differ from RustMech mesh")
+        if "solver_cell_order" in self.payload:
+            cells = cells[:, self.payload["solver_cell_order"]]
         for i, cell in enumerate(cells):
             if [n.Id for n in part.Elements[i+1].GetGeometry()] != ids[cell].tolist():
                 raise ValueError("Imported specimen connectivity differs from RustMech mesh")
@@ -173,6 +175,9 @@ class CompressionAnalysis(StructuralMechanicsAnalysis):
             self.contact_output_indices=np.array([positions[int(self.payload['self_contact_nodes'].get(str(n.Id),n.Id))] for n in self.contact_output_nodes])
         self.extrapolate = IntegrationValuesExtrapolationToNodesProcess(self.model, KM.Parameters(json.dumps({
             "model_part_name": "Structure.Specimen", "list_of_variables": ["CAUCHY_STRESS_VECTOR"],
+            # Contact also writes NODAL_AREA. Keep its values independent of
+            # the integration-point weights used for nodal stress recovery.
+            "average_variable": "NODAL_VOLUME",
             "extrapolate_non_historical": True, "area_average": True})))
         self.extrapolate.ExecuteBeforeSolutionLoop()
 
@@ -224,8 +229,9 @@ class CompressionAnalysis(StructuralMechanicsAnalysis):
             uz = float(np.mean([part.Nodes[n].GetSolutionStepValue(KM.DISPLACEMENT_Z) for n in self.payload["plate_nodes"]["TopPlaten"]]))
             if self.settings['loading_mode']=='displacement' and not np.isclose(uz,self.load_sign*self.settings['compression']*self.time,rtol=1e-6,atol=1e-9):
                 raise RuntimeError('The requested platen displacement was not reached in this substep.')
-            if (self.settings['self_contact_mode']!='disabled' or self.experiment!='compression') and abs(bottom+top)>.01*max(abs(bottom),abs(top),1e-9):
-                    raise RuntimeError('Solution failed the independent fixture force-balance check.')
+            quadratic = self.settings.get('mesh_type') in ('HEX20', 'TET10')
+            if (quadratic or self.settings['self_contact_mode']!='disabled' or self.experiment!='compression') and abs(bottom+top)>.01*max(abs(bottom),abs(top),1e-9):
+                raise RuntimeError('Solution failed the independent fixture force-balance check.')
             name = f"step_{len(self.manifest['steps'])+1:06d}.npz"
             np.savez_compressed(self.results/name, ids=ids, displacement=displacement, equivalent_stress=vm,**contact_fields)
             self.manifest["steps"].append({"file":name,"time":self.time,"top_displacement":uz,"bottom_reaction":bottom,"top_reaction":top})

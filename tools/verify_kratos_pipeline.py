@@ -15,13 +15,21 @@ from kratos_export import export_kratos
 from kratos_backend import KratosResults
 
 
-def cube_mesh(tetra=False,subdivisions=2):
+def cube_mesh(tetra=False,subdivisions=2,*,quadratic=False):
     spacing=1./subdivisions
     raw=pv.ImageData(dimensions=(subdivisions+1,)*3,spacing=(spacing,)*3).cast_to_unstructured_grid()
     cells=raw.cells.reshape(-1,9).copy()
     cells[:,1:]=cells[:,1:][:,[0,1,3,2,4,5,7,6]]
     grid=pv.UnstructuredGrid(cells,np.full(raw.n_cells,12),raw.points)
-    if tetra:grid=grid.triangulate()
+    if tetra:
+        grid=grid.triangulate()
+        if quadratic:
+            from rust_mesh import quadratic_tetra_arrays
+            points, cells = quadratic_tetra_arrays(grid.points, grid.cells.reshape(-1, 5)[:, 1:])
+            grid = pv.UnstructuredGrid({pv.CellType.QUADRATIC_TETRA: cells}, points)
+    elif quadratic:
+        from rust_mesh import build_hex_grid
+        grid = build_hex_grid(np.ones((subdivisions,)*3, dtype=bool), spacing, quadratic=True)
     ids=np.arange(1,grid.n_points+1)
     grid.point_data['ansys_node_num']=ids
     grid.cell_data['ansys_elem_num']=np.arange(1,grid.n_cells+1)
@@ -39,6 +47,8 @@ if __name__ == '__main__':
         'friction_plastic':replace(base,material_model='bilinear_isotropic',yield_stress=2.,tangent_modulus=10.,compression=.02,substeps=20,kratos_max_iterations=100,bottom_platen_contact='frictional',top_platen_contact='frictional'),
         'tabulated':replace(base,material_model='multilinear_isotropic',hardening_curve=((0.,2.),(.1,3.)),compression=.005,substeps=10,kratos_max_iterations=100),
         'tet4':replace(base,mesh_type='TET4'),
+        'hex20':replace(base,mesh_type='HEX20',mesh_resolution=.25,kratos_contact_method='penalty'),
+        'tet10':replace(base,mesh_type='TET10',mesh_resolution=.25,kratos_contact_method='penalty'),
         'penalty_amgcl':replace(base,kratos_contact_method='penalty',kratos_linear_solver='amgcl'),
         'mixed_contact':replace(base,bottom_platen_contact='frictional'),
         'hex64':replace(base,mesh_resolution=.25),
@@ -48,7 +58,8 @@ if __name__ == '__main__':
     }
     report={}
     for name,settings in cases.items():
-        mesh=cube_mesh(settings.mesh_type=='TET4',subdivisions=round(1/settings.mesh_resolution))
+        mesh=cube_mesh(settings.mesh_type.startswith('TET'),subdivisions=round(1/settings.mesh_resolution),
+                       quadratic=settings.mesh_type in ('HEX20','TET10'))
         target=ROOT/'build/kratos-cases'/name
         export_kratos(mesh,settings,target)
         with (target/'driver.log').open('w') as log:
@@ -59,8 +70,10 @@ if __name__ == '__main__':
             reader=KratosResults(target/'results',mesh)
             bottom,top=reader.platen_reactions(reader.nsets-1)
             error=abs(bottom+top)/max(abs(top),1e-12)
-            expected=1. if name in ('elastic','force','tet4','penalty_amgcl','hex64','hex216','tet_fine','zero_friction') else None
-            passed=reader.manifest['complete'] and error<.01 and (expected is None or abs(-top-expected)<.02)
+            expected=1. if name in ('elastic','force','tet4','hex20','tet10','penalty_amgcl','hex64','hex216','tet_fine','zero_friction') else None
+            # The quadratic solid meets a piecewise-linear contact surface.
+            tolerance = {'hex20': .07, 'tet10': .04}.get(name, .02)
+            passed=reader.manifest['complete'] and error<.01 and (expected is None or abs(-top-expected)<tolerance)
             reader.displacement(reader.nsets-1,mesh.grid.point_data['ansys_node_num'])
             reader.equivalent_stress(reader.nsets-1,mesh.grid.point_data['ansys_node_num'])
             report[name]={'passed':bool(passed),'steps':reader.nsets,'force':-top,'relative_force_imbalance':error}

@@ -136,8 +136,10 @@ class SolverProfileTests(unittest.TestCase):
         save_settings(dialog.collect(), path)
         self.assertEqual(load_settings(path), dialog.collect())
         self.assertTrue(KRATOS_CAPABILITIES.implemented)
-        errors = replace(KRATOS_CAPABILITIES, implemented=True).validate(replace(dialog.collect(), mesh_type="TET10"))
-        self.assertTrue(any("HEX8" in error for error in errors))
+        dialog.mesh_type_combo.setCurrentIndex(dialog.mesh_type_combo.findData("TET10"))
+        settings = dialog.collect()
+        self.assertEqual(settings.kratos_contact_method, "penalty")
+        self.assertEqual(KRATOS_CAPABILITIES.validate(settings), [])
 
     def test_self_contact_selects_penalty_without_starting_and_uses_fixed_increments(self):
         dialog=self.dialog()

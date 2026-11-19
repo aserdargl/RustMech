@@ -120,7 +120,7 @@ class KratosSettingsPanel(SidebarGroupBox):
         self.view_results_button.setEnabled(False)
         self.view_results_button.clicked.connect(lambda *_:self.view_results_requested.emit())
         form.addRow(self.view_results_button)
-        hint = QLabel("TRUBA · nonlinear static · HEX8 / TET4.\n"
+        hint = QLabel("HEX20/TET10 compression uses displacement control and penalty mortar.\n"
                       "Self-contact: HEX8, penalty mortar, fixed increments. Increase penalty to reduce penetration; refine increments if convergence fails.")
         hint.setObjectName("mutedHintLabel")
         hint.setWordWrap(True)

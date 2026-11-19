@@ -732,6 +732,8 @@ class FolderBatchTests(unittest.TestCase):
         self.assertEqual(dialog.execution_target.currentData(), 'truba')
         self.assertEqual(dialog.solver.currentText(), 'Kratos')
         self.assertEqual(dialog.mesh_type.currentText(), 'TET4')
+        self.assertTrue(dialog.mesh_type.isEnabled())
+        dialog.mesh_type.setCurrentText('TET10')
         self.assertEqual(dialog.enqueue.text(), 'Add Truba')
         dialog.table.item(0, RUN_COLUMN).setCheckState(Qt.CheckState.Checked)
         with patch('doe_studio.AnalysisProcess') as serial, patch('truba_parallel.AnalysisProcess') as parallel:
@@ -747,7 +749,8 @@ class FolderBatchTests(unittest.TestCase):
         remote, = QueueStore(queue.store.path).load()
         self.assertEqual(remote.folder_job['execution_target'], 'truba')
         self.assertEqual(remote.design_settings.solver_backend, 'kratos')
-        self.assertEqual(remote.design_settings.mesh_type, 'TET4')
+        self.assertEqual(remote.design_settings.mesh_type, 'TET10')
+        self.assertEqual(remote.design_settings.kratos_contact_method, 'penalty')
         self.assertEqual(remote.design_settings.self_contact_mode, 'disabled')
         self.assertEqual(dialog.queue_table.item(0, 2).text(), 'TRUBA')
 

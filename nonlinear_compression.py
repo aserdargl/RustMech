@@ -96,6 +96,7 @@ from model import (
     write_json,
 )
 from solver_api import (
+    KRATOS_QUADRATIC_MESH_TYPES,
     MAPDL_CAPABILITIES,
     SOLVER_REGISTRY,
     SolverCapabilities,
@@ -2105,18 +2106,20 @@ class RustMechDialog(QDialog):
         self.solver_hint_label.setText(hint_text)
         kratos = cap.identifier == "kratos"
         self.kratos_panel.setVisible(kratos)
+        remote = getattr(self, "remote_controller", None)
+        flexure = kratos and self.test_profile_combo.currentData() == 'iso178_preferred'
         for index in range(self.mesh_type_combo.count()):
             mesh_type = self.mesh_type_combo.itemData(index)
-            remote = getattr(self,"remote_controller",None)
             available = mesh_type in cap.supported_mesh_types
-            if kratos and self.test_profile_combo.currentData()=='iso178_preferred':available=mesh_type=='HEX8'
+            tooltip = MESH_TYPE_LABELS.get(mesh_type, mesh_type)
             if remote is not None and remote.requested:
                 available = remote.ready and mesh_type in remote.capabilities.get("mesh_types",[])
-                self.mesh_type_combo.setItemData(index,
-                    "Remote mesh preview is supported; Kratos solves HEX8/TET4 only."
-                    if available and mesh_type not in cap.supported_mesh_types else "",
-                    Qt.ItemDataRole.ToolTipRole)
-            if kratos and self.test_profile_combo.currentData()=='iso178_preferred' and mesh_type!='HEX8':available=False
+            if flexure and mesh_type != 'HEX8':
+                available = False
+                tooltip = "Kratos three-point flexure requires HEX8 with aligned support/loading lines."
+            elif kratos and mesh_type in KRATOS_QUADRATIC_MESH_TYPES and self.test_profile_combo.currentData() != 'astm_e8_subsize':
+                tooltip = "Kratos HEX20/TET10 compression uses displacement control and penalty mortar with self-contact disabled."
+            self.mesh_type_combo.setItemData(index, tooltip, Qt.ItemDataRole.ToolTipRole)
             self.mesh_type_combo.model().item(index).setEnabled(available)
         for combo in self.platen_contact_combos.values():
             for index in range(combo.count()):
@@ -2137,7 +2140,7 @@ class RustMechDialog(QDialog):
             self.physics_note.setText(
                 "Kratos · nonlinear static structural mechanics\n"
                 "Shared specimen material and geometry · solver-specific mesh and numerical settings\n"
-                "Frictional / frictionless platens · HEX8 / TET4 · HEX8 penalty self-contact"
+                "Frictional / frictionless platens · HEX8 / HEX20 / TET4 / TET10 · HEX8 penalty self-contact"
                 if kratos else
                 "• Bottom platen at Z = 0 · Top platen at Z = L (−Z compression)\n"
                 "• Rigid platen contact with separate Coulomb friction coefficients\n"
@@ -2177,7 +2180,10 @@ class RustMechDialog(QDialog):
             for key in ('minimum_substeps','maximum_substeps'):form.setRowVisible(self.controls[key],not fixed)
         if hasattr(self,'kratos_panel'):
             method=self.kratos_panel.fields['kratos_contact_method']
-            method.model().item(method.findData('alm')).setEnabled(not kratos or sc_mode=='disabled')
+            quadratic_platens = kratos and not kinematic and self.mesh_type_combo.currentData() in KRATOS_QUADRATIC_MESH_TYPES
+            method.model().item(method.findData('alm')).setEnabled(not kratos or (sc_mode=='disabled' and not quadratic_platens))
+            if quadratic_platens:
+                method.setCurrentIndex(method.findData('penalty'))
 
         if "self_friction_coeff" in self.controls:
             self._contact_form.setRowVisible(
@@ -2435,6 +2441,8 @@ class RustMechDialog(QDialog):
         self._mesh_form.setRowVisible(local_size.parentWidget(), tetrahedral)
         self._mesh_form.setRowVisible(self.tetra_strategy_combo, tetrahedral)
         if hasattr(self, "geometry_apply_button"):
+            if hasattr(self, "kratos_panel"):
+                self._sync_contact_ui()
             self.geometry_changed()
 
     def preview_settings(self) -> Settings:

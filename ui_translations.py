@@ -415,7 +415,7 @@ Ready to submit analysis to TRUBA.|Analiz TRUBA'ya gönderilmeye hazır.
 Local mesh|Yerel ağ üretimi
 TRUBA batch analysis|TRUBA toplu analizi
 Enable TRUBA mode and allocate or refresh a resource session before running these jobs.|Bu işleri çalıştırmadan önce TRUBA modunu açın ve bir kaynak oturumu ayırın veya mevcut oturumu yenileyin.
-TRUBA uses Kratos and TET4 with self-contact disabled. Material, loading and platen contact come from the Mechanic workspace.|TRUBA, öz temas kapalı olarak Kratos ve TET4 kullanır. Malzeme, yükleme ve plaka teması Mekanik çalışma alanından alınır.
+TRUBA uses Kratos with self-contact disabled. TET10 uses displacement control and penalty mortar. Material and loading come from the Mechanic workspace.|TRUBA, öz temas kapalı olarak Kratos kullanır. TET10 için yer değiştirme kontrolü ve ceza mortar kullanılır. Malzeme ve yükleme Mekanik çalışma alanından alınır.
 The mesh is generated locally. Kratos solves use TRUBA. Analysis settings come from the Mechanic workspace.|Ağ yerelde üretilir. Kratos çözümü TRUBA'da çalışır. Analiz ayarları Mekanik çalışma alanından alınır.
 Material, loading, contact and solver parameters are captured from the main Mechanic workspace when checking.|Malzeme, yükleme, temas ve çözücü ayarları ön kontrol sırasında ana Mekanik çalışma alanından alınır.
 Remove from Queue|Kuyruktan Çıkar
@@ -952,8 +952,17 @@ TURKISH.update({
     'ISO 178:2019 · Three-point flexure': 'ISO 178:2019 · Üç noktalı eğilme',
     'RustMech | Nonlinear Compression': 'RustMech | Doğrusal olmayan basma',
     'RustMech · Kratos results': 'RustMech · Kratos sonuçları',
-    'TRUBA · nonlinear static · HEX8 / TET4.\nSelf-contact: HEX8, penalty mortar, fixed increments. Increase penalty to reduce penetration; refine increments if convergence fails.':
-        'TRUBA · Doğrusal olmayan statik · HEX8 / TET4.\nÖz temas: HEX8, ceza mortar, sabit artımlar. Nüfuziyeti azaltmak için ceza katsayısını artırın; yakınsama yoksa artımları küçültün.',
+    'HEX20/TET10 compression uses displacement control and penalty mortar.\nSelf-contact: HEX8, penalty mortar, fixed increments. Increase penalty to reduce penetration; refine increments if convergence fails.':
+        'HEX20/TET10 basma analizinde yer değiştirme kontrolü ve ceza mortar kullanılır.\nÖz temas: HEX8, ceza mortar, sabit artımlar. Nüfuziyeti azaltmak için ceza katsayısını artırın; yakınsama yoksa artımları küçültün.',
+    'Kratos HEX20/TET10 compression uses displacement control and penalty mortar with self-contact disabled.':
+        'Kratos HEX20/TET10 basma analizinde yer değiştirme kontrolü ve ceza mortar kullanılır. Öz temas kapalı olmalıdır.',
+    'Kratos three-point flexure requires HEX8 with aligned support/loading lines.':
+        'Kratos üç nokta eğme analizi, mesnet ve yükleme çizgileriyle hizalı HEX8 ağ gerektirir.',
+    'Kratos HEX20 and TET10 platen contact requires penalty mortar.':
+        'Kratos HEX20 ve TET10 plaka teması için ceza mortar gerekir.',
+    'Kratos HEX20 and TET10 compression requires displacement control.':
+        'Kratos HEX20 ve TET10 basma analizi yer değiştirme kontrolü gerektirir.',
+    'Kratos self-contact requires HEX8.': 'Kratos öz temas için HEX8 gerektirir.',
     '• Bottom platen at Z = 0 · Top platen at Z = L (−Z compression)\n• Rigid platen contact with separate Coulomb friction coefficients\n• Configurable 3D Cell-Wall Self-Contact & Internal Friction (μ_self)\n• Large displacement (NLGEOM) · voxel HEX8/HEX20 or surface-conforming TET4/TET10':
         '• Alt plaka Z = 0 · Üst plaka Z = L (−Z basma)\n• Ayrı Coulomb sürtünme katsayılarıyla rijit plaka teması\n• Ayarlanabilir 3B hücre duvarı öz teması ve iç sürtünme (μ_self)\n• Büyük yer değiştirme (NLGEOM) · Voksel HEX8/HEX20 veya yüzeye uyumlu TET4/TET10',
 })

@@ -8,7 +8,18 @@ import shutil
 import sys
 
 import numpy as np
+from solver_api import KRATOS_QUADRATIC_MESH_TYPES, kratos_quadratic_platen_errors
 from tools.truba.kratos_self_contact import contact_partition
+
+
+SOLID_CELLS = {"HEX8": (12, 8), "HEX20": (25, 20), "TET4": (10, 4), "TET10": (24, 10)}
+# Kratos orders the HEX20 vertical edge nodes before the top edge nodes.
+HEX20_KRATOS_ORDER = (*range(12), *range(16, 20), *range(12, 16))
+# Outward-facing linear mortar facets on the existing quadratic face nodes.
+QUADRATIC_FACE_TRIANGLES = {
+    6: ((0, 3, 5), (1, 4, 3), (2, 5, 4), (3, 4, 5)),
+    8: ((0, 4, 7), (1, 5, 4), (2, 6, 5), (3, 7, 6), (4, 5, 6), (4, 6, 7)),
+}
 
 
 def mesh_digest(points, cells, ids):
@@ -40,11 +51,53 @@ def material_properties(settings):
             "Material": {"constitutive_law": {"name": law}, "Variables": values, "Tables": {}}}
 
 
+def specimen_surfaces(grid, ids, points, *, quadratic):
+    if quadratic:
+        import pyvista as pv
+        from vtkmodules.vtkFiltersGeometry import vtkUnstructuredGridGeometryFilter
+
+        # Retain whole quadratic faces so platen membership is decided before
+        # triangulation. VTK's default tessellation can include collinear nodes.
+        boundary = vtkUnstructuredGridGeometryFilter()
+        boundary.MergingOff()
+        boundary.PassThroughPointIdsOn()
+        boundary.SetInputData(grid)
+        boundary.Update()
+        skin = pv.wrap(boundary.GetOutput())
+    else:
+        skin = grid.extract_surface(algorithm="dataset_surface")
+    original = np.asarray(skin.point_data["vtkOriginalPointIds"])
+    zmin, zmax = points[:, 2].min(), points[:, 2].max()
+    tolerance = max((zmax - zmin) * 1e-9, 1e-12)
+    surfaces = {"BottomSpecimen": [], "TopSpecimen": [], "SelfSurface": []}
+    for i in range(skin.n_cells):
+        indices = original[np.asarray(skin.get_cell(i).point_ids)]
+        z = points[indices, 2]
+        if np.all(abs(z - zmin) < tolerance):
+            key = "BottomSpecimen"
+        elif np.all(abs(z - zmax) < tolerance):
+            key = "TopSpecimen"
+        elif quadratic:
+            continue  # Quadratic elements have platen contact only.
+        else:
+            key = "SelfSurface"
+        face = ids[indices]
+        if quadratic:
+            triangles = QUADRATIC_FACE_TRIANGLES[len(face)]
+            surfaces[key].extend(face[list(triangle)].tolist() for triangle in triangles)
+        else:
+            surfaces[key].append(face.tolist())
+    return surfaces
+
+
 def export_kratos(mesh, settings, directory):
     from standard_tests import kind, profile, load_sign, profile_report
     experiment=kind(settings)
     tension=experiment=='tension'
     kinematic=experiment!='compression'
+    quadratic = settings.mesh_type in KRATOS_QUADRATIC_MESH_TYPES
+    if errors := kratos_quadratic_platen_errors(settings):
+        raise ValueError("\n".join(errors))
     directory = Path(directory)
     directory.mkdir(parents=True, exist_ok=True)
     grid = mesh.grid
@@ -53,13 +106,12 @@ def export_kratos(mesh, settings, directory):
     if settings.self_contact_mode!='disabled' and settings.kratos_contact_method!='penalty':
         raise ValueError('Self-contact requires penalty mortar.')
     if settings.self_contact_mode!='disabled' and settings.mesh_type!='HEX8':
-        raise ValueError('Self-contact is qualified for HEX8 only; TET4 platen contact remains available.')
-    if settings.mesh_type not in ("HEX8", "TET4"):
-        raise ValueError("Kratos contact export requires HEX8 or TET4; the specimen is never remeshed.")
-    count = 8 if settings.mesh_type == "HEX8" else 4
-    expected_type = 12 if count == 8 else 10
+        raise ValueError('Kratos self-contact requires HEX8.')
+    if settings.mesh_type not in SOLID_CELLS:
+        raise ValueError(f"Unsupported Kratos element type: {settings.mesh_type}.")
+    expected_type, count = SOLID_CELLS[settings.mesh_type]
     if not np.all(np.asarray(grid.celltypes) == expected_type):
-        raise ValueError("Kratos export requires homogeneous HEX8 or TET4 connectivity, not voxel cell ordering.")
+        raise ValueError(f"Kratos export requires homogeneous {settings.mesh_type} connectivity.")
     cells = np.asarray(grid.cell_connectivity).reshape(-1, count)
     ids = np.asarray(grid.point_data.get("ansys_node_num", np.arange(1, grid.n_points + 1)), dtype=np.int64)
     if len(np.unique(ids)) != len(ids) or np.any(ids <= 0):
@@ -68,16 +120,8 @@ def export_kratos(mesh, settings, directory):
     fingerprint = mesh_digest(points, cells, ids)
     np.savez(directory / "mesh_input.npz", points=points, cells=cells, ids=ids)
     grid.save(directory/"submitted_mesh.vtu")
-    skin = grid.extract_surface(algorithm="dataset_surface")
-    original = np.asarray(skin.point_data["vtkOriginalPointIds"])
     zmin, zmax = points[:, 2].min(), points[:, 2].max()
-    tolerance = max((zmax-zmin) * 1e-9, 1e-12)
-    surfaces = {"BottomSpecimen": [], "TopSpecimen": [], "SelfSurface": []}
-    for i in range(skin.n_cells):
-        indices = original[np.asarray(skin.get_cell(i).point_ids)]
-        z = points[indices, 2]
-        key = "BottomSpecimen" if np.all(abs(z-zmin) < tolerance) else "TopSpecimen" if np.all(abs(z-zmax) < tolerance) else "SelfSurface"
-        surfaces[key].append(ids[indices].tolist())
+    surfaces = specimen_surfaces(grid, ids, points, quadratic=quadratic)
     if not surfaces["BottomSpecimen"] or not surfaces["TopSpecimen"]:
         raise ValueError("The specimen must touch both platen planes.")
     next_id = int(ids.max()) + 1
@@ -117,7 +161,12 @@ def export_kratos(mesh, settings, directory):
         for j in range(ny):
             for i in range(nx):
                 face=[int(patch[j,i]),int(patch[j,i+1]),int(patch[j+1,i+1]),int(patch[j+1,i])]
-                faces.append(face[::-1] if name == "TopPlaten" else face)
+                if name == "TopPlaten":
+                    face.reverse()
+                if quadratic:
+                    faces.extend((face[:3], [face[0], face[2], face[3]]))
+                else:
+                    faces.append(face)
         surfaces[name]=faces
         next_id+=(nx+1)*(ny+1)
     if tension:
@@ -143,7 +192,8 @@ def export_kratos(mesh, settings, directory):
     lines += [f"{int(n)} {x:.17g} {y:.17g} {z:.17g}" for n,(x,y,z) in zip(ids,points)]
     lines += [f"{n} {x:.17g} {y:.17g} {z:.17g}" for n,(x,y,z) in extra_points]
     lines += ["End Nodes", f"Begin Elements TotalLagrangianElement3D{count}N"]
-    lines += [f"{i+1} 1 " + " ".join(map(str,ids[cell])) for i,cell in enumerate(cells)]
+    solver_cells = cells[:, HEX20_KRATOS_ORDER] if settings.mesh_type == "HEX20" else cells
+    lines += [f"{i+1} 1 " + " ".join(map(str,ids[cell])) for i,cell in enumerate(solver_cells)]
     lines += ["End Elements"]
     condition_ids, condition_nodes = {}, {}
     cid = 1
@@ -194,17 +244,18 @@ def export_kratos(mesh, settings, directory):
     # Kratos searches MASTER CONDITION CENTRES within factor * slave radius.
     # A single rigid patch spans the whole platen: a fixed factor loses edge
     # contact as the specimen mesh gets finer. Cover every slave face centre.
-    master_center=np.array([(xmin+xmax)/2,(ymin+ymax)/2])
     point_by_id={int(n):p for n,p in zip(ids,points)}
     point_by_id.update(dict(extra_points))
     search_factor=3.5
     for name in ('BottomSpecimen','TopSpecimen'):
         if kinematic:continue
+        platen = name.replace('Specimen', 'Platen')
+        master_centers = [np.mean([point_by_id[n][:2] for n in face], axis=0) for face in surfaces[platen]]
         for face in surfaces[name]:
             coordinates=np.array([point_by_id[n] for n in face])
             center=coordinates.mean(axis=0)
             radius=np.linalg.norm(coordinates-center,axis=1).max()
-            distance=np.linalg.norm(center[:2]-master_center)
+            distance=max(np.linalg.norm(center[:2]-master_center) for master_center in master_centers)
             search_factor=max(search_factor,float(distance/max(radius,1e-12))+2.)
     process = {"python_module": "alm_contact_process" if settings.kratos_contact_method == "alm" else "penalty_contact_process",
                "kratos_module": "KratosMultiphysics.ContactStructuralMechanicsApplication", "Parameters": {
@@ -243,6 +294,8 @@ def export_kratos(mesh, settings, directory):
     payload = {"schema_version": 1, "settings": asdict(settings), "mesh_digest": fingerprint,
                "specimen_node_ids": ids.tolist(), "plate_nodes": plate_nodes, "pilot_node": pilot,
                "self_contact_nodes": self_nodes}
+    if settings.mesh_type == "HEX20":
+        payload["solver_cell_order"] = HEX20_KRATOS_ORDER
     payload.update(test_profile=profile_report(settings),experiment=experiment,load_sign=load_sign(settings))
     if experiment=='flexure':
         payload['support_nodes']=supports
@@ -254,11 +307,12 @@ def export_kratos(mesh, settings, directory):
         parameters['solver_settings']['convergence_criterion']='residual_criterion'
         parameters['solver_settings']['multi_point_constraints_used']=settings.loading_mode=='force'
         parameters['processes']['contact_process_list']=[]
-    if kinematic:
+    if kinematic or quadratic:
         # Imposed motion can make the initial residual much larger than the
-        # beam reactions. The generic 1e-4 relative criterion can therefore
-        # accept a step with a material global force imbalance.
+        # fixture reactions. Require tighter equilibrium in these cases.
         if contact_parts:parameters['solver_settings']['convergence_criterion']='contact_residual_criterion'
+        if quadratic and not kinematic:
+            parameters['solver_settings']['convergence_criterion'] = 'residual_criterion'
         for prefix in ('displacement','residual'):
             parameters['solver_settings'][prefix+'_relative_tolerance']=min(settings.kratos_relative_tolerance,1e-8)
             parameters['solver_settings'][prefix+'_absolute_tolerance']=min(settings.kratos_absolute_tolerance,1e-10)

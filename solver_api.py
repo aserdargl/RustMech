@@ -11,7 +11,23 @@ from pathlib import Path
 from typing import Protocol
 
 import numpy as np
-from model import FEMesh, Settings
+from model import FEMesh, MESH_TYPES, Settings
+
+
+KRATOS_QUADRATIC_MESH_TYPES = ("HEX20", "TET10")
+
+
+def kratos_quadratic_platen_errors(settings: Settings) -> list[str]:
+    from standard_tests import kind
+
+    if settings.mesh_type not in KRATOS_QUADRATIC_MESH_TYPES or kind(settings) != "compression":
+        return []
+    errors = []
+    if settings.kratos_contact_method != "penalty":
+        errors.append("Kratos HEX20 and TET10 platen contact requires penalty mortar.")
+    if settings.loading_mode != "displacement":
+        errors.append("Kratos HEX20 and TET10 compression requires displacement control.")
+    return errors
 
 
 @dataclass(frozen=True)
@@ -55,6 +71,7 @@ class SolverCapabilities:
         if settings.mesh_type not in self.supported_mesh_types:
             errors.append(f"{self.display_name} configuration supports: {', '.join(self.supported_mesh_types)}.")
         if self.identifier == "kratos":
+            errors.extend(kratos_quadratic_platen_errors(settings))
             if kind(settings)=='flexure' and settings.mesh_type!='HEX8':
                 errors.append('Kratos three-point flexure requires HEX8 with aligned support/loading lines.')
             if not isinstance(settings.kratos_line_search, bool):
@@ -70,7 +87,7 @@ class SolverCapabilities:
             elif settings.self_contact_mode!='disabled' and settings.kratos_contact_method!='penalty':
                 errors.append('Kratos self-contact requires penalty mortar.')
             if settings.self_contact_mode!='disabled' and settings.mesh_type!='HEX8':
-                errors.append('Kratos self-contact currently requires HEX8. TET4 remains available without self-contact.')
+                errors.append('Kratos self-contact requires HEX8.')
             if (isinstance(settings.kratos_penalty_factor,bool) or not isinstance(settings.kratos_penalty_factor,(int,float))
                     or not np.isfinite(settings.kratos_penalty_factor) or not 1<=settings.kratos_penalty_factor<=1e8):
                 errors.append('Kratos penalty factor must be between 1 and 100000000.')
@@ -133,8 +150,8 @@ KRATOS_CAPABILITIES = SolverCapabilities(
     unavailable_reason=(
         ""
     ),
-    ui_hint="TRUBA · nonlinear static · HEX8 / TET4 · OpenMP",
-    supported_mesh_types=("HEX8", "TET4"),
+    ui_hint="TRUBA · nonlinear static · HEX8 / HEX20 / TET4 / TET10 · OpenMP",
+    supported_mesh_types=MESH_TYPES,
 )
 
 SOLVER_REGISTRY: dict[str, SolverCapabilities] = {

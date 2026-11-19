@@ -125,9 +125,10 @@ class RemoteOperationTests(unittest.TestCase):
                     probe.assert_not_called()
 
     def test_kratos_adapter_limits_are_checked_before_meshing(self):
-        request = dict(operation='mechanical', settings=asdict(replace(Settings(), solver_backend='kratos', mesh_type='HEX20')))
+        request = dict(operation='mechanical', settings=asdict(replace(Settings(), solver_backend='kratos', mesh_type='HEX20',
+                       self_contact_mode='disabled', kratos_contact_method='penalty', loading_mode='force')))
         with patch('remote_worker._stage'), patch('remote_worker.probe', return_value=dict(kratos=True, mesh_types=['HEX20'])), patch('mesh_engine.generate_volume_mesh') as mesh:
-            with self.assertRaisesRegex(ValueError, 'HEX8, TET4'):
+            with self.assertRaisesRegex(ValueError, 'requires displacement control'):
                 run_operation(request, Path('.'))
             mesh.assert_not_called()
 
