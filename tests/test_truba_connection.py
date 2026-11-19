@@ -9,7 +9,7 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 import paramiko
-from PySide6.QtCore import QPoint, QSettings, Qt
+from PySide6.QtCore import QItemSelectionModel, QPoint, QSettings, Qt
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QLineEdit, QMessageBox
 
@@ -24,6 +24,9 @@ from window_state import WindowStateStore
 
 def queue_output(*rows):
     return '\n'.join(row.replace('|', QUEUE_SEPARATOR, 9) for row in rows)
+
+
+SELECT_ROW = QItemSelectionModel.SelectionFlag.ClearAndSelect | QItemSelectionModel.SelectionFlag.Rows
 
 
 class TrubaTests(unittest.TestCase):
@@ -357,6 +360,12 @@ class TrubaTests(unittest.TestCase):
             self.assertEqual(command.call_count, 2)
             self.assertEqual(tab.jobs.item(0, 0).text(), '1')
             self.assertTrue(tab.refresh_button.isEnabled())
+            self.assertLess(tab.cancel_button.geometry().right(), tab.refresh_button.x())
+            self.assertEqual(tab.cancel_button.y(), tab.refresh_button.y())
+            self.assertEqual(tab.cancel_button.size(), tab.refresh_button.size())
+            tab.layout().activate()
+            bottom_margin = tab.layout().contentsMargins().bottom()
+            self.assertEqual(tab.splitter.geometry().bottom(), tab.rect().bottom() - bottom_margin)
 
         dialog.connection_changed.emit(False)
         self.assertFalse(tab.refresh_button.isEnabled())
@@ -382,9 +391,12 @@ class TrubaTests(unittest.TestCase):
             self.app.processEvents()
             tab.timer.stop()
 
-            tab.jobs.setCurrentCell(2, 0)
+            tab.jobs.setCurrentCell(2, 0, SELECT_ROW)
             self.assertFalse(tab.cancel_button.isEnabled())
-            tab.jobs.setCurrentCell(1, 0)
+            tab.jobs.selectionModel().select(tab.jobs.model().index(0, 0),
+                                             QItemSelectionModel.SelectionFlag.Select | QItemSelectionModel.SelectionFlag.Rows)
+            self.assertFalse(tab.cancel_button.isEnabled())
+            tab.jobs.setCurrentCell(1, 0, SELECT_ROW)
             self.assertTrue(tab.cancel_button.isEnabled())
             tab.study_name.setFocus()
             QTest.keyClick(tab.study_name, Qt.Key.Key_Return)
@@ -396,7 +408,7 @@ class TrubaTests(unittest.TestCase):
             self.assertEqual(question.call_args.args[-1], QMessageBox.StandardButton.No)
 
             def confirm(*_):
-                tab.jobs.setCurrentCell(0, 0)
+                tab.jobs.setCurrentCell(0, 0, SELECT_ROW)
                 return QMessageBox.StandardButton.Yes
 
             question.side_effect = confirm
@@ -409,7 +421,7 @@ class TrubaTests(unittest.TestCase):
             self.app.processEvents()
             self.assertEqual(command.call_args_list[1].args[0], 'scancel --user=tester 23')
             self.assertTrue(command.call_args_list[2].args[0].startswith('TZ=UTC'))
-            self.assertEqual([job.job_id for job in tab.selected_jobs], ['11'])
+            self.assertEqual(tab.jobs.rowCount(), 1)
             self.assertEqual(tab.cancel_notice.text(), 'Cancellation requested for Slurm job 23.')
 
             command.side_effect = [RuntimeError('Rejected'), queue.splitlines()[0]]
@@ -419,11 +431,84 @@ class TrubaTests(unittest.TestCase):
             self.assertTrue(tab.worker.wait(5000))
             self.app.processEvents()
             self.assertTrue(tab.cancel_button.isEnabled())
-            self.assertEqual(tab.selected_job().job_id, '11')
+            self.assertEqual(tab.selected_job_ids(), ('11',))
             self.assertIn('Could not request cancellation', tab.cancel_notice.text())
 
         dialog.connection_changed.emit(False)
         self.assertFalse(tab.cancel_button.isEnabled())
+
+    def test_active_jobs_bulk_cancel_preserves_confirmed_ids_across_refresh(self):
+        dialog = self.dialog()
+        tab = dialog.active_jobs
+        dialog.tabs.setCurrentWidget(tab)
+        dialog.show()
+        queue = queue_output(
+            '11|RUNNING|N/A|4:00|8:00:00|8|1|short|First job|run.slurm',
+            '23|PENDING|N/A|0:00|8:00:00|4|1|short|Second job|run.slurm',
+            '31|RUNNING|N/A|4:00|8:00:00|8|1|short|Third job|run.slurm',
+        ).splitlines()
+        with (patch.object(dialog, 'analysis_auth', return_value=RemoteAuth('tester', 'test')),
+              patch('truba_active_jobs.RemoteTransport') as transport,
+              patch.object(QMessageBox, 'question') as question):
+            command = transport.return_value.command
+            command.return_value = '\n'.join(queue)
+            dialog.connection_changed.emit(True)
+            self.assertTrue(tab.worker.wait(5000))
+            self.app.processEvents()
+            tab.timer.stop()
+
+            third_job = tab.jobs.visualItemRect(tab.jobs.item(2, 0)).center()
+            QTest.mouseClick(tab.jobs.viewport(), Qt.MouseButton.LeftButton,
+                             Qt.KeyboardModifier.ShiftModifier, third_job)
+            self.assertEqual(tab.selected_job_ids(), ('11', '23', '31'))
+            tab.jobs.setCurrentCell(0, 0, SELECT_ROW)
+            QTest.mouseClick(tab.jobs.viewport(), Qt.MouseButton.LeftButton,
+                             Qt.KeyboardModifier.ControlModifier, third_job)
+            self.assertEqual(tab.selected_job_ids(), ('11', '31'))
+
+            original_groups = tab.groups
+            tab.show_groups(dict(reversed(tuple(original_groups.items()))))
+            self.assertEqual(tab.selected_job_ids(), ('31', '11'))
+
+            question.return_value = QMessageBox.StandardButton.No
+            tab.cancel_button.click()
+            command.assert_called_once()
+            self.assertIn('2 selected Slurm jobs', question.call_args.args[2])
+            self.assertEqual(question.call_args.args[-1], QMessageBox.StandardButton.No)
+
+            def confirm_stale_selection(*_):
+                tab.show_groups({'Third job': original_groups['Third job']})
+                return QMessageBox.StandardButton.Yes
+
+            question.side_effect = confirm_stale_selection
+            tab.cancel_button.click()
+            command.assert_called_once()
+            self.assertIn('selected jobs changed', tab.cancel_notice.text())
+
+            tab.show_groups(original_groups)
+            tab.jobs.setCurrentCell(0, 0, SELECT_ROW)
+            self.app.processEvents()
+            tab.jobs.scrollToItem(tab.jobs.item(2, 0))
+            third_job = tab.jobs.visualItemRect(tab.jobs.item(2, 0)).center()
+            QTest.mouseClick(tab.jobs.viewport(), Qt.MouseButton.LeftButton,
+                             Qt.KeyboardModifier.ControlModifier, third_job)
+            self.assertEqual(tab.selected_job_ids(), ('11', '31'))
+
+            def confirm(*_):
+                tab.jobs.setCurrentCell(1, 0, SELECT_ROW)
+                return QMessageBox.StandardButton.Yes
+
+            question.side_effect = confirm
+            command.side_effect = ['', queue[1]]
+            tab.cancel_button.click()
+            self.assertFalse(tab.cancel_button.isEnabled())
+            self.assertTrue(tab.cancel_worker.wait(5000))
+            self.app.processEvents()
+            self.assertTrue(tab.worker.wait(5000))
+            self.app.processEvents()
+            self.assertEqual(command.call_args_list[1].args[0], 'scancel --user=tester 11 31')
+            self.assertEqual(tab.selected_job_ids(), ('23',))
+            self.assertEqual(tab.cancel_notice.text(), 'Cancellation requested for 2 Slurm jobs.')
 
     def test_active_jobs_show_purposes_resources_and_times_in_numbered_rows(self):
         dialog = self.dialog()

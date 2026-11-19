@@ -1165,6 +1165,7 @@ Estimated start|Tahmini başlangıç
 Slurm has no start estimate yet.|Slurm henüz başlangıç tahmini vermedi.
 Start time estimated by Slurm. It may change.|Slurm'un tahmini başlangıç zamanı değişebilir.
 Cancel job|İşi iptal et
+The selected jobs changed. Review the list and try again.|Seçili işler değişti. Listeyi kontrol edip tekrar deneyin.
 Only individual Slurm allocations can be cancelled here.|Buradan yalnızca tekil Slurm tahsisleri iptal edilebilir.
 Sending cancellation request to Slurm…|Slurm’a iptal isteği gönderiliyor…
 All jobs|Tüm işler
@@ -1354,10 +1355,16 @@ TURKISH.update({
 TEMPLATES = {
     'Cancel Slurm job {job_id}? This stops the entire allocation and any analyses using it.':
         '{job_id} numaralı Slurm işi iptal edilsin mi? Tahsisin tamamı ve onu kullanan analizler durdurulur.',
+    'Cancel {count} selected Slurm jobs? This stops each allocation and any analyses using it.':
+        'Seçilen {count} Slurm işi iptal edilsin mi? Bu işlerin tahsisleri ve onları kullanan analizler durdurulur.',
     'Could not request cancellation for Slurm job {job_id}. Refresh and retry.':
         '{job_id} numaralı Slurm işi için iptal isteği gönderilemedi. Listeyi yenileyip tekrar deneyin.',
     'Cancellation requested for Slurm job {job_id}.':
         '{job_id} numaralı Slurm işi için iptal isteği gönderildi.',
+    'Could not confirm cancellation requests for all {count} Slurm jobs. Check their status.':
+        '{count} Slurm işinin tamamı için iptal isteği doğrulanamadı. İşlerin durumunu kontrol edin.',
+    'Cancellation requested for {count} Slurm jobs.':
+        '{count} Slurm işi için iptal isteği gönderildi.',
     'Could not write VTU: {file}': 'VTU dosyası yazılamadı: {file}',
     'Missing or invalid nodal result field: {field}': 'Düğüm sonuç alanı eksik veya geçersiz: {field}',
     'Unsupported EnSight Gold cell types: {types}': 'Desteklenmeyen EnSight Gold eleman tipleri: {types}',

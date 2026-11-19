@@ -8,7 +8,7 @@ from pathlib import PurePosixPath
 import re
 import shlex
 
-from PySide6.QtCore import QSignalBlocker, QThread, QTimer, Qt
+from PySide6.QtCore import QItemSelection, QItemSelectionModel, QSignalBlocker, QThread, QTimer, Qt
 from PySide6.QtWidgets import (QAbstractItemView, QFormLayout, QHBoxLayout, QHeaderView,
                                QItemDelegate, QLabel, QLineEdit, QMessageBox, QPushButton, QSplitter,
                                QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
@@ -158,19 +158,19 @@ class ActiveJobsWorker(QThread):
 
 
 class CancelSlurmJobWorker(QThread):
-    def __init__(self, auth, job_id, parent):
+    def __init__(self, auth, job_ids, parent):
         super().__init__(parent)
         self.auth = auth
-        self.job_id = job_id
+        self.job_ids = job_ids
         self.failed = False
         self.invalidated = False
 
     def run(self):
         try:
-            if not re.fullmatch(r'[0-9]+', self.job_id):
-                raise ValueError('Expected a single Slurm allocation ID')
+            if not self.job_ids or any(not re.fullmatch(r'[0-9]+', job_id) for job_id in self.job_ids):
+                raise ValueError('Expected Slurm allocation IDs')
             transport = RemoteTransport(RemoteContext(transport='ssh'), self.auth)
-            transport.command(f'scancel --user={shlex.quote(self.auth.username)} {self.job_id}')
+            transport.command(f'scancel --user={shlex.quote(self.auth.username)} {" ".join(self.job_ids)}')
         except Exception:
             self.failed = True
         finally:
@@ -186,7 +186,7 @@ class TrubaActiveJobs(QWidget):
         self.refresh_after_cancel = False
         self.shutting_down = False
         self.groups = {}
-        self.selected_jobs = []
+        self.job_rows = []
         self.timer = QTimer(self, interval=10000)
         self.timer.timeout.connect(self.refresh)
         dialog.connection_changed.connect(self.connection_changed)
@@ -201,16 +201,23 @@ class TrubaActiveJobs(QWidget):
         self.study_name.setToolTip('Use the same work name to group multiple submissions.')
         form = QFormLayout()
         form.addRow('Work name for new jobs', self.study_name)
+        self.cancel_button = QPushButton('Cancel job')
+        self.cancel_button.setObjectName('destructiveActionBtn')
+        self.cancel_button.clicked.connect(self.cancel_selected_jobs)
         self.refresh_button = QPushButton('Refresh')
-        self.refresh_button.setFixedHeight(CONTROL_HEIGHT)
-        self.refresh_button.setStyleSheet('QPushButton { padding: 0 8px; } QPushButton:focus { padding: 0 7px; }')
-        self.refresh_button.setAutoDefault(False)
-        self.refresh_button.setEnabled(False)
         self.refresh_button.clicked.connect(self.refresh)
         header_row = QHBoxLayout()
         header_row.addLayout(form, 1)
-        header_row.addWidget(self.refresh_button)
+        for button in (self.cancel_button, self.refresh_button):
+            button.setFixedHeight(CONTROL_HEIGHT)
+            button.setStyleSheet('QPushButton { padding: 0 8px; } QPushButton:focus { padding: 0 7px; }')
+            button.setAutoDefault(False)
+            button.setEnabled(False)
+            button.setProperty('managesLocalizedWidth', True)
+            header_row.addWidget(button)
         layout.addLayout(header_row)
+        self.fit_action_buttons()
+        dialog.language_manager.changed.connect(self.fit_action_buttons)
 
         self.splitter = QSplitter(Qt.Orientation.Horizontal)
         self.splitter.setObjectName('trubaActiveJobsSplitter')
@@ -221,6 +228,7 @@ class TrubaActiveJobs(QWidget):
         self.jobs = QTableWidget(0, len(headers))
         self.jobs.setHorizontalHeaderLabels(headers)
         configure_slurm_job_table(self.jobs)
+        self.jobs.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.splitter.addWidget(self.works)
         self.splitter.addWidget(self.jobs)
         self.splitter.setStretchFactor(0, 0)
@@ -228,26 +236,30 @@ class TrubaActiveJobs(QWidget):
         self.splitter.setSizes([115, 375])
         layout.addWidget(self.splitter, 1)
         self.works.currentCellChanged.connect(self.select_work)
-        self.jobs.currentCellChanged.connect(self.update_cancel_button)
+        self.jobs.itemSelectionChanged.connect(self.update_cancel_button)
 
         self.notice = QLabel('Connect to TRUBA to see active jobs.')
         self.notice.setObjectName('mutedHintLabel')
         self.notice.setWordWrap(True)
-        layout.addWidget(self.notice)
-        actions = QHBoxLayout()
         self.cancel_notice = QLabel()
         self.cancel_notice.setObjectName('mutedHintLabel')
         self.cancel_notice.setWordWrap(True)
-        actions.addWidget(self.cancel_notice, 1)
-        self.cancel_button = QPushButton('Cancel job')
-        self.cancel_button.setObjectName('destructiveActionBtn')
-        self.cancel_button.setFixedHeight(CONTROL_HEIGHT)
-        self.cancel_button.setStyleSheet(self.refresh_button.styleSheet())
-        self.cancel_button.setAutoDefault(False)
-        self.cancel_button.setEnabled(False)
-        self.cancel_button.clicked.connect(self.cancel_selected_job)
-        actions.addWidget(self.cancel_button)
-        layout.addLayout(actions)
+        self.cancel_notice.hide()
+        status_row = QHBoxLayout()
+        status_row.addWidget(self.notice, 1)
+        status_row.addWidget(self.cancel_notice, 1)
+        layout.addLayout(status_row)
+
+    def fit_action_buttons(self, *_):
+        buttons = (self.cancel_button, self.refresh_button)
+        width = max(button.fontMetrics().horizontalAdvance(translate(button.text())) for button in buttons) + 20
+        for button in buttons:
+            button.setFixedWidth(width)
+
+    @staticmethod
+    def set_notice(label, message):
+        label.setText(message)
+        label.setVisible(bool(message))
 
     @staticmethod
     def _table(headers):
@@ -277,9 +289,9 @@ class TrubaActiveJobs(QWidget):
                 self.worker.invalidated = True
             if self.cancel_worker is not None:
                 self.cancel_worker.invalidated = True
-            self.cancel_notice.clear()
+            self.set_notice(self.cancel_notice, '')
             self.show_groups({})
-            self.notice.setText('Connect to TRUBA to see active jobs.')
+            self.set_notice(self.notice, 'Connect to TRUBA to see active jobs.')
         else:
             self.refresh()
 
@@ -290,7 +302,7 @@ class TrubaActiveJobs(QWidget):
         if auth is None:
             return
         if not self.groups:
-            self.notice.setText('Updating active jobs…')
+            self.set_notice(self.notice, 'Updating active jobs…')
         self.refresh_button.setEnabled(False)
         self.worker = ActiveJobsWorker(auth, self.dialog.state_dir, self)
         self.worker.finished.connect(self.finish_refresh)
@@ -310,10 +322,10 @@ class TrubaActiveJobs(QWidget):
             self.refresh()
             return
         if worker.groups is None:
-            self.notice.setText('Could not update active jobs. Retrying…')
+            self.set_notice(self.notice, 'Could not update active jobs. Retrying…')
             return
         self.show_groups(worker.groups)
-        self.notice.setText('' if worker.groups else 'No active Slurm jobs.')
+        self.set_notice(self.notice, '' if worker.groups else 'No active Slurm jobs.')
 
     def show_groups(self, groups):
         current = self.works.currentItem()
@@ -335,22 +347,22 @@ class TrubaActiveJobs(QWidget):
 
     def select_work(self, *_):
         selected = self.works.currentItem()
+        selection_model = self.jobs.selectionModel()
+        previous_rows = [(name, job.job_id) for name, job in self.job_rows]
+        previous_selection = {previous_rows[index.row()] for index in selection_model.selectedRows()}
         row = self.jobs.currentRow()
-        previous = (
-            (self.jobs.item(row, 2).text(), self.selected_jobs[row].job_id)
-            if 0 <= row < len(self.selected_jobs) else None
-        )
+        previous_current = previous_rows[row] if row >= 0 else None
         selected_name = selected.data(Qt.ItemDataRole.UserRole) if selected else None
         groups = self.groups if selected_name is None else {selected_name: self.groups[selected_name]}
-        jobs = [(name, job) for name, group in groups.items() for job in group]
-        self.selected_jobs = [job for _, job in jobs]
+        self.job_rows = [(name, job) for name, group in groups.items() for job in group]
         horizontal_scroll = self.jobs.horizontalScrollBar()
         scroll_position = horizontal_scroll.value()
         with QSignalBlocker(self.jobs):
             self.jobs.setColumnHidden(2, selected_name is not None)
-            self.jobs.setRowCount(len(self.selected_jobs))
-            row = 0
-            for index, (name, job) in enumerate(jobs):
+            self.jobs.setRowCount(len(self.job_rows))
+            selected_rows = []
+            current_row = -1
+            for index, (name, job) in enumerate(self.job_rows):
                 self.jobs.setItem(index, 0, QTableWidgetItem(job.job_id))
                 self.jobs.setItem(index, 1, QTableWidgetItem(job.state))
                 self.jobs.setItem(index, 2, QTableWidgetItem(name))
@@ -379,45 +391,65 @@ class TrubaActiveJobs(QWidget):
                         else 'Start time estimated by Slurm. It may change.'
                     ))
                 self.jobs.setItem(index, len(SLURM_JOB_HEADERS), estimate_item)
-                if (name, job.job_id) == previous:
-                    row = index
-            self.jobs.setCurrentCell(row, 0)
+                if (name, job.job_id) in previous_selection:
+                    selected_rows.append(index)
+                if (name, job.job_id) == previous_current:
+                    current_row = index
+            if not previous_rows and self.job_rows:
+                selected_rows.append(0)
+            if current_row == -1 and selected_rows:
+                current_row = selected_rows[0]
+            selection = QItemSelection()
+            for row in selected_rows:
+                index = self.jobs.model().index(row, 0)
+                selection.select(index, index)
+            flags = QItemSelectionModel.SelectionFlag
+            selection_model.select(selection, flags.ClearAndSelect | flags.Rows)
+            self.jobs.setCurrentCell(current_row, 0, flags.NoUpdate)
         horizontal_scroll.setValue(scroll_position)
         self.update_cancel_button()
 
-    def selected_job(self):
-        row = self.jobs.currentRow()
-        return self.selected_jobs[row] if 0 <= row < len(self.selected_jobs) else None
+    def selected_job_ids(self):
+        rows = sorted(index.row() for index in self.jobs.selectionModel().selectedRows())
+        return tuple(dict.fromkeys(self.job_rows[row][1].job_id for row in rows))
 
     def update_cancel_button(self, *_):
-        job = self.selected_job()
-        single_job = job is not None and bool(re.fullmatch(r'[0-9]+', job.job_id))
-        self.cancel_button.setEnabled(single_job and self.cancel_worker is None)
+        job_ids = self.selected_job_ids()
+        unsupported = any(not re.fullmatch(r'[0-9]+', job_id) for job_id in job_ids)
+        self.cancel_button.setEnabled(bool(job_ids) and not unsupported and self.cancel_worker is None)
         self.cancel_button.setToolTip(translate(
             'Only individual Slurm allocations can be cancelled here.'
-        ) if job is not None and not single_job else '')
+        ) if unsupported else '')
 
-    def cancel_selected_job(self):
+    def cancel_selected_jobs(self):
         auth = self.dialog.analysis_auth()
-        job = self.selected_job()
-        if self.shutting_down or auth is None or job is None or self.cancel_worker is not None:
+        job_ids = self.selected_job_ids()
+        if self.shutting_down or auth is None or not job_ids or self.cancel_worker is not None:
             return
-        if not re.fullmatch(r'[0-9]+', job.job_id):
+        if any(not re.fullmatch(r'[0-9]+', job_id) for job_id in job_ids):
             return
-        # Keep the confirmed target even if a refresh changes the current row.
+        if len(job_ids) == 1:
+            message = (f'Cancel Slurm job {job_ids[0]}? This stops the entire allocation '
+                       'and any analyses using it.')
+        else:
+            message = (f'Cancel {len(job_ids)} selected Slurm jobs? This stops each allocation '
+                       'and any analyses using it.')
+        # Keep the confirmed targets even if a refresh changes the selection.
         answer = QMessageBox.question(
-            self, 'Cancel job',
-            f'Cancel Slurm job {job.job_id}? This stops the entire allocation and any analyses using it.',
+            self, 'Cancel job', message,
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
         )
         if (answer != QMessageBox.StandardButton.Yes or self.shutting_down or self.cancel_worker is not None
-                or self.dialog.analysis_auth() != auth
-                or not any(item.job_id == job.job_id for group in self.groups.values() for item in group)):
+                or self.dialog.analysis_auth() != auth):
             return
-        self.cancel_worker = CancelSlurmJobWorker(auth, job.job_id, self)
+        active_ids = {item.job_id for group in self.groups.values() for item in group}
+        if not active_ids.issuperset(job_ids):
+            self.set_notice(self.cancel_notice, 'The selected jobs changed. Review the list and try again.')
+            return
+        self.cancel_worker = CancelSlurmJobWorker(auth, job_ids, self)
         self.cancel_worker.finished.connect(self.finish_cancel)
-        self.cancel_notice.setText('Sending cancellation request to Slurm…')
+        self.set_notice(self.cancel_notice, 'Sending cancellation request to Slurm…')
         self.cancel_button.setEnabled(False)
         self.cancel_worker.start()
 
@@ -427,9 +459,15 @@ class TrubaActiveJobs(QWidget):
         self.update_cancel_button()
         if worker.invalidated or self.shutting_down:
             return
-        message = ('Could not request cancellation for Slurm job {job_id}. Refresh and retry.' if worker.failed
-                   else 'Cancellation requested for Slurm job {job_id}.')
-        self.cancel_notice.setText(message.format(job_id=worker.job_id))
+        count = len(worker.job_ids)
+        if count == 1:
+            job_id = worker.job_ids[0]
+            message = (f'Could not request cancellation for Slurm job {job_id}. Refresh and retry.' if worker.failed
+                       else f'Cancellation requested for Slurm job {job_id}.')
+        else:
+            message = (f'Could not confirm cancellation requests for all {count} Slurm jobs. Check their status.'
+                       if worker.failed else f'Cancellation requested for {count} Slurm jobs.')
+        self.set_notice(self.cancel_notice, message)
         if self.worker is not None:
             self.refresh_after_cancel = True
         else:
