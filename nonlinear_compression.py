@@ -2263,9 +2263,12 @@ class RustMechDialog(QDialog):
         value = self.collect().automatic_surface_resolution
         self.stl_resolution_input.setText(f"{value:.12g}")
 
-    def collect(self) -> Settings:
+    def collect(self, *, draft=False) -> Settings:
+        stl_resolution = self._stl_resolution_value()
+        if draft and stl_resolution is not None and not np.isfinite(stl_resolution):
+            stl_resolution = None
         settings=Settings(
-            stl_resolution=self._stl_resolution_value(),
+            stl_resolution=stl_resolution,
             test_profile=self.test_profile_combo.currentData(),
             specimen_architecture=self.architecture_combo.currentData(),
             imported_geometry_path=self.imported_geometry_path,
@@ -2300,6 +2303,8 @@ class RustMechDialog(QDialog):
                                minimum_substeps=None, maximum_substeps=None)
         if self.imported_geometry_path:
             settings = replace(settings, size=self.imported_geometry_height)
+        if draft:
+            return settings
         if settings.test_profile != 'custom':
             from standard_tests import profile
             p=profile(settings)
@@ -3101,13 +3106,20 @@ class RustMechDialog(QDialog):
             self._update_status_visuals("error", "● FAILED", False)
             return
         if self._persist_solver_profiles:
-            preferences = self.solver_profile_store.settings
-            preferences.setValue("fft/grid", grid)
-            preferences.setValue("fft/voidRatio", void_ratio)
-            preferences.setValue("fft/distribution", distribution)
+            self._save_fft_preferences()
         self.refresh_validity()
         self.force_stop_button.setEnabled(True)
         self.analysis_poll.start()
+
+    def _save_fft_preferences(self):
+        preferences = self.solver_profile_store.settings
+        material = self.fft_material_editor.material_settings()
+        preferences.setValue("fft/solidMaterial", json.dumps(
+            {key: getattr(material, key) for key in MATERIAL_FIELDS}))
+        preferences.setValue("fft/grid", self.fft_grid.value())
+        preferences.setValue("fft/voidRatio", self.fft_void_ratio.value())
+        preferences.setValue("fft/distribution", self.fft_distribution.text())
+        preferences.sync()
 
     def retrieve_truba_job(self):
         if self.analysis_job is not None or self.remote_controller.future is not None:
@@ -3350,11 +3362,10 @@ class RustMechDialog(QDialog):
         if self.disposed:
             return
         if self._solver_profiles_ready and self._persist_solver_profiles:
-            self.solver_profile_store.save(self._active_solver_id, profile_values(self.collect()))
-            material = self.fft_material_editor.material_settings()
-            self.solver_profile_store.settings.setValue("fft/solidMaterial", json.dumps(
-                {key: getattr(material, key) for key in MATERIAL_FIELDS}))
-            self.solver_profile_store.settings.sync()
+            draft = self.collect(draft=True)
+            self.solver_profile_store.save_workspace(draft)
+            self.solver_profile_store.save(self._active_solver_id, profile_values(draft))
+            self._save_fft_preferences()
         self.force_stop_analysis()
         if hasattr(self,"remote_controller"):
             self.remote_controller.shutdown()
@@ -3407,15 +3418,14 @@ def main() -> int:
         help="Skip images during offline export",
     )
     args = parser.parse_args()
-    settings = load_settings()
     if args.offline_test:
-        offline_check(settings, images=not args.no_images)
+        offline_check(load_settings(), images=not args.no_images)
         return 0
     app = QApplication.instance() or QApplication([sys.argv[0]])
     from app_identity import configure_application
     configure_application(app)
     profiles = SolverProfileStore()
-    settings = profiles.restore(settings)
+    settings = profiles.restore_workspace()
     dialog = RustMechDialog(settings, solver_profile_store=profiles)
     try:
         dialog.exec()

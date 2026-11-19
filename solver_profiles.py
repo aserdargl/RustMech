@@ -1,9 +1,10 @@
 """Per-user solver drafts, separate from the shared specimen geometry/material."""
 import json
-from dataclasses import asdict
+from dataclasses import asdict, replace
+from pathlib import Path
 
 from PySide6.QtCore import QSettings
-from model import ANALYSIS_FIELDS, Settings, settings_from_dict
+from model import ANALYSIS_FIELDS, SETTINGS_FILE, Settings, load_settings, settings_from_dict
 
 KRATOS_FIELDS = tuple(name for name in Settings.__dataclass_fields__ if name.startswith(("kratos_", "truba_")))
 PROFILE_FIELDS = tuple(dict.fromkeys((*ANALYSIS_FIELDS, "mesh_type", "mesh_resolution",
@@ -36,6 +37,32 @@ def default_profile(solver, current):
 class SolverProfileStore:
     def __init__(self, settings=None):
         self.settings = settings if settings is not None else QSettings("RustMech", "RustMech")
+
+    def save_workspace(self, draft):
+        self.settings.setValue("mechanical/workspaceDraft", json.dumps(asdict(draft), allow_nan=False))
+
+    def restore_workspace(self, legacy_path=SETTINGS_FILE):
+        """Restore editable inputs, which may be unfinished or fail solve validation."""
+        raw = self.settings.value("mechanical/workspaceDraft")
+        if raw:
+            try:
+                draft = settings_from_dict(json.loads(raw))
+            except (TypeError, ValueError):
+                pass
+            else:
+                if draft.imported_geometry_path and not Path(draft.imported_geometry_path).is_file():
+                    draft = replace(draft, imported_geometry_path="", imported_geometry_name="",
+                                    imported_geometry_role="compression")
+                # A temporary TRUBA solver can differ from the locally selected solver.
+                active = self.settings.value("solverProfiles/active", draft.solver_backend)
+                if active in ("ansys_mapdl", "kratos", "openfoam") and active != draft.solver_backend:
+                    return self.load(active, draft)
+                return draft
+        try:
+            legacy = load_settings(legacy_path)
+        except (OSError, ValueError, TypeError):
+            legacy = Settings()
+        return self.restore(legacy)
 
     def load(self, solver, current):
         fallback = default_profile(solver, current)

@@ -95,6 +95,29 @@ class FolderBatchTests(unittest.TestCase):
         self.addCleanup(dialog.dispose)
         return dialog
 
+    def test_reopened_folder_batch_restores_inputs_and_local_choices(self):
+        batch = self.dialog()
+        batch.folder.setText(str(self.root))
+        batch.mode.setCurrentIndex(1)
+        batch.mesh_resolution.setValue(.6)
+        batch.local_mesh_size.setValue(.3)
+        batch.execution_target.setCurrentIndex(batch.execution_target.findData("local"))
+        batch.solver.setCurrentIndex(1)
+        batch.mesh_type.setCurrentText("TET10")
+        batch.execution_target.setCurrentIndex(batch.execution_target.findData("truba"))
+        batch.reject()
+
+        restarted = self.dialog()
+        self.assertEqual(restarted.folder.text(), str(self.root))
+        self.assertEqual(restarted.mode.currentIndex(), 1)
+        self.assertAlmostEqual(restarted.mesh_resolution.value(), .6)
+        self.assertAlmostEqual(restarted.local_mesh_size.value(), .3)
+        self.assertEqual(restarted.execution_target.currentData(), "truba")
+        self.assertIsNone(restarted.future)
+        restarted.execution_target.setCurrentIndex(restarted.execution_target.findData("local"))
+        self.assertEqual(restarted.solver.currentIndex(), 1)
+        self.assertEqual(restarted.mesh_type.currentText(), "TET10")
+
     def test_axes_offsets_sizes_and_reverse_direction(self):
         for direction, expected in (((1, 0, 0), 4), ((0, 1, 0), 3), ((0, 0, 1), 6), ((0, 0, -1), 6)):
             with self.subTest(direction=direction):

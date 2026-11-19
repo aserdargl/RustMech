@@ -73,6 +73,46 @@ class SolverProfileTests(unittest.TestCase):
         self.select(restarted, "ansys_mapdl")
         self.assertAlmostEqual(restarted.collect().compression, .41)
 
+    def test_close_restores_unsolved_workspace_and_fft_inputs(self):
+        dialog = self.dialog()
+        dialog.controls["size"].setValue(13.5)
+        dialog.controls["cell_size"].setValue(4.75)
+        dialog.controls["solid_fraction"].setValue(42)
+        dialog.controls["mesh_resolution"].setValue(.2)
+        dialog.controls["local_mesh_size"].setValue(.35)
+        dialog.stl_resolution_input.setText("0,07")
+        dialog.material_editor.controls["young_modulus"].setValue(180000)
+        dialog.fft_grid.setValue(40)
+        dialog.fft_void_ratio.setValue(.02)
+        dialog.fft_distribution.setText("Ubuntu-RustMech")
+        dialog.reject()
+
+        self.store = SolverProfileStore(QSettings(self.store.settings.fileName(), QSettings.Format.IniFormat))
+        restarted = self.dialog(self.store.restore_workspace(Path(self.temp.name) / "settings.json"))
+        actual = restarted.collect()
+        self.assertEqual((actual.size, actual.cell_size, actual.solid_fraction), (13.5, 4.75, 42))
+        self.assertEqual((actual.mesh_resolution, actual.local_mesh_size), (.2, .35))
+        self.assertAlmostEqual(actual.stl_resolution, .07)
+        self.assertEqual(actual.young_modulus, 180000)
+        self.assertEqual(restarted.fft_grid.value(), 40)
+        self.assertAlmostEqual(restarted.fft_void_ratio.value(), .02)
+        self.assertEqual(restarted.fft_distribution.text(), "Ubuntu-RustMech")
+        self.assertIsNone(restarted.analysis_job)
+        self.assertFalse(restarted.remote_controller.requested)
+
+    def test_workspace_migrates_legacy_settings_and_handles_missing_geometry(self):
+        path = Path(self.temp.name) / "settings.json"
+        legacy = Settings(size=17, cell_size=5)
+        save_settings(legacy, path)
+        self.assertEqual(self.store.restore_workspace(path), legacy)
+
+        self.store.save_workspace(replace(legacy, size=23,
+            imported_geometry_path=str(path.with_name("removed.stl")), imported_geometry_name="Gone"))
+        restored = self.store.restore_workspace(path)
+        self.assertEqual(restored.size, 23)
+        self.assertEqual(restored.imported_geometry_path, "")
+        self.assertEqual(restored.imported_geometry_name, "")
+
     def test_kratos_enter_only_confirms_and_settings_roundtrip(self):
         dialog = self.dialog()
         self.select(dialog, "kratos")

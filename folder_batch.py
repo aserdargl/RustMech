@@ -342,6 +342,7 @@ class FolderBatchDialog(QDialog):
         self.timer.setInterval(100)
         self.timer.timeout.connect(self.poll)
         self.timer.start()
+        self._restore_preferences()
         self.folder.textChanged.connect(self.invalidate)
         self.mode.currentIndexChanged.connect(self.invalidate)
         self.solver.currentIndexChanged.connect(self.refresh_queue_view)
@@ -349,8 +350,40 @@ class FolderBatchDialog(QDialog):
         self.local_mesh_size.valueChanged.connect(self.refresh_queue_view)
         self.mesh_type.currentIndexChanged.connect(self.refresh_queue_view)
         self.queue.queue_changed.connect(self.refresh_queue_view)
-        self.execution_target.currentIndexChanged.connect(self.update_execution_target)
         self.update_execution_target()
+        self.execution_target.currentIndexChanged.connect(self.update_execution_target)
+        self.finished.connect(self._save_preferences)
+
+    def _restore_preferences(self):
+        self.folder.setText(self.preferences.value("folderBatch/folder", "", type=str))
+        for name in ("mode", "solver", "mesh_type", "execution_target"):
+            combo = getattr(self, name)
+            index = self.preferences.value(f"folderBatch/{name}", combo.currentIndex(), type=int)
+            if 0 <= index < combo.count():
+                combo.setCurrentIndex(index)
+        self._local_solver_index = self.solver.currentIndex()
+        self._local_mesh_index = self.mesh_type.currentIndex()
+        for name in ("mesh_resolution", "local_mesh_size"):
+            control = getattr(self, name)
+            value = self.preferences.value(f"folderBatch/{name}", control.value(), type=float)
+            if isfinite(value) and value >= MIN_MESH_INPUT_MM:
+                control.setMaximum(max(control.maximum(), value))
+                control.setValue(value)
+
+    def _save_preferences(self):
+        remote = self.execution_target.currentData() == "truba"
+        values = {
+            "folder": self.folder.text(),
+            "mode": self.mode.currentIndex(),
+            "solver": self._local_solver_index if remote else self.solver.currentIndex(),
+            "mesh_type": self._local_mesh_index if remote else self.mesh_type.currentIndex(),
+            "execution_target": self.execution_target.currentIndex(),
+            "mesh_resolution": self.mesh_resolution.value(),
+            "local_mesh_size": self.local_mesh_size.value(),
+        }
+        for name, value in values.items():
+            self.preferences.setValue(f"folderBatch/{name}", value)
+        self.preferences.sync()
 
     def add_mesh_size(self, layout, row, label, value, step):
         control = CompactDoubleSpinBox()
@@ -721,6 +754,7 @@ class FolderBatchDialog(QDialog):
 
     def dispose(self):
         if not self.disposed:
+            self._save_preferences()
             self.disposed = True
             self.timer.stop()
             self.pending.clear()
