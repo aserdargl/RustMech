@@ -64,6 +64,32 @@ yazın. Örneğin LAMMPS çağrısından önce `echo 'ESEN_STEP=LAMMPS çekme an
 ekleyin. LAMMPS girdi betiğinden adım bildirmek için
 `print "ESEN_STEP=Minimizasyon" screen yes` kullanılabilir.
 
+### TRUBA’ya yüklenmiş analizleri tek düğmeyle çalıştırma
+
+Proje klasörünü `/arf/scratch/<kullanıcı>/RustMech/` altına yükleyin. Her analiz
+klasöründe Slurm betiğini ve betiğin kullandığı dosyaları bir arada tutun.
+Projenin üst klasörüne `Run.esen` adlı UTF-8 metin dosyasını koyun ve çalışacak
+betiklerin göreli yollarını, her satıra bir yol gelecek şekilde yazın.
+
+```text
+cekme-300K/run.slurm
+cekme-600K/run.slurm
+cna/analiz.slurm
+```
+
+İlk aktarımı ESEN’den yapmak için **TRUBA Files** panelinde bir uzak proje
+klasörü oluşturup açın. **Folder** ile yerel proje klasörünü seçin ve
+**Send Truba** ile içeriğini açık uzak klasöre yükleyin.
+
+**TRUBA Files** panelinde uzak proje klasörünü açtığınızda `Run.esen` seçilir.
+Bir kez **Run**’a basın. ESEN listedeki her betiği TRUBA’da kendi analiz
+klasörünün bir çalışma kopyasından ayrı bir Slurm işi olarak gönderir.
+İş kimliklerini, durumları ve günlükleri **İş geçmişi**’nden izleyin.
+
+Yeni bir analiz eklemek için klasörünü TRUBA’ya yükleyip betiğin yolunu listeye
+ekleyin. Tek bir analizi çalıştırmak için kendi `.slurm` dosyasını seçip
+**Run**’a basabilirsiniz.
+
 ### Klasörden LAMMPS girdi betiği gönderimi
 
 **Folder** ile tek bir analiz klasörünü veya bağımsız analizlerin bulunduğu üst
