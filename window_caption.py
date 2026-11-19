@@ -212,7 +212,7 @@ class WindowOutline(QWidget):
 
     def paintEvent(self, event):
         painter = QPainter(self)
-        painter.setPen(QColor("#64748B" if self.window().isActiveWindow() else "#9CA3AF"))
+        painter.setPen(QColor("#64748B"))
         painter.drawRect(self.rect().adjusted(0, 0, -1, -1))
 
 

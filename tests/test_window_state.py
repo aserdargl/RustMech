@@ -169,6 +169,11 @@ class WindowStateTests(unittest.TestCase):
             self.assertEqual((bounds.left, bounds.top, bounds.right, bounds.bottom),
                              (monitor.work.left, monitor.work.top, monitor.work.right, monitor.work.bottom))
 
+        def assert_outline_color(window):
+            outline = window.property(CAPTION_PROPERTY).outline
+            image = outline.grab().toImage()
+            self.assertEqual(image.pixelColor(image.width() // 2, 0).name(), "#64748b")
+
         main = QMainWindow()
         main.setCentralWidget(QWidget())
         main.resize(640, 440)
@@ -183,6 +188,7 @@ class WindowStateTests(unittest.TestCase):
         self.assertTrue(all(button.width() == button.height() == 25 for button in buttons))
         self.assertGreaterEqual(main.centralWidget().y(), caption.geometry().bottom() + 1)
         self.assertTrue(caption.outline.isVisible())
+        assert_outline_color(main)
         self.assertTrue(caption.outline.testAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents))
         if service._native_frame is not None:
             # VTK's native viewport likewise promotes the surrounding Qt widgets.
@@ -215,6 +221,8 @@ class WindowStateTests(unittest.TestCase):
         dialog_buttons = dialog_caption.findChildren(CaptionButton)
         self.assertEqual([button.action for button in dialog_buttons], ["pin", "close"])
         self.assertTrue(dialog_caption.outline.isVisible())
+        assert_outline_color(main)
+        assert_outline_color(dialog)
         dialog_caption.pin.click()
         self.assertTrue(dialog_caption.pin.isChecked())
         self.assertFalse(caption.pin.isChecked())
@@ -246,6 +254,7 @@ class WindowStateTests(unittest.TestCase):
         picker.show()
         self.app.processEvents()
         self.assertTrue(picker.property(CAPTION_PROPERTY).isVisible())
+        assert_outline_color(picker)
         menu = QMenu(restored)
         menu.ensurePolished()
         self.assertIsNone(menu.property(CAPTION_PROPERTY))
