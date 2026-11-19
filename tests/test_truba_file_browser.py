@@ -1,5 +1,6 @@
 """Cover the SFTP browser's project boundary and desktop entry points."""
 
+from io import BytesIO
 from pathlib import PurePosixPath
 from stat import S_IFDIR, S_IFLNK, S_IFREG
 from types import SimpleNamespace
@@ -11,7 +12,7 @@ from PySide6.QtWidgets import QApplication, QSplitter
 import pytest
 
 from esen_workspace import EsenWorkspace
-from truba_files import create_directory, download_file, list_directory, project_root, upload_file
+from truba_files import create_directory, download_file, list_directory, project_root, upload_file, upload_tree
 from truba_ssh import RemoteAuth, register_session, unregister_session
 from window_state import WindowStateStore
 
@@ -78,6 +79,56 @@ def test_upload_stages_data_and_never_overwrites_existing_file(remote, tmp_path)
     with pytest.raises(FileExistsError):
         upload_file(auth, folder, source)
     sftp.remove.assert_called_once_with(sftp.open.call_args.args[0])
+
+
+def test_job_inputs_go_directly_into_open_folder_and_retry_safely(remote, tmp_path):
+    auth, sftp = remote
+    folder = PurePosixPath("project/run 1")
+    target = project_root(auth.username) / folder
+    (tmp_path / "data").mkdir()
+    (tmp_path / "data/model.lmp").write_bytes(b"model")
+    (tmp_path / "job.slurm").write_bytes(b"script")
+    known = {}
+    staged = {}
+
+    def attrs(path):
+        if path not in known:
+            raise FileNotFoundError(path)
+        contents = known[path]
+        return SimpleNamespace(st_mode=S_IFDIR if contents is None else S_IFREG,
+                               st_size=len(contents or b""))
+
+    def open_file(path, mode):
+        if mode == "rb":
+            return BytesIO(known[path])
+        staged[path] = bytearray()
+        writer = MagicMock()
+        writer.__enter__.return_value = writer
+        writer.write.side_effect = staged[path].extend
+        return writer
+
+    sftp.lstat.side_effect = attrs
+    sftp.mkdir.side_effect = lambda path: known.__setitem__(path, None)
+    sftp.open.side_effect = open_file
+    sftp.stat.side_effect = lambda path: SimpleNamespace(st_size=len(staged[path]))
+    sftp.rename.side_effect = lambda path, final: known.__setitem__(final, bytes(staged.pop(path)))
+
+    upload_tree(auth, folder, tmp_path)
+    assert known == {
+        str(target / "data"): None,
+        str(target / "data/model.lmp"): b"model",
+        str(target / "job.slurm"): b"script",
+    }
+    assert not staged
+    upload_tree(auth, folder, tmp_path)
+    assert sftp.rename.call_count == 2
+
+    (tmp_path / "extra.txt").touch()
+    (tmp_path / "job.slurm").write_bytes(b"edited")
+    with pytest.raises(FileExistsError, match="job.slurm"):
+        upload_tree(auth, folder, tmp_path)
+    assert str(target / "extra.txt") not in known
+    assert known[str(target / "job.slurm")] == b"script"
 
 
 def test_download_replaces_local_file_only_after_complete_transfer(remote, tmp_path):

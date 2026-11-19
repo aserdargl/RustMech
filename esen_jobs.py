@@ -18,12 +18,13 @@ import subprocess
 import tarfile
 from tempfile import TemporaryDirectory
 from time import monotonic, time
+from typing import NamedTuple
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
 import esen_restart
 from esen_windows_job import limited_process
 from truba_credentials import state_directory
-from truba_files import project_root
+from truba_files import project_root, upload_tree
 from truba_jobs import SAFE_NAME, validated_remote_path, write_record
 from truba_remote import RemoteContext, RemoteTransport, safe_extract
 from truba_resources import BASELINES, candidates, fetch_catalog
@@ -44,6 +45,18 @@ SLURM_TERMINAL = frozenset({
 LOG_BYTES = 16000
 FILE_LIMIT = 2000
 RESULT_DIRECTORY = re.compile(r"(?:ESEN-[0-9a-f]{32}|\.esen-export-[0-9a-f]{32}-.+)", re.IGNORECASE)
+
+
+class FolderUpload(NamedTuple):
+    upload_id: str
+    username: str
+    directory: str = ""
+    direct: bool = False
+
+    def path(self):
+        if self.direct:
+            return str(project_root(self.username) / self.directory)
+        return upload_location(self.upload_id, self.username, self.directory) + "/inputs"
 
 
 def jobs_directory():
@@ -126,13 +139,15 @@ def new_job(root, entry, target, ranks, *, parent, batch_folder=None, folder_upl
     if batch_folder is not None:
         record["batch_folder"] = batch_folder
     if folder_upload is not None:
-        upload_id, username, *destination = folder_upload
+        upload = FolderUpload(*folder_upload)
         subdir = relative_file(entry).parent
         if work_subdir is None:
             work_subdir = subdir.as_posix() if subdir.parts else ""
-        record.update(folder_upload=upload_id, username=username, work_subdir=work_subdir)
-        if destination and destination[0]:
-            record["upload_directory"] = destination[0]
+        record.update(folder_upload=upload.upload_id, username=upload.username, work_subdir=work_subdir)
+        if upload.directory:
+            record["upload_directory"] = upload.directory
+        if upload.direct:
+            record["direct_upload"] = True
     if root.name == "inputs" and root.parent.parent == parent:
         # Reused inputs are stored in job history, while their results belong in the original job folder.
         with suppress(OSError, ValueError):
@@ -220,35 +235,18 @@ test ! -L {snapshot}/inputs
 """)
 
 
-def upload_folder(history, root, auth, *, files=None, directory=""):
-    """Publish all inputs or the given relative paths as an immutable snapshot."""
+def upload_folder(history, root, auth, *, files=None, directory="", include_results=True):
+    """Copy inputs to the open TRUBA folder and retain a local submission snapshot."""
     if files is None and history.resolve().is_relative_to(root.resolve()):
         raise ValueError("Choose a job folder outside the ESEN history directory.")
     upload_id = uuid4().hex
     destination = upload_snapshot(history, upload_id).parent
-    remote = upload_location(upload_id, auth.username, directory)
-    quoted = shlex.quote(remote)
     destination.parent.mkdir(parents=True, exist_ok=True)
     with TemporaryDirectory(dir=destination.parent) as temporary:
         staging = Path(temporary)
-        snapshot = snapshot_inputs(staging, root, None, files or (), files is None, include_results=True)
-        archive = staging / "inputs.tar.gz"
-        with tarfile.open(archive, "w:gz") as bundle:
-            bundle.add(snapshot, arcname=".")
-        transport = RemoteTransport(RemoteContext(transport="ssh"), auth)
-        _check_upload_directory(transport, auth.username, directory, remote)
-        # A unique destination keeps failed transfers away from runnable snapshots.
-        transport.command(f"umask 077; mkdir -p -- {quoted}/.incoming")
-        try:
-            transport.put(archive, remote + "/inputs.tar.gz")
-            transport.command(f"cd {quoted} && tar -xzf inputs.tar.gz -C .incoming && "
-                              "rm -- inputs.tar.gz && mv -- .incoming inputs", timeout=1800)
-            destination.mkdir()
-            snapshot.rename(destination / "inputs")
-        except Exception:
-            with suppress(Exception):
-                transport.command(f"rm -rf -- {quoted}")
-            raise
+        snapshot = snapshot_inputs(staging, root, None, files or (), files is None, include_results=include_results)
+        upload_tree(auth, PurePosixPath(directory), snapshot)
+        staging.rename(destination)
     return upload_id
 
 
@@ -555,16 +553,16 @@ def submit_remote(directory, record, files, script, auth):
         transport, remote = remote_location(directory, record, auth)
         upload_id = record.get("folder_upload")
         snapshot = job_inputs(directory, record) if upload_id else snapshot_inputs(directory, *files)
-        if work_subdir := record.get("work_subdir"):
-            snapshot /= relative_file(work_subdir)
-        if not (snapshot / relative_file(files[1])).is_file():
+        work_subdir = record.get("work_subdir", "")
+        input_dir = snapshot / relative_file(work_subdir) if work_subdir else snapshot
+        if not (input_dir / relative_file(files[1])).is_file():
             raise ValueError("The selected input script is missing.")
-        if record.get("resume_input") and not (snapshot / relative_file(record["resume_input"])).is_file():
+        if record.get("resume_input") and not (input_dir / relative_file(record["resume_input"])).is_file():
             raise ValueError("Include the LAMMPS restart input in the job files.")
         batch = directory / "run.slurm"
         batch.write_text(script, encoding="utf-8", newline="\n")
         work = shlex.quote(remote + "/work")
-        if upload_id:
+        if upload_id and not record.get("direct_upload"):
             source = _quoted_upload_inputs(record)
             transport.command(f"umask 077; mkdir -p -- {shlex.quote(remote)} && "
                               f"cp -a --reflink=auto -- {source} {work}", timeout=1800)
@@ -815,7 +813,7 @@ def _quoted_upload_inputs(record):
 def remote_output_scan(record, *, archive=False):
     """List changed files from a Slurm work copy and all files for legacy jobs."""
     find = "find -P work -type f " + ("-print0" if archive else "-printf '%P\\0'")
-    if not (record.get("folder_upload") and is_slurm_script(record["name"])):
+    if record.get("direct_upload") or not (record.get("folder_upload") and is_slurm_script(record["name"])):
         return find
     source = _quoted_upload_inputs(record)
     output = "$file" if archive else "${file#work/}"
