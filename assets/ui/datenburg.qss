@@ -157,6 +157,8 @@ QTabBar::tab:disabled { background: #EBEBEB; color: #808080; border-color: #D6D6
 #doeNavigation QPushButton { padding: 0 10px; }
 #doeNavigation QPushButton:focus { padding: 0 9px; }
 #viewportToolbar { background: #F8FAFC; border: 1px solid #CBD5E1; border-radius: 2px; }
+#viewportToolbar QPushButton, #viewportToolbar QToolButton { font-size: 12px; }
+#viewportToolbar QToolButton#headerMenu { padding-right: 12px; }
 #navigationSeparator { background: #707070; border: none; margin: 0; }
 #viewportContainer { background: #FFFFFF; border: 1px solid #CBD5E1; border-radius: 2px; }
 #legendPlatenPill { padding: 0 4px; }

@@ -1483,7 +1483,7 @@ class RustMechDialog(QDialog):
         toolbar_frame.setObjectName("viewportToolbar")
         toolbar_frame.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
         toolbar = QGridLayout(toolbar_frame)
-        toolbar.setContentsMargins(0, 1, 0, 1)
+        toolbar.setContentsMargins(5, 1, 5, 1)
         toolbar.setHorizontalSpacing(6)
         toolbar.setColumnStretch(0, 1)
         toolbar.setColumnStretch(2, 1)
@@ -1983,17 +1983,16 @@ class RustMechDialog(QDialog):
                                           if action.isVisible())),
             (self.designs_button, (self.designs_button.text(),)),
         )
-        # Size each menu independently, allowing for its arrow and focus border.
-        for button, labels in menu_buttons:
-            width = max(button.fontMetrics().horizontalAdvance(label) for label in labels)
-            button.setFixedSize(width + 20, CONTROL_HEIGHT)
-        for button in (self.doe_button, self.folder_batch_button):
-            button.setProperty("managesLocalizedWidth", True)
-            width = button.fontMetrics().horizontalAdvance(button.text())
-            button.setFixedSize(width + 10, CONTROL_HEIGHT)
-        display_buttons = self.display_mode_buttons.buttons()
-        width = max(button.fontMetrics().horizontalAdvance(button.text()) for button in display_buttons) + 10
-        for button in display_buttons:
+        command_buttons = (self.doe_button, self.folder_batch_button, *self.display_mode_buttons.buttons())
+        # Allow for the menu arrow and the shared 2 px focus border.
+        width = max(
+            max(button.fontMetrics().horizontalAdvance(label) + 18
+                for button, labels in menu_buttons for label in labels),
+            max(button.fontMetrics().horizontalAdvance(button.text()) + 8 for button in command_buttons),
+        )
+        for button, _ in menu_buttons:
+            button.setFixedSize(width, CONTROL_HEIGHT)
+        for button in command_buttons:
             button.setProperty("managesLocalizedWidth", True)
             button.setFixedSize(width, CONTROL_HEIGHT)
         # Allow the shared button face's focus border to grow by 1 px on each side.

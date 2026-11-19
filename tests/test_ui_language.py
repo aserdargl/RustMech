@@ -153,15 +153,17 @@ class LanguageTests(unittest.TestCase):
             normal_bounds = window.geometry()
             navigation = (window.project_button, window.sidebar_toggle, window.workspace_button,
                           window.doe_button, window.designs_button, window.folder_batch_button)
+            toolbar_buttons = (*navigation, *window.display_mode_buttons.buttons())
             self.assertEqual([button.x() for button in navigation],
                              sorted(button.x() for button in navigation))
-            self.assertLess(window.doe_button.width(), window.sidebar_toggle.width())
+            self.assertEqual(len({button.size().toTuple() for button in toolbar_buttons}), 1)
             self.assertEqual(window.folder_batch_button.text(), 'Batch Analysis')
             self.manager.set_language('tr')
             self.app.processEvents()
             self.assertEqual(window.folder_batch_button.text(), 'Toplu Analiz')
-            self.assertEqual(window.folder_batch_button.width(),
-                             window.folder_batch_button.fontMetrics().horizontalAdvance('Toplu Analiz') + 10)
+            self.assertEqual(len({button.size().toTuple() for button in toolbar_buttons}), 1)
+            self.assertGreaterEqual(window.folder_batch_button.width(),
+                                    window.folder_batch_button.fontMetrics().horizontalAdvance('Toplu Analiz') + 8)
             methods = window.sidebar_toggle.menu().actions()
             self.assertEqual(window.sidebar_toggle.text(), 'Sonlu Eleman')
             self.assertEqual(window.sidebar_toggle.text(), methods[0].text())
@@ -175,7 +177,7 @@ class LanguageTests(unittest.TestCase):
             methods[2].trigger()
             self.assertEqual(window.sidebar_toggle.text(), 'FFT')
             self.assertEqual(window.sidebar_toggle.accessibleName(), methods[2].text())
-            self.assertLess(window.doe_button.width(), window.sidebar_toggle.width())
+            self.assertEqual(len({button.size().toTuple() for button in toolbar_buttons}), 1)
             self.assertTrue(window.apply_button.isEnabled())
             with patch.object(window, '_start_fft') as start_fft:
                 window.apply_button.click()

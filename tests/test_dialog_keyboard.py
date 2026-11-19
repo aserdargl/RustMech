@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 from PySide6.QtCore import QSettings, QTimer, Qt
 from PySide6.QtTest import QTest, QSignalSpy
-from PySide6.QtWidgets import QApplication, QPushButton
+from PySide6.QtWidgets import QApplication, QFrame, QPushButton
 
 from model import Settings
 from nonlinear_compression import RustMechDialog
@@ -113,6 +113,11 @@ class DialogKeyboardTests(unittest.TestCase):
                         self.app.processEvents()
                         dialog.main_splitter.setSizes([350, width - 350])
                         expected = dialog.main_splitter.sizes()
+                        toolbar = dialog.findChild(QFrame, "viewportToolbar")
+                        project_position = dialog.project_button.mapTo(toolbar, dialog.project_button.rect().topLeft())
+                        self.assertEqual(project_position.x(), toolbar.layout().contentsMargins().left()
+                                         + toolbar.frameWidth())
+                        self.assertLessEqual(toolbar.minimumSizeHint().width(), toolbar.width())
                         menu = dialog.sidebar_toggle.menu()
                         opened = QSignalSpy(menu.aboutToShow)
                         button_width = dialog.sidebar_toggle.width()
@@ -138,7 +143,7 @@ class DialogKeyboardTests(unittest.TestCase):
                             self.assertEqual(dialog.workspace_tabs.currentIndex(), 0)
                             self.assertEqual(dialog.sidebar_toggle.width(), button_width)
                             self.assertGreaterEqual(button_width,
-                                dialog.sidebar_toggle.fontMetrics().horizontalAdvance(label) + 20)
+                                dialog.sidebar_toggle.fontMetrics().horizontalAdvance(label) + 18)
                         self.assertEqual(opened.count(), len(menu.actions()))
                         self.assertFalse(dialog.setup_tabs.tabBar().isVisible())
                         # Selecting settings also recovers a previously collapsed saved sidebar.
