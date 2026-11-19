@@ -12,7 +12,7 @@ import subprocess
 from threading import Event
 from time import time
 
-from PySide6.QtCore import QPoint, QSettings, QSignalBlocker, QSize, Qt, QTimer, QUrl, Signal
+from PySide6.QtCore import QItemSelectionModel, QPoint, QSettings, QSignalBlocker, QSize, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QCheckBox, QDialog, QFormLayout, QFrame, QHeaderView, QHBoxLayout, QLabel,
@@ -37,6 +37,8 @@ WORKSPACE_TITLE = "Esen"
 ACTIVE_TRUBA_STATES = frozenset({"Submitting", "Submitted", "Queued", "Running", "Cancellation requested"})
 PANEL_PADDING = 7
 INPUT_TOOL_SPACING = 2
+HISTORY_REMOTE_ACTIVE_ROLE = Qt.ItemDataRole.UserRole + 1
+HISTORY_REFRESH_OWNER_ROLE = Qt.ItemDataRole.UserRole + 2
 
 
 def job_duration(record, state):
@@ -324,6 +326,9 @@ class EsenWorkspace(QDialog):
         self.run_list_message = ""
         self.batch_queue = {}
         self.batch_active = None
+        self.reuse_batch = []
+        self.history_refresh_queue = deque()
+        self._history_preview = None
         self._active_truba_jobs = {}
         self.local_stop = Event()
         self.record = None
@@ -526,14 +531,18 @@ class EsenWorkspace(QDialog):
 
         self.delete_job = command("Delete", self._delete_history_job, role="destructiveActionBtn",
                                   hint="Remove job from history")
-        history, layout = panel("Job history", paper=True, scrollable=True, actions=(self.delete_job,))
-        left.addWidget(history)
         self.history = CompactListWidget()
         self.history.setAccessibleName("ESEN job history")
+        self.history.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        self.select_history = command("Select all", self.history.selectAll)
+        history, layout = panel("Job history", paper=True, scrollable=True,
+                                actions=(self.select_history, self.delete_job))
+        left.addWidget(history)
         self.history.currentItemChanged.connect(self._select_job)
+        self.history.itemSelectionChanged.connect(self._select_job)
         layout.addWidget(self.history, 1)
         self.use_inputs = command("Reuse", self._reuse_inputs, hint="Reuse inputs")
-        self.refresh = command("Refresh", lambda: self._refresh_remote(manual=True), hint="Refresh job")
+        self.refresh = command("Refresh", self._refresh_history, hint="Refresh job")
         self.resume = command("Resume", self._resume_job, hint="Resume job")
         self.stop = command("Stop", self._cancel, role="destructiveActionBtn", hint="Stop job")
         layout.addLayout(button_row(self.use_inputs, self.refresh, self.resume, self.stop))
@@ -600,10 +609,13 @@ class EsenWorkspace(QDialog):
         split.setSizes([385, 570, 315])
 
         self.start = command("Run", self._start, role="esenRun", hint="Run LAMMPS")
+        self.clear_reuse = command("Clear reuse", self._clear_reuse)
+        self.clear_reuse.hide()
         self.copy_ai = command("Copy AI", self._copy_ai, hint="Copy ESEN file preparation instructions for AI")
         footer = QHBoxLayout()
         footer.addWidget(self.copy_ai)
         footer.addStretch()
+        footer.addWidget(self.clear_reuse)
         footer.addWidget(self.start)
         outer.addLayout(footer)
 
@@ -611,9 +623,12 @@ class EsenWorkspace(QDialog):
         # Reserve space for the shared focus border on both sides.
         toolbar_labels = (self.batch_folder, self.upload, self.sync)
         navigation = self.truba_browser.navigation_buttons
+        history_actions = (self.select_history, self.delete_job)
+        history_commands = (self.use_inputs, self.refresh, self.resume, self.stop)
         other_buttons = [button for button in self._command_buttons
-                         if button not in (*toolbar_labels, *self._compact_input_actions, *navigation)]
-        for group in (other_buttons, toolbar_labels, navigation):
+                         if button not in (*toolbar_labels, *self._compact_input_actions, *navigation,
+                                           *history_actions, *history_commands)]
+        for group in (other_buttons, toolbar_labels, navigation, history_actions, history_commands):
             width = max(button.sizeHint().width() for button in group) + 2
             for button in group:
                 button.setFixedWidth(width)
@@ -730,7 +745,9 @@ class EsenWorkspace(QDialog):
         self._scan_folder()
 
     def _target_changed(self, *_):
-        if self.folder_root is not None:
+        if self.reuse_batch:
+            self._preview()
+        elif self.folder_root is not None:
             self._scan_folder()
         else:
             self._update_inputs()
@@ -760,6 +777,7 @@ class EsenWorkspace(QDialog):
         self._preview()
 
     def _clear_batch_source(self):
+        self.reuse_batch = []
         if self.folder_scan is not None:
             self.folder_scan[0].cancel()
         self.folder_root = self.folder_scan = None
@@ -1142,8 +1160,19 @@ class EsenWorkspace(QDialog):
         self.sync.setVisible(remote)
         self.sync_status.setText(self.sync_message)
         self.sync_status.setVisible(remote and bool(self.sync_message))
+        self.clear_reuse.setVisible(bool(self.reuse_batch))
         self.move_up.setVisible(slurm and not using_truba)
         self.move_down.setVisible(slurm and not using_truba)
+        if self.reuse_batch:
+            self.preview.setPlainText("\n".join(
+                f"{'TRUBA' if record['target'] == 'remote' else translate('This computer')} · {record['name']}"
+                for _, record in self.reuse_batch
+            ))
+            self.input_note.setText(translate("{count} jobs ready to reuse. Run queues them on their saved targets.").format(
+                count=len(self.reuse_batch)))
+            self.command_valid = True
+            self._buttons()
+            return
         if using_truba:
             self._preview_truba_file(remote_file, auth)
             return
@@ -1260,12 +1289,19 @@ class EsenWorkspace(QDialog):
         self._update_history_item(item, directory, record)
         if prepend:
             self.history.insertItem(0, item)
-            self.history.setCurrentItem(item)
+            if len(self.history.selectedItems()) <= 1:
+                self.history.setCurrentItem(item, QItemSelectionModel.SelectionFlag.ClearAndSelect)
         else:
             self.history.addItem(item)
+        return item
 
     def _update_history_item(self, item, directory, record):
         username = record.get("username")
+        item.setData(HISTORY_REMOTE_ACTIVE_ROLE,
+                     record["target"] == "remote" and record["state"] in ACTIVE_TRUBA_STATES)
+        can_refresh = (record["target"] == "remote" and record["state"] != "Preparing"
+                       and (record.get("job_id") or record["state"] not in jobs.TERMINAL))
+        item.setData(HISTORY_REFRESH_OWNER_ROLE, username if can_refresh else None)
         if record["target"] == "remote" and username and record["state"] in ACTIVE_TRUBA_STATES:
             self._active_truba_jobs[directory] = username
         else:
@@ -1295,41 +1331,68 @@ class EsenWorkspace(QDialog):
     def _active_directories(self):
         return [task[0] for task in (self.local_task, self.remote_task) if task]
 
-    def _selected_directory(self):
-        item = self.history.currentItem()
+    def _history_focus(self):
+        current = self.history.currentItem()
+        if current is not None and current.isSelected():
+            return current
+        return next(iter(self.history.selectedItems()), None)
+
+    @staticmethod
+    def _history_directory(item):
         return Path(item.data(Qt.ItemDataRole.UserRole)) if item else None
 
-    def _can_delete_job(self, directory, record):
-        return bool(record and directory and directory != self.batch_active
-                    and directory not in self._active_directories()
-                    and not (record["target"] == "remote" and record["state"] in ACTIVE_TRUBA_STATES))
+    def _selected_directory(self):
+        return self._history_directory(self._history_focus())
+
+    def _history_selection(self):
+        return sorted(self.history.selectedItems(), key=self.history.row)
+
+    def _can_delete_job(self, directory, remote_active):
+        return (directory != self.batch_active and directory not in self._active_directories()
+                and not remote_active)
 
     def _delete_history_job(self):
-        directory = self._selected_directory()
-        if not self._can_delete_job(directory, self.record):
+        selection = self._history_selection()
+        eligible = [(item, self._history_directory(item)) for item in selection
+                    if self._can_delete_job(self._history_directory(item), item.data(HISTORY_REMOTE_ACTIVE_ROLE))]
+        if not eligible:
             return
+        message = "Remove the selected job from history? Job files and results will be kept."
+        if len(selection) > 1:
+            message = ("Remove {count} selected jobs from history? "
+                       "Active jobs, job files and results will be kept.")
         reply = QMessageBox.question(
-            self, translate("Remove job from history"),
-            translate("Remove the selected job from history? Job files and results will be kept."),
+            self, translate("Remove job from history"), translate(message).format(count=len(eligible)),
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No,
         )
-        if reply != QMessageBox.StandardButton.Yes or directory != self._selected_directory():
+        if reply != QMessageBox.StandardButton.Yes:
             return
-        try:
-            record = jobs.read_job(directory)
-            if not self._can_delete_job(directory, record):
-                return
-            jobs.save_job(directory, record, hidden_from_history=True)
-        except (OSError, ValueError) as error:
-            self.job_error = str(error)
+        errors = []
+        with QSignalBlocker(self.history):
+            for item, directory in eligible:
+                try:
+                    record = jobs.read_job(directory)
+                    remote_active = record["target"] == "remote" and record["state"] in ACTIVE_TRUBA_STATES
+                    if not self._can_delete_job(directory, remote_active):
+                        errors.append(translate("Job became active: {name}").format(name=record["name"]))
+                        continue
+                    jobs.save_job(directory, record, hidden_from_history=True)
+                except (OSError, ValueError) as error:
+                    errors.append(str(error))
+                    continue
+                self.batch_queue.pop(directory, None)
+                self._active_truba_jobs.pop(directory, None)
+                self.history.takeItem(self.history.row(item))
+        self._select_job()
+        if errors:
+            self.job_error = "\n".join(errors)
             self._show_selected()
-            return
-        self.batch_queue.pop(directory, None)
-        self._active_truba_jobs.pop(directory, None)
-        self.history.takeItem(self.history.currentRow())
-        self._show_selected()
 
     def _start(self):
+        if self.reuse_batch:
+            if self.start.isEnabled():
+                self._queue_reuse_batch()
+            return
         target = self.target.currentData()
         auth = self.truba.analysis_auth() if target == "remote" else None
         if (self.sync_task or self.run_list_task or self.batch_active or self.batch_queue or
@@ -1464,7 +1527,7 @@ class EsenWorkspace(QDialog):
                 if self.unsent_slurm_jobs:
                     directory = self.unsent_slurm_jobs[name]
                     record = jobs.read_job(directory)
-                    if record["state"] != "Preparing" or record.get("job_id"):
+                    if record["state"] != "Preparing" or record.get("job_id") or record.get("hidden_from_history"):
                         continue
                 else:
                     directory, record = jobs.new_job(root if auth else folder, name if auth else entry,
@@ -1506,14 +1569,22 @@ class EsenWorkspace(QDialog):
             self._submit_remote(directory, record, files, options[0], auth)
         else:
             self._run_local(directory, record, files, *options)
-        self.history.setCurrentItem(self._update_finished_job(directory, record))
+        item = self._update_finished_job(directory, record)
+        if len(self.history.selectedItems()) <= 1:
+            self.history.setCurrentItem(item, QItemSelectionModel.SelectionFlag.ClearAndSelect)
 
     def _select_job(self, *_):
+        directory = self._selected_directory()
+        if self._history_preview == directory:
+            self._buttons()
+            return
+        self._history_preview = directory
         self.job_error = ""
         self._result_key = None
         self.log.clear()
         self._show_selected()
-        self._auto_refresh(manual=bool(self.record and self.record.get("remote_run")))
+        if len(self.history.selectedItems()) == 1:
+            self._auto_refresh(manual=bool(self.record and self.record.get("remote_run")))
 
     def _show_selected(self):
         directory = self._selected_directory()
@@ -1538,7 +1609,7 @@ class EsenWorkspace(QDialog):
         if record.get("folder_upload") and not record.get("direct_upload") and jobs.is_slurm_script(record["name"]):
             upload = jobs.FolderUpload(record["folder_upload"], record["username"], record.get("upload_directory", ""))
             self.truba_browser.set_slurm_directory(upload.username, upload.path())
-        self._update_history_item(self.history.currentItem(), directory, record)
+        self._update_history_item(self._history_focus(), directory, record)
         state = self._state(directory, record)
         details = [record.get("job_id", ""), record.get("created", ""),
                    self.job_error or translate(record.get("detail", ""))]
@@ -1634,18 +1705,23 @@ class EsenWorkspace(QDialog):
                 ready = ready and self.truba_browser.task is None
             elif self.unsent_slurm_jobs or (self.folder_root is not None and not self.folder_slurm):
                 ready = ready and self._upload_ready(auth)
+        if self.reuse_batch:
+            targets = {record["target"] for _, record in self.reuse_batch}
+            ready = ("remote" not in targets or (authenticated and not self.remote_task)) and (
+                "local" not in targets or not self.local_task)
+            self.connection.setVisible("remote" in targets and not authenticated)
         self.start.setEnabled(self.command_valid and ready and not batch_busy and not uploading)
         has_inputs = self.folder_root is not None or (
             self.input_root is not None and (self.entry or self.extra or self.whole_folder.isChecked())
         )
         self.upload.setEnabled(bool(remote and authenticated and has_inputs
-                                    and not self.folder_scan and not uploading and not batch_busy
+                                    and not self.folder_scan and not uploading and not batch_busy and not self.reuse_batch
                                     and not self.truba_browser.restoring_directory
                                     and not self.truba_browser.is_slurm_snapshot_open()))
         browser = self.truba_browser
         sync_directory = browser.open_directory(auth)
         self.sync.setEnabled(bool(remote and authenticated and self.folder_root and not self.folder_replay
-                                  and not self.folder_scan and not uploading and not batch_busy
+                                  and not self.folder_scan and not uploading and not batch_busy and not self.reuse_batch
                                   and browser.loaded and browser.task is None
                                   and sync_directory and "esen-folders" not in PurePosixPath(sync_directory).parts))
         for control in (self.target, self.batch_folder, self.load_files, self.pick_script, self.inputs,
@@ -1657,23 +1733,29 @@ class EsenWorkspace(QDialog):
         self.remove_inputs.setEnabled(supporting_file_selected and not uploading)
         self.move_up.setEnabled(not uploading and self._script_neighbor(-1) is not None)
         self.move_down.setEnabled(not uploading and self._script_neighbor(1) is not None)
-        self.delete_job.setEnabled(self._can_delete_job(directory, record))
+        selection = self.history.selectedItems()
+        multiple = len(selection) > 1
+        self.select_history.setEnabled(self.history.count() > len(selection))
+        self.delete_job.setEnabled(any(
+            self._can_delete_job(self._history_directory(item), item.data(HISTORY_REMOTE_ACTIVE_ROLE))
+            for item in selection
+        ))
         self.open_folder.setEnabled(directory is not None)
         self.open_results_folder.setEnabled(self._downloaded_results(directory, record) is not None)
         self.attach.setEnabled(bool(authenticated and self.remote_folder.text().strip() and not self.remote_task))
-        self.use_inputs.setEnabled(bool(record and not record.get("remote_run") and directory and not uploading
-                                        and directory not in self._active_directories()
-                                        and (jobs.job_inputs(directory, record) /
-                                             jobs.relative_file(record["name"])).is_file()))
+        self.use_inputs.setEnabled(not uploading and (multiple or self._can_reuse_job(directory, record)))
         remote_ready = bool(record and record["target"] == "remote" and record.get("username")
                             and authenticated and not self.remote_task
                             and record["state"] != "Preparing"
                             and (record.get("job_id") or record["state"] not in jobs.TERMINAL))
-        self.refresh.setEnabled(remote_ready)
-        self.resume.setEnabled(bool(remote_ready and record.get("resume_input") and record.get("has_checkpoint")
+        refresh_selected = authenticated and not self.remote_task and any(
+            item.data(HISTORY_REFRESH_OWNER_ROLE) == auth.username for item in selection)
+        self.refresh.setEnabled(not self.history_refresh_queue and (refresh_selected if multiple else remote_ready))
+        self.resume.setEnabled(bool(not multiple and remote_ready and record.get("resume_input") and record.get("has_checkpoint")
                                     and record["state"] in {"Failed", "Cancelled", "Interrupted"}))
-        self.stop.setEnabled(bool((self.local_task and directory == self.local_task[0] and not self.local_stop.is_set())
-                                  or (remote_ready and not record.get("remote_run") and record["state"] not in jobs.TERMINAL)))
+        self.stop.setEnabled(not multiple and bool(
+            (self.local_task and directory == self.local_task[0] and not self.local_stop.is_set())
+            or (remote_ready and not record.get("remote_run") and record["state"] not in jobs.TERMINAL)))
         result = self._result_path()
         self.open_file.setEnabled(result is not None and result.is_file())
         self.download.setEnabled(bool(remote_ready and self.results.currentItem()))
@@ -1701,6 +1783,7 @@ class EsenWorkspace(QDialog):
                     ):
                         self.job_error = str(error)
         self._run_next_batch_job()
+        self._refresh_next_history_job()
         if self.isVisible():
             self._show_selected()
 
@@ -1710,8 +1793,7 @@ class EsenWorkspace(QDialog):
             if item.data(Qt.ItemDataRole.UserRole) == str(directory):
                 self._update_history_item(item, directory, record)
                 return item
-        self._history_item(directory, record, prepend=True)
-        return self.history.currentItem()
+        return self._history_item(directory, record, prepend=True)
 
     def _attach_remote(self):
         auth = self.truba.analysis_auth()
@@ -1729,19 +1811,47 @@ class EsenWorkspace(QDialog):
                 if self.history.currentItem() == item:
                     self._refresh_remote(manual=True)
                 else:
-                    self.history.setCurrentItem(item)
+                    self.history.setCurrentItem(item, QItemSelectionModel.SelectionFlag.ClearAndSelect)
                 return
         self.job_error = ""
         self.remote_task = (directory, self.executor.submit(jobs.attach_remote_run, directory, path, auth))
         self._buttons()
 
     def _auto_refresh(self, *, manual=False):
-        if self.isVisible():
+        if self.isVisible() and not self.history_refresh_queue:
             self._refresh_remote(manual=manual)
+
+    def _refresh_history(self):
+        selection = self._history_selection()
+        if len(selection) == 1:
+            self._refresh_remote(manual=True)
+        elif self.refresh.isEnabled():
+            auth = self.truba.analysis_auth()
+            if not auth:
+                return
+            self.history_refresh_queue.extend(self._history_directory(item) for item in selection
+                                              if item.data(HISTORY_REFRESH_OWNER_ROLE) == auth.username)
+            self._refresh_next_history_job()
+            self._buttons()
+
+    def _refresh_next_history_job(self):
+        auth = self.truba.analysis_auth()
+        if not auth:
+            self.history_refresh_queue.clear()
+            return
+        while self.history_refresh_queue and not self.remote_task:
+            directory = self.history_refresh_queue.popleft()
+            try:
+                record = jobs.read_job(directory)
+            except (OSError, ValueError):
+                continue
+            if (not record.get("hidden_from_history") and record["target"] == "remote"
+                    and record.get("username") == auth.username):
+                self._refresh_remote(manual=True, job=(directory, record))
 
     def _poll_remote(self):
         auth = self.truba.analysis_auth()
-        if self.remote_task or not auth:
+        if self.remote_task or not auth or self.history_refresh_queue:
             return
         directory = next((path for path, username in self._active_truba_jobs.items()
                           if username == auth.username), None)
@@ -1807,15 +1917,56 @@ class EsenWorkspace(QDialog):
         self._buttons()
 
     def _cancel(self):
+        if not self.stop.isEnabled():
+            return
         if self.local_task and self._selected_directory() == self.local_task[0]:
             self.local_stop.set()
             self._buttons()
         else:
             self._refresh_remote(manual=True, cancel=True)
 
+    def _can_reuse_job(self, directory, record):
+        if not directory or not record or record.get("remote_run") or directory in self._active_directories():
+            return False
+        try:
+            return bool(record.get("truba_input_folder") or
+                        (jobs.job_inputs(directory, record) / jobs.relative_file(record["name"])).is_file())
+        except (OSError, ValueError):
+            return False
+
+    def _clear_reuse(self):
+        self.reuse_batch = []
+        self._preview()
+
     def _reuse_inputs(self):
+        if not self.use_inputs.isEnabled():
+            return
+        selection = self._history_selection()
+        if len(selection) > 1 or (self.record and self.record.get("truba_input_folder")):
+            prepared, skipped = [], []
+            auth = self.truba.analysis_auth()
+            for item in selection:
+                directory = self._history_directory(item)
+                try:
+                    record = jobs.read_job(directory)
+                except (OSError, ValueError):
+                    skipped.append(item.text().splitlines()[0])
+                    continue
+                needs_owner = record.get("folder_upload") or record.get("truba_input_folder")
+                if (self._can_reuse_job(directory, record)
+                        and (not needs_owner or not auth or auth.username == record.get("username"))):
+                    prepared.append((directory, record))
+                else:
+                    skipped.append(record["name"])
+            self.reuse_batch = prepared
+            self._preview()
+            self.job_error = (translate("Reuse unavailable for: {names}").format(names=", ".join(skipped))
+                              if skipped else "")
+            self._show_selected()
+            return
         directory = self._selected_directory()
         if directory and self.record:
+            self.reuse_batch = []
             if upload_id := self.record.get("folder_upload"):
                 self._clear_batch_source()
                 self.target.setCurrentIndex(self.target.findData("remote"))
@@ -1844,15 +1995,80 @@ class EsenWorkspace(QDialog):
             self.entry = self.record["name"]
             self.resume_input.setText(self.record.get("resume_input", ""))
             self.extra = []
-            self.ranks.setValue(self.record["ranks"])
+            if self.record.get("ranks") is not None:
+                self.ranks.setValue(self.record["ranks"])
             self.whole_folder.setChecked(True)
             self._update_inputs()
 
+    def _reuse_job_arguments(self, original, record, auth):
+        target, name = record["target"], record["name"]
+        remote_folder = record.get("truba_input_folder")
+        upload = None
+        work_subdir = record.get("work_subdir", "")
+        entry = jobs.relative_file(name).name if work_subdir else name
+        root = jobs.job_inputs(original, record) if remote_folder is None else None
+        ranks = None
+        files = root, entry, (), True
+        if target == "local":
+            ranks = min(record.get("ranks") or self.ranks.value(), self.ranks.maximum())
+            invocation = jobs.local_command(entry, ranks, self.local_exe.text().strip(), self.local_mpi.text().strip())
+            options = invocation, self.local_memory.value()
+        else:
+            if (remote_folder or record.get("folder_upload")) and record.get("username") != auth.username:
+                raise ValueError(translate("Connect using the TRUBA account that submitted this job."))
+            settings = {**self._remote_settings(auth), "resume_input": record.get("resume_input", "")}
+            if not jobs.is_slurm_script(entry):
+                restart = settings["resume_input"]
+                if restart and root is not None:
+                    base = root / jobs.relative_file(work_subdir) if work_subdir else root
+                    if not (base / jobs.relative_file(restart)).is_file():
+                        raise ValueError(translate("Include the LAMMPS restart input in the job files."))
+                self._remote_command(entry, settings, work_subdir=work_subdir)
+            options = settings, auth.username
+            if upload_id := record.get("folder_upload"):
+                upload = jobs.FolderUpload(upload_id, auth.username, record.get("upload_directory", ""),
+                                           record.get("direct_upload", False))
+        source = Path(record["source"]) if upload and record.get("source") else root
+        return (source, name, target, ranks), dict(
+            batch_folder=record.get("batch_folder"), folder_upload=upload, work_subdir=work_subdir,
+            truba_input_folder=remote_folder,
+        ), files, options
+
+    def _queue_reuse_batch(self):
+        auth = self.truba.analysis_auth()
+        prepared = []
+        for original, record in self.reuse_batch:
+            try:
+                if not self._can_reuse_job(original, record):
+                    raise ValueError(translate("The selected input script is missing."))
+                args = self._reuse_job_arguments(original, record, auth)
+            except (OSError, ValueError) as error:
+                self.input_note.setText(f"{record['name']}\n{error}")
+                return
+            prepared.append((original, record, args))
+
+        self._save_profiles()
+        self.reuse_batch = []
+        errors = []
+        for original, record, (args, kwargs, files, options) in prepared:
+            try:
+                directory, new_record = jobs.new_job(*args, parent=self.history_root, **kwargs)
+            except OSError as error:
+                self.reuse_batch.append((original, record))
+                errors.append(f"{record['name']}: {error}")
+                continue
+            self.batch_queue[directory] = new_record, files, options
+            self._history_item(directory, new_record, prepend=True)
+        self._run_next_batch_job()
+        self._preview()
+        if errors:
+            self.input_note.setText("\n".join(errors))
 
     @staticmethod
     def _unsent_slurm_job(record):
         return (record["target"] == "remote" and record["state"] == "Preparing"
                 and not record.get("job_id") and jobs.is_slurm_script(record["name"]))
+
     @staticmethod
     def _downloaded_results(directory, record):
         if directory is None or record is None or record["state"] != "Completed":

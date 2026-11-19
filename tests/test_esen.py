@@ -13,7 +13,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import ANY, patch
 
-from PySide6.QtCore import QMimeData, QObject, QPoint, QSettings, Qt, QUrl, Signal
+from PySide6.QtCore import QItemSelectionModel, QMimeData, QObject, QPoint, QSettings, Qt, QUrl, Signal
 from PySide6.QtGui import QDragEnterEvent, QDropEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QMessageBox
@@ -521,7 +521,13 @@ class EsenTests(unittest.TestCase):
                     self.assertEqual([button.x() for button in navigation],
                                      sorted({button.x() for button in navigation}))
                     self.assertEqual(len({button.width() for button in navigation}), 1)
-                    buttons = [button for button in workspace._command_buttons if button not in (*toolbar, *navigation)]
+                    history_actions = (workspace.select_history, workspace.delete_job)
+                    history_commands = (workspace.use_inputs, workspace.refresh, workspace.resume, workspace.stop)
+                    self.assertEqual(len({button.y() for button in history_actions}), 1)
+                    self.assertEqual(len({button.width() for button in history_actions}), 1)
+                    self.assertEqual(len({button.width() for button in history_commands}), 1)
+                    buttons = [button for button in workspace._command_buttons
+                               if button not in (*toolbar, *navigation, *history_actions, *history_commands)]
                     width = max(button.sizeHint().width() for button in buttons) + 2
                     self.assertEqual({button.maximumWidth() for button in buttons}, {width})
                     self.assertEqual({button.width() for button in buttons if button.isVisible()}, {width})
@@ -1083,7 +1089,7 @@ class EsenTests(unittest.TestCase):
         workspace.show()
         app.processEvents()
         workspace._load_files([str(self.source / name) for name in names])
-        workspace.inputs.setCurrentItem(workspace.inputs.items()[1])
+        workspace.inputs.setCurrentItem(workspace.inputs.items()[1], 0, QItemSelectionModel.SelectionFlag.ClearAndSelect)
         workspace.move_up.click()
         self.assertEqual(workspace.inputs.items()[0].path, names[1])
         for row in range(2):
@@ -1244,6 +1250,88 @@ class EsenTests(unittest.TestCase):
             sync.assert_not_called()
         self.assertEqual(workspace.history.count(), 3)
         self.assertEqual(jobs.read_job(accepted)["job_id"], "7019602")
+
+    def test_select_all_removes_only_inactive_history_entries(self):
+        app = QApplication.instance() or QApplication([])
+        preferences = QSettings(str(self.root / "settings.ini"), QSettings.Format.IniFormat)
+        first, record = self.new_job("local")
+        jobs.save_job(first, record, state="Completed")
+        second, record = self.new_job("local")
+        jobs.save_job(second, record, state="Failed")
+        active, record = self.new_job()
+        jobs.save_job(active, record, state="Running", username=self.auth.username)
+        with patch("esen_workspace.QSettings", return_value=preferences):
+            workspace = EsenWorkspace(FakeTruba(), history=self.history)
+        self.addCleanup(workspace.dispose)
+        workspace.show()
+        app.processEvents()
+        QTest.keyClick(workspace.history, Qt.Key.Key_A, Qt.KeyboardModifier.ControlModifier)
+        self.assertEqual(len(workspace.history.selectedItems()), 3)
+        workspace.history.clearSelection()
+        workspace.select_history.click()
+        self.assertEqual(len(workspace.history.selectedItems()), 3)
+        with patch.object(QMessageBox, "question", return_value=QMessageBox.StandardButton.Yes) as confirm:
+            workspace.delete_job.click()
+        confirm.assert_called_once()
+        self.assertIn("2", confirm.call_args.args[2])
+        self.assertEqual(workspace.history.count(), 1)
+        self.assertTrue(jobs.read_job(first)["hidden_from_history"])
+        self.assertTrue(jobs.read_job(second)["hidden_from_history"])
+        self.assertFalse(jobs.read_job(active).get("hidden_from_history", False))
+        self.assertFalse(workspace.delete_job.isEnabled())
+
+    def test_reuse_multiple_snapshots_creates_jobs_only_when_run(self):
+        app = QApplication.instance() or QApplication([])
+        preferences = QSettings(str(self.root / "settings.ini"), QSettings.Format.IniFormat)
+        originals = {}
+        for target in ("local", "remote"):
+            directory, record = self.new_job(target)
+            snapshot = jobs.snapshot_inputs(directory, *self.files)
+            jobs.save_job(directory, record, state="Completed")
+            originals[target] = snapshot
+        truba = FakeTruba()
+        truba.auth = self.auth
+        with patch("esen_workspace.QSettings", return_value=preferences):
+            workspace = EsenWorkspace(truba, history=self.history)
+        self.addCleanup(workspace.dispose)
+        workspace.select_history.click()
+        workspace.use_inputs.click()
+        self.assertEqual(len(workspace.reuse_batch), 2)
+        self.assertEqual(workspace.history.count(), 2)
+        self.assertFalse(workspace.batch_queue)
+        with (patch("esen_jobs.local_command", return_value=["lmp"]),
+              patch.object(workspace, "_run_next_batch_job")):
+            workspace.start.click()
+        self.assertEqual(workspace.history.count(), 4)
+        self.assertEqual(len(workspace.history.selectedItems()), 2)
+        self.assertEqual({record["target"]: files[0] for record, files, _ in workspace.batch_queue.values()}, originals)
+        self.assertFalse(workspace.reuse_batch)
+
+    def test_refresh_processes_selected_truba_jobs_in_sequence(self):
+        app = QApplication.instance() or QApplication([])
+        preferences = QSettings(str(self.root / "settings.ini"), QSettings.Format.IniFormat)
+        expected = set()
+        for number in range(3):
+            directory, record = self.new_job()
+            owner = self.auth.username if number < 2 else "other-account"
+            jobs.save_job(directory, record, state="Queued", username=owner, job_id=str(number + 100))
+            if number < 2:
+                expected.add(directory)
+        truba = FakeTruba()
+        truba.auth = self.auth
+        with patch("esen_workspace.QSettings", return_value=preferences):
+            workspace = EsenWorkspace(truba, history=self.history)
+        self.addCleanup(workspace.dispose)
+        workspace.select_history.click()
+        with patch("esen_jobs.refresh_remote") as refresh:
+            workspace.refresh.click()
+            for _ in expected:
+                workspace.remote_task[1].result(timeout=5)
+                workspace._tick()
+            self.assertIsNone(workspace.remote_task)
+            self.assertEqual(refresh.call_count, 2)
+            self.assertEqual({call.args[0] for call in refresh.call_args_list}, expected)
+        self.assertEqual(len(workspace.history.selectedItems()), 3)
 
     def test_remove_history_entry_preserves_job_files_and_is_persistent(self):
         app = QApplication.instance() or QApplication([])

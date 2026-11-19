@@ -100,6 +100,11 @@ Job history|İş geçmişi
 ESEN job history|ESEN iş geçmişi
 Remove job from history|İşi geçmişten sil
 Remove the selected job from history? Job files and results will be kept.|Seçili iş geçmişten silinsin mi? İş dosyaları ve sonuçlar korunacak.
+Remove {count} selected jobs from history? Active jobs, job files and results will be kept.|Seçili {count} iş geçmişten silinsin mi? Aktif işler, iş dosyaları ve sonuçlar korunacak.
+Job became active: {name}|İş aktif duruma geçti: {name}
+Clear reuse|Yeniden kullanımı temizle
+{count} jobs ready to reuse. Run queues them on their saved targets.|{count} iş yeniden kullanıma hazır. Çalıştır, işleri kayıtlı hedeflerinde sıraya alır.
+Reuse unavailable for: {names}|Yeniden kullanılamayan işler: {names}
 Move script up|Betiği yukarı taşı
 Move script down|Betiği aşağı taşı
 Reuse inputs|Girdileri yeniden kullan
