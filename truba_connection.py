@@ -1,12 +1,6 @@
 """Explicit password-authenticated TRUBA connection with per-user credentials."""
 from __future__ import annotations
 
-import base64
-import hashlib
-import socket
-from threading import Event
-
-import paramiko
 from PySide6.QtCore import QRectF, QThread, Qt, Signal
 from PySide6.QtGui import QColor, QPainter, QPainterPath
 from PySide6.QtWidgets import (QApplication, QCheckBox, QDialog, QFormLayout, QFrame, QGroupBox, QHBoxLayout,
@@ -14,9 +8,9 @@ from PySide6.QtWidgets import (QApplication, QCheckBox, QDialog, QFormLayout, QF
                                QStyle, QStyleOptionTab, QTabBar, QTabWidget, QVBoxLayout, QWidget)
 
 from studio_style import CONTROL_HEIGHT, STUDIO_STYLESHEET
+from truba_client import TrubaSession
 from truba_credentials import CredentialStore, state_directory
-
-HOST = "172.16.6.15"
+from truba_ssh import HOST
 
 
 class TrubaTabBar(QTabBar):
@@ -69,10 +63,6 @@ class TrubaTabBar(QTabBar):
                 painter.drawLine(edge.bottomLeft(), edge.bottomRight())
 
 
-class HostKeyDeclined(paramiko.SSHException):
-    """The user did not approve the server identity."""
-
-
 class ConnectionWorker(QThread):
     state_changed = Signal(str)
     host_key_required = Signal(str)
@@ -80,102 +70,30 @@ class ConnectionWorker(QThread):
 
     def __init__(self, username, password, directory, parent=None):
         super().__init__(parent)
-        self.username, self.password = username, password
-        self.directory = directory
-        self.stop_requested = Event()
-        self.host_decided = Event()
-        self.host_accepted = False
-        self.client = None
+        self._session = TrubaSession(
+            username, password, directory,
+            on_state=self.state_changed.emit,
+            on_host_key=self.host_key_required.emit,
+            on_failure=self._report_failure,
+        )
 
-    def missing_host_key(self, client, hostname, key):
-        fingerprint = base64.b64encode(hashlib.sha256(key.asbytes()).digest()).decode().rstrip("=")
-        self.host_decided.clear()
-        self.host_accepted = False
-        self.state_changed.emit("host_key_confirmation")
-        self.host_key_required.emit(f"{hostname}\n{key.get_name()}\nSHA256:{fingerprint}")
-        while not self.host_decided.wait(0.1):
-            if self.stop_requested.is_set():
-                raise paramiko.SSHException("Cancelled")
-        if not self.host_accepted or self.stop_requested.is_set():
-            raise HostKeyDeclined("Host identity was not accepted")
-        client.get_host_keys().add(hostname, key.get_name(), key)
-        client.save_host_keys(str(self.directory / "known_hosts"))
-        self.state_changed.emit("authenticating")
-
-    def stop(self):
-        self.stop_requested.set()
-        self.host_decided.set()
-        client = self.client
-        if client is not None:
-            client.close()
+    def _report_failure(self, category):
+        self.failure_detail.emit(
+            f"SSH negotiation failed ({category}). Try the same host in WinSCP / SFTP to compare."
+        )
 
     def run(self):
-        try:
-            self.directory.mkdir(parents=True, exist_ok=True)
-            while not self.stop_requested.is_set():
-                self.state_changed.emit("connecting")
-                client = self.client = paramiko.SSHClient()
-                try:
-                    known_hosts = self.directory / "known_hosts"
-                    if known_hosts.exists():
-                        client.load_host_keys(str(known_hosts))
-                    client.set_missing_host_key_policy(self)
-                    # Never use the developer's SSH agent, private keys or account.
-                    client.connect(HOST, username=self.username, password=self.password,
-                                   allow_agent=False, look_for_keys=False,
-                                   timeout=15, banner_timeout=30, auth_timeout=30)
-                    if self.stop_requested.is_set():
-                        break
-                    transport = client.get_transport()
-                    if transport is None or not transport.is_authenticated():
-                        raise paramiko.AuthenticationException()
-                    transport.set_keepalive(15)
-                    from truba_ssh import register_session
-                    register_session(self.username, self.password, client)
-                    self.state_changed.emit("connected")
-                    while not self.stop_requested.wait(1):
-                        if not transport.is_active() or not transport.is_authenticated():
-                            break
-                except paramiko.BadAuthenticationType:
-                    self.state_changed.emit("password_auth_unavailable")
-                    break
-                except paramiko.AuthenticationException:
-                    self.state_changed.emit("authentication_failed")
-                    break
-                except paramiko.BadHostKeyException:
-                    self.state_changed.emit("host_key_changed")
-                    break
-                except HostKeyDeclined:
-                    self.state_changed.emit("host_key_declined")
-                    break
-                except (paramiko.SSHException, EOFError) as exc:
-                    self.state_changed.emit("ssh_failed")
-                    # Report the category only: exception text can contain server
-                    # content or authentication data and must not reach the UI.
-                    self.failure_detail.emit(f"SSH negotiation failed ({type(exc).__name__}). Try the same host in WinSCP / SFTP to compare.")
-                    break
-                except socket.timeout:
-                    self.state_changed.emit("connection_timeout")
-                    break
-                except OSError:
-                    self.state_changed.emit("waiting_for_network")
-                    if self.stop_requested.wait(10):
-                        break
-                    continue
-                finally:
-                    from truba_ssh import unregister_session
-                    unregister_session(self.username, client)
-                    client.close()
-                    self.client = None
-                if self.stop_requested.is_set():
-                    break
-                self.state_changed.emit("reconnecting")
-                if self.stop_requested.wait(10):
-                    break
-        except (OSError, ValueError):
-            self.state_changed.emit("local_error")
-        finally:
-            self.password = ""
+        self._session.run()
+
+    def stop(self):
+        self._session.stop()
+
+    @property
+    def auth(self):
+        return self._session.auth
+
+    def decide_host_key(self, accepted):
+        self._session.decide_host_key(accepted)
 
 
 class TrubaConnectionDialog(QDialog):
@@ -183,10 +101,9 @@ class TrubaConnectionDialog(QDialog):
     disconnect_requested = Signal()
 
     def analysis_auth(self):
-        worker=self.worker
-        if self.connected and worker is not None and worker.client is not None:
-            from truba_jobs import RemoteAuth
-            return RemoteAuth(worker.username,worker.password)
+        worker = self.worker
+        if self.connected and worker is not None:
+            return worker.auth
         return None
 
     def __init__(self, parent=None, *, credential_store=None):
@@ -445,8 +362,7 @@ class TrubaConnectionDialog(QDialog):
             self, "Verify TRUBA server identity",
             "First connection to this server. Verify this fingerprint with TRUBA before accepting:\n\n" + fingerprint,
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No)
-        worker.host_accepted = answer == QMessageBox.StandardButton.Yes
-        worker.host_decided.set()
+        worker.decide_host_key(answer == QMessageBox.StandardButton.Yes)
 
     def _state_changed(self, state):
         if self.stopping:

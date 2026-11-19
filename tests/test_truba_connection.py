@@ -13,9 +13,11 @@ from PySide6.QtCore import QPoint, QSettings, Qt
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QLineEdit, QMessageBox
 
-from truba_connection import ConnectionWorker, TrubaConnectionDialog
+from truba_client import TrubaSession
+from truba_connection import TrubaConnectionDialog
 from truba_credentials import CredentialStore
 from truba_jobs import HOST, RemoteAuth, write_record
+from truba_ssh import ssh_connection
 from window_state import WindowStateStore
 
 
@@ -130,27 +132,31 @@ class TrubaTests(unittest.TestCase):
         )
         for error, expected in cases:
             with self.subTest(expected=expected):
-                worker = ConnectionWorker("user", "password", self.directory)
                 states, details = [], []
-                worker.state_changed.connect(states.append)
-                worker.failure_detail.connect(details.append)
+                session = TrubaSession(
+                    "user", "password", self.directory, on_state=states.append,
+                    on_host_key=self.fail, on_failure=details.append,
+                )
                 client = MagicMock()
                 client.connect.side_effect = error
-                with patch("truba_connection.paramiko.SSHClient", return_value=client):
-                    worker.run()
+                with patch("truba_client.paramiko.SSHClient", return_value=client):
+                    session.run()
                 self.assertEqual(states, ["connecting", expected])
-                self.assertNotIn("secret-from-server", str(details))
-                self.assertEqual(worker.password, "")
+                self.assertEqual(details, [type(error).__name__] if expected == "ssh_failed" else [])
+                self.assertEqual(session._password, "")
+                self.assertIsNone(session.auth)
                 client.close.assert_called_once()
 
     def test_rejected_password_never_falls_back_to_personal_keys_or_retries(self):
-        worker = ConnectionWorker("installer-user", "installer-password", self.directory)
         states = []
-        worker.state_changed.connect(states.append)
+        session = TrubaSession(
+            "installer-user", "installer-password", self.directory,
+            on_state=states.append, on_host_key=self.fail, on_failure=self.fail,
+        )
         client = MagicMock()
         client.connect.side_effect = paramiko.AuthenticationException()
-        with patch("truba_connection.paramiko.SSHClient", return_value=client):
-            worker.run()
+        with patch("truba_client.paramiko.SSHClient", return_value=client):
+            session.run()
         kwargs = client.connect.call_args.kwargs
         self.assertEqual(kwargs["username"], "installer-user")
         self.assertEqual(kwargs["password"], "installer-password")
@@ -158,39 +164,62 @@ class TrubaTests(unittest.TestCase):
         self.assertFalse(kwargs["look_for_keys"])
         client.connect.assert_called_once()
         self.assertEqual(states, ["connecting", "authentication_failed"])
-        self.assertEqual(worker.password, "")
+        self.assertEqual(session._password, "")
         client.close.assert_called_once()
 
     def test_authenticated_session_and_disconnect(self):
-        worker = ConnectionWorker("user", "password", self.directory)
         states = []
+        client = MagicMock()
+
         def changed(state):
             states.append(state)
             if state == "connected":
-                worker.stop()
-        worker.state_changed.connect(changed)
-        client = MagicMock()
-        with patch("truba_connection.paramiko.SSHClient", return_value=client):
-            worker.run()
+                self.assertEqual(session.auth, RemoteAuth("user", "password"))
+                with ssh_connection(session.auth) as pooled:
+                    self.assertIs(pooled, client)
+                session.stop()
+
+        session = TrubaSession(
+            "user", "password", self.directory, on_state=changed,
+            on_host_key=self.fail, on_failure=self.fail,
+        )
+        with patch("truba_client.paramiko.SSHClient", return_value=client) as create:
+            session.run()
+        create.assert_called_once()
         self.assertEqual(states, ["connecting", "connected"])
         client.get_transport.return_value.set_keepalive.assert_called_once_with(15)
-        self.assertTrue(worker.stop_requested.is_set())
+        self.assertIsNone(session.auth)
 
     def test_unknown_host_requires_explicit_acceptance_and_changed_host_is_rejected(self):
-        worker = ConnectionWorker("user", "password", self.directory)
-        worker.host_key_required.connect(lambda _: worker.host_decided.set())
+        states = []
+        session = TrubaSession(
+            "user", "password", self.directory, on_state=states.append,
+            on_host_key=lambda _: session.decide_host_key(False), on_failure=self.fail,
+        )
         key = MagicMock()
         key.asbytes.return_value = b"server-key"
         client = MagicMock()
         with self.assertRaises(paramiko.SSHException):
-            worker.missing_host_key(client, "host", key)
+            session.missing_host_key(client, "host", key)
+        self.assertEqual(states, ["host_key_confirmation"])
         client.save_host_keys.assert_not_called()
         client.connect.side_effect = paramiko.BadHostKeyException("host", key, key)
-        states = []
-        worker.state_changed.connect(states.append)
-        with patch("truba_connection.paramiko.SSHClient", return_value=client):
-            worker.run()
+        states.clear()
+        with patch("truba_client.paramiko.SSHClient", return_value=client):
+            session.run()
         self.assertEqual(states, ["connecting", "host_key_changed"])
+
+    def test_stop_during_host_key_confirmation_does_not_trust_key(self):
+        session = TrubaSession(
+            "user", "password", self.directory, on_state=lambda _: None,
+            on_host_key=lambda _: session.stop(), on_failure=self.fail,
+        )
+        client = MagicMock()
+        key = MagicMock()
+        key.asbytes.return_value = b"server-key"
+        with self.assertRaises(paramiko.SSHException):
+            session.missing_host_key(client, "host", key)
+        client.save_host_keys.assert_not_called()
 
     def test_truba_window_geometry_restores(self):
         store = WindowStateStore(self.app, QSettings(str(self.directory / "windows.ini"), QSettings.Format.IniFormat))
@@ -377,7 +406,7 @@ class TrubaTests(unittest.TestCase):
         dialog.password.setText("local-test-password")
         dialog.remember.setChecked(True)
         try:
-            with patch("truba_connection.paramiko.SSHClient", LocalClient), patch(
+            with patch("truba_client.paramiko.SSHClient", LocalClient), patch(
                     "truba_connection.QMessageBox.question", return_value=QMessageBox.StandardButton.Yes):
                 dialog.start_connection()
                 deadline = monotonic() + 8

@@ -1,5 +1,4 @@
 """TRUBA job transfer, SLURM monitoring and recovery without stored passwords."""
-from dataclasses import dataclass, field
 import json
 import os
 from pathlib import Path, PurePosixPath
@@ -15,20 +14,14 @@ import uuid
 
 import paramiko
 from truba_credentials import CredentialStore, state_directory
+from truba_ssh import HOST, RemoteAuth, ssh_connection
 
-HOST = "172.16.6.15"
 SAFE_NAME = re.compile(r"^[A-Za-z0-9_.-]+$")
 SLURM_TERMINAL_STATES = {
     "COMPLETED", "CANCELLED", "FAILED", "TIMEOUT", "NODE_FAIL", "OUT_OF_MEMORY",
     "PREEMPTED", "BOOT_FAIL", "DEADLINE", "REVOKED",
 }
 job_record_lock = RLock()
-
-
-@dataclass
-class RemoteAuth:
-    username: str
-    password: str = field(repr=False)
 
 
 def write_record(path, value):
@@ -238,7 +231,6 @@ class SSHJobs:
         self.username=auth.username
 
     def connect(self):
-        from truba_ssh import ssh_connection
         return ssh_connection(self.auth)
 
     def run(self,local,remote,record,record_paths,resume=False):

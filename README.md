@@ -176,6 +176,13 @@ Pencereyi açmak veya dil değiştirmek bağlantı, kaynak tahsisi ya da analiz
 başlatmaz. Bağlantı **Bağlan**, hesaplama modu ve kaynak tahsisi kendi açık
 eylemleriyle başlatılır. Pencerenin konumu, boyutu ve büyütülmüş durumu korunur.
 
+`truba_client.TrubaSession`, bağlantı ve sunucu kimliği doğrulamasını Qt'den
+bağımsız yürütür. Çağıran uygulama `known_hosts` dosyasının dizinini ve durum,
+parmak izi ve hata geri çağrılarını sağlar. Bağlantı açıkken `session.auth`
+değerini `truba_ssh.ssh_connection` işlevine vererek aynı süreçte komut ve
+SFTP aktarımı için mevcut SSH oturumunu kullanabilir. RustMech analiz isteklerinin
+Slurm'a gönderimi ve sonuçların alınması `truba_remote` üzerinden yürür.
+
 ## Gitterburg Tasarim Havuzu
 
 Gitterburg'da alt komut cubugundaki **Output / Cikti** menusunden

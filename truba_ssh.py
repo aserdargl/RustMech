@@ -5,10 +5,20 @@ clients. No credentials or session handles are written to disk by this module.
 """
 import atexit
 from contextlib import contextmanager
+from dataclasses import dataclass, field
 from threading import RLock
 
 import paramiko
 from truba_credentials import state_directory
+
+HOST = "172.16.6.15"
+
+
+@dataclass
+class RemoteAuth:
+    username: str
+    password: str = field(repr=False)
+
 
 _lock = RLock()
 _sessions = {}
@@ -56,7 +66,7 @@ def ssh_connection(auth):
                 client.load_host_keys(str(known))
             client.set_missing_host_key_policy(paramiko.RejectPolicy())
             try:
-                client.connect('172.16.6.15', username=auth.username, password=auth.password,
+                client.connect(HOST, username=auth.username, password=auth.password,
                     allow_agent=False, look_for_keys=False, timeout=15, banner_timeout=30, auth_timeout=30)
                 client.get_transport().set_keepalive(15)
             except BaseException:
