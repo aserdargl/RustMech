@@ -171,7 +171,7 @@ class FolderBatchDialog(QDialog):
         self.setStyleSheet(STUDIO_STYLESHEET)
         self.setWindowFlags(self.windowFlags() | Qt.WindowType.WindowMinimizeButtonHint | Qt.WindowType.WindowMaximizeButtonHint)
         self.resize(920, 600)
-        self.setMinimumSize(620, 420)
+        self.setMinimumSize(620, 480)
         self.setSizeGripEnabled(True)
         self.settings_provider, self.queue = settings_provider, queue
         self.executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix='folder-preflight')
