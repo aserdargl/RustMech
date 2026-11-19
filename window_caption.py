@@ -270,6 +270,7 @@ class WindowCaption(QWidget):
         window = self.window()
         painter = QPainter(self)
         painter.fillRect(self.rect(), window.palette().window())
+        painter.fillRect(0, self.height() - 1, self.width(), 1, QColor("#D5DBE2"))
         painter.setFont(self._title_font)
         painter.setPen(window.palette().windowText().color())
         left = 8
