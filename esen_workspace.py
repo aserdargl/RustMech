@@ -16,7 +16,7 @@ from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QCheckBox, QDialog, QFormLayout, QFrame, QHBoxLayout, QLabel,
     QLineEdit, QListWidget, QListWidgetItem, QMessageBox, QPlainTextEdit, QPushButton,
-    QScrollArea, QSizePolicy, QSplitter, QStyle, QToolTip, QVBoxLayout, QWidget,
+    QScrollArea, QSizePolicy, QSplitter, QStyle, QToolTip, QVBoxLayout,
 )
 
 from datenburg_widgets import qss_asset_url
@@ -188,7 +188,7 @@ class InputFileList(CompactListWidget):
             elif mode == "format":
                 item.sort_key = item.format_key
             else:
-                item.sort_key = (item.job_order,)
+                item.sort_key = (not jobs.is_slurm_script(item.text()), item.job_order)
         self.sortItems()
 
     def __init__(self):

@@ -460,13 +460,17 @@ class EsenTests(unittest.TestCase):
             workspace = EsenWorkspace(FakeTruba(), history=self.history)
         self.addCleanup(workspace.dispose)
         workspace._load_files([str(self.source / name) for name in names])
+        workspace.show()
+        app.processEvents()
         items = {item.text(): item for item in workspace.inputs.items()}
+        self.assertEqual(list(items), ["z.slurm", "c.slurm", "a.in", "b.DATA"])
         for name in ("z.slurm", "c.slurm"):
             items[name].setCheckState(Qt.CheckState.Checked)
         workspace.inputs.setCurrentItem(items["c.slurm"])
         workspace.move_up.click()
         self.assertEqual(list(workspace._folder_jobs()), ["c.slurm", "z.slurm"])
         manual_order = [item.text() for item in workspace.inputs.items()]
+        self.assertEqual(manual_order, ["c.slurm", "z.slurm", "a.in", "b.DATA"])
 
         for sort_mode, expected in (("name", ["a.in", "b.DATA", "c.slurm", "z.slurm"]),
                                     ("format", ["b.DATA", "a.in", "c.slurm", "z.slurm"])):
