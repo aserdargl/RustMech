@@ -358,6 +358,8 @@ Thermal CHT|Isıl CHT
 Thermal (CHT)|Isıl (CHT)
 Transient Heat Transfer|Geçici ısı transferi
 Designs|Tasarımlar
+Batch Analysis|Toplu Analiz
+Batch analysis from folder...|Klasörden toplu analiz...
 Design|Tasarım
 Design Pool|Tasarım havuzu
 Design Pool (Gitterburg)...|Tasarım havuzu (Gitterburg)...
@@ -883,7 +885,7 @@ Voxel spacing|Voksel aralığı
 Solid fraction|Katı oranı
 Meshing method|Ağ oluşturma yöntemi
 Geometry-trimmed voxel mesh|Geometriye göre kırpılmış voksel ağı
-Geometry Trimmed|Geometriye göre kırpılmış
+Geo. Voxel|Geo. Voksel
 Planned|Planlanıyor
 Material Point Method|Malzeme noktası yöntemi
 Peridynamics|Peridinamik

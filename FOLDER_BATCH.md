@@ -2,7 +2,7 @@
 
 1. Ana **Mechanic** çalışma alanında malzeme, ağ, yükleme, temas ve çözücü
    parametrelerini ayarlayın.
-2. **Designs > Batch analysis from folder...** menüsünü açın ve klasörü seçin.
+2. **Designs** yanındaki **Batch Analysis** düğmesine tıklayın ve klasörü seçin.
    STL, OBJ, PLY ve VTP dosyaları alt klasörleriyle birlikte, dosya adına göre
    doğal sırada taranır (`part2`, `part10` öncesindedir). `Result` klasörleri ve
    bağlantılı klasörler taranmaz. Koordinatlar mm kabul edilir.

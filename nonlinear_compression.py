@@ -1576,9 +1576,12 @@ class RustMechDialog(QDialog):
         designs_menu.addAction("Import geometry for flow / thermal...", self.import_flow_geometry)
         designs_menu.addAction("Add current model to analysis queue", self._enqueue_current_model)
         designs_menu.addAction("Analysis queue...", self._show_analysis_queue)
-        designs_menu.addAction("Batch analysis from folder...", self._show_folder_batch)
         self.designs_button.setMenu(designs_menu)
         navigation.addWidget(self.designs_button)
+        self.folder_batch_button = QPushButton("Batch Analysis")
+        self.folder_batch_button.setToolTip("Batch analysis from folder...")
+        self.folder_batch_button.clicked.connect(self._show_folder_batch)
+        navigation.addWidget(self.folder_batch_button)
 
         self.display_mode_group = QFrame()
         self.display_mode_group.setObjectName("displayModeGroup")
@@ -1973,23 +1976,25 @@ class RustMechDialog(QDialog):
         self.language_manager.localize_tree(self)
         if self.setup_tabs.currentIndex() == self._fft_method_index:
             self._update_fft_preview_summary(self.collect())
-        navigation = (
-            self.project_button, self.sidebar_toggle, self.workspace_button,
-            self.doe_button, self.designs_button,
+        menu_buttons = (
+            (self.project_button, (self.project_button.text(),)),
+            (self.sidebar_toggle, tuple(translate(name) for name in self.method_button_labels)),
+            (self.workspace_button, tuple(action.text() for action in self.workspace_menu.actions()
+                                          if action.isVisible())),
+            (self.designs_button, (self.designs_button.text(),)),
         )
-        # Reserve space for every selectable label so switching menus doesn't shift the row.
-        width = max(
-            max(button.fontMetrics().horizontalAdvance(button.text()) for button in navigation),
-            max(self.sidebar_toggle.fontMetrics().horizontalAdvance(translate(name))
-                for name in self.method_button_labels),
-            max(self.workspace_button.fontMetrics().horizontalAdvance(action.text())
-                for action in self.workspace_menu.actions() if action.isVisible()),
-        ) + 32
-        for button in navigation:
-            button.setFixedSize(width, CONTROL_HEIGHT)
+        # Size each menu independently, allowing for its arrow and focus border.
+        for button, labels in menu_buttons:
+            width = max(button.fontMetrics().horizontalAdvance(label) for label in labels)
+            button.setFixedSize(width + 20, CONTROL_HEIGHT)
+        for button in (self.doe_button, self.folder_batch_button):
+            button.setProperty("managesLocalizedWidth", True)
+            width = button.fontMetrics().horizontalAdvance(button.text())
+            button.setFixedSize(width + 10, CONTROL_HEIGHT)
         display_buttons = self.display_mode_buttons.buttons()
-        width = max(button.fontMetrics().horizontalAdvance(button.text()) for button in display_buttons) + 26
+        width = max(button.fontMetrics().horizontalAdvance(button.text()) for button in display_buttons) + 10
         for button in display_buttons:
+            button.setProperty("managesLocalizedWidth", True)
             button.setFixedSize(width, CONTROL_HEIGHT)
         # Allow the shared button face's focus border to grow by 1 px on each side.
         width = max(button.sizeHint().width() for button in self._analysis_action_buttons) + 2
@@ -2211,14 +2216,14 @@ class RustMechDialog(QDialog):
         self.method_names = ["Finite Element"]
         self.method_button_labels = self.method_names.copy()
         methods = (
-            ("Voxel", "Geometry-trimmed voxel mesh", "Clip boundary voxels against the reference geometry. Cut-cell element types, small cells and ANSYS compatibility require validation."),
-            ("FFT", "FFT Homogenization", "Effective stiffness from periodic unit-cell tests."),
-            ("MPM", "Material Point Method", "Large-deformation platen compression and impact."),
-            ("Peridynamics", "Peridynamics", "Crack initiation and propagation in mechanical tests."),
+            ("Voxel", "Geo. Voxel", "Geometry-trimmed voxel mesh", "Clip boundary voxels against the reference geometry. Cut-cell element types, small cells and ANSYS compatibility require validation."),
+            ("FFT", "FFT", "FFT Homogenization", "Effective stiffness from periodic unit-cell tests."),
+            ("MPM", "MPM", "Material Point Method", "Large-deformation platen compression and impact."),
+            ("Peridynamics", "Peridynamics", "Peridynamics", "Crack initiation and propagation in mechanical tests."),
         )
-        for tab, name, description in methods:
+        for tab, button_label, name, description in methods:
             self.method_names.append(name)
-            self.method_button_labels.append("Geometry Trimmed" if tab == "Voxel" else name)
+            self.method_button_labels.append(button_label)
             fields = self._add_setup_page(tab)
             self.setup_tabs.setTabToolTip(self.setup_tabs.count() - 1, name)
             heading = QLabel(name)

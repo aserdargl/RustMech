@@ -152,7 +152,8 @@ class LanguageManager(QObject):
                 self._property(widget, 'windowTitle', widget.windowTitle, widget.setWindowTitle)
             if isinstance(widget, (QLabel, QAbstractButton)):
                 self._property(widget, 'text', widget.text, widget.setText)
-                if isinstance(widget, QAbstractButton) and not isinstance(widget, QToolButton):
+                if (isinstance(widget, QAbstractButton) and not isinstance(widget, QToolButton)
+                        and not widget.property('managesLocalizedWidth')):
                     if widget.minimumWidth() == widget.maximumWidth():
                         sources = self._sources.setdefault(widget, {})
                         needed = widget.fontMetrics().horizontalAdvance(widget.text()) + 24

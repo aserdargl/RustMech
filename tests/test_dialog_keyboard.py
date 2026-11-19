@@ -126,8 +126,11 @@ class DialogKeyboardTests(unittest.TestCase):
                             action.trigger()
                             self.app.processEvents()
                             label = action.text()
-                            if label == "Geometry-trimmed voxel mesh":
-                                label = "Geometry Trimmed"
+                            label = {
+                                "Geometry-trimmed voxel mesh": "Geo. Voxel",
+                                "FFT Homogenization": "FFT",
+                                "Material Point Method": "MPM",
+                            }.get(label, label)
                             self.assertEqual(dialog.sidebar_toggle.text(), label)
                             self.assertEqual(dialog.sidebar_toggle.accessibleName(), action.text())
                             self.assertEqual(dialog.setup_tabs.currentIndex(), action.data())
@@ -135,7 +138,7 @@ class DialogKeyboardTests(unittest.TestCase):
                             self.assertEqual(dialog.workspace_tabs.currentIndex(), 0)
                             self.assertEqual(dialog.sidebar_toggle.width(), button_width)
                             self.assertGreaterEqual(button_width,
-                                dialog.sidebar_toggle.fontMetrics().horizontalAdvance(label) + 24)
+                                dialog.sidebar_toggle.fontMetrics().horizontalAdvance(label) + 20)
                         self.assertEqual(opened.count(), len(menu.actions()))
                         self.assertFalse(dialog.setup_tabs.tabBar().isVisible())
                         # Selecting settings also recovers a previously collapsed saved sidebar.
@@ -145,6 +148,9 @@ class DialogKeyboardTests(unittest.TestCase):
                         dialog.setup_tabs.setCurrentIndex(2)
                         dialog._show_geometry_workspace()
                         self.assertEqual(dialog.sidebar_toggle.text(), "Finite Element")
+                    self.assertFalse(hasattr(dialog, "folder_batch_dialog"))
+                    QTest.mouseClick(dialog.folder_batch_button, Qt.MouseButton.LeftButton)
+                    self.assertTrue(dialog.folder_batch_dialog.isVisible())
             finally:
                 if dialog is not None:
                     dialog.close()
