@@ -7,11 +7,12 @@ from stat import S_ISDIR, S_ISLNK, S_ISREG
 
 from PySide6.QtCore import QLocale, Qt
 from PySide6.QtWidgets import (
-    QApplication, QHeaderView, QHBoxLayout, QLabel, QLineEdit, QStyle,
+    QApplication, QCheckBox, QHeaderView, QHBoxLayout, QLabel, QLineEdit, QStyle,
     QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
 )
 
 from file_dialog import QFileDialog
+from esen_jobs import is_input_script, is_slurm_script
 from studio_style import ActionFlowLayout, CONTROL_HEIGHT
 import truba_files
 from ui_language import translate
@@ -42,6 +43,7 @@ class TrubaFileBrowser(QWidget):
         self.loaded = False
         self._uploaded_directory = None
         self._slurm_directory = None
+        self.entries = []
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -63,6 +65,20 @@ class TrubaFileBrowser(QWidget):
             actions.addWidget(button)
         actions.addStretch()
         layout.addLayout(actions)
+
+        filters = QHBoxLayout()
+        self.filter = QLineEdit()
+        self.filter.setObjectName("esenFileFilter")
+        self.filter.setFixedHeight(CONTROL_HEIGHT)
+        self.filter.setClearButtonEnabled(True)
+        self.filter.setPlaceholderText("Filter by name or extension")
+        self.filter.setAccessibleName("Filter TRUBA files")
+        self.filter.textChanged.connect(self._filter_entries)
+        filters.addWidget(self.filter, 1)
+        self.group_files = QCheckBox("Group by type")
+        self.group_files.toggled.connect(self._render_entries)
+        filters.addWidget(self.group_files)
+        layout.addLayout(filters)
 
         self.files = QTreeWidget()
         self.files.setAccessibleName("TRUBA files")
@@ -129,7 +145,8 @@ class TrubaFileBrowser(QWidget):
         self.directory = PurePosixPath()
         self.loaded = False
         self._uploaded_directory = None
-        self.files.clear()
+        self._show_entries([])
+        self.filter.clear()
         self.folder_name.clear()
         self._update_address()
         self.status.setText("Connect using the main TRUBA button." if auth is None else "")
@@ -300,13 +317,19 @@ class TrubaFileBrowser(QWidget):
         self._refresh_after_upload_if_ready()
 
     def _show_entries(self, entries):
+        self.entries = entries
+        self._render_entries()
+
+    def _render_entries(self, *_):
         self.files.clear()
         folder_icon = self.style().standardIcon(QStyle.StandardPixmap.SP_DirIcon)
         file_icon = self.style().standardIcon(QStyle.StandardPixmap.SP_FileIcon)
         link_icon = self.style().standardIcon(QStyle.StandardPixmap.SP_FileLinkIcon)
         locale = QLocale()
-        rows = []
-        for entry in entries:
+        groups = {}
+        grouped = self.group_files.isChecked()
+        self.files.setRootIsDecorated(grouped)
+        for entry in self.entries:
             mode = entry.st_mode or 0
             folder = S_ISDIR(mode)
             size = "" if folder or entry.st_size is None else locale.formattedDataSize(entry.st_size)
@@ -314,5 +337,43 @@ class TrubaFileBrowser(QWidget):
             row.setData(0, Qt.ItemDataRole.UserRole, mode)
             row.setToolTip(0, entry.filename)
             row.setIcon(0, folder_icon if folder else link_icon if S_ISLNK(mode) else file_icon)
-            rows.append(row)
-        self.files.addTopLevelItems(rows)
+            if grouped:
+                if folder:
+                    category = "Folders"
+                elif S_ISREG(mode) and (is_slurm_script(entry.filename) or is_input_script(entry.filename)):
+                    category = "Scripts"
+                else:
+                    category = "Other files"
+                if category not in groups:
+                    header = QTreeWidgetItem([translate(category)])
+                    header.setData(0, Qt.ItemDataRole.UserRole, 0)
+                    header.setFlags(header.flags() & ~Qt.ItemFlag.ItemIsSelectable)
+                    groups[category] = header
+                groups[category].addChild(row)
+            else:
+                self.files.addTopLevelItem(row)
+        for category in ("Folders", "Scripts", "Other files"):
+            if category in groups:
+                self.files.addTopLevelItem(groups[category])
+                groups[category].setExpanded(True)
+        self._filter_entries()
+
+    def _filter_entries(self, *_):
+        query = self.filter.text().strip().casefold()
+        for index in range(self.files.topLevelItemCount()):
+            row = self.files.topLevelItem(index)
+            if row.childCount():
+                for child in range(row.childCount()):
+                    self._filter_row(row.child(child), query)
+                row.setHidden(all(row.child(child).isHidden() for child in range(row.childCount())))
+                if query and not row.isHidden():
+                    row.setExpanded(True)
+            else:
+                self._filter_row(row, query)
+
+    @staticmethod
+    def _filter_row(row, query):
+        hidden = query not in row.text(0).casefold()
+        if hidden:
+            row.setSelected(False)
+        row.setHidden(hidden)

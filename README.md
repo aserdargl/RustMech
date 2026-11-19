@@ -42,10 +42,14 @@ Slurm işi olarak gönderir. Aynı aktarım birden fazla işte kullanılır.
 
 Dosya listesinde Ctrl ile tek tek, Shift ile aralık seçin. Boşluk tuşu
 seçili çalıştırılabilir betiklerin kutularını birlikte işaretler veya temizler.
-Dosya listesine ad veya uzantı yazarak filtre uygulayabilir, görünümü ada ya da
-uzantıya göre sıralayabilirsiniz. İşaretli dosyalar ve çalıştırma sırası korunur.
+**İş ayarları** dosyaları kendi klasörlerinin altında gösterir. Ada veya uzantıya
+göre filtreleyebilir ya da sıralayabilirsiniz. İşaretli dosyalar ve çalıştırma
+sırası korunur. **İş sırası** görünümünde Slurm betiklerinin sıra numaraları görünür.
 Slurm işlerinin sırasını değiştirmek için filtreyi temizleyin, **İş sırası**
 görünümünü seçin ve yukarı/aşağı oklarını kullanın.
+
+**TRUBA** dosya tarayıcısında açık klasörü ada veya uzantıya göre filtreleyin.
+**Türe göre grupla** seçeneği klasörleri, betikleri ve diğer dosyaları ayırır.
 
 Kuyruk, hesap, MPI görev sayısı, bellek ve süreyi betiğin `#SBATCH`
 satırlarında belirleyin. ESEN iş takibi için iş adını, çalışma dizinini ve

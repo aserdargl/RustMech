@@ -101,6 +101,11 @@ Choose a TRUBA run folder under your scratch directory.|Scratch alanınızdaki b
 Stop job|İşi durdur
 Command preview|Komut önizlemesi
 TRUBA files|TRUBA dosyaları
+Filter TRUBA files|TRUBA dosyalarını filtrele
+Group by type|Türe göre grupla
+Folders|Klasörler
+Scripts|Betikler
+Other files|Diğer dosyalar
 TRUBA folder path|TRUBA klasör yolu
 Open selected TRUBA folder|Seçili TRUBA klasörünü aç
 Slurm inputs|Slurm girdileri

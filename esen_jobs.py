@@ -104,7 +104,7 @@ def read_slurm_script(path):
     return script
 
 
-def scan_folder_files(root, *, include_results=False):
+def scan_folder_files(root, *, include_results=False, directories=None):
     """List regular files as paths relative to the selected folder."""
     def walk_error(error):
         raise error
@@ -115,11 +115,19 @@ def scan_folder_files(root, *, include_results=False):
         folder = Path(folder)
         dirs[:] = sorted((name for name in dirs if (include_results or name.casefold() != "results")
                           and not is_link(folder / name)), key=str.casefold)
+        if directories is not None:
+            directories.extend((folder / name).relative_to(root).as_posix() for name in dirs)
         for name in sorted(files, key=str.casefold):
             path = folder / name
             if path.is_file() and not is_link(path):
                 found.append(path.relative_to(root).as_posix())
     return found
+
+
+def scan_folder_tree(root, *, include_results=False):
+    directories = []
+    files = scan_folder_files(root, include_results=include_results, directories=directories)
+    return directories, files
 
 
 def save_job(directory, record, **changes):

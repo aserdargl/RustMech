@@ -15,9 +15,9 @@ from time import time
 from PySide6.QtCore import QPoint, QSettings, QSignalBlocker, QSize, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
-    QAbstractItemView, QApplication, QCheckBox, QDialog, QFormLayout, QFrame, QHBoxLayout, QLabel,
+    QAbstractItemView, QApplication, QCheckBox, QDialog, QFormLayout, QFrame, QHeaderView, QHBoxLayout, QLabel,
     QLineEdit, QListWidget, QListWidgetItem, QMessageBox, QPlainTextEdit, QProgressBar, QPushButton,
-    QScrollArea, QSizePolicy, QSplitter, QStyle, QToolTip, QVBoxLayout,
+    QScrollArea, QSizePolicy, QSplitter, QStyle, QToolTip, QTreeWidget, QTreeWidgetItem, QVBoxLayout,
 )
 
 from datenburg_widgets import qss_asset_url
@@ -60,11 +60,11 @@ QFrame[esenCard="paper"] { background: #FFFFFF; border: 1px solid #D5DBE2; borde
     background: #FFFFFF; border: 1px solid #DCE3EC; border-radius: 3px;
 }
 #esenWorkspace QTreeWidget { color: #111827; selection-background-color: #E5E5E5; selection-color: #111827; }
-#esenWorkspace QListWidget::indicator { width: 13px; height: 13px; background: #FFFFFF;
+#esenWorkspace QTreeWidget::indicator { width: 13px; height: 13px; background: #FFFFFF;
                                     border: 1px solid #AAAAAA; border-radius: 2px; }
-#esenWorkspace QListWidget::indicator:checked { border-color: #2563EB;
+#esenWorkspace QTreeWidget::indicator:checked { border-color: #2563EB;
                                            image: url(@ESEN_CHECK@); }
-#esenWorkspace QListWidget::indicator:hover { border-color: #2563EB; }
+#esenWorkspace QTreeWidget::indicator:hover { border-color: #2563EB; }
 #esenWorkspace QPlainTextEdit { font-family: Consolas; font-size: 12px; }
 #esenFieldLabel { color: #475569; font-size: 11px; }
 #esenWorkspace #trubaConnectionBadge { margin: 0; }
@@ -161,56 +161,111 @@ class CompactListWidget(QListWidget):
         return size
 
 
-class InputFileItem(QListWidgetItem):
-    def __init__(self, name, job_order):
-        super().__init__(name)
+class InputFileItem(QTreeWidgetItem):
+    def __init__(self, name, job_order=None):
         path = Path(name)
+        super().__init__([path.name])
+        self.path = name
         self.job_order = job_order
         self.name_key = (path.name.casefold(), name.casefold(), name)
         self.format_key = (path.suffix.casefold(), *self.name_key)
-        self.sort_key = (job_order,)
+        self.sort_key = self.name_key
+        self.setFlags(self.flags() & ~Qt.ItemFlag.ItemIsUserCheckable)
 
     def __lt__(self, other):
         return self.sort_key < other.sort_key
 
 
-class InputFileList(CompactListWidget):
+class InputFileTree(QTreeWidget):
     files_dropped = Signal(list)
 
     def items(self):
-        return [self.item(row) for row in range(self.count())]
+        return [item for item in self.walk(self.invisibleRootItem()) if item.job_order is not None]
+
+    @staticmethod
+    def walk(parent):
+        for index in range(parent.childCount()):
+            child = parent.child(index)
+            yield child
+            yield from InputFileTree.walk(child)
+
+    def add_path(self, item, root):
+        parent = self.invisibleRootItem()
+        folder = ""
+        for part in Path(item.path).parts[:-1]:
+            folder = f"{folder}/{part}" if folder else part
+            if folder not in self.folders:
+                self.add_path(InputFileItem(folder), root)
+            parent = self.folders[folder]
+        directory = item.job_order is None
+        if directory:
+            self.folders[item.path] = item
+        item.setIcon(0, self.folder_icon if directory else self.file_icon)
+        if root is not None:
+            item.setToolTip(0, str(root / item.path))
+        parent.addChild(item)
+
+    def clear(self):
+        self.folders.clear()
+        super().clear()
 
     def job_items(self):
         return sorted(self.items(), key=attrgetter("job_order"))
 
     def sort_view(self, mode):
-        for item in self.items():
-            if mode == "name":
-                item.sort_key = item.name_key
-            elif mode == "format":
-                item.sort_key = item.format_key
+        scripts = [item.path for item in self.job_items()
+                   if jobs.is_slurm_script(item.path) and item.data(0, Qt.ItemDataRole.CheckStateRole) is not None]
+        ranks = {path: str(rank) for rank, path in enumerate(scripts, 1)}
+        self.setColumnHidden(1, not ranks or mode != "job")
+        for item in reversed(list(self.walk(self.invisibleRootItem()))):
+            item.setText(1, ranks.get(item.path, "") if mode == "job" else "")
+            directory = item.job_order is None
+            if mode == "job" and directory:
+                first = min((item.child(index).sort_key for index in range(item.childCount())),
+                            default=(True, float("inf"), item.name_key))
+                item.sort_key = first
+            elif mode == "job":
+                item.sort_key = (not jobs.is_slurm_script(item.path), item.job_order, item.name_key)
             else:
-                item.sort_key = (not jobs.is_slurm_script(item.text()), item.job_order)
-        self.sortItems()
+                key = item.format_key if mode == "format" and not directory else item.name_key
+                item.sort_key = (not directory, key)
+        self.sortItems(0, Qt.SortOrder.AscendingOrder)
 
     def __init__(self):
         super().__init__()
+        self.folders = {}
+        self.folder_icon = self.style().standardIcon(QStyle.StandardPixmap.SP_DirIcon)
+        self.file_icon = self.style().standardIcon(QStyle.StandardPixmap.SP_FileIcon)
+        self.setColumnCount(2)
+        self.setColumnHidden(1, True)
+        self.header().setStretchLastSection(False)
+        self.header().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        self.header().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        self.setHeaderHidden(True)
+        self.setProperty("preserveItemText", True)
+        self.setUniformRowHeights(True)
+        self.setMinimumHeight(63)
         self.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         help_text = translate("Use Ctrl or Shift to select files. Press Space to check or uncheck selected scripts.")
         self.setAccessibleDescription(help_text)
         self.setToolTip(help_text)
 
+    def sizeHint(self):
+        size = super().sizeHint()
+        size.setHeight(self.minimumHeight())
+        return size
+
     def keyPressEvent(self, event):
         if event.key() == Qt.Key.Key_Space and event.modifiers() == Qt.KeyboardModifier.NoModifier:
             items = [item for item in self.selectedItems()
-                     if item.data(Qt.ItemDataRole.CheckStateRole) is not None]
+                     if item.data(0, Qt.ItemDataRole.CheckStateRole) is not None]
             if items:
-                check = any(item.checkState() != Qt.CheckState.Checked for item in items)
+                check = any(item.checkState(0) != Qt.CheckState.Checked for item in items)
                 state = Qt.CheckState.Checked if check else Qt.CheckState.Unchecked
                 with QSignalBlocker(self):
                     for item in items:
-                        item.setCheckState(state)
-                self.itemChanged.emit(items[0])
+                        item.setCheckState(0, state)
+                self.itemChanged.emit(items[0], 0)
                 event.accept()
                 return
         super().keyPressEvent(event)
@@ -373,7 +428,7 @@ class EsenWorkspace(QDialog):
         file_view.addWidget(self.input_filter, 1)
         file_view.addWidget(self.input_sort)
         layout.addLayout(file_view)
-        self.inputs = InputFileList()
+        self.inputs = InputFileTree()
         self.inputs.setAcceptDrops(True)
         self.inputs.viewport().setAcceptDrops(True)
         self.inputs.files_dropped.connect(self._load_files)
@@ -681,7 +736,7 @@ class EsenWorkspace(QDialog):
                 else self._folder_source())
         remote = self.target.currentData() == "remote"
         self.folder_error = ""
-        self.folder_scan = self.executor.submit(jobs.scan_folder_files, root, include_results=remote), checked
+        self.folder_scan = self.executor.submit(jobs.scan_folder_tree, root, include_results=remote), checked
         with QSignalBlocker(self.inputs):
             self.inputs.clear()
         self._preview()
@@ -702,23 +757,23 @@ class EsenWorkspace(QDialog):
         (scan, checked), self.folder_scan = self.folder_scan, None
         remote = self.target.currentData() == "remote"
         try:
-            names = scan.result()
+            directories, names = scan.result()
         except (OSError, ValueError) as error:
             self.folder_error = str(error)
         else:
             self.folder_slurm = any(map(jobs.is_slurm_script, names))
             with QSignalBlocker(self.inputs):
+                for name in directories:
+                    self.inputs.add_path(InputFileItem(name), self.folder_root)
                 for position, name in enumerate(names):
                     item = InputFileItem(name, position)
-                    item.setToolTip(str(self.folder_root / name))
                     runnable = (jobs.is_slurm_script(name) if remote and self.folder_slurm else
-                                remote or jobs.is_input_script(name))
+                                jobs.is_input_script(name))
                     if runnable:
                         selected = name in checked if checked is not None else not remote
-                        item.setCheckState(Qt.CheckState.Checked if selected else Qt.CheckState.Unchecked)
-                    else:
-                        item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsUserCheckable)
-                    self.inputs.addItem(item)
+                        item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+                        item.setCheckState(0, Qt.CheckState.Checked if selected else Qt.CheckState.Unchecked)
+                    self.inputs.add_path(item, self.folder_root)
             self._sort_inputs()
             if not remote and next(self._folder_jobs(), None) is None:
                 self.folder_error = "No LAMMPS input scripts named in.* or *.in were found."
@@ -726,44 +781,43 @@ class EsenWorkspace(QDialog):
 
     def _folder_jobs(self):
         for item in self.inputs.job_items():
-            if item.checkState() == Qt.CheckState.Checked:
-                yield item.text()
+            if item.checkState(0) == Qt.CheckState.Checked:
+                yield item.path
 
     def _filter_inputs(self):
         query = self.input_filter.text().strip().casefold()
         with QSignalBlocker(self.inputs):
-            for item in self.inputs.items():
-                hidden = query not in item.text().casefold()
+            for item in reversed(list(self.inputs.walk(self.inputs.invisibleRootItem()))):
+                hidden = query not in item.path.casefold() and all(
+                    item.child(index).isHidden() for index in range(item.childCount()))
                 if hidden and item.isSelected():
                     item.setSelected(False)
                 item.setHidden(hidden)
+                if query and not hidden and item.childCount():
+                    item.setExpanded(True)
         self._buttons()
 
     def _sort_inputs(self):
-        self.inputs.sort_view(self.input_sort.currentData())
+        with QSignalBlocker(self.inputs):
+            self.inputs.sort_view(self.input_sort.currentData())
         self._filter_inputs()
 
     def _script_neighbor(self, direction):
         if self.input_sort.currentData() != "job" or self.input_filter.text().strip():
             return None
         items = self.inputs.selectedItems()
-        if len(items) != 1 or not jobs.is_slurm_script(items[0].text()):
+        scripts = [item for item in self.inputs.job_items() if jobs.is_slurm_script(item.path)]
+        if len(items) != 1 or items[0] not in scripts:
             return None
-        row = self.inputs.row(items[0])
-        end = self.inputs.count() if direction > 0 else -1
-        return next((index for index in range(row + direction, end, direction)
-                     if jobs.is_slurm_script(self.inputs.item(index).text())), None)
+        index = scripts.index(items[0]) + direction
+        return scripts[index] if 0 <= index < len(scripts) else None
 
     def _move_script(self, direction):
         neighbor = self._script_neighbor(direction)
         if self._slurm_mode() and neighbor is not None and not self.upload_task:
-            row = self.inputs.row(self.inputs.selectedItems()[0])
-            with QSignalBlocker(self.inputs):
-                item = self.inputs.takeItem(row)
-                self.inputs.insertItem(neighbor, item)
-                self.inputs.setCurrentItem(item)
-                for position, item in enumerate(self.inputs.items()):
-                    item.job_order = position
+            item = self.inputs.selectedItems()[0]
+            item.job_order, neighbor.job_order = neighbor.job_order, item.job_order
+            self._sort_inputs()
             self._preview()
 
     def _folder_preview_files(self, name):
@@ -897,8 +951,8 @@ class EsenWorkspace(QDialog):
 
     def _use_as_script(self):
         items = self.inputs.selectedItems()
-        if len(items) == 1 and items[0].text() in self.extra:
-            name = items[0].text()
+        if len(items) == 1 and items[0].job_order is not None and items[0].path in self.extra:
+            name = items[0].path
             self.extra.remove(name)
             if self.entry:
                 self.extra.insert(0, self.entry)
@@ -906,7 +960,7 @@ class EsenWorkspace(QDialog):
             self._update_inputs()
 
     def _remove_files(self):
-        selected = {item.text() for item in self.inputs.selectedItems()}
+        selected = {item.path for item in self.inputs.selectedItems() if item.job_order is not None}
         remaining = [name for name in self.extra if name not in selected]
         if remaining != self.extra:
             self.extra = remaining
@@ -916,7 +970,7 @@ class EsenWorkspace(QDialog):
         self._clear_batch_source()
         self.files_upload = None
         slurm = self._slurm_mode()
-        ordered = [item.text() for item in self.inputs.job_items()] if slurm else []
+        ordered = [item.path for item in self.inputs.job_items()] if slurm else []
         checked = set(self._folder_jobs()) if slurm else set()
         names = ([self.entry] if self.entry else []) + self.extra
         if slurm:
@@ -925,17 +979,18 @@ class EsenWorkspace(QDialog):
             self.inputs.clear()
             for position, name in enumerate(names):
                 item = InputFileItem(name, position)
+                self.inputs.add_path(item, self.input_root)
                 if slurm and jobs.is_slurm_script(name):
-                    item.setCheckState(Qt.CheckState.Checked if name in checked else Qt.CheckState.Unchecked)
+                    item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+                    item.setCheckState(0, Qt.CheckState.Checked if name in checked else Qt.CheckState.Unchecked)
                 elif name == self.entry:
-                    item.setToolTip(translate("LAMMPS input script"))
-                    item.setData(Qt.ItemDataRole.AccessibleDescriptionRole, translate("LAMMPS input script"))
-                    font = item.font()
+                    item.setData(0, Qt.ItemDataRole.AccessibleDescriptionRole, translate("LAMMPS input script"))
+                    font = item.font(0)
                     font.setBold(True)
-                    item.setFont(font)
-                self.inputs.addItem(item)
+                    item.setFont(0, font)
+            self.inputs.expandToDepth(0)
             if names and (slurm or not self.entry):
-                self.inputs.setCurrentRow(0)
+                self.inputs.setCurrentItem(self.inputs.items()[0])
         self._sort_inputs()
         self._preview()
 
@@ -1031,9 +1086,10 @@ class EsenWorkspace(QDialog):
             lines.append(translate("Use ↑ and ↓ in Job order. Run syncs the inputs and submits each checked Slurm script after the previous job ends."))
         elif remote:
             lines.append(translate("Preview values are estimates. Slurm limits apply at submission."))
-        if batch_mode and self.inputs.count():
+        file_count = len(self.inputs.items()) if batch_mode else 0
+        if file_count:
             lines.append(translate("{files} files · {scripts} scripts selected").format(
-                files=self.inputs.count(), scripts=sum(1 for _ in self._folder_jobs())))
+                files=file_count, scripts=sum(1 for _ in self._folder_jobs())))
         elif not folder_mode and not entry:
             lines.append(translate("Select the input file and click Use As Script." if self.extra else
                                    "Add a folder or drop inputs here."))
@@ -1391,7 +1447,7 @@ class EsenWorkspace(QDialog):
                         self.pick_root, self.whole_folder, self.input_filter, self.input_sort):
             control.setEnabled(not uploading)
         selected = self.inputs.selectedItems()
-        supporting_file_selected = any(item.text() in self.extra for item in selected)
+        supporting_file_selected = any(item.job_order is not None and item.path in self.extra for item in selected)
         self.use_as_script.setEnabled(len(selected) == 1 and supporting_file_selected and not uploading)
         self.remove_inputs.setEnabled(supporting_file_selected and not uploading)
         self.move_up.setEnabled(not uploading and self._script_neighbor(-1) is not None)

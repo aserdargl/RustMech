@@ -484,28 +484,28 @@ class EsenTests(unittest.TestCase):
         workspace._load_files([str(self.source / name) for name in names])
         workspace.show()
         app.processEvents()
-        items = {item.text(): item for item in workspace.inputs.items()}
+        items = {item.path: item for item in workspace.inputs.items()}
         self.assertEqual(list(items), ["z.slurm", "c.slurm", "a.in", "b.DATA"])
         for name in ("z.slurm", "c.slurm"):
-            items[name].setCheckState(Qt.CheckState.Checked)
+            items[name].setCheckState(0, Qt.CheckState.Checked)
         workspace.inputs.setCurrentItem(items["c.slurm"])
         workspace.move_up.click()
         self.assertEqual(list(workspace._folder_jobs()), ["c.slurm", "z.slurm"])
-        manual_order = [item.text() for item in workspace.inputs.items()]
+        manual_order = [item.path for item in workspace.inputs.items()]
         self.assertEqual(manual_order, ["c.slurm", "z.slurm", "a.in", "b.DATA"])
 
         for sort_mode, expected in (("name", ["a.in", "b.DATA", "c.slurm", "z.slurm"]),
                                     ("format", ["b.DATA", "a.in", "c.slurm", "z.slurm"])):
             workspace.input_sort.setCurrentIndex(workspace.input_sort.findData(sort_mode))
-            self.assertEqual([item.text() for item in workspace.inputs.items()], expected)
+            self.assertEqual([item.path for item in workspace.inputs.items()], expected)
         workspace.input_filter.setText(".data")
-        self.assertEqual([item.text() for item in workspace.inputs.items() if not item.isHidden()], ["b.DATA"])
+        self.assertEqual([item.path for item in workspace.inputs.items() if not item.isHidden()], ["b.DATA"])
         self.assertEqual(list(workspace._folder_jobs()), ["c.slurm", "z.slurm"])
         self.assertFalse(workspace.move_up.isEnabled())
 
         workspace.input_filter.clear()
         workspace.input_sort.setCurrentIndex(workspace.input_sort.findData("job"))
-        self.assertEqual([item.text() for item in workspace.inputs.items()], manual_order)
+        self.assertEqual([item.path for item in workspace.inputs.items()], manual_order)
 
     def test_copy_ai_copies_instructions_without_inputs_or_connection(self):
         app = QApplication.instance() or QApplication([])
@@ -741,10 +741,12 @@ class EsenTests(unittest.TestCase):
         app = QApplication.instance() or QApplication([])
         preferences = QSettings(str(self.root / "settings.ini"), QSettings.Format.IniFormat)
         sub = self.source / "study"
+        empty = self.source / "study" / "empty"
         ignored = self.source / "Results" / "previous"
         for folder in (sub, ignored):
             folder.mkdir(parents=True)
             (folder / "run.IN").touch()
+        empty.mkdir()
         for name in ("in.second", "in.first", "in.skip"):
             (self.source / name).touch()
         with patch("esen_workspace.QSettings", return_value=preferences):
@@ -765,14 +767,21 @@ class EsenTests(unittest.TestCase):
               patch("esen_jobs.local_command", side_effect=lambda entry, *_: ["lmp", entry])):
             self.load_batch(workspace)
             self.assertEqual(workspace.history.count(), 0)
-            items = {workspace.inputs.item(i).text(): workspace.inputs.item(i)
-                     for i in range(workspace.inputs.count())}
+            items = {item.path: item for item in workspace.inputs.items()}
             self.assertEqual(list(items), ["in.first", "in.second", "in.skip", self.entry,
                                            "data/cell.lmp", "study/run.IN"])
+            study = items["study/run.IN"].parent()
+            self.assertEqual(study.text(0), "study")
+            self.assertEqual(workspace.inputs.folders["study/empty"].parent(), study)
+            self.assertEqual(items["study/run.IN"].text(0), "run.IN")
+            workspace.input_filter.setText("run.IN")
+            self.assertFalse(study.isHidden())
+            self.assertTrue(items["in.first"].isHidden())
+            workspace.input_filter.clear()
             for name in (self.entry, "data/cell.lmp"):
                 self.assertFalse(items[name].flags() & Qt.ItemFlag.ItemIsUserCheckable)
             self.assertIn("6 files · 4 scripts selected", workspace.input_note.text())
-            items["in.skip"].setCheckState(Qt.CheckState.Unchecked)
+            items["in.skip"].setCheckState(0, Qt.CheckState.Unchecked)
             workspace.local_memory.setValue(1536)
             workspace.start.click()
             self.assertFalse(workspace.start.isEnabled())
@@ -797,7 +806,7 @@ class EsenTests(unittest.TestCase):
         for folder in (second, first):
             folder.mkdir()
             (folder / "in.run").touch()
-        (first / "solver.txt").touch()
+        (first / "in.solver").touch()
         truba = FakeTruba()
         with patch("esen_workspace.QSettings", return_value=preferences):
             workspace = EsenWorkspace(truba, history=self.history)
@@ -825,10 +834,9 @@ class EsenTests(unittest.TestCase):
             workspace.folder_scan[0].result(timeout=5)
             workspace._tick()
         self.assertFalse(workspace.start.isEnabled())
-        for index in range(workspace.inputs.count()):
-            item = workspace.inputs.item(index)
-            if item.text() in {"01/solver.txt", "02/in.run"}:
-                item.setCheckState(Qt.CheckState.Checked)
+        for item in workspace.inputs.items():
+            if item.path in {"01/in.solver", "02/in.run"}:
+                item.setCheckState(0, Qt.CheckState.Checked)
         self.assertTrue(workspace.start.isEnabled())
 
         def submit(directory, record, files, settings, auth):
@@ -858,9 +866,9 @@ class EsenTests(unittest.TestCase):
             workspace._tick()
             snapshot = jobs.upload_snapshot(self.history, workspace.folder_upload[0])
             self.assertEqual([call.args[2][:2] for call in launch.call_args_list],
-                             [(snapshot / "01", "solver.txt"), (snapshot / "02", "in.run")])
+                             [(snapshot / "01", "in.solver"), (snapshot / "02", "in.run")])
         self.assertEqual(workspace.history.count(), 2)
-        self.assertIn("01/solver.txt", workspace.history.item(1).text())
+        self.assertIn("01/in.solver", workspace.history.item(1).text())
         self.assertIn("Completed", workspace.history.item(1).text())
         self.assertFalse(workspace.start.isEnabled())
         workspace.use_inputs.click()
@@ -883,12 +891,11 @@ class EsenTests(unittest.TestCase):
         workspace.show()
         app.processEvents()
         self.load_batch(workspace)
-        for index in range(workspace.inputs.count()):
-            item = workspace.inputs.item(index)
-            if item.text() == "in.model":
+        for item in workspace.inputs.items():
+            if item.path == "in.model":
                 self.assertFalse(item.flags() & Qt.ItemFlag.ItemIsUserCheckable)
-            if item.text() == "run_second.slurm":
-                item.setCheckState(Qt.CheckState.Checked)
+            if item.path == "run_second.slurm":
+                item.setCheckState(0, Qt.CheckState.Checked)
         self.assertTrue(workspace.upload.isVisible())
         self.assertTrue(workspace.start.isEnabled())
         with (patch("esen_jobs.sync_slurm_folder") as sync,
@@ -936,7 +943,7 @@ class EsenTests(unittest.TestCase):
         app.processEvents()
         workspace._load_files([str(self.source / name) for name in names])
         QTest.keyClick(workspace.inputs, Qt.Key.Key_A, Qt.KeyboardModifier.ControlModifier)
-        self.assertEqual(len(workspace.inputs.selectedItems()), 3)
+        self.assertEqual({item.path for item in workspace.inputs.selectedItems()}, {*names, "data"})
         QTest.keyClick(workspace.inputs, Qt.Key.Key_Space)
         self.assertEqual(list(workspace._folder_jobs()), list(names[:2]))
         QTest.keyClick(workspace.inputs, Qt.Key.Key_Space)
@@ -956,15 +963,16 @@ class EsenTests(unittest.TestCase):
         app.processEvents()
         workspace._load_files([str(self.source / name) for name in names])
         view = workspace.inputs
-        QTest.mouseClick(view.viewport(), Qt.MouseButton.LeftButton, pos=view.visualItemRect(view.item(0)).center())
+        files = view.items()
+        QTest.mouseClick(view.viewport(), Qt.MouseButton.LeftButton, pos=view.visualItemRect(files[0]).center())
         QTest.mouseClick(view.viewport(), Qt.MouseButton.LeftButton, Qt.KeyboardModifier.ShiftModifier,
-                         view.visualItemRect(view.item(2)).center())
-        self.assertEqual(len(view.selectedItems()), 3)
+                         view.visualItemRect(files[2]).center())
+        self.assertEqual({item.path for item in view.selectedItems() if item.job_order is not None}, set(names))
         self.assertTrue(workspace.remove_inputs.isEnabled())
         self.assertFalse(workspace.use_as_script.isEnabled())
         workspace.remove_inputs.click()
-        self.assertEqual(workspace.inputs.count(), 1)
-        self.assertEqual(workspace.inputs.item(0).text(), names[0])
+        self.assertEqual(len(workspace.inputs.items()), 1)
+        self.assertEqual(workspace.inputs.items()[0].path, names[0])
         self.assertTrue(all((self.source / name).exists() for name in names))
 
     def test_selected_files_upload_and_slurm_runs_in_the_user_order(self):
@@ -982,11 +990,11 @@ class EsenTests(unittest.TestCase):
         workspace.show()
         app.processEvents()
         workspace._load_files([str(self.source / name) for name in names])
-        workspace.inputs.setCurrentRow(1)
+        workspace.inputs.setCurrentItem(workspace.inputs.items()[1])
         workspace.move_up.click()
-        self.assertEqual(workspace.inputs.item(0).text(), names[1])
+        self.assertEqual(workspace.inputs.items()[0].path, names[1])
         for row in range(2):
-            workspace.inputs.item(row).setCheckState(Qt.CheckState.Checked)
+            workspace.inputs.items()[row].setCheckState(0, Qt.CheckState.Checked)
 
         def submit(directory, record, _files, _settings, auth):
             jobs.save_job(directory, record, state="Submitted", job_id="123", username=auth.username)

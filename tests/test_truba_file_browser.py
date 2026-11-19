@@ -242,6 +242,17 @@ def test_workspace_browses_creates_and_restores_three_columns(remote, tmp_path, 
         assert browser.address.text() == str(root)
         assert browser.files.topLevelItem(0).text(0) == "results"
         assert browser.files.topLevelItem(1).text(0) == "readme.txt"
+        browser.group_files.setChecked(True)
+        folders, other = (browser.files.topLevelItem(index) for index in range(2))
+        assert folders.child(0).text(0) == "results"
+        assert other.child(0).text(0) == "readme.txt"
+        browser.files.setCurrentItem(other.child(0))
+        assert browser.download.isEnabled()
+        browser.filter.setText("RESULT")
+        assert other.isHidden() and not folders.isHidden()
+        assert not browser.download.isEnabled()
+        browser.filter.clear()
+        browser.group_files.setChecked(False)
         assert not browser.up.isEnabled()
         assert browser.upload.isEnabled()
         assert not browser.download.isEnabled()
