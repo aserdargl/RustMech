@@ -263,6 +263,35 @@ def download_file(auth, relative, name, destination):
         _download_file(sftp, source, destination)
 
 
+def read_regular_file(auth, relative, name, *, limit):
+    validate_folder_name(name)
+    with _project_directory(auth, relative) as (sftp, directory):
+        source = str(directory / name)
+        if not S_ISREG(sftp.lstat(source).st_mode or 0):
+            raise ValueError("Select a regular file on TRUBA.")
+        with sftp.open(source, "rb") as stream:
+            contents = stream.read(limit + 1)
+        if len(contents) > limit:
+            raise ValueError("The TRUBA run list is too large.")
+        return contents
+
+
+def require_regular_files(auth, relative, paths):
+    with _project_directory(auth, relative) as (sftp, directory):
+        checked = {directory}
+        for path in paths:
+            target = directory / path
+            try:
+                if target.parent not in checked:
+                    if sftp.normalize(str(target.parent)) != str(target.parent):
+                        raise ValueError(f"Slurm script folder contains a symbolic link: {path}")
+                    checked.add(target.parent)
+                if not S_ISREG(sftp.lstat(str(target)).st_mode or 0):
+                    raise ValueError(f"Expected a regular Slurm script on TRUBA: {path}")
+            except FileNotFoundError as error:
+                raise ValueError(f"Slurm script listed in Run.esen is missing on TRUBA: {path}") from error
+
+
 def _download_file(sftp, source, destination, *, sync_source=None, existing=None):
     local = NamedTemporaryFile(dir=destination.parent, prefix=".rustmech-download-",
                                suffix=".part", delete=False)

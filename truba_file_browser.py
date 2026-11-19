@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (
 )
 
 from file_dialog import QFileDialog
-from esen_jobs import is_input_script, is_slurm_script
+from esen_jobs import RUN_LIST, is_input_script, is_slurm_script
 from studio_style import ActionFlowLayout, CONTROL_HEIGHT
 import truba_files
 from ui_language import translate
@@ -350,12 +350,13 @@ class TrubaFileBrowser(QWidget):
 
     def _show_entries(self, entries, *, preserve_selection=False):
         self.entries = entries
-        self._render_entries(preserve_selection=preserve_selection)
+        self._render_entries(preserve_selection=preserve_selection, select_run_list=True)
 
-    def _render_entries(self, *_, preserve_selection=True):
+    def _render_entries(self, *_, preserve_selection=True, select_run_list=False):
         current = self.files.selectedItems() if preserve_selection else []
         selected_name = current[0].text(0) if current else None
         selected_row = None
+        run_list_row = None
         self.files.clear()
         folder_icon = self.style().standardIcon(QStyle.StandardPixmap.SP_DirIcon)
         file_icon = self.style().standardIcon(QStyle.StandardPixmap.SP_FileIcon)
@@ -373,11 +374,14 @@ class TrubaFileBrowser(QWidget):
             row.setToolTip(0, entry.filename)
             if entry.filename == selected_name:
                 selected_row = row
+            if S_ISREG(mode) and entry.filename == RUN_LIST:
+                run_list_row = row
             row.setIcon(0, folder_icon if folder else link_icon if S_ISLNK(mode) else file_icon)
             if grouped:
                 if folder:
                     category = "Folders"
-                elif S_ISREG(mode) and (is_slurm_script(entry.filename) or is_input_script(entry.filename)):
+                elif S_ISREG(mode) and (row is run_list_row or is_slurm_script(entry.filename)
+                                       or is_input_script(entry.filename)):
                     category = "Scripts"
                 else:
                     category = "Other files"
@@ -394,6 +398,8 @@ class TrubaFileBrowser(QWidget):
                 self.files.addTopLevelItem(groups[category])
                 groups[category].setExpanded(True)
         self._filter_entries()
+        if select_run_list and selected_row is None:
+            selected_row = run_list_row
         if selected_row is not None and not selected_row.isHidden():
             self.files.setCurrentItem(selected_row)
 

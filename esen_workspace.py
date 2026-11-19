@@ -319,6 +319,8 @@ class EsenWorkspace(QDialog):
         self.sync_task = None
         self.sync_message = ""
         self._run_truba_selection = False
+        self.run_list_task = None
+        self.run_list_message = ""
         self.batch_queue = {}
         self.batch_active = None
         self._active_truba_jobs = {}
@@ -1123,7 +1125,8 @@ class EsenWorkspace(QDialog):
         using_truba = remote and self._run_truba_selection
         auth = self.truba.analysis_auth() if remote else None
         remote_file = self.truba_browser.selected_file(auth) if using_truba else None
-        slurm = bool(remote_file and jobs.is_slurm_script(remote_file[1])) if using_truba else self._slurm_mode()
+        slurm = (bool(remote_file and (jobs.is_slurm_script(remote_file[1]) or remote_file[1] == jobs.RUN_LIST))
+                 if using_truba else self._slurm_mode())
         for field in self.local_fields:
             self.job_form.setRowVisible(field, not remote)
         self.job_form.setRowVisible(self.partition, remote and not slurm)
@@ -1211,7 +1214,11 @@ class EsenWorkspace(QDialog):
             if folder.parts:
                 jobs.relative_file(folder.as_posix())
             jobs.relative_file(name)
-            if jobs.is_slurm_script(name):
+            if name == jobs.RUN_LIST:
+                invocation = translate("Submit every Slurm script listed in Run.esen.")
+                if self.run_list_message:
+                    self.input_note.setText(f"{self.input_note.text()}\n{self.run_list_message}")
+            elif jobs.is_slurm_script(name):
                 invocation = translate("Submit the selected TRUBA Slurm script.")
             elif jobs.is_input_script(name):
                 invocation = self._remote_command(name, self._remote_settings(auth))
@@ -1321,7 +1328,7 @@ class EsenWorkspace(QDialog):
     def _start(self):
         target = self.target.currentData()
         auth = self.truba.analysis_auth() if target == "remote" else None
-        if (self.sync_task or self.batch_active or self.batch_queue or
+        if (self.sync_task or self.run_list_task or self.batch_active or self.batch_queue or
                 (target == "remote" and (self.remote_task or not auth or self.upload_task)) or
                 (target == "local" and self.local_task)):
             return
@@ -1331,6 +1338,11 @@ class EsenWorkspace(QDialog):
                 selected = self.truba_browser.selected_file(auth)
                 if self.start.isEnabled() and selected:
                     folder, name = selected
+                    if name == jobs.RUN_LIST:
+                        self.run_list_message = translate("Reading Run.esen from TRUBA…")
+                        self.run_list_task = self.executor.submit(jobs.read_truba_run_list, auth, folder), auth, folder
+                        self._preview()
+                        return
                     directory, record = jobs.new_job(None, name, "remote", None, parent=self.history_root,
                                                      truba_input_folder=folder.as_posix())
                     self._save_profiles()
@@ -1369,6 +1381,37 @@ class EsenWorkspace(QDialog):
     def _submit_remote(self, directory, record, files, settings, auth):
         future = self.executor.submit(jobs.submit_full_node, directory, record, files, settings, auth)
         self.remote_task = (directory, future)
+
+    def _check_run_list(self):
+        if self.run_list_task is None or not self.run_list_task[0].done():
+            return
+        future, auth, folder = self.run_list_task
+        self.run_list_task = None
+        self.run_list_message = ""
+        try:
+            entries = future.result()
+            if self.truba.analysis_auth() != auth:
+                raise ValueError(translate("TRUBA connection changed. Run the list again."))
+            errors = []
+            for path in entries:
+                case_folder = (folder / path.parent).as_posix()
+                try:
+                    directory, record = jobs.new_job(
+                        None, path.name, "remote", None, parent=self.history_root,
+                        batch_folder=case_folder, truba_input_folder=case_folder,
+                    )
+                except OSError as error:
+                    errors.append(f"{path}: {error}")
+                    continue
+                self.batch_queue[directory] = record, (None, path.name, (), True), (None, auth.username)
+                self._history_item(directory, record, prepend=True)
+            self.run_list_message = translate("{count} scripts prepared from {folder}.").format(
+                count=len(entries) - len(errors), folder=folder.as_posix())
+            if errors:
+                self.run_list_message += "\n" + "\n".join(errors)
+        except Exception as error:
+            self.run_list_message = str(error)
+        self._preview()
 
     def _run_local(self, directory, record, files, invocation, memory_mib):
         self.local_stop = Event()
@@ -1438,7 +1481,10 @@ class EsenWorkspace(QDialog):
         if remote and (not auth or auth.username != options[1]):
             return
         self.batch_queue.pop(directory)
-        self.batch_active = directory
+        # An uploaded run list stages independent jobs. Slurm can queue them
+        # as soon as each submission returns, even while earlier jobs run.
+        if "truba_input_folder" not in record:
+            self.batch_active = directory
         if remote:
             self._submit_remote(directory, record, files, options[0], auth)
         else:
@@ -1555,6 +1601,7 @@ class EsenWorkspace(QDialog):
         self.truba_badge.setVisible(remote and authenticated)
         if remote and authenticated:
             working = (self.remote_task is not None or self.upload_task is not None or self.sync_task is not None
+                       or self.run_list_task is not None
                        or auth.username in self._active_truba_jobs.values())
             state = "working" if working else "connected"
             if self.truba_badge.property("state") != state:
@@ -1564,7 +1611,7 @@ class EsenWorkspace(QDialog):
                 self.truba_badge.style().polish(self.truba_badge)
         ready = authenticated and not self.remote_task if remote else not self.local_task
         batch_busy = bool(self.batch_active or self.batch_queue)
-        uploading = self.upload_task is not None or self.sync_task is not None
+        uploading = self.upload_task is not None or self.sync_task is not None or self.run_list_task is not None
         if remote:
             if self._run_truba_selection:
                 ready = ready and self.truba_browser.task is None
@@ -1619,6 +1666,7 @@ class EsenWorkspace(QDialog):
         self._check_folder_scan()
         self._check_upload()
         self._check_sync()
+        self._check_run_list()
         for field in ("local_task", "remote_task"):
             task = getattr(self, field)
             if task and task[1].done():

@@ -24,7 +24,7 @@ from uuid import NAMESPACE_URL, uuid4, uuid5
 import esen_restart
 from esen_windows_job import limited_process
 from truba_credentials import state_directory
-from truba_files import project_root, upload_tree
+from truba_files import project_root, read_regular_file, require_regular_files, upload_tree
 from truba_jobs import SAFE_NAME, validated_remote_path, write_record
 from truba_remote import RemoteContext, RemoteTransport, safe_extract
 from truba_resources import BASELINES, candidates, fetch_catalog
@@ -44,6 +44,8 @@ SLURM_TERMINAL = frozenset({
 })
 LOG_BYTES = 16000
 FILE_LIMIT = 2000
+RUN_LIST = "Run.esen"
+RUN_LIST_LIMIT = 64 * 1024
 INPUT_ARCHIVE_COMPRESSION = 3
 RESULT_DIRECTORY = re.compile(r"(?:ESEN-[0-9a-f]{32}|\.esen-export-[0-9a-f]{32}-.+)", re.IGNORECASE)
 
@@ -92,6 +94,33 @@ def is_input_script(name):
 
 def is_slurm_script(name):
     return Path(name).suffix.lower() == ".slurm"
+
+
+def run_list_entries(contents):
+    """Read the ordered, relative Slurm paths from an ESEN run list."""
+    entries = []
+    seen = set()
+    for line in contents.decode("utf-8-sig").splitlines():
+        name = line.strip()
+        if not name or name.startswith("#"):
+            continue
+        path = relative_file(name).as_posix()
+        if not is_slurm_script(path):
+            raise ValueError(f"Expected a relative Slurm script path: {name}")
+        if path.casefold() in seen:
+            raise ValueError(f"Duplicate Slurm script in run list: {name}")
+        seen.add(path.casefold())
+        entries.append(PurePosixPath(path))
+    if not entries:
+        raise ValueError("The ESEN run list is empty.")
+    return entries
+
+
+def read_truba_run_list(auth, folder):
+    contents = read_regular_file(auth, folder, RUN_LIST, limit=RUN_LIST_LIMIT)
+    entries = run_list_entries(contents)
+    require_regular_files(auth, folder, entries)
+    return entries
 
 
 def read_slurm_script(path):

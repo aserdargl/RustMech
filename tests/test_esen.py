@@ -363,6 +363,20 @@ class EsenTests(unittest.TestCase):
         self.assertTrue(transport.put.call_args.args[1].endswith("/run.slurm"))
         catalog.assert_not_called()
 
+    def test_truba_run_list_checks_every_path_in_order(self):
+        folder = PurePosixPath("research/jobs")
+        contents = b"\xef\xbb\xbf# selected jobs\r\nsecond/run.slurm\r\n\r\nfirst/run test.slurm\r\n"
+        expected = [PurePosixPath("second/run.slurm"), PurePosixPath("first/run test.slurm")]
+        with (patch("esen_jobs.read_regular_file", return_value=contents) as read,
+              patch("esen_jobs.require_regular_files") as check):
+            self.assertEqual(jobs.read_truba_run_list(self.auth, folder), expected)
+            read.assert_called_once_with(self.auth, folder, jobs.RUN_LIST, limit=jobs.RUN_LIST_LIMIT)
+            check.assert_called_once_with(self.auth, folder, expected)
+        for invalid in (b"../run.slurm", b"/run.slurm", b"C:/run.slurm", b"in.model",
+                        b"# empty", b"first/run.slurm\nFIRST/run.slurm"):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                jobs.run_list_entries(invalid)
+
     def test_truba_lammps_selection_uses_the_configured_queue_without_uploading_inputs(self):
         name = "in.remote"
         directory, record = jobs.new_job(None, name, "remote", None, parent=self.history,
@@ -969,6 +983,45 @@ class EsenTests(unittest.TestCase):
             self.assertEqual(workspace.history.count(), 1)
             self.assertIn("run_second.slurm", workspace.history.item(0).text())
             self.assertIn("Submitted", workspace.history.item(0).text())
+
+    def test_run_submits_an_uploaded_run_list_without_local_inputs(self):
+        app = QApplication.instance() or QApplication([])
+        preferences = QSettings(str(self.root / "settings.ini"), QSettings.Format.IniFormat)
+        truba = FakeTruba()
+        truba.auth = self.auth
+        with patch("esen_workspace.QSettings", return_value=preferences):
+            workspace = EsenWorkspace(truba, history=self.history)
+        self.addCleanup(workspace.dispose)
+        folder = PurePosixPath("uploaded runs")
+        scripts = [PurePosixPath("case B/launch.slurm"), PurePosixPath("case A/run.slurm")]
+        browser = workspace.truba_browser
+        browser._sync_connection()
+        browser.directory = folder
+        browser.loaded = True
+        browser._show_entries([SimpleNamespace(filename=jobs.RUN_LIST, st_mode=S_IFREG, st_size=42)])
+        self.assertEqual(browser.selected_file(self.auth), (folder, jobs.RUN_LIST))
+        self.assertTrue(workspace.start.isEnabled())
+        self.assertEqual(workspace.history.count(), 0)
+
+        def submit(directory, record, files, settings, auth):
+            jobs.save_job(directory, record, state="Submitted", job_id="123", username=auth.username)
+
+        with (patch("esen_jobs.read_truba_run_list", return_value=scripts) as read,
+              patch("esen_jobs.submit_full_node", side_effect=submit) as launch,
+              patch("esen_jobs.sync_slurm_folder") as sync):
+            workspace.start.click()
+            workspace.run_list_task[0].result(timeout=5)
+            workspace._tick()
+            for _ in scripts:
+                workspace.remote_task[1].result(timeout=5)
+                workspace._tick()
+            read.assert_called_once_with(self.auth, folder)
+            self.assertEqual([(call.args[1]["truba_input_folder"], call.args[2][1])
+                              for call in launch.call_args_list],
+                             [("uploaded runs/case B", "launch.slurm"), ("uploaded runs/case A", "run.slurm")])
+            sync.assert_not_called()
+        self.assertEqual(workspace.history.count(), 2)
+        self.assertTrue(all("Submitted" in workspace.history.item(i).text() for i in range(2)))
 
     def test_space_checks_only_runnable_files_in_a_multi_selection(self):
         app = QApplication.instance() or QApplication([])

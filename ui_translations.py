@@ -66,6 +66,12 @@ Select a script to run.|Çalıştırmak için bir betik seçin.
 Select a script in the TRUBA file browser.|TRUBA dosya tarayıcısında bir betik seçin.
 Select a Slurm or LAMMPS input script on TRUBA.|TRUBA’da bir Slurm veya LAMMPS girdi betiği seçin.
 Submit the selected TRUBA Slurm script.|Seçilen TRUBA betiğini Slurm’a gönder.
+Submit every Slurm script listed in Run.esen.|Run.esen dosyasındaki tüm Slurm betiklerini gönder.
+Reading Run.esen from TRUBA…|Run.esen dosyası TRUBA’dan okunuyor…
+TRUBA connection changed. Run the list again.|TRUBA bağlantısı değişti. Listeyi yeniden çalıştırın.
+{count} scripts prepared from {folder}.|{folder} klasöründe {count} betik gönderim için hazırlandı.
+The TRUBA run list is too large.|TRUBA iş listesi çok büyük.
+The ESEN run list is empty.|ESEN iş listesi boş.
 Run uploads the selected local inputs to TRUBA.|Çalıştır, seçili yerel girdileri TRUBA’ya aktarır.
 Add a folder or drop inputs here.|Klasör ekleyin veya girdileri buraya bırakın.
 {files} files · {scripts} scripts selected|{files} dosya · {scripts} betik seçili
