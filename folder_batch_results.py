@@ -200,7 +200,7 @@ def run_remote_folder_doe(index, settings, context, solve, destination, staged_g
 run_remote_folder_doe.remote_job_target = True
 
 
-def write_folder_reports(rows):
+def write_folder_reports(rows, *, summary_name='toplu_ozet.csv'):
     """Write an outcome (including failures) per job and a summary per input root."""
     grouped = {}
     for row in rows:
@@ -223,4 +223,40 @@ def write_folder_reports(rows):
                                  max_force_n=row.max_force_n, effective_modulus_mpa=row.effective_modulus_mpa,
                                  energy_absorption_j=row.energy_absorption_j, run_folder=row.run_folder,
                                  job_id=row.exp_id))
-        atomic_text(results / 'toplu_ozet.csv', '\ufeff' + stream.getvalue())
+        atomic_text(results / summary_name, '\ufeff' + stream.getvalue())
+
+
+def folder_job_row(settings, metadata):
+    from doe_studio import generate_doe_rows
+    from model import settings_from_dict
+    snapshot = settings_from_dict(asdict(settings))
+    row = generate_doe_rows([snapshot], {}, "grid", 1, 42)[0]
+    row.exp_id = "JOB-" + uuid4().hex[:10].upper()
+    row.folder_job = dict(metadata)
+    row.folder_job['destination'] = str(Path(metadata['destination']) / row.exp_id)
+    return row
+
+
+class FolderResultMixin:
+    def _write_folder_reports(self, *, summary_name="toplu_ozet.csv"):
+        try:
+            write_folder_reports(self._rows, summary_name=summary_name)
+        except (OSError, ValueError, TypeError) as error:
+            self._report_persistence_problem('Folder results could not be saved: ' + str(error))
+
+    def _apply_payload(self, payload):
+        row = self._rows[payload['r_idx']]
+        if row.folder_job:
+            if not payload.get('run_folder') and self._active_mode == 'solve':
+                payload = dict(payload, run_folder=row.folder_job['destination'])
+            try:
+                if payload.get('folder_export_error'):
+                    row.folder_job['export_error'] = payload['folder_export_error']
+                else:
+                    payload = collect_folder_output(row, payload)
+                    row.folder_job.pop('export_error', None)
+            except (OSError, ValueError) as error:
+                row.folder_job['export_error'] = 'Output copy failed; original retained: ' + str(error)
+        super()._apply_payload(payload)
+        if row.folder_job and row.folder_job.get('export_error'):
+            self._report_persistence_problem(row.folder_job['export_error'])

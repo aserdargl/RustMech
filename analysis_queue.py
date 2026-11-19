@@ -13,7 +13,8 @@ from PySide6.QtWidgets import QLabel, QMessageBox, QPushButton, QTableWidgetItem
 from design_exchange import pool_directory
 from doe_studio import (COL_RUN, COL_STRUCTURE, DoEStudioWidget, DoEStudioWindow,
                         ExperimentRow, TABLE_COLUMNS, generate_doe_rows)
-from folder_batch_results import (LEGACY_BATCH_DIRECTORY, batch_directory, move_batch_workspace,
+from folder_batch_results import (FolderResultMixin, LEGACY_BATCH_DIRECTORY, batch_directory,
+                                  folder_job_row, move_batch_workspace,
                                   relocate_batch_report, relocate_queue_row, validate_folder_snapshot)
 from model import ROOT, settings_from_dict, validate_settings
 
@@ -104,7 +105,7 @@ class QueueStore:
         return bool(aliases)
 
 
-class AnalysisQueueWidget(DoEStudioWidget):
+class AnalysisQueueWidget(FolderResultMixin, DoEStudioWidget):
     queue_changed = Signal()
 
     def __init__(self, settings_provider, mesh_generator, batch_solver_runner, parent=None, queue_path=None):
@@ -244,12 +245,7 @@ class AnalysisQueueWidget(DoEStudioWidget):
             if metadata['key'] in known:
                 continue
             validate_folder_snapshot(settings)
-            snapshot = settings_from_dict(asdict(settings))
-            row = generate_doe_rows([snapshot], {}, "grid", 1, 42)[0]
-            row.exp_id = "JOB-" + uuid4().hex[:10].upper()
-            row.folder_job = dict(metadata)
-            row.folder_job['destination'] = str(Path(metadata['destination']) / row.exp_id)
-            added.append(row)
+            added.append(folder_job_row(settings, metadata))
             known.add(metadata['key'])
         self.store.save([*self._rows, *added])
         self._rows.extend(added)
@@ -257,34 +253,9 @@ class AnalysisQueueWidget(DoEStudioWidget):
         self._write_folder_reports()
         return added
 
-    def _write_folder_reports(self):
-        from folder_batch_results import write_folder_reports
-        try:
-            write_folder_reports(self._rows)
-        except (OSError, ValueError, TypeError) as error:
-            self._report_persistence_problem('Folder results could not be saved: ' + str(error))
-
     def _persist_progress(self):
         super()._persist_progress()
         self._write_folder_reports()
-
-    def _apply_payload(self, payload):
-        row = self._rows[payload['r_idx']]
-        if row.folder_job:
-            if not payload.get('run_folder') and self._active_mode == 'solve':
-                payload = dict(payload, run_folder=row.folder_job['destination'])
-            from folder_batch_results import collect_folder_output
-            try:
-                if payload.get('folder_export_error'):
-                    row.folder_job['export_error'] = payload['folder_export_error']
-                else:
-                    payload = collect_folder_output(row, payload)
-                    row.folder_job.pop('export_error', None)
-            except (OSError, ValueError) as error:
-                row.folder_job['export_error'] = 'Output copy failed; original retained: ' + str(error)
-        super()._apply_payload(payload)
-        if row.folder_job and row.folder_job.get('export_error'):
-            self._report_persistence_problem(row.folder_job['export_error'])
 
     def _write_row_cells(self, index, row):
         super()._write_row_cells(index, row)

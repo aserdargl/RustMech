@@ -1,4 +1,4 @@
-"""Folder preflight and explicit preparation of sequential mechanical jobs."""
+"""Prepare and run folder-based mechanical analyses locally or on TRUBA."""
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, replace
 from hashlib import sha256
@@ -6,31 +6,33 @@ from html import escape
 import json
 from math import isfinite
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import re
 
 from PySide6.QtCore import QSignalBlocker, QSize, Qt, QTimer
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QDialog, QGridLayout, QGroupBox, QHeaderView,
-                              QHBoxLayout, QLabel, QLineEdit, QPushButton, QSplitter, QStyle,
-                              QTableWidget, QTableWidgetItem, QToolButton, QVBoxLayout, QWidget)
+                              QHBoxLayout, QLabel, QLineEdit, QPushButton, QStyle,
+                              QTableWidget, QTableWidgetItem, QToolButton, QVBoxLayout)
 
 from camera_toolbar import camera_icon
+from doe_studio import DoEStudioWidget, STATE_COMPLETED, classify_status
 from file_dialog import QFileDialog
 from folder_batch_preview import FacePreviewButton, FacePreviewPopup, store_face_preview
-from folder_batch_results import (BATCH_DIRECTORY, LEGACY_BATCH_DIRECTORY, atomic_text, batch_directory,
-                                  validate_folder_snapshot)
+from folder_batch_results import (BATCH_DIRECTORY, LEGACY_BATCH_DIRECTORY, FolderResultMixin, atomic_text,
+                                  batch_directory, folder_job_row, validate_folder_snapshot)
 from imported_geometry import (SURFACE_EXTENSIONS, SURFACE_FILE_FILTER, SurfaceComponents,
                                align_compression_surface, automatic_compression_selection,
                                compression_direction, read_polygonal_surface, store_surface, surface_cache_directory)
 from model import MIN_MESH_INPUT_MM, settings_from_dict
+from operation_progress import OperationProgress
 from studio_style import (CompactComboBox, CompactDoubleSpinBox, CONTROL_HEIGHT,
                           STUDIO_STYLESHEET, field_label, mesh_precision_stepper, stepper_with_unit)
 from ui_language import translate
 from window_state import install_window_state
 
 
-FACES_COLUMN, RUN_COLUMN, SPECIMEN_COLUMN, PREFLIGHT_COLUMN = range(4)
+FACES_COLUMN, RUN_COLUMN, SPECIMEN_COLUMN, PREFLIGHT_COLUMN, ANALYSIS_COLUMN = range(5)
 
 
 class SelectAllSpecimens(QCheckBox):
@@ -200,21 +202,54 @@ def _prepared_snapshots(item, root, base, solvers, *, execution_target=None):
         yield snapshot, metadata
 
 
-def prepare_queue_snapshots(items, root, base, solvers, target, auth):
+def prepare_batch_snapshots(items, root, base, solvers, target, auth=None):
     snapshots = [snapshot for item in items for snapshot in
                  specimen_snapshots(item, root, base, solvers, execution_target=target)]
-    if target == 'truba':
+    settings_by_geometry = {}
+    for settings, _ in snapshots:
+        validate_folder_snapshot(settings)
+        if auth is not None:
+            values = asdict(settings)
+            values.pop('imported_geometry_path')
+            settings_by_geometry.setdefault(settings.imported_geometry_path, []).append(values)
+    if auth is not None:
         from truba_files import stage_batch_geometries
-        for settings, _ in snapshots:
-            validate_folder_snapshot(settings)
-        staged = stage_batch_geometries(auth, (settings.imported_geometry_path for settings, _ in snapshots))
+        staged = stage_batch_geometries(auth, settings_by_geometry, settings_by_geometry=settings_by_geometry)
         for settings, metadata in snapshots:
             metadata['staged_geometry'] = staged[settings.imported_geometry_path]
     return snapshots
 
 
+class FolderBatchRunner(FolderResultMixin, DoEStudioWidget):
+    """Use the shared solver lifecycle for one explicit Batch run."""
+
+    @property
+    def active(self):
+        return self._active_mode is not None
+
+    def start(self, snapshots):
+        rows = [folder_job_row(settings, metadata) for settings, metadata in snapshots]
+        self._rows[:] = rows
+        self._refresh_table_view()
+        self._report_persistence_problem("")
+        self.start_batch_solve()
+
+    def _new_dataset_path(self):
+        first = self._rows[0]
+        return Path(first.folder_job['results_root']) / f"toplu_ozet_{first.exp_id}.csv"
+
+    def _persist_progress(self):
+        self._write_folder_reports(summary_name=self._dataset_path.name)
+
+    def dispose(self):
+        self.planner.geometry_panel.dispose()
+        self._poll_timer.stop()
+        self.stop_active_queue()
+
+
 class FolderBatchDialog(QDialog):
-    def __init__(self, settings_provider, queue, parent=None):
+    def __init__(self, settings_provider, mesh_generator, solver_runner, remote_controller,
+                 migrate_workspace, parent=None):
         super().__init__(parent, Qt.WindowType.Window)
         app = QApplication.instance()
         install_window_state(app)
@@ -226,10 +261,17 @@ class FolderBatchDialog(QDialog):
         self.resize(920, 600)
         self.setMinimumSize(620, 480)
         self.setSizeGripEnabled(True)
-        self.settings_provider, self.queue = settings_provider, queue
+        self.settings_provider = settings_provider
+        self.mesh_generator = mesh_generator
+        self.solver_runner = solver_runner
+        self.remote_controller = remote_controller
+        self.migrate_workspace = migrate_workspace
+        self.runner = None
+        self.staged = None
+        self.running = False
         self.executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix='folder-preflight')
         self.future = None
-        self.adding_target = None
+        self.preparing_target = None
         self.items = []
         self.pending = []
         self.root = None
@@ -280,7 +322,7 @@ class FolderBatchDialog(QDialog):
         controls.addWidget(self.solver)
         self.execution_target = CompactComboBox()
         self.execution_target.addItem('TRUBA', 'truba')
-        self.execution_target.addItem(translate('Local mesh'), 'local')
+        self.execution_target.addItem(translate('Local'), 'local')
         self.execution_target.setFixedWidth(110)
         execution_label = QLabel('Execution')
         execution_label.setBuddy(self.execution_target)
@@ -312,16 +354,11 @@ class FolderBatchDialog(QDialog):
         self.settings_hint = QLabel()
         self.settings_hint.setWordWrap(True)
         layout.addWidget(self.settings_hint)
-        panels = QSplitter(Qt.Orientation.Horizontal)
-        panels.setObjectName('folderBatchPanels')
-        panels.setChildrenCollapsible(False)
-        panels.setHandleWidth(7)
-        layout.addWidget(panels, 1)
         specimens = QGroupBox('Specimens')
         specimen_layout = QVBoxLayout(specimens)
         specimen_layout.setContentsMargins(6, 6, 6, 6)
-        self.table = QTableWidget(0, 4)
-        self.table.setHorizontalHeaderLabels(['', '', 'Specimen', 'Preflight'])
+        self.table = QTableWidget(0, 5)
+        self.table.setHorizontalHeaderLabels(['', '', 'Specimen', 'Preflight', 'Status'])
         self.face_icon = camera_icon('orthographic')
         self.face_preview = FacePreviewPopup(self)
         edit_header = self.table.horizontalHeaderItem(FACES_COLUMN)
@@ -346,49 +383,30 @@ class FolderBatchDialog(QDialog):
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        self.table.horizontalHeader().setStretchLastSection(True)
+        header.setSectionResizeMode(PREFLIGHT_COLUMN, QHeaderView.ResizeMode.Stretch)
+        header.setStretchLastSection(True)
         specimen_layout.addWidget(self.table)
 
-        queued = QGroupBox('Analysis Queue')
-        queue_layout = QVBoxLayout(queued)
-        queue_layout.setContentsMargins(6, 6, 6, 6)
-        self.queue_table = QTableWidget(0, 3)
-        self.queue_table.setHorizontalHeaderLabels(['Specimen', 'Solver', 'Execution target'])
-        self.queue_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        self.queue_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        self.queue_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
-        self.queue_table.verticalHeader().hide()
-        queue_header = self.queue_table.horizontalHeader()
-        queue_header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        queue_header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
-        queue_header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
-        queue_layout.addWidget(self.queue_table)
-        self.remove_from_queue = self.button('Remove from Queue', self.return_queued_specimen)
-        self.remove_from_queue.setEnabled(False)
-        self.queue_table.itemSelectionChanged.connect(self.update_remove_button)
-        self.enqueue = self.button('Add to Queue', self.enqueue_ready)
-        self.show_queue = self.button('Analysis Queue', self.open_queue)
-        close = self.button('Close', self.close)
-        self.enqueue.setMinimumWidth(self.remove_from_queue.sizeHint().width())
-
-        # Reserve the footer below each card so its actions take no table space.
-        for card, leading, trailing in ((specimens, self.show_queue, self.enqueue),
-                                        (queued, close, self.remove_from_queue)):
-            pane = QWidget()
-            pane_layout = QVBoxLayout(pane)
-            pane_layout.setContentsMargins(0, 0, 0, 0)
-            pane_layout.setSpacing(layout.spacing())
-            pane_layout.addWidget(card, 1)
-            footer = QHBoxLayout()
-            footer.setContentsMargins(7, 0, 7, 0)
-            footer.addWidget(leading)
-            footer.addStretch()
-            footer.addWidget(trailing)
-            pane_layout.addLayout(footer)
-            panels.addWidget(pane)
-        panels.setSizes([560, 320])
+        layout.addWidget(specimens, 1)
+        footer = QHBoxLayout()
+        self.close_button = self.button('Close', self.close)
+        self.send = self.button('Send to TRUBA', self.send_to_truba)
+        self.run = self.button('Run', self.run_batch, primary=True)
+        self.stop = self.button('Stop', self.stop_batch)
+        action_width = max(button.sizeHint().width() for button in (self.send, self.run, self.stop))
+        for button in (self.send, self.run, self.stop):
+            button.setMinimumWidth(action_width)
+        footer.addWidget(self.close_button)
+        footer.addStretch()
+        footer.addWidget(self.send)
+        footer.addWidget(self.run)
+        footer.addWidget(self.stop)
+        layout.addLayout(footer)
+        self.progress = OperationProgress(self)
+        layout.addWidget(self.progress)
 
         self.status = QLabel('Choose a folder and check it. No analysis starts during preparation.')
+        self.status.setTextFormat(Qt.TextFormat.PlainText)
         self.status.setWordWrap(True)
         layout.addWidget(self.status)
         self.timer = QTimer(self)
@@ -398,12 +416,11 @@ class FolderBatchDialog(QDialog):
         self._restore_preferences()
         self.folder.textChanged.connect(self.invalidate)
         self.mode.currentIndexChanged.connect(self.invalidate)
-        self.solver.currentIndexChanged.connect(self.refresh_queue_view)
-        self.mesh_resolution.valueChanged.connect(self.refresh_queue_view)
-        self.local_mesh_size.valueChanged.connect(self.refresh_queue_view)
+        self.solver.currentIndexChanged.connect(self.invalidate_transfer)
+        self.mesh_resolution.valueChanged.connect(self.invalidate_transfer)
+        self.local_mesh_size.valueChanged.connect(self.invalidate_transfer)
         self.mesh_type.currentIndexChanged.connect(self._mesh_type_changed)
-        self.queue.queue_changed.connect(self.refresh_queue_view)
-        self.table.itemChanged.connect(self.update_enqueue_button)
+        self.table.itemChanged.connect(self.selection_changed)
         self.update_execution_target()
         self.execution_target.currentIndexChanged.connect(self.update_execution_target)
         self.finished.connect(self._save_preferences)
@@ -456,7 +473,7 @@ class FolderBatchDialog(QDialog):
     def _mesh_type_changed(self):
         if self.execution_target.currentData() == 'truba':
             self._truba_mesh_type = self.mesh_type.currentText()
-        self.refresh_queue_view()
+        self.invalidate_transfer()
 
     def update_execution_target(self):
         remote = self.execution_target.currentData() == 'truba'
@@ -469,11 +486,9 @@ class FolderBatchDialog(QDialog):
             else:
                 self.solver.setCurrentIndex(self._local_solver_index)
                 self.mesh_type.setCurrentIndex(self._local_mesh_index)
-        self.enqueue.setText(translate('Send to TRUBA' if remote else 'Add to Queue'))
-        self.enqueue.setToolTip(translate('Upload prepared specimens, then add the jobs to the analysis queue.')
-                                if remote else '')
         self.update_settings_hint()
-        self.set_busy(self.future is not None or bool(self.pending))
+        self.invalidate_transfer()
+        self.set_busy(self.busy)
 
     def update_settings_hint(self):
         remote = self.execution_target.currentData() == 'truba'
@@ -503,7 +518,17 @@ class FolderBatchDialog(QDialog):
         self.base = None
         self.compression_axis = None
         self.update_settings_hint()
-        self.refresh_queue_view()
+        self.invalidate_transfer()
+
+    @property
+    def busy(self):
+        return self.future is not None or bool(self.pending) or self.running
+
+    def invalidate_transfer(self, *_):
+        if self.staged is not None:
+            self.staged = None
+            self.status.setText(translate('Selection or settings changed. Send the batch to TRUBA again.'))
+        self.update_actions()
 
     def set_busy(self, busy):
         for widget in (self.folder, self.browse, self.mode, self.execution_target, self.check,
@@ -514,7 +539,9 @@ class FolderBatchDialog(QDialog):
         self.mesh_type.setEnabled(not busy)
         for row in range(self.table.rowCount()):
             self.table.cellWidget(row, FACES_COLUMN).setEnabled(not busy)
-        self.refresh_queue_view(busy=busy)
+        for widget in (self.table, self.mesh_precision):
+            widget.setEnabled(not busy)
+        self.update_actions(busy=busy)
 
     def selected_solvers(self):
         return {0: [self.base.solver_backend], 1: ['ansys_mapdl'], 2: ['kratos'],
@@ -529,40 +556,6 @@ class FolderBatchDialog(QDialog):
                 settings = replace(settings, kratos_contact_method='penalty')
         return settings
 
-    def refresh_queue_view(self, *, busy=None):
-        root = str(self.root) if self.root is not None else None
-        target = self.execution_target.currentData()
-        # Untargeted jobs still follow the main workspace and are managed in Analysis Queue.
-        rows = [row for row in self.queue.rows if row.folder_job and row.folder_job['root'] == root
-                and row.folder_job.get('execution_target') == target]
-        keys = {row.folder_job['key'] for row in rows}
-        solvers = self.selected_solvers() if keys else ()
-        rows = [row for row in rows if row.design_settings.solver_backend in solvers]
-        self.queue_table.clearSelection()
-        self.queue_table.setRowCount(len(rows))
-        target_label = translate('TRUBA' if target == 'truba' else 'Local mesh')
-        for index, row in enumerate(rows):
-            settings = row.design_settings
-            for column, value in enumerate((settings.imported_geometry_name, settings.solver_backend, target_label)):
-                item = QTableWidgetItem(value)
-                if column == 2 and target == 'truba':
-                    staged = row.folder_job.get('staged_geometry')
-                    item.setToolTip(translate('Prepared geometry uploaded to BatchInputs on TRUBA.' if staged
-                                              else 'Previously queued job. Geometry uploads when the queue runs.'))
-                else:
-                    item.setToolTip(value)
-                item.setData(Qt.ItemDataRole.UserRole, row.exp_id)
-                self.queue_table.setItem(index, column, item)
-
-        base = self.batch_settings() if keys else None
-        for index, specimen in enumerate(self.items):
-            queued = bool(specimen.cached and keys) and all(
-                metadata['key'] in keys for _, metadata in _prepared_snapshots(
-                    specimen, self.root, base, solvers, execution_target=target))
-            self.table.setRowHidden(index, queued)
-        self.update_enqueue_button(busy=busy)
-        self.update_remove_button()
-
     def position_select_all(self, *_):
         header = self.table.horizontalHeader()
         size = self.select_all.sizeHint()
@@ -572,7 +565,7 @@ class FolderBatchDialog(QDialog):
 
     def ready_checkboxes(self):
         return [self.table.item(index, RUN_COLUMN) for index, specimen in enumerate(self.items)
-                if specimen.cached and not self.table.isRowHidden(index)]
+                if specimen.cached]
 
     def selected_specimens(self):
         return [self.items[checkbox.row()] for checkbox in self.ready_checkboxes()
@@ -583,13 +576,15 @@ class FolderBatchDialog(QDialog):
         with QSignalBlocker(self.table):
             for checkbox in self.ready_checkboxes():
                 checkbox.setCheckState(state)
-        self.update_enqueue_button()
+        self.invalidate_transfer()
 
-    def update_enqueue_button(self, item=None, *, busy=None):
-        if item is not None and item.column() != RUN_COLUMN:
-            return
+    def selection_changed(self, item):
+        if item.column() == RUN_COLUMN:
+            self.invalidate_transfer()
+
+    def update_actions(self, *, busy=None):
         if busy is None:
-            busy = self.future is not None or bool(self.pending)
+            busy = self.busy
         checkboxes = self.ready_checkboxes()
         checked = sum(checkbox.checkState() == Qt.CheckState.Checked for checkbox in checkboxes)
         state = Qt.CheckState.Unchecked
@@ -597,31 +592,12 @@ class FolderBatchDialog(QDialog):
             state = Qt.CheckState.Checked if checked == len(checkboxes) else Qt.CheckState.PartiallyChecked
         self.select_all.setEnabled(not busy and bool(checkboxes))
         self.select_all.setCheckState(state)
-        self.enqueue.setEnabled(not busy and bool(checked))
-
-    def update_remove_button(self):
-        idle = self.future is None and not self.pending
-        self.remove_from_queue.setEnabled(idle and bool(self.queue_table.selectionModel().hasSelection()))
-
-    def return_queued_specimen(self):
-        selected = self.queue_table.selectionModel().selectedRows()
-        if not selected or self.future is not None or self.pending:
-            return
-        item = self.queue_table.item(selected[0].row(), 0)
-        try:
-            removed = self.queue.remove_jobs({item.data(Qt.ItemDataRole.UserRole)})
-        except (OSError, ValueError) as error:
-            self.status.setText(str(error))
-            return
-        if not removed:
-            return
-        for index, specimen in enumerate(self.items):
-            if specimen.source == removed[0].folder_job['source']:
-                self.table.setRowHidden(index, False)
-                self.table.selectRow(index)
-                self.table.scrollToItem(self.table.item(index, SPECIMEN_COLUMN))
-                break
-        self.status.setText('Selected job removed from the queue.')
+        remote = self.execution_target.currentData() == 'truba'
+        self.send.setVisible(remote)
+        self.send.setEnabled(not busy and bool(checked))
+        self.run.setEnabled(not busy and (self.staged is not None if remote else bool(checked)))
+        self.stop.setVisible(self.running)
+        self.close_button.setEnabled(self.preparing_target != 'truba')
 
     def choose_folder(self):
         path = QFileDialog.getExistingDirectory(self, 'Specimen folder', self.folder.text().strip(),
@@ -707,13 +683,15 @@ class FolderBatchDialog(QDialog):
             dialog.deleteLater()
 
     def check_folder(self):
-        if self.future is not None:
+        if self.busy:
             return
         try:
             if not self.folder.text().strip():
                 raise ValueError('Choose a specimen folder.')
             root = Path(self.folder.text()).expanduser().resolve()
-            self.queue.migrate_batch_workspace(root)
+            legacy = root / LEGACY_BATCH_DIRECTORY
+            if legacy.exists() or legacy.is_symlink() or legacy.is_junction():
+                self.migrate_workspace(root)
             paths = discover_specimens(root)
             if not paths:
                 raise ValueError('No STL, OBJ, PLY or VTP specimens found.')
@@ -729,6 +707,7 @@ class FolderBatchDialog(QDialog):
                 if first is None:
                     return
                 direction = first.direction
+            self.invalidate_transfer()
             self.items = [PreparedSpecimen(str(path), error='Face selection required') for path in paths]
             if first:
                 self.items[0] = first
@@ -752,15 +731,17 @@ class FolderBatchDialog(QDialog):
         else:
             self.set_busy(False)
             ready = sum(bool(item.cached) for item in self.items)
-            self.status.setText(f'{ready}/{len(self.items)} ' + translate('ready. Edit the faces on the left, then select the specimens to send or queue.'))
+            self.status.setText(f'{ready}/{len(self.items)} ' + translate('ready. Review the faces and select the specimens to analyze.'))
 
     def poll(self):
+        if self.running:
+            self.refresh_run()
         if self.future is None or not self.future.done():
             return
         future, self.future = self.future, None
-        if self.adding_target is not None:
-            target, self.adding_target = self.adding_target, None
-            self.finish_enqueue(future, target)
+        if self.preparing_target is not None:
+            target, self.preparing_target = self.preparing_target, None
+            self.finish_preparation(future, target)
             return
         try:
             self.items[self.working_index] = future.result()
@@ -803,7 +784,7 @@ class FolderBatchDialog(QDialog):
                 preflight += f' | Excluded components: {specimen.excluded_components}'
             if specimen.cached and specimen.normalized_direction is not None:
                 preflight += ' | End faces flattened'
-            for column, value in ((SPECIMEN_COLUMN, name), (PREFLIGHT_COLUMN, preflight)):
+            for column, value in ((SPECIMEN_COLUMN, name), (PREFLIGHT_COLUMN, preflight), (ANALYSIS_COLUMN, '')):
                 item = QTableWidgetItem(value)
                 item.setToolTip(value)
                 self.table.setItem(index, column, item)
@@ -811,7 +792,7 @@ class FolderBatchDialog(QDialog):
         blocker.unblock()
 
     def edit_specimen(self, index):
-        if self.future is not None:
+        if self.busy:
             return
         try:
             item = self.items[index]
@@ -822,6 +803,7 @@ class FolderBatchDialog(QDialog):
                 selection += (item.normalized_direction,)
             prepared = self.pick_faces(item.source, selection, self.compression_axis)
             if prepared:
+                self.invalidate_transfer()
                 self.items[index] = prepared
                 self.refresh_table()
                 self.set_busy(False)
@@ -829,71 +811,117 @@ class FolderBatchDialog(QDialog):
         except Exception as error:
             self.status.setText(str(error))
 
-    def enqueue_ready(self):
-        if self.future is not None or self.pending or self.base is None:
+    def send_to_truba(self):
+        if self.busy or self.execution_target.currentData() != 'truba' or not self.selected_specimens():
             return
-        items = self.selected_specimens()
-        if not items:
-            self.status.setText(translate('Check at least one ready specimen.'))
+        auth = self.remote_controller.auth() if self.remote_controller is not None else None
+        if auth is None:
+            self.status.setText(translate('TRUBA is disconnected. Connect using the TRUBA button, then send the prepared specimens.'))
             return
-        try:
-            self.queue.require_writable_folder_queue()
-        except ValueError as error:
-            self.status.setText(translate(str(error)))
+        self.staged = None
+        self.prepare_selected('truba', auth)
+
+    def run_batch(self):
+        if self.busy or not self.selected_specimens():
             return
-        root, base, solvers = self.root, self.batch_settings(), self.selected_solvers()
-        target = self.execution_target.currentData()
-        auth = None
-        if target == 'truba':
-            controller = getattr(self.queue, 'remote_controller', None)
-            auth = controller.auth() if controller is not None else None
-            if auth is None:
-                self.status.setText(translate('TRUBA is disconnected. Connect using the TRUBA button, then send the prepared specimens.'))
-                return
-        self.status.setText(translate('Checking and uploading prepared specimens to TRUBA…' if target == 'truba' else
-                                      'Checking source files before saving jobs to Analysis Queue…'))
-        self.adding_target = target
-        self.future = self.executor.submit(prepare_queue_snapshots, items, root, base, solvers, target, auth)
+        if self.execution_target.currentData() == 'local':
+            self.prepare_selected('local')
+        elif self.staged is not None:
+            self.start_run(self.staged)
+
+    def prepare_selected(self, target, auth=None):
+        self.status.setText(translate('Uploading geometry and analysis settings to TRUBA…' if auth is not None
+                                      else 'Checking specimen files and analysis settings…'))
+        self.preparing_target = target
+        self.future = self.executor.submit(prepare_batch_snapshots, self.selected_specimens(), self.root,
+                                           self.batch_settings(), self.selected_solvers(), target, auth)
         self.set_busy(True)
 
-    def finish_enqueue(self, future, target):
+    def finish_preparation(self, future, target):
         try:
-            added = self.queue.add_folder_snapshots(future.result())
+            snapshots = future.result()
         except Exception as error:
             self.status.setText(translate(str(error)))
         else:
-            if added:
-                message = translate(f'Saved to Analysis Queue ({len(added)}). Open Analysis Queue and select Run analysis queue to start.')
-                if target == 'truba':
-                    message = translate('Prepared geometry uploaded to BatchInputs on TRUBA.') + ' ' + message
+            if target == 'truba':
+                self.staged = snapshots
+                self.status.setText(translate('Geometry and analysis settings uploaded to TRUBA. Select Run to start.'))
             else:
-                message = translate('The selected jobs are already in Analysis Queue.')
-            results = batch_directory(self.root) / 'Results'
-            self.status.setText(message + '\n' + translate(f'Results folder is {results}'))
+                self.start_run(snapshots)
         finally:
-            self.set_busy(False)
+            self.set_busy(self.busy)
 
-    def open_queue(self):
-        window = self.queue.window()
-        if hasattr(window, 'open_workspace'):
-            window.open_workspace()
+    def start_run(self, snapshots):
+        try:
+            if snapshots[0][1]['execution_target'] == 'truba':
+                for settings, metadata in snapshots:
+                    _, auth = self.remote_controller.require(settings.solver_backend, settings, allow_handover=True)
+                    if auth is None or auth.username != metadata['staged_geometry']['username']:
+                        raise ValueError('Use the TRUBA account that received the prepared specimens.')
+            if self.runner is None:
+                self.runner = FolderBatchRunner(lambda: self.base, self.mesh_generator, self.solver_runner, self)
+                self.runner.hide()
+                self.runner.remote_controller = self.remote_controller
+            self.runner.start(snapshots)
+        except Exception as error:
+            self.status.setText(translate(str(error)))
+            return
+        self.running = True
+        self.set_busy(True)
+        self.refresh_run()
+
+    def refresh_run(self):
+        by_source = {}
+        for row in self.runner.rows:
+            solver = row.design_settings.solver_backend
+            by_source.setdefault(row.folder_job['source'], []).append(f'{solver}: {translate(row.status)}')
+        for index, item in enumerate(self.items):
+            cell = self.table.item(index, ANALYSIS_COLUMN)
+            status = ' | '.join(by_source.get(item.source, ()))
+            if cell.text() != status:
+                cell.setText(status)
+                cell.setToolTip(status)
+        self.progress.update_step(*self.runner._operation_state())
+        if self.runner.active:
+            self.status.setText(translate('Batch analysis running…'))
+            return
+        self.running = False
+        self.set_busy(False)
+        rows = self.runner.rows
+        completed = sum(classify_status(row.status) == STATE_COMPLETED for row in rows)
+        message = translate('Completed {completed}/{total} analyses.').format(completed=completed, total=len(rows))
+        message += '\n' + translate(f'Results folder is {batch_directory(self.root) / "Results"}')
+        if self.runner._persistence_error:
+            message += '\n' + self.runner._persistence_error
+        self.status.setText(message)
+
+    def stop_batch(self):
+        if self.running:
+            self.runner.stop_active_queue()
+            self.refresh_run()
+
+    def detach_remote_jobs(self):
+        return self.runner.detach_remote_queue() if self.runner is not None else []
 
     def reject(self):
-        if self.adding_target == 'truba':
+        if self.preparing_target == 'truba':
             self.status.setText(translate('Wait for the TRUBA upload to finish.'))
             return
         super().reject()
 
     def closeEvent(self, event):
-        if self.adding_target == 'truba':
+        if self.preparing_target == 'truba':
             event.ignore()
             self.reject()
+            return
+        if self.running:
+            super().closeEvent(event)
             return
         self.pending.clear()
         if self.future is not None:
             self.future.cancel()
             self.future = None
-        self.adding_target = None
+        self.preparing_target = None
         self.set_busy(False)
         super().closeEvent(event)
 
@@ -903,4 +931,7 @@ class FolderBatchDialog(QDialog):
             self.disposed = True
             self.timer.stop()
             self.pending.clear()
+            self.preparing_target = None
             self.executor.shutdown(wait=False, cancel_futures=True)
+            if self.runner is not None:
+                self.runner.dispose()

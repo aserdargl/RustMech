@@ -17,11 +17,11 @@ import pyvista as pv
 from PySide6.QtCore import QEvent, QLocale, QSettings, Qt, QTimer
 from PySide6.QtGui import QHelpEvent, QPixmap
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QAbstractItemView, QApplication, QComboBox, QDialogButtonBox, QLineEdit, QPushButton, QSplitter
+from PySide6.QtWidgets import QAbstractItemView, QApplication, QComboBox, QDialogButtonBox, QLineEdit, QPushButton
 
 from analysis_queue import AnalysisQueueWidget, QueueStore
 from doe_studio import ExperimentWorker
-from folder_batch import (FACES_COLUMN, PREFLIGHT_COLUMN, RUN_COLUMN, SPECIMEN_COLUMN,
+from folder_batch import (ANALYSIS_COLUMN, FACES_COLUMN, PREFLIGHT_COLUMN, RUN_COLUMN, SPECIMEN_COLUMN,
                           FolderBatchDialog, discover_specimens, prepare_specimen,
                           source_digest, specimen_snapshots)
 from folder_batch_results import (LEGACY_BATCH_DIRECTORY, batch_directory, collect_folder_output,
@@ -91,12 +91,14 @@ class FolderBatchTests(unittest.TestCase):
         return widget
 
     def dialog(self, queue=None):
-        dialog = FolderBatchDialog(lambda: self.base, queue or self.queue())
+        dialog = FolderBatchDialog(lambda: self.base, process_mesh, process_runner,
+                                   SimpleNamespace(auth=lambda: None),
+                                   lambda root: (queue or self.queue()).migrate_batch_workspace(root))
         self.addCleanup(dialog.close)
         self.addCleanup(dialog.dispose)
         return dialog
 
-    def finish_enqueue(self, dialog):
+    def finish_preparation(self, dialog):
         self.assertIsNotNone(dialog.future)
         # poll() delivers both validation success and failure on the UI thread.
         for _ in range(1000):
@@ -104,13 +106,16 @@ class FolderBatchTests(unittest.TestCase):
             if dialog.future is None:
                 return
             QTest.qWait(10)
-        self.fail('Enqueue did not finish')
+        self.fail('Batch preparation did not finish')
 
     def simulate_upload(self, dialog):
         auth = SimpleNamespace(username='test-user')
-        dialog.queue.remote_controller = SimpleNamespace(auth=lambda: auth)
+        context = RemoteContext(cores=2, session_id='123')
+        dialog.remote_controller = SimpleNamespace(auth=lambda: auth, context=lambda: context,
+                                                  require=Mock(return_value=(context, auth)))
 
-        def stage(active_auth, sources):
+        def stage(active_auth, sources, *, settings_by_geometry):
+            self.assertEqual(list(sources), list(settings_by_geometry))
             self.assertIs(active_auth, auth)
             return {source: dict(username=auth.username, sha256=sha256(Path(source).read_bytes()).hexdigest())
                     for source in sources}
@@ -525,12 +530,12 @@ class FolderBatchTests(unittest.TestCase):
         dialog.items[0] = prepare_specimen(self.root / 'part.stl', (0, 0, 1))
         dialog.refresh_table()
         self.assertEqual(dialog.table.item(0, RUN_COLUMN).checkState(), Qt.CheckState.Unchecked)
-        self.assertFalse(dialog.enqueue.isEnabled())
+        self.assertFalse(dialog.send.isEnabled())
         dialog.table.item(0, RUN_COLUMN).setCheckState(Qt.CheckState.Checked)
         dialog.refresh_table()
         self.assertEqual(dialog.table.item(0, RUN_COLUMN).checkState(), Qt.CheckState.Checked)
-        self.assertTrue(dialog.enqueue.isEnabled())
-        self.assertFalse(dialog.queue.rows)
+        self.assertTrue(dialog.send.isEnabled())
+        self.assertIsNone(dialog.runner)
         for button in dialog.findChildren(QPushButton):
             self.assertFalse(button.autoDefault())
             self.assertFalse(button.isDefault())
@@ -619,7 +624,7 @@ class FolderBatchTests(unittest.TestCase):
         self.assertEqual(batch.status.text(), 'Specimen faces saved.')
         batch.close()
 
-        reopened = self.dialog(batch.queue)
+        reopened = self.dialog()
         reopened.preferences = QSettings(self.store.settings.fileName(), QSettings.Format.IniFormat)
         reopened.folder.setText(str(self.root))
         reopened.mode.setCurrentIndex(4)
@@ -628,12 +633,7 @@ class FolderBatchTests(unittest.TestCase):
         reopened.poll()
         self.assertIsNone(reopened.future)
         self.assertEqual(reopened.items[1].cells, selected)
-        reopened.table.item(1, RUN_COLUMN).setCheckState(Qt.CheckState.Checked)
-        reopened.execution_target.setCurrentIndex(reopened.execution_target.findData('local'))
-        reopened.enqueue.click()
-        self.finish_enqueue(reopened)
-        self.assertEqual(len(reopened.queue.rows), 1)
-        self.assertEqual(reopened.queue.rows[0].design_settings.size, 4)
+        self.assertEqual(reopened.items[1].height, 4)
 
         self.surface.translate((4, 0, 0), inplace=False).save(second)
         reopened.check_folder()
@@ -702,282 +702,156 @@ class FolderBatchTests(unittest.TestCase):
         fallback.stop()
         self.assertEqual(restored, [(True, True), specimen.cells], dialog.status.text())
 
-    def test_batch_queue_view_follows_target_and_solver_for_saved_jobs(self):
-        queue = self.queue()
-        specimen = self.prepared()
-        legacy = queue.add_folder_snapshots(
-            specimen_snapshots(specimen, self.root, self.base, ['ansys_mapdl', 'kratos']))
-        local = queue.add_folder_snapshots(
-            specimen_snapshots(specimen, self.root, self.base, ['ansys_mapdl', 'kratos'], execution_target='local'))
-        dialog = self.dialog(queue)
-        dialog.root, dialog.base = self.root, self.base
-        dialog.items = [specimen]
-        dialog.refresh_table()
-        dialog.set_busy(False)
-
-        def visible_jobs():
-            return [(dialog.queue_table.item(index, 0).data(Qt.ItemDataRole.UserRole),
-                     dialog.queue_table.item(index, 1).text(), dialog.queue_table.item(index, 2).text())
-                    for index in range(dialog.queue_table.rowCount())]
-
-        self.assertEqual(visible_jobs(), [])
-        self.assertFalse(dialog.enqueue.isEnabled())
-        dialog.table.item(0, RUN_COLUMN).setCheckState(Qt.CheckState.Checked)
-        self.assertTrue(dialog.enqueue.isEnabled())
-        self.simulate_upload(dialog)
-        dialog.enqueue.click()
-        self.finish_enqueue(dialog)
-        remote = queue.rows[-1]
-        self.assertEqual(visible_jobs(), [(remote.exp_id, 'kratos', 'TRUBA')])
-        self.assertTrue(dialog.table.isRowHidden(0))
-
-        dialog.execution_target.setCurrentIndex(dialog.execution_target.findData('local'))
-        dialog.solver.setCurrentIndex(1)
-        self.assertEqual(visible_jobs(), [(local[0].exp_id, 'ansys_mapdl', 'Local mesh')])
-        self.assertEqual([row.exp_id for row in QueueStore(queue.store.path).load()],
-                         [row.exp_id for row in [*legacy, *local, remote]])
-
-    def test_truba_is_default_and_saved_jobs_use_their_target_in_serial_and_parallel(self):
-        queue = self.queue()
-        dialog = self.dialog(queue)
-        dialog.root = self.root
-        dialog.base = replace(self.base, mesh_type='TET10', self_contact_mode='frictional')
-        dialog.items = [self.prepared()]
-        dialog.refresh_table()
-        dialog.set_busy(False)
-        self.assertEqual(dialog.execution_target.currentData(), 'truba')
-        self.assertEqual(dialog.solver.currentText(), 'Kratos')
-        self.assertEqual(dialog.mesh_type.currentText(), 'TET4')
-        self.assertTrue(dialog.mesh_type.isEnabled())
-        dialog.mesh_type.setCurrentText('TET10')
-        self.assertEqual(dialog.enqueue.text(), 'Send to TRUBA')
-        dialog.table.item(0, RUN_COLUMN).setCheckState(Qt.CheckState.Checked)
-        dialog.enqueue.click()
-        self.assertIn('TRUBA is disconnected', dialog.status.text())
-        self.assertIsNone(dialog.future)
-        self.assertFalse(queue.rows)
-        self.assertEqual(dialog.queue_table.rowCount(), 0)
-        self.simulate_upload(dialog)
-        with patch('truba_files.stage_batch_geometries', side_effect=OSError('Upload interrupted')):
-            dialog.enqueue.click()
-            self.finish_enqueue(dialog)
-        self.assertIn('Upload interrupted', dialog.status.text())
-        self.assertFalse(queue.rows)
-        self.assertFalse(dialog.table.isRowHidden(0))
-        with patch('doe_studio.AnalysisProcess') as serial, patch('truba_parallel.AnalysisProcess') as parallel:
-            dialog.enqueue.click()
-            self.assertFalse(dialog.enqueue.isEnabled())
-            self.assertFalse(dialog.enqueue.isDown())
-            self.assertIn('uploading prepared specimens', dialog.status.text())
-            self.assertFalse(queue.rows)
-            self.assertEqual(dialog.queue_table.rowCount(), 0)
-            self.finish_enqueue(dialog)
-            serial.assert_not_called()
-            parallel.assert_not_called()
-        self.assertIn('Saved to Analysis Queue (1)', dialog.status.text())
-        self.assertIn('uploaded to BatchInputs on TRUBA', dialog.status.text())
-        remote, = QueueStore(queue.store.path).load()
-        self.assertEqual(remote.folder_job['execution_target'], 'truba')
-        self.assertEqual(remote.folder_job['staged_geometry'], dict(
-            username='test-user', sha256=sha256(Path(dialog.items[0].cached).read_bytes()).hexdigest()))
-        self.assertEqual(remote.design_settings.solver_backend, 'kratos')
-        self.assertEqual(remote.design_settings.mesh_type, 'TET10')
-        self.assertEqual(remote.design_settings.kratos_contact_method, 'penalty')
-        self.assertEqual(remote.design_settings.self_contact_mode, 'disabled')
-        self.assertEqual(dialog.queue_table.item(0, 2).text(), 'TRUBA')
-
-        dialog.execution_target.setCurrentIndex(1)
-        dialog.enqueue.click()
-        self.finish_enqueue(dialog)
-        self.assertEqual(queue.rows[1].folder_job['execution_target'], 'local')
-        self.assertEqual(queue.rows[1].design_settings.self_contact_mode, 'frictional')
-        self.assertEqual(queue.rows[1].design_settings.solver_backend, 'ansys_mapdl')
-
-        controller = queue.remote_controller = SimpleNamespace(requested=False, require=Mock())
-        with patch('analysis_queue.QMessageBox.warning') as warning, patch('doe_studio.AnalysisProcess') as serial:
-            queue.run_batch_btn.click()
-            warning.assert_called_once()
-            serial.assert_not_called()
-        self.assertEqual([row.status for row in queue.rows], ['Pending', 'Pending'])
-
-        controller.requested = True
+    def test_truba_send_stages_frozen_settings_then_explicit_run_dispatches(self):
         for slots in (1, 2):
             with self.subTest(slots=slots):
+                dialog = self.dialog()
+                dialog.root = self.root
+                dialog.base = replace(self.base, mesh_type='TET10', self_contact_mode='frictional')
+                dialog.items = [self.prepared()]
+                dialog.refresh_table()
+                dialog.mesh_type.setCurrentText('TET10')
+                dialog.table.item(0, RUN_COLUMN).setCheckState(Qt.CheckState.Checked)
+                self.assertEqual(dialog.execution_target.currentData(), 'truba')
+                self.assertEqual(dialog.solver.currentText(), 'Kratos')
+                self.assertEqual(dialog.send.text(), 'Send to TRUBA')
+                self.assertFalse(dialog.run.isEnabled())
+                dialog.send.click()
+                self.assertIn('TRUBA is disconnected', dialog.status.text())
+                self.assertIsNone(dialog.future)
+
+                upload = self.simulate_upload(dialog)
                 context = RemoteContext(cores=2, parallel_jobs=slots, session_id='123')
-                controller.context = lambda: context
-                controller.require.return_value = (context, None)
-                remote_future, local_future = Future(), Future()
-                serial_results = [remote_future, local_future] if slots == 1 else [local_future]
-                with (patch('doe_studio.AnalysisProcess', side_effect=serial_results) as serial,
-                      patch('truba_parallel.AnalysisProcess', return_value=remote_future) as parallel):
-                    queue.run_batch_btn.click()
+                auth = dialog.remote_controller.auth()
+                dialog.remote_controller.context = lambda: context
+                dialog.remote_controller.require.return_value = (context, auth)
+                with patch('truba_files.stage_batch_geometries', side_effect=OSError('Upload interrupted')):
+                    dialog.send.click()
+                    self.finish_preparation(dialog)
+                self.assertIn('Upload interrupted', dialog.status.text())
+                self.assertFalse(dialog.run.isEnabled())
+
+                result = Future()
+                with (patch('doe_studio.AnalysisProcess', return_value=result) as serial,
+                      patch('truba_parallel.AnalysisProcess', return_value=result) as parallel):
+                    dialog.send.click()
+                    self.assertFalse(dialog.run.isEnabled())
+                    self.finish_preparation(dialog)
+                    serial.assert_not_called()
+                    parallel.assert_not_called()
+                    self.assertTrue(dialog.run.isEnabled())
+                    self.assertIn('uploaded to TRUBA', dialog.status.text())
+                    dialog.mesh_resolution.setValue(.9)
+                    self.assertFalse(dialog.run.isEnabled())
+                    dialog.send.click()
+                    self.finish_preparation(dialog)
+                    self.assertEqual(upload.call_count, 2, dialog.status.text())
+                    self.assertTrue(dialog.run.isEnabled(), dialog.status.text())
+                    values, = upload.call_args.kwargs['settings_by_geometry'][dialog.items[0].cached]
+                    self.assertEqual(values['mesh_resolution'], .9)
+                    self.assertEqual(values['local_mesh_size'], .8)
+                    self.assertEqual(values['mesh_type'], 'TET10')
+                    self.assertEqual(values['kratos_contact_method'], 'penalty')
+                    self.assertEqual(values['self_contact_mode'], 'disabled')
+
+                    dialog.remote_controller.require.side_effect = RuntimeError('Resource session unavailable')
+                    dialog.run.click()
+                    self.assertIn('Resource session unavailable', dialog.status.text())
+                    self.assertTrue(dialog.run.isEnabled())
+                    serial.assert_not_called()
+                    parallel.assert_not_called()
+
+                    dialog.remote_controller.require.side_effect = None
+                    dialog.run.click()
                     dispatch = serial if slots == 1 else parallel
                     dispatch.assert_called_once()
                     target, index, settings, _, solve, destination, staged = dispatch.call_args.args
                     self.assertIs(target, run_remote_folder_doe)
-                    self.assertEqual((index, settings.solver_backend, solve, destination),
-                                     (0, 'kratos', True, remote.folder_job['destination']))
-                    self.assertEqual(staged, remote.folder_job['staged_geometry'])
-                    remote_future.set_result(dict(r_idx=0, status='Completed'))
-                    queue._poll_worker()
-                    self.assertEqual(serial.call_args.args[0].__name__, '_solve_row')
-                    self.assertEqual(serial.call_args.args[1], 1)
-                    local_future.set_result(dict(r_idx=1, status='Completed'))
-                    queue._poll_worker()
-                for row in queue.rows:
-                    row.status = 'Pending'
+                    self.assertEqual((index, settings.solver_backend, settings.mesh_resolution, solve),
+                                     (0, 'kratos', .9, True))
+                    self.assertEqual(staged, dict(username=auth.username,
+                                                 sha256=sha256(Path(dialog.items[0].cached).read_bytes()).hexdigest()))
+                    self.assertFalse(dialog.run.isEnabled())
+                    result.set_result(dict(r_idx=0, status='Completed'))
+                    dialog.runner._poll_worker()
+                    dialog.poll()
+                    self.assertIn('Completed 1/1', dialog.status.text())
+                    self.assertTrue((Path(destination) / 'job.json').exists())
+                    self.assertTrue(dialog.run.isEnabled())
 
-    def test_local_batch_mesh_fields_update_queue_identity(self):
+    def test_local_run_uses_current_mesh_fields_and_ignores_remote_mode(self):
         queue = self.queue()
+        existing = queue.add_snapshot(self.base)
         dialog = self.dialog(queue)
-        dialog.execution_target.setCurrentIndex(1)
+        dialog.remote_controller.requested = True
+        dialog.execution_target.setCurrentIndex(dialog.execution_target.findData('local'))
         dialog.root, dialog.base = self.root, self.base
-        dialog.items = [self.prepared()]
+        dialog.items = [self.prepared('part1.stl'), self.prepared('part2.stl')]
         dialog.refresh_table()
         dialog.solver.setCurrentIndex(1)
-        dialog.set_busy(False)
-        self.assertEqual(dialog.mesh_resolution.value(), self.base.mesh_resolution)
-        self.assertEqual(dialog.local_mesh_size.value(), self.base.local_mesh_size)
-        self.assertEqual(dialog.enqueue.text(), 'Add to Queue')
-
-        dialog.table.item(0, RUN_COLUMN).setCheckState(Qt.CheckState.Checked)
-        dialog.enqueue.click()
-        self.finish_enqueue(dialog)
-        self.assertTrue(dialog.table.isRowHidden(0))
         dialog.mesh_resolution.setValue(.6)
         dialog.local_mesh_size.setValue(.2)
         dialog.mesh_type.setCurrentText('TET10')
-        self.assertFalse(dialog.table.isRowHidden(0))
-        with patch('doe_studio.AnalysisProcess') as process:
+        dialog.table.item(1, RUN_COLUMN).setCheckState(Qt.CheckState.Checked)
+        self.assertEqual(dialog.run.text(), 'Run')
+        self.assertTrue(dialog.send.isHidden())
+        result = Future()
+        with patch('doe_studio.AnalysisProcess', return_value=result) as process:
             QTest.keyClick(dialog.local_mesh_size, Qt.Key.Key_Return)
-            self.assertEqual(len(queue.rows), 1)
-            dialog.enqueue.click()
-            self.finish_enqueue(dialog)
             process.assert_not_called()
-        self.assertEqual(len(queue.rows), 2)
-        first, second = (row.design_settings for row in QueueStore(queue.store.path).load())
-        self.assertEqual((first.mesh_resolution, first.local_mesh_size, first.mesh_type), (1., .8, 'TET4'))
-        self.assertEqual((second.mesh_resolution, second.local_mesh_size, second.mesh_type), (.6, .2, 'TET10'))
-        self.assertTrue(dialog.table.isRowHidden(0))
+            dialog.run.click()
+            self.finish_preparation(dialog)
+            process.assert_called_once()
+            target, _, settings = process.call_args.args
+            self.assertEqual(target.__name__, '_solve_row')
+            self.assertEqual(settings.imported_geometry_name, 'part2.stl')
+            self.assertEqual((settings.mesh_resolution, settings.local_mesh_size, settings.mesh_type),
+                             (.6, .2, 'TET10'))
+            result.set_result(dict(r_idx=0, status='Completed'))
+            dialog.runner._poll_worker()
+            dialog.poll()
+        self.assertIn('Completed', dialog.table.item(1, ANALYSIS_COLUMN).text())
+        self.assertEqual(dialog.table.item(0, ANALYSIS_COLUMN).text(), '')
+        self.assertEqual([row.exp_id for row in QueueStore(queue.store.path).load()], [existing.exp_id])
 
-    def test_queued_specimens_move_to_right_panel_and_keep_solver_options(self):
-        dialog = self.dialog()
-        dialog.execution_target.setCurrentIndex(1)
-        dialog.root, dialog.base = self.root, self.base
-        dialog.items = [self.prepared('part1.stl'), self.prepared('part2.stl')]
-        dialog.refresh_table()
-        dialog.set_busy(False)
-        dialog.show()
-        self.app.processEvents()
-        dialog.table.item(0, RUN_COLUMN).setCheckState(Qt.CheckState.Checked)
-        dialog.solver.setCurrentIndex(1)
-        dialog.enqueue.click()
-        self.finish_enqueue(dialog)
-
-        self.assertTrue(dialog.table.isRowHidden(0))
-        self.assertFalse(dialog.table.isRowHidden(1))
-        self.assertEqual(dialog.queue_table.rowCount(), 1)
-        self.assertEqual(dialog.queue_table.item(0, 0).text(), 'part1.stl')
-        self.assertEqual(dialog.queue_table.item(0, 1).text(), 'ansys_mapdl')
-        dialog.solver.setCurrentIndex(2)
-        self.assertFalse(dialog.table.isRowHidden(0))
-        dialog.solver.setCurrentIndex(1)
-        dialog.queue.table.selectRow(0)
-        dialog.queue.delete_selected_rows()
-        self.assertFalse(dialog.table.isRowHidden(0))
-        self.assertEqual(dialog.queue_table.rowCount(), 0)
-
-    def test_queue_actions_stay_below_and_right_aligned_to_their_tables(self):
+    def test_batch_action_buttons_stay_compact_and_below_the_specimens(self):
         dialog = self.dialog()
         dialog.show()
-        self.app.processEvents()
-        splitter = dialog.findChild(QSplitter, 'folderBatchPanels')
-        for position in (splitter.sizes()[0], splitter.width() // 2):
-            splitter.moveSplitter(position, 1)
+        for width in (640, 920):
+            dialog.resize(width, 520)
             self.app.processEvents()
-            self.assertEqual(dialog.enqueue.size(), dialog.remove_from_queue.size())
-            for table, button in ((dialog.table, dialog.enqueue),
-                                  (dialog.queue_table, dialog.remove_from_queue)):
-                table_corner = table.mapTo(dialog, table.rect().bottomRight())
-                button_corner = button.mapTo(dialog, button.rect().topRight())
-                self.assertEqual(button_corner.x(), table_corner.x())
-                self.assertGreater(button_corner.y(), table_corner.y())
-            self.assertEqual(dialog.table.height(), dialog.queue_table.height())
+            self.assertEqual(dialog.send.size(), dialog.run.size())
+            self.assertLess(dialog.run.width(), dialog.table.width() // 3)
+            self.assertGreater(dialog.run.mapTo(dialog, dialog.run.rect().topLeft()).y(),
+                               dialog.table.mapTo(dialog, dialog.table.rect().bottomRight()).y())
 
-    def test_remove_from_right_panel_persists_and_returns_only_the_selected_job(self):
-        dialog = self.dialog()
-        self.simulate_upload(dialog)
-        unrelated = dialog.queue.add_snapshot(self.base)
-        dialog.root, dialog.base = self.root, self.base
-        dialog.items = [self.prepared('part1.stl'), self.prepared('part2.stl')]
-        dialog.refresh_table()
-        dialog.set_busy(False)
-        for index in range(2):
-            dialog.table.item(index, RUN_COLUMN).setCheckState(Qt.CheckState.Checked)
-        dialog.enqueue.click()
-        self.finish_enqueue(dialog)
-        first, second = dialog.queue.rows[1:]
-        self.assertFalse(dialog.remove_from_queue.isEnabled())
-        dialog.queue_table.selectRow(0)
-        self.assertTrue(dialog.remove_from_queue.isEnabled())
-
-        with patch.object(dialog.queue.store, 'save', side_effect=OSError('disk full')):
-            dialog.remove_from_queue.click()
-        self.assertEqual(dialog.status.text(), 'disk full')
-        self.assertTrue(dialog.table.isRowHidden(0))
-        self.assertEqual(dialog.queue_table.rowCount(), 2)
-
-        with patch.object(dialog.queue, '_active_mode', 'solve'):
-            dialog.remove_from_queue.click()
-            self.assertIn('Stop the analysis queue', dialog.status.text())
-            self.assertTrue(dialog.table.isRowHidden(0))
-
-        dialog.remove_from_queue.click()
-        self.assertEqual([job.exp_id for job in QueueStore(dialog.queue.store.path).load()],
-                         [unrelated.exp_id, second.exp_id])
-        self.assertEqual(dialog.queue_table.rowCount(), 1)
-        self.assertEqual(dialog.queue_table.item(0, 0).text(), 'part2.stl')
-        self.assertFalse(dialog.remove_from_queue.isEnabled())
-        self.assertFalse(dialog.table.isRowHidden(0))
-        self.assertTrue(dialog.table.isRowHidden(1))
-        self.assertEqual(dialog.table.selectionModel().selectedRows()[0].row(), 0)
-        self.assertTrue((Path(first.folder_job['destination']) / 'job.json').is_file())
-
-        dialog.enqueue.click()
-        self.finish_enqueue(dialog)
-        self.assertTrue(dialog.table.isRowHidden(0))
-        self.assertEqual(dialog.queue.rows[-1].folder_job['key'], first.folder_job['key'])
-
-    def test_enqueue_keeps_unmodified_queue_when_a_source_changes(self):
+    def test_send_rejects_a_changed_source_before_staging(self):
         dialog = self.dialog()
         upload = self.simulate_upload(dialog)
         dialog.root, dialog.base = self.root, self.base
         dialog.items = [self.prepared('part1.stl'), self.prepared('part2.stl')]
         dialog.refresh_table()
-        dialog.set_busy(False)
         Path(dialog.items[1].source).write_bytes(b'changed')
 
         for index in range(2):
             dialog.table.item(index, RUN_COLUMN).setCheckState(Qt.CheckState.Checked)
-        dialog.enqueue.click()
-        self.finish_enqueue(dialog)
+        dialog.send.click()
+        self.finish_preparation(dialog)
 
         self.assertIn('Source changed after preparation', dialog.status.text())
         upload.assert_not_called()
-        self.assertFalse(dialog.queue.rows)
-        self.assertTrue(dialog.enqueue.isEnabled())
-        self.assertFalse(dialog.table.isRowHidden(0))
+        self.assertFalse(dialog.run.isEnabled())
+        self.assertTrue(dialog.send.isEnabled())
 
-    def test_header_checkbox_tracks_visible_ready_specimens(self):
+    def test_header_checkbox_tracks_ready_specimens(self):
         dialog = self.dialog()
         dialog.root, dialog.base = self.root, self.base
         failed = self.specimen('open.stl')
         pv.Plane().triangulate().save(failed)
         dialog.items = [self.prepared('part1.stl'), self.prepared('part2.stl'),
-                        prepare_specimen(failed, (0, 0, 1)), self.prepared('hidden.stl')]
+                        prepare_specimen(failed, (0, 0, 1))]
         dialog.refresh_table()
-        dialog.table.setRowHidden(3, True)
-        dialog.update_enqueue_button()
+        dialog.update_actions()
         dialog.show()
         self.app.processEvents()
         header = dialog.table.horizontalHeader()
@@ -985,19 +859,19 @@ class FolderBatchTests(unittest.TestCase):
         self.assertEqual(dialog.table.horizontalHeaderItem(RUN_COLUMN).text(), '')
         self.assertTrue(checkbox.isVisible())
         self.assertTrue(header.viewport().rect().contains(checkbox.geometry()))
-        row_checks = [dialog.table.item(row, RUN_COLUMN) for row in range(4)]
+        row_checks = [dialog.table.item(row, RUN_COLUMN) for row in range(3)]
         row_checks[0].setCheckState(Qt.CheckState.Checked)
         self.assertEqual(checkbox.checkState(), Qt.CheckState.PartiallyChecked)
         # Click the indicator, then use the keyboard to clear the ready rows.
         QTest.mouseClick(checkbox, Qt.MouseButton.LeftButton, pos=checkbox.rect().center())
         self.assertEqual(checkbox.checkState(), Qt.CheckState.Checked)
         self.assertEqual([item.checkState() for item in row_checks],
-                         [Qt.CheckState.Checked] * 2 + [Qt.CheckState.Unchecked] * 2)
+                         [Qt.CheckState.Checked] * 2 + [Qt.CheckState.Unchecked])
         QTest.keyClick(checkbox, Qt.Key.Key_Space)
         self.assertEqual(checkbox.checkState(), Qt.CheckState.Unchecked)
-        self.assertFalse(dialog.enqueue.isEnabled())
+        self.assertFalse(dialog.send.isEnabled())
 
-    def test_async_check_and_enter_never_start_or_enqueue(self):
+    def test_async_check_and_enter_never_start_or_send(self):
         dialog = self.dialog()
         self.specimen()
         dialog.folder.setText(str(self.root))
@@ -1010,14 +884,12 @@ class FolderBatchTests(unittest.TestCase):
             self.assertIsNone(dialog.future)
             self.assertTrue(dialog.items[0].cached)
             self.assertEqual(dialog.table.item(0, RUN_COLUMN).checkState(), Qt.CheckState.Unchecked)
-            self.assertFalse(dialog.enqueue.isEnabled())
-            self.assertFalse(dialog.queue.rows)
-            self.assertFalse(QueueStore(dialog.queue.store.path).load())
+            self.assertFalse(dialog.send.isEnabled())
+            self.assertIsNone(dialog.runner)
             dialog.table.item(0, RUN_COLUMN).setCheckState(Qt.CheckState.Checked)
             QTest.keyClick(dialog.folder, Qt.Key.Key_Return)
-            self.assertTrue(dialog.enqueue.isEnabled())
-            self.assertFalse(dialog.queue.rows)
-            self.assertFalse(QueueStore(dialog.queue.store.path).load())
+            self.assertTrue(dialog.send.isEnabled())
+            self.assertIsNone(dialog.runner)
             process.assert_not_called()
 
     def test_hover_preview_is_saved_beside_prepared_geometry_and_replaced_after_edit(self):
@@ -1093,22 +965,30 @@ class FolderBatchTests(unittest.TestCase):
         self.assertEqual(analysis.call_args.kwargs, dict(images=False, output_directory=self.root / 'Result'))
         self.assertEqual(result['run_folder'], str(folder))
 
-    def test_actual_spawn_process_keeps_destination_and_returns_output(self):
-        from analysis_process import AnalysisProcess
-        destination = self.root / 'Result' / 'spawn'
-        worker = ExperimentWorker(process_mesh, process_runner, str(destination))
-        process = AnalysisProcess(worker._solve_row, 0, self.base)
+    def test_local_run_spawns_worker_and_writes_batch_results(self):
+        dialog = self.dialog()
+        dialog.execution_target.setCurrentIndex(dialog.execution_target.findData('local'))
+        dialog.root, dialog.base = self.root, self.base
+        dialog.items = [self.prepared()]
+        dialog.refresh_table()
+        dialog.table.item(0, RUN_COLUMN).setCheckState(Qt.CheckState.Checked)
+        dialog.run.click()
+        self.finish_preparation(dialog)
         deadline = time.monotonic() + 25
-        while not process.done() and time.monotonic() < deadline:
+        while dialog.running and time.monotonic() < deadline:
             QTest.qWait(20)
-        if not process.done():
-            process.force_stop()
+        if dialog.running:
+            dialog.stop_batch()
             self.fail('Folder worker did not finish')
-        result = process.result()
-        self.assertEqual(result['status'], 'Completed')
-        self.assertEqual(result['max_force_n'], 42)
-        self.assertTrue((Path(result['run_folder']) / 'summary.json').is_file())
-        self.assertTrue(Path(result['run_folder']).is_relative_to(destination))
+        self.assertIn('Completed 1/1', dialog.status.text())
+        row, = dialog.runner.rows
+        self.assertEqual(row.max_force_n, 42)
+        self.assertTrue((Path(row.run_folder) / 'summary.json').is_file())
+        self.assertTrue(Path(row.run_folder).is_relative_to(row.folder_job['destination']))
+        with dialog.runner._dataset_path.open(encoding='utf-8-sig', newline='') as stream:
+            summary, = csv.DictReader(stream)
+        self.assertEqual(summary['job_id'], row.exp_id)
+        self.assertEqual(summary['status'], 'Completed')
 
     def test_remote_raw_outputs_and_summary_paths_are_relocated(self):
         queue = self.queue()
@@ -1140,16 +1020,12 @@ class FolderBatchTests(unittest.TestCase):
         first.resize(720, 500)
         first.move(40, 50)
         self.app.processEvents()
-        splitter = first.findChild(QSplitter, 'folderBatchPanels')
-        splitter.setSizes([300, 400])
-        sizes = splitter.sizes()
         geometry = first.frameGeometry()
         first.hide()
         second = self.dialog()
         second.show()
         self.app.processEvents()
         self.assertEqual(second.frameGeometry(), geometry)
-        self.assertEqual(second.findChild(QSplitter, 'folderBatchPanels').sizes(), sizes)
         second.showMaximized()
         self.app.processEvents()
         normal = second.normalGeometry().size()

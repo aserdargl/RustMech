@@ -3129,11 +3129,16 @@ class RustMechDialog(QDialog):
         self._ensure_analysis_queue()
         self.analysis_queue_window.open_workspace()
 
+    def _migrate_folder_batch_workspace(self, root):
+        self._ensure_analysis_queue()
+        self.analysis_queue_widget.migrate_batch_workspace(root)
+
     def _show_folder_batch(self):
         from folder_batch import FolderBatchDialog
-        self._ensure_analysis_queue()
         if not hasattr(self, "folder_batch_dialog"):
-            self.folder_batch_dialog = FolderBatchDialog(self.collect, self.analysis_queue_widget, self)
+            self.folder_batch_dialog = FolderBatchDialog(
+                self.collect, generate_volume_mesh, run_batch_experiment, self.remote_controller,
+                self._migrate_folder_batch_workspace, self)
         from window_state import show_restored_window
         show_restored_window(self.folder_batch_dialog)
 
@@ -3550,6 +3555,8 @@ class RustMechDialog(QDialog):
         for queue in (self.doe_studio, self.analysis_queue_widget):
             if queue is not None:
                 jobs.extend(queue.detach_remote_queue())
+        if hasattr(self, "folder_batch_dialog"):
+            jobs.extend(self.folder_batch_dialog.detach_remote_jobs())
         from mesh_convergence import MeshConvergenceWidget
         for study in self.findChildren(MeshConvergenceWidget):
             if getattr(study.future, 'is_remote', False) is True:

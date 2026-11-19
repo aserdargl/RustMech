@@ -508,6 +508,14 @@ Analysis queue...|Analiz kuyruğu...
 Analysis Queue|Analiz Kuyruğu
 Add to Queue|Kuyruğa Ekle
 Send to TRUBA|TRUBA'ya Gönder
+Selection or settings changed. Send the batch to TRUBA again.|Seçim veya ayarlar değişti. Toplu analizi TRUBA'ya yeniden gönderin.
+ready. Review the faces and select the specimens to analyze.|hazır. Yüzleri kontrol edin ve analiz edilecek numuneleri seçin.
+Uploading geometry and analysis settings to TRUBA…|Geometri ve analiz ayarları TRUBA'ya yükleniyor…
+Checking specimen files and analysis settings…|Numune dosyaları ve analiz ayarları kontrol ediliyor…
+Geometry and analysis settings uploaded to TRUBA. Select Run to start.|Geometri ve analiz ayarları TRUBA'ya yüklendi. Başlatmak için Çalıştır'a tıklayın.
+Batch analysis running…|Toplu analiz çalışıyor…
+Completed {completed}/{total} analyses.|{completed}/{total} analiz tamamlandı.
+Use the TRUBA account that received the prepared specimens.|Hazırlanan numunelerin gönderildiği TRUBA hesabını kullanın.
 Select all ready specimens|Hazır numunelerin tümünü seç
 Upload prepared specimens, then add the jobs to the analysis queue.|Hazırlanan numuneleri yükle ve işleri analiz kuyruğuna ekle.
 Prepared geometry uploaded to BatchInputs on TRUBA.|Hazırlanan geometri TRUBA'daki BatchInputs klasörüne yüklendi.
@@ -529,6 +537,7 @@ Installing and checking Kratos…|Kratos kuruluyor ve doğrulanıyor…
 Local Kratos installation is available on Windows.|Yerel Kratos Windows'ta kurulabilir.
 Local Kratos requires 64-bit Python 3.14 and an internet connection for setup.|Yerel Kratos kurulumu için 64 bit Python 3.14 ve internet bağlantısı gerekir.
 Ready to submit analysis to TRUBA.|Analiz TRUBA'ya gönderilmeye hazır.
+Local|Yerel
 Local mesh|Yerel ağ üretimi
 TRUBA batch analysis|TRUBA toplu analizi
 Enable TRUBA mode and allocate or refresh a resource session before running these jobs.|Bu işleri çalıştırmadan önce TRUBA modunu açın ve bir kaynak oturumu ayırın veya mevcut oturumu yenileyin.

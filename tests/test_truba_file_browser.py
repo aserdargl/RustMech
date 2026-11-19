@@ -2,6 +2,7 @@
 
 from contextlib import contextmanager
 import errno
+import json
 from hashlib import sha256
 from io import BytesIO
 import os
@@ -166,6 +167,33 @@ def test_batch_geometry_upload_is_verified_and_reused(remote, tmp_path):
     with pytest.raises(OSError, match='geometry verification failed'):
         stage_batch_geometries(auth, [source])
     sftp.rename.assert_not_called()
+
+
+def test_batch_settings_upload_references_verified_geometry(remote, tmp_path, monkeypatch):
+    auth, sftp = remote
+    source = tmp_path / 'prepared.vtp'
+    source.write_bytes(b'prepared geometry')
+    settings = dict(mesh_resolution=0.9, local_mesh_size=0.8, mesh_type='TET10')
+    remote_inputs = {}
+
+    def stat(path):
+        if path not in remote_inputs:
+            raise FileNotFoundError(path)
+        return SimpleNamespace(st_mode=S_IFREG)
+
+    def publish(_, local, target):
+        remote_inputs[target] = local.read_bytes()
+
+    sftp.lstat.side_effect = stat
+    sftp.open.side_effect = lambda path, _: BytesIO(remote_inputs[path])
+    monkeypatch.setattr('truba_files._publish_file', publish)
+    stage_batch_geometries(auth, [source], settings_by_geometry={str(source): [settings]})
+
+    manifest_path, = (path for path in remote_inputs if path.endswith('.json'))
+    contents = remote_inputs[manifest_path]
+    assert PurePosixPath(manifest_path).stem == sha256(contents).hexdigest()
+    geometry = sha256(source.read_bytes()).hexdigest() + '.vtp'
+    assert json.loads(contents) == dict(schema_version=1, jobs=[dict(geometry=geometry, settings=settings)])
 
 
 @pytest.mark.parametrize("available_channels", [1, 3])
