@@ -4,6 +4,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from html import escape
+from pathlib import PurePosixPath
 import re
 import shlex
 
@@ -20,6 +21,10 @@ from truba_remote import RemoteContext, RemoteTransport
 from ui_language import translate
 
 
+# Job names and command paths may contain ordinary punctuation.
+QUEUE_SEPARATOR = '\x1f'
+
+
 @dataclass(frozen=True)
 class ActiveJob:
     job_id: str
@@ -28,27 +33,33 @@ class ActiveJob:
     elapsed: str
     remaining: str
     purposes: tuple[str, ...]
+    script: str
+    command: str
+    cpus: str
+    nodes: str
+    partition: str
 
 
-def esen_job_purpose(slurm_name, job_id, username):
+def esen_job_script(slurm_name, job_id, username):
     match = re.fullmatch(r'ESEN-([0-9a-f]{32})', slurm_name)
     if not match:
-        return slurm_name
+        return None
     try:
         record = read_esen_job(esen_jobs_directory() / match[1])
     except (OSError, ValueError):
-        return slurm_name
+        return None
     if (isinstance(record, dict) and record.get('username') == username
             and str(record.get('job_id')) == job_id and record.get('name')):
-        return f"LAMMPS · {record['name']}"
-    return slurm_name
+        return record['name']
+    return None
 
 
 def query_active_jobs(auth, state_dir):
     transport = RemoteTransport(RemoteContext(transport='ssh'), auth)
+    fields_format = QUEUE_SEPARATOR.join(('%i', '%T', '%S', '%M', '%L', '%C', '%D', '%P', '%j', '%o'))
     output = transport.command(
         "TZ=UTC SLURM_TIME_FORMAT='%Y-%m-%dT%H:%M:%S' squeue --noheader --all --array --states=all --user="
-        + shlex.quote(auth.username) + " --format='%i|%T|%S|%M|%L|%j'"
+        + shlex.quote(auth.username) + ' --format=' + shlex.quote(fields_format)
     )
     records = defaultdict(list)
     for _, record in unfinished_records(state_dir):
@@ -56,14 +67,17 @@ def query_active_jobs(auth, state_dir):
             records[str(record['job_id'])].append(record)
     groups = defaultdict(list)
     for line in output.splitlines():
-        fields = line.strip().split('|', 5)
-        if len(fields) != 6:
+        fields = line.split(QUEUE_SEPARATOR, 9)
+        if len(fields) != 10:
             continue
-        job_id, state, start, elapsed, remaining, slurm_name = fields
+        job_id, state, start, elapsed, remaining, cpus, nodes, partition, slurm_name, command = (
+            field.strip() for field in fields
+        )
         if (not re.fullmatch(r'[0-9]+(?:[_+][0-9]+|_\[[0-9,:%-]+\])*', job_id)
                 or state in SLURM_TERMINAL_STATES):
             continue
-        slurm_name = slurm_name.strip()
+        esen_script = esen_job_script(slurm_name, job_id, auth.username)
+        script = esen_script or (PurePosixPath(command).name if command.startswith('/') else command)
         fallback_name = slurm_name or job_id
         matching = records.get(job_id, ())
         has_study = any(record.get('study_name') for record in matching)
@@ -73,10 +87,13 @@ def query_active_jobs(auth, state_dir):
                 continue
             purposes_by_work[record.get('study_name') or fallback_name].append(job_description(record))
         if not purposes_by_work:
-            purpose = esen_job_purpose(slurm_name, job_id, auth.username)
+            purpose = f'LAMMPS · {esen_script}' if esen_script else slurm_name
             purposes_by_work[fallback_name] = [purpose or '—']
         for name, purposes in purposes_by_work.items():
-            groups[name].append(ActiveJob(job_id, state, start, elapsed, remaining, tuple(dict.fromkeys(purposes))))
+            groups[name].append(ActiveJob(
+                job_id, state, start, elapsed, remaining, tuple(dict.fromkeys(purposes)),
+                script or '—', command, cpus or '—', nodes or '—', partition or '—',
+            ))
     return dict(groups)
 
 
@@ -177,29 +194,33 @@ class TrubaActiveJobs(QWidget):
         self.splitter.setChildrenCollapsible(False)
         self.works = self._table(['Work name'])
         self.works.setItemDelegate(QItemDelegate(self.works))
-        self.jobs = self._table(['Slurm ID', 'Status', 'Work name', 'Job description'])
+        self.jobs = self._table([
+            'Slurm ID', 'Status', 'Work name', 'Job description', 'Script / command', 'CPUs',
+            'Nodes', 'Partition', 'Started at', 'Elapsed time', 'Time left',
+        ])
+        row_numbers = self.jobs.verticalHeader()
+        row_numbers.setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
+        row_numbers.setSectionsClickable(False)
+        row_numbers.show()
+        self.jobs.setHorizontalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
         header = self.jobs.horizontalHeader()
-        header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Interactive)
+        header.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+        for column in (2, 3, 4):
+            header.setSectionResizeMode(column, QHeaderView.ResizeMode.Interactive)
         self.jobs.setColumnWidth(2, 88)
-        self.jobs.setItemDelegateForColumn(2, QItemDelegate(self.jobs))
+        self.jobs.setColumnWidth(3, 134)
+        self.jobs.setColumnWidth(4, 128)
+        for column in (2, 4, 7):
+            self.jobs.setItemDelegateForColumn(column, QItemDelegate(self.jobs))
         self.splitter.addWidget(self.works)
         self.splitter.addWidget(self.jobs)
+        self.splitter.setStretchFactor(0, 0)
+        self.splitter.setStretchFactor(1, 1)
         self.splitter.setSizes([115, 375])
         layout.addWidget(self.splitter, 1)
         self.works.currentCellChanged.connect(self.select_work)
-        self.jobs.currentCellChanged.connect(self.show_details)
+        self.jobs.currentCellChanged.connect(self.update_cancel_button)
 
-        details = QFormLayout()
-        details.setVerticalSpacing(2)
-        self.started = QLabel('—')
-        self.elapsed = QLabel('—')
-        self.remaining = QLabel('—')
-        details.addRow('Started at', self.started)
-        details.addRow('Elapsed time', self.elapsed)
-        details.addRow('Time left in Slurm allocation', self.remaining)
-        layout.addLayout(details)
         self.notice = QLabel('Connect to TRUBA to see active jobs.')
         self.notice.setObjectName('mutedHintLabel')
         self.notice.setWordWrap(True)
@@ -314,6 +335,8 @@ class TrubaActiveJobs(QWidget):
         groups = self.groups if selected_name is None else {selected_name: self.groups[selected_name]}
         jobs = [(name, job) for name, group in groups.items() for job in group]
         self.selected_jobs = [job for _, job in jobs]
+        horizontal_scroll = self.jobs.horizontalScrollBar()
+        scroll_position = horizontal_scroll.value()
         with QSignalBlocker(self.jobs):
             self.jobs.setColumnHidden(2, selected_name is not None)
             self.jobs.setRowCount(len(self.selected_jobs))
@@ -326,21 +349,31 @@ class TrubaActiveJobs(QWidget):
                 tooltip = '<br>'.join(escape(translate(purpose)) for purpose in job.purposes)
                 description.setToolTip(f'<qt>{tooltip}</qt>')
                 self.jobs.setItem(index, 3, description)
+                script = QTableWidgetItem(job.script)
+                if job.command:
+                    script.setToolTip(f'<qt>{escape(job.command)}</qt>')
+                self.jobs.setItem(index, 4, script)
+                started = job.state not in ('PENDING', 'CONFIGURING')
+                values = (
+                    job.cpus, job.nodes, job.partition,
+                    display_start(job) if started else '—',
+                    display_duration(job.elapsed) if started else '—',
+                    display_duration(job.remaining) if started else '—',
+                )
+                for column, value in enumerate(values, start=5):
+                    self.jobs.setItem(index, column, QTableWidgetItem(value))
                 if (name, job.job_id) == previous:
                     row = index
             self.jobs.setCurrentCell(row, 0)
-        self.show_details()
+        horizontal_scroll.setValue(scroll_position)
+        self.update_cancel_button()
 
     def selected_job(self):
         row = self.jobs.currentRow()
         return self.selected_jobs[row] if 0 <= row < len(self.selected_jobs) else None
 
-    def show_details(self, *_):
+    def update_cancel_button(self, *_):
         job = self.selected_job()
-        started = job is not None and job.state not in ('PENDING', 'CONFIGURING')
-        self.started.setText(display_start(job) if started else '—')
-        self.elapsed.setText(display_duration(job.elapsed) if started else '—')
-        self.remaining.setText(display_duration(job.remaining) if started else '—')
         single_job = job is not None and bool(re.fullmatch(r'[0-9]+', job.job_id))
         self.cancel_button.setEnabled(single_job and self.cancel_worker is None)
         self.cancel_button.setToolTip(translate(
@@ -374,7 +407,7 @@ class TrubaActiveJobs(QWidget):
     def finish_cancel(self):
         worker, self.cancel_worker = self.cancel_worker, None
         worker.deleteLater()
-        self.show_details()
+        self.update_cancel_button()
         if worker.invalidated or self.shutting_down:
             return
         message = ('Could not request cancellation for Slurm job {job_id}. Refresh and retry.' if worker.failed

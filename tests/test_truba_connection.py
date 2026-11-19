@@ -13,12 +13,17 @@ from PySide6.QtCore import QPoint, QSettings, Qt
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QLineEdit, QMessageBox
 
+from truba_active_jobs import QUEUE_SEPARATOR
 from truba_client import TrubaSession
 from truba_connection import TrubaConnectionDialog
 from truba_credentials import CredentialStore
 from truba_jobs import HOST, RemoteAuth, write_record
 from truba_ssh import ssh_connection
 from window_state import WindowStateStore
+
+
+def queue_output(*rows):
+    return '\n'.join(row.replace('|', QUEUE_SEPARATOR, 9) for row in rows)
 
 
 class TrubaTests(unittest.TestCase):
@@ -247,10 +252,22 @@ class TrubaTests(unittest.TestCase):
             self.app.processEvents()
             splitter = first.jobs_splitter
             before = first.job_list.table.height()
-            splitter.moveSplitter(180, 1)
+            upper_before = first.tabs.height()
+            handle = splitter.handle(1)
+            center = handle.rect().center()
+            QTest.mousePress(handle, Qt.MouseButton.LeftButton, pos=center)
+            QTest.mouseMove(handle, center - QPoint(0, 150))
+            QTest.mouseRelease(handle, Qt.MouseButton.LeftButton, pos=center)
             self.app.processEvents()
             self.assertGreater(first.job_list.table.height(), before)
             self.assertGreater(first.job_list.table.height(), 160)
+            self.assertLess(first.tabs.height(), upper_before)
+            smaller_upper = first.tabs.height()
+            QTest.mousePress(handle, Qt.MouseButton.LeftButton, pos=center)
+            QTest.mouseMove(handle, center + QPoint(0, 60))
+            QTest.mouseRelease(handle, Qt.MouseButton.LeftButton, pos=center)
+            self.app.processEvents()
+            self.assertGreater(first.tabs.height(), smaller_upper)
             self.assertGreater(first.tabs.height(), 0)
             expected = splitter.sizes()
             first.hide()
@@ -283,7 +300,7 @@ class TrubaTests(unittest.TestCase):
             QTest.keyClick(tab.study_name, Qt.Key.Key_Return)
             command.assert_called_once()
 
-            command.return_value = '1|PENDING|N/A|0:00|8:00:00|New job\n'
+            command.return_value = queue_output('1|PENDING|N/A|0:00|8:00:00|8|1|short|New job|')
             QTest.mouseClick(tab.refresh_button, Qt.MouseButton.LeftButton)
             self.assertFalse(tab.refresh_button.isEnabled())
             tab.refresh_button.click()
@@ -302,9 +319,11 @@ class TrubaTests(unittest.TestCase):
         dialog.tabs.setCurrentWidget(tab)
         dialog.show()
         self.assertFalse(tab.cancel_button.isEnabled())
-        queue = ('11|RUNNING|N/A|4:00|8:00:00|First job\n'
-                 '23|PENDING|N/A|0:00|8:00:00|Second job\n'
-                 '42_5|PENDING|N/A|0:00|8:00:00|Array task\n')
+        queue = queue_output(
+            '11|RUNNING|N/A|4:00|8:00:00|8|1|short|First job|run.slurm',
+            '23|PENDING|N/A|0:00|8:00:00|4|1|short|Second job|run.slurm',
+            '42_5|PENDING|N/A|0:00|8:00:00|8|1|short|Array task|run.slurm',
+        )
         with (patch.object(dialog, 'analysis_auth', return_value=RemoteAuth('tester', 'test')),
               patch('truba_active_jobs.RemoteTransport') as transport,
               patch.object(QMessageBox, 'question') as question):
@@ -358,7 +377,7 @@ class TrubaTests(unittest.TestCase):
         dialog.connection_changed.emit(False)
         self.assertFalse(tab.cancel_button.isEnabled())
 
-    def test_active_jobs_show_purposes_by_work_and_selected_slurm_times(self):
+    def test_active_jobs_show_purposes_resources_and_times_in_numbered_rows(self):
         dialog = self.dialog()
         tab = dialog.active_jobs
         dialog.state_dir = self.directory / 'TRUBA'
@@ -379,16 +398,16 @@ class TrubaTests(unittest.TestCase):
         esen_id = 'a' * 32
         write_record(self.directory / 'ESEN' / 'jobs' / esen_id / 'job.json',
                      dict(username='tester', job_id='8', name='run_material.slurm'))
-        output = (
-            '1|RUNNING|2026-11-18T04:15:00|1-05:20:40|2:17:15|RM-1\n'
-            '2|PENDING|2026-11-18T23:15:00|0:00|8:00:00|RM-2\n'
-            '3|RUNNING|2026-11-18T05:00:00|25:40|UNLIMITED|External job\n'
-            '4|COMPLETED|2026-11-18T04:15:00|1:30|0:00|Done\n'
-            '5_[1-16%4]|PENDING|N/A|0:00|8:00:00|Array job\n'
-            '6|RUNNING|2026-11-18T04:15:00|25:40|8:00:00|RustMech-session\n'
-            '7|RUNNING|2026-11-18T04:15:00|25:40|8:00:00|bash\n'
-            f'8|RUNNING|2026-11-18T04:15:00|25:40|8:00:00|ESEN-{esen_id}\n'
-            '9|RUNNING|2026-11-18T04:15:00|25:40|8:00:00|RustMech-remote\n'
+        output = queue_output(
+            '1|RUNNING|2026-11-18T04:15:00|1-05:20:40|2:17:15|64|2|orfoz|RM-1|/scratch/a|b/solve.slurm',
+            '2|PENDING|2026-11-18T23:15:00|0:00|8:00:00|32|1|orfoz|RM-2|/scratch/thermal.slurm',
+            '3|RUNNING|2026-11-18T05:00:00|25:40|UNLIMITED|20|1|short|External job|bash',
+            '4|COMPLETED|2026-11-18T04:15:00|1:30|0:00|20|1|short|Done|bash',
+            '5_[1-16%4]|PENDING|N/A|0:00|8:00:00|4|1|short|Array job|array.slurm',
+            '6|RUNNING|2026-11-18T04:15:00|25:40|8:00:00|32|1|short|RustMech-session|session.slurm',
+            '7|RUNNING|2026-11-18T04:15:00|25:40|8:00:00|20|1|short|bash|',
+            f'8|RUNNING|2026-11-18T04:15:00|25:40|8:00:00|16|1|short|ESEN-{esen_id}|/scratch/run.slurm',
+            '9|RUNNING|2026-11-18T04:15:00|25:40|8:00:00|8|1|short|RustMech-remote|preview.slurm',
         )
         with (patch.object(dialog, 'analysis_auth', return_value=RemoteAuth('tester', 'test')),
               patch('truba_active_jobs.esen_jobs_directory', return_value=self.directory / 'ESEN' / 'jobs'),
@@ -406,7 +425,8 @@ class TrubaTests(unittest.TestCase):
             command = transport.return_value.command.call_args.args[0]
             self.assertIn('--user=tester', command)
             self.assertIn('--all', command.split())
-            self.assertIn('%i|%T|%S|%M|%L|%j', command)
+            self.assertIn(QUEUE_SEPARATOR.join(('%i', '%T', '%S', '%M', '%L', '%C', '%D', '%P', '%j', '%o')),
+                          command)
             self.assertEqual([tab.works.item(i, 0).text() for i in range(tab.works.rowCount())],
                              ['All jobs', 'A', 'Array job', 'B', 'bash', f'ESEN-{esen_id}', 'External job',
                               'RustMech-remote'])
@@ -432,17 +452,32 @@ class TrubaTests(unittest.TestCase):
             self.assertFalse(tab.jobs.isColumnHidden(3))
             self.assertEqual([tab.jobs.item(i, 0).text() for i in range(tab.jobs.rowCount())], ['1', '2', '6'])
             self.assertEqual(tab.jobs.item(2, 3).toolTip(), '<qt>DOE mesh generation<br>DOE analysis</qt>')
-            self.assertNotEqual(tab.started.text(), '—')
-            self.assertEqual(tab.elapsed.text(), '29:20:40')
-            self.assertEqual(tab.remaining.text(), '02:17:15')
+            self.assertTrue(tab.jobs.verticalHeader().isVisible())
+            model = tab.jobs.model()
+            self.assertEqual([model.headerData(row, Qt.Orientation.Vertical) for row in range(tab.jobs.rowCount())],
+                             [1, 2, 3])
+            self.assertEqual([tab.jobs.item(0, column).text() for column in range(4, 8)],
+                             ['solve.slurm', '64', '2', 'orfoz'])
+            self.assertEqual(tab.jobs.item(0, 4).toolTip(), '<qt>/scratch/a|b/solve.slurm</qt>')
+            self.assertNotEqual(tab.jobs.item(0, 8).text(), '—')
+            self.assertEqual(tab.jobs.item(0, 9).text(), '29:20:40')
+            self.assertEqual(tab.jobs.item(0, 10).text(), '02:17:15')
             tab.jobs.setCurrentCell(1, 0)
+            scrollbar = tab.jobs.horizontalScrollBar()
+            self.assertGreater(scrollbar.maximum(), 0)
+            scrollbar.setValue(scrollbar.maximum())
+            scroll_position = scrollbar.value()
             tab.show_groups(tab.groups)
             self.assertEqual(tab.jobs.currentItem().text(), '2')
-            self.assertEqual(tab.started.text(), '—')
-            self.assertEqual(tab.remaining.text(), '—')
+            self.assertEqual(scrollbar.value(), scroll_position)
+            self.assertEqual(tab.jobs.item(1, 5).text(), '32')
+            self.assertEqual([tab.jobs.item(1, column).text() for column in range(8, 11)], ['—'] * 3)
+            tab.works.setCurrentCell(5, 0)
+            self.assertEqual(tab.jobs.item(0, 4).text(), 'run_material.slurm')
             tab.works.setCurrentCell(6, 0)
             self.assertEqual(tab.jobs.item(0, 0).text(), '3')
-            self.assertEqual(tab.elapsed.text(), '00:25:40')
+            self.assertEqual(tab.jobs.item(0, 9).text(), '00:25:40')
+            self.assertEqual(tab.jobs.item(0, 10).text(), 'Unlimited')
             dialog.connection_changed.emit(False)
             self.assertEqual(tab.works.rowCount(), 0)
             self.assertEqual(tab.jobs.rowCount(), 0)

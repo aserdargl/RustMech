@@ -137,7 +137,7 @@ class TrubaConnectionDialog(QDialog):
         self.jobs_splitter = QSplitter(Qt.Orientation.Vertical)
         self.jobs_splitter.setObjectName('trubaJobsSplitter')
         self.jobs_splitter.setChildrenCollapsible(False)
-        self.jobs_splitter.setHandleWidth(6)
+        self.jobs_splitter.setHandleWidth(8)
         self.jobs_splitter.addWidget(self.tabs)
         layout.addWidget(self.jobs_splitter, 1)
         self.settings_scroll = QScrollArea()

@@ -1139,6 +1139,10 @@ Job description|İş açıklaması
 Started at|Başlangıç zamanı
 Elapsed time|Geçen süre
 Time left in Slurm allocation|Slurm süre sınırına kalan
+Time left|Kalan süre
+Script / command|Betik / komut
+CPUs|CPU sayısı
+Partition|Slurm bölümü
 Connect to TRUBA to see active jobs.|Aktif işleri görmek için TRUBA'ya bağlanın.
 No active Slurm jobs.|Aktif Slurm işi yok.
 Updating active jobs…|Aktif işler güncelleniyor…
