@@ -974,6 +974,7 @@ Top platen displacement in −Z; reaction force is calculated (N).|Üst plakanı
 Pending / active remote jobs|Bekleyen / Etkin uzak işler
 TRUBA jobs|TRUBA işleri
 Active jobs|Aktif işler
+All jobs|Tüm işler
 Work name for new jobs|Yeni işler için çalışma adı
 Use the same work name to group multiple submissions.|Birden çok gönderimi gruplamak için aynı çalışma adını kullanın.
 Work name|Çalışma adı

@@ -273,6 +273,9 @@ class TrubaTests(unittest.TestCase):
             '2|PENDING|2026-11-18T23:15:00|0:00|8:00:00|RM-2\n'
             '3|RUNNING|2026-11-18T05:00:00|25:40|UNLIMITED|External job\n'
             '4|COMPLETED|2026-11-18T04:15:00|1:30|0:00|Done\n'
+            '5_[1-16%4]|PENDING|N/A|0:00|8:00:00|Array job\n'
+            '6|RUNNING|2026-11-18T04:15:00|25:40|8:00:00|RustMech-session\n'
+            '7|RUNNING|2026-11-18T04:15:00|25:40|8:00:00|bash\n'
         )
         with patch.object(dialog, 'analysis_auth', return_value=RemoteAuth('tester', 'test')), patch(
                 'truba_active_jobs.RemoteTransport') as transport:
@@ -288,9 +291,19 @@ class TrubaTests(unittest.TestCase):
             transport.assert_called_once()
             command = transport.return_value.command.call_args.args[0]
             self.assertIn('--user=tester', command)
+            self.assertIn('--all', command.split())
             self.assertIn('%i|%T|%S|%M|%L|%j', command)
             self.assertEqual([tab.works.item(i, 0).text() for i in range(tab.works.rowCount())],
-                             ['A', 'External job'])
+                             ['All jobs', 'A', 'Array job', 'bash', 'External job', 'RustMech-session'])
+            self.assertEqual(tab.works.currentRow(), 0)
+            self.assertFalse(tab.jobs.isColumnHidden(2))
+            self.assertEqual({tab.jobs.item(i, 0).text(): (tab.jobs.item(i, 1).text(), tab.jobs.item(i, 2).text())
+                              for i in range(tab.jobs.rowCount())},
+                             {'1': ('RUNNING', 'A'), '2': ('PENDING', 'A'),
+                              '3': ('RUNNING', 'External job'), '5_[1-16%4]': ('PENDING', 'Array job'),
+                              '6': ('RUNNING', 'RustMech-session'), '7': ('RUNNING', 'bash')})
+            tab.works.setCurrentCell(1, 0)
+            self.assertTrue(tab.jobs.isColumnHidden(2))
             self.assertEqual([tab.jobs.item(i, 0).text() for i in range(tab.jobs.rowCount())], ['1', '2'])
             self.assertNotEqual(tab.started.text(), '—')
             self.assertEqual(tab.elapsed.text(), '29:20:40')
@@ -300,7 +313,7 @@ class TrubaTests(unittest.TestCase):
             self.assertEqual(tab.jobs.currentItem().text(), '2')
             self.assertEqual(tab.started.text(), '—')
             self.assertEqual(tab.remaining.text(), '—')
-            tab.works.setCurrentCell(1, 0)
+            tab.works.setCurrentCell(4, 0)
             self.assertEqual(tab.jobs.item(0, 0).text(), '3')
             self.assertEqual(tab.elapsed.text(), '00:25:40')
             dialog.connection_changed.emit(False)

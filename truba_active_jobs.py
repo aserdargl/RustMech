@@ -16,6 +16,7 @@ from studio_style import CONTROL_HEIGHT
 from truba_job_list import unfinished_records
 from truba_jobs import SLURM_TERMINAL_STATES
 from truba_remote import RemoteContext, RemoteTransport
+from ui_language import translate
 
 
 @dataclass(frozen=True)
@@ -30,7 +31,7 @@ class ActiveJob:
 def query_active_jobs(auth, state_dir):
     transport = RemoteTransport(RemoteContext(transport='ssh'), auth)
     output = transport.command(
-        "TZ=UTC SLURM_TIME_FORMAT='%Y-%m-%dT%H:%M:%S' squeue --noheader --array --states=all --user="
+        "TZ=UTC SLURM_TIME_FORMAT='%Y-%m-%dT%H:%M:%S' squeue --noheader --all --array --states=all --user="
         + shlex.quote(auth.username) + " --format='%i|%T|%S|%M|%L|%j'"
     )
     names = defaultdict(set)
@@ -44,7 +45,8 @@ def query_active_jobs(auth, state_dir):
         if len(fields) != 6:
             continue
         job_id, state, start, elapsed, remaining, slurm_name = fields
-        if not re.fullmatch(r'[0-9]+(?:[_+][0-9]+)*', job_id) or state in SLURM_TERMINAL_STATES:
+        if (not re.fullmatch(r'[0-9]+(?:[_+][0-9]+|_\[[0-9,:%-]+\])*', job_id)
+                or state in SLURM_TERMINAL_STATES):
             continue
         for name in names.get(job_id) or (slurm_name.strip() or job_id,):
             groups[name].append(ActiveJob(job_id, state, start, elapsed, remaining))
@@ -115,8 +117,9 @@ class TrubaActiveJobs(QWidget):
         self.splitter.setChildrenCollapsible(False)
         self.works = self._table(['Work name'])
         self.works.setItemDelegate(QItemDelegate(self.works))
-        self.jobs = self._table(['Slurm job ID', 'Status'])
+        self.jobs = self._table(['Slurm job ID', 'Status', 'Work name'])
         self.jobs.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        self.jobs.setItemDelegateForColumn(2, QItemDelegate(self.jobs))
         self.splitter.addWidget(self.works)
         self.splitter.addWidget(self.jobs)
         self.splitter.setSizes([180, 310])
@@ -197,16 +200,19 @@ class TrubaActiveJobs(QWidget):
 
     def show_groups(self, groups):
         current = self.works.currentItem()
-        selected_name = current.text() if current else None
+        selected_name = current.data(Qt.ItemDataRole.UserRole) if current else None
         self.groups = groups
         names = sorted(groups, key=str.casefold)
         with QSignalBlocker(self.works):
-            self.works.setRowCount(len(names))
-            for row, name in enumerate(names):
+            self.works.setRowCount(len(names) + 1 if names else 0)
+            if names:
+                self.works.setItem(0, 0, QTableWidgetItem(translate('All jobs')))
+            for row, name in enumerate(names, start=1):
                 item = QTableWidgetItem(name)
+                item.setData(Qt.ItemDataRole.UserRole, name)
                 item.setToolTip(f'<qt>{escape(name)}</qt>')
                 self.works.setItem(row, 0, item)
-            row = names.index(selected_name) if selected_name in names else 0
+            row = names.index(selected_name) + 1 if selected_name in names else 0
             self.works.setCurrentCell(row, 0)
         self.select_work()
 
@@ -214,13 +220,18 @@ class TrubaActiveJobs(QWidget):
         selected = self.works.currentItem()
         row = self.jobs.currentRow()
         job_id = self.selected_jobs[row].job_id if 0 <= row < len(self.selected_jobs) else None
-        self.selected_jobs = self.groups.get(selected.text(), []) if selected else []
+        selected_name = selected.data(Qt.ItemDataRole.UserRole) if selected else None
+        groups = self.groups if selected_name is None else {selected_name: self.groups[selected_name]}
+        jobs = [(name, job) for name, group in groups.items() for job in group]
+        self.selected_jobs = [job for _, job in jobs]
         with QSignalBlocker(self.jobs):
+            self.jobs.setColumnHidden(2, selected_name is not None)
             self.jobs.setRowCount(len(self.selected_jobs))
             row = 0
-            for index, job in enumerate(self.selected_jobs):
+            for index, (name, job) in enumerate(jobs):
                 self.jobs.setItem(index, 0, QTableWidgetItem(job.job_id))
                 self.jobs.setItem(index, 1, QTableWidgetItem(job.state))
+                self.jobs.setItem(index, 2, QTableWidgetItem(name))
                 if job.job_id == job_id:
                     row = index
             self.jobs.setCurrentCell(row, 0)
