@@ -1092,13 +1092,8 @@ class EsenTests(unittest.TestCase):
         def submit(directory, record, _files, _settings, auth):
             jobs.save_job(directory, record, state="Submitted", job_id="123", username=auth.username)
 
-        def complete(directory, record, _auth, *, cancel):
-            jobs.save_job(directory, record, state="Completed")
-
         with (patch("esen_jobs.RemoteTransport") as transport, patch("esen_jobs.upload_tree") as transfer,
-              patch("esen_jobs.submit_full_node", side_effect=submit) as launch,
-              patch("esen_jobs.refresh_remote", side_effect=complete),
-              patch("esen_jobs.remote_files"), patch("esen_jobs.export_remote_results")):
+              patch("esen_jobs.submit_full_node", side_effect=submit) as launch):
             destination = "Deneme 1"
             browser = workspace.truba_browser
 
@@ -1181,11 +1176,11 @@ class EsenTests(unittest.TestCase):
             run_upload_id = workspace.upload_task[0].result(timeout=5)
             workspace._tick()
             workspace.remote_task[1].result(timeout=5)
-            workspace._tick()
             launch.assert_called_once()
             record = launch.call_args.args[1]
             self.assertEqual(record["name"], names[1])
             self.assertEqual(record["folder_upload"], run_upload_id)
+            workspace._tick()
             transfer.assert_called_once()
             self.assertTrue(browser.slurm_inputs.isEnabled())
             list_directory.return_value = [SimpleNamespace(filename=names[1], st_mode=S_IFREG, st_size=12)]
@@ -1194,12 +1189,61 @@ class EsenTests(unittest.TestCase):
             self.assertEqual(browser.address.text(), jobs.upload_location(run_upload_id, self.auth.username) + "/inputs")
             self.assertEqual(browser.files.topLevelItem(0).text(0), names[1])
             self.assertFalse(browser.upload.isEnabled())
-            workspace._poll_remote()
-            workspace.remote_task[1].result(timeout=5)
-            workspace._tick()
             workspace.remote_task[1].result(timeout=5)
             workspace._tick()
             self.assertEqual([call.args[1]["name"] for call in launch.call_args_list], [names[1], names[0]])
+            self.assertTrue(all(call.args[1]["state"] == "Submitted" for call in launch.call_args_list))
+
+    def test_reuse_recovers_unsent_slurm_batch_without_resubmitting_accepted_job(self):
+        app = QApplication.instance() or QApplication([])
+        preferences = QSettings(str(self.root / "settings.ini"), QSettings.Format.IniFormat)
+        truba = FakeTruba()
+        truba.auth = self.auth
+        upload = jobs.FolderUpload("a" * 32, self.auth.username)
+        snapshot = jobs.upload_snapshot(self.history, upload.upload_id)
+        snapshot.mkdir(parents=True)
+        accepted = None
+        unsent = []
+        for entry in ("01/run.slurm", "02/run.slurm", "03/run.slurm"):
+            script = snapshot / entry
+            script.parent.mkdir()
+            script.write_text("#!/bin/bash\n", encoding="utf-8")
+            directory, record = jobs.new_job(
+                self.source, entry, "remote", None, parent=self.history,
+                batch_folder=self.source.name, folder_upload=upload,
+            )
+            if accepted is None:
+                accepted = directory
+                jobs.save_job(directory, record, state="Queued", job_id="7019602")
+            else:
+                unsent.append(directory)
+        with (patch("esen_workspace.QSettings", return_value=preferences),
+              patch("truba_files.list_directory", return_value=[])):
+            workspace = EsenWorkspace(truba, history=self.history)
+        self.addCleanup(workspace.dispose)
+        workspace.history.setCurrentItem(next(
+            item for item in (workspace.history.item(row) for row in range(workspace.history.count()))
+            if item.data(Qt.ItemDataRole.UserRole) == str(unsent[0])
+        ))
+        self.assertTrue(workspace.use_inputs.isEnabled())
+        workspace.use_inputs.click()
+        workspace.folder_scan[0].result(timeout=5)
+        workspace._tick()
+        self.assertEqual(list(workspace._folder_jobs()), ["02/run.slurm", "03/run.slurm"])
+
+        def submit(directory, record, _files, _settings, _auth):
+            jobs.save_job(directory, record, state="Submitted", job_id=directory.name[:6])
+
+        with (patch("esen_jobs.submit_full_node", side_effect=submit) as launch,
+              patch("esen_jobs.sync_slurm_folder") as sync):
+            workspace.start.click()
+            for _ in unsent:
+                workspace.remote_task[1].result(timeout=5)
+                workspace._tick()
+            self.assertEqual([call.args[0] for call in launch.call_args_list], unsent)
+            sync.assert_not_called()
+        self.assertEqual(workspace.history.count(), 3)
+        self.assertEqual(jobs.read_job(accepted)["job_id"], "7019602")
 
     def test_remove_history_entry_preserves_job_files_and_is_persistent(self):
         app = QApplication.instance() or QApplication([])

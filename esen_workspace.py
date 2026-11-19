@@ -313,6 +313,7 @@ class EsenWorkspace(QDialog):
         self.folder_upload = None
         self.folder_slurm = False
         self.folder_replay = False
+        self.unsent_slurm_jobs = {}
         self.files_upload = None
         self.upload_task = None
         self.upload_error = ""
@@ -766,6 +767,7 @@ class EsenWorkspace(QDialog):
         self.folder_upload = None
         self.folder_slurm = False
         self.folder_replay = False
+        self.unsent_slurm_jobs.clear()
         self.upload_error = ""
         self.sync_message = ""
         self._run_truba_selection = False
@@ -810,7 +812,7 @@ class EsenWorkspace(QDialog):
                     item = InputFileItem(name, position)
                     runnable = (jobs.is_slurm_script(name) if remote and self.folder_slurm else
                                 jobs.is_input_script(name))
-                    if runnable:
+                    if runnable and (not self.unsent_slurm_jobs or name in self.unsent_slurm_jobs):
                         selected = name in checked if checked is not None else not remote
                         item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
                         item.setCheckState(0, Qt.CheckState.Checked if selected else Qt.CheckState.Unchecked)
@@ -1181,8 +1183,10 @@ class EsenWorkspace(QDialog):
                 lines.append(translate("Run uploads the selected local inputs to TRUBA."))
             if self.upload_error:
                 lines.append(translate("File upload failed: {error}").format(error=self.upload_error))
-        if slurm:
-            lines.append(translate("Use ↑ and ↓ in Job order. Run syncs the inputs and submits each checked Slurm script after the previous job ends."))
+        if self.unsent_slurm_jobs:
+            lines.append(translate("Run submits the checked jobs that have not been sent to Slurm yet."))
+        elif slurm:
+            lines.append(translate("Use ↑ and ↓ in Job order. Run syncs the inputs and sends each checked Slurm script as a separate job."))
         elif remote:
             lines.append(translate("Preview values are estimates. Slurm limits apply at submission."))
         file_count = len(self.inputs.items()) if batch_mode else 0
@@ -1353,7 +1357,11 @@ class EsenWorkspace(QDialog):
             if self._slurm_mode():
                 selected = tuple(self._folder_jobs())
                 if self.command_valid and not self.folder_scan and selected:
-                    self._transfer_inputs(auth, selected)
+                    if self.unsent_slurm_jobs:
+                        if self._upload_ready(auth):
+                            self._queue_batch(target, auth, selected=selected)
+                    else:
+                        self._transfer_inputs(auth, selected)
                 return
             if self.folder_root is not None:
                 if target == "remote" and not self._upload_ready(auth):
@@ -1453,14 +1461,23 @@ class EsenWorkspace(QDialog):
             folder, entry = files[:2]
             label = root.name if auth else (Path(root.name) / folder.relative_to(root)).as_posix()
             try:
-                directory, record = jobs.new_job(root if auth else folder, name if auth else entry,
-                                                 target, ranks, parent=self.history_root, batch_folder=label,
-                                                 folder_upload=upload)
-            except OSError as error:
+                if self.unsent_slurm_jobs:
+                    directory = self.unsent_slurm_jobs[name]
+                    record = jobs.read_job(directory)
+                    if record["state"] != "Preparing" or record.get("job_id"):
+                        continue
+                else:
+                    directory, record = jobs.new_job(root if auth else folder, name if auth else entry,
+                                                     target, ranks, parent=self.history_root, batch_folder=label,
+                                                     folder_upload=upload)
+            except (OSError, ValueError) as error:
                 errors.append(f"{label}: {error}")
                 continue
             self.batch_queue[directory] = (record, files, options)
-            self._history_item(directory, record, prepend=True)
+            if self.unsent_slurm_jobs:
+                self._update_finished_job(directory, record)
+            else:
+                self._history_item(directory, record, prepend=True)
         if errors:
             if not self.batch_queue:
                 raise OSError("\n".join(errors))
@@ -1481,9 +1498,9 @@ class EsenWorkspace(QDialog):
         if remote and (not auth or auth.username != options[1]):
             return
         self.batch_queue.pop(directory)
-        # An uploaded run list stages independent jobs. Slurm can queue them
-        # as soon as each submission returns, even while earlier jobs run.
-        if "truba_input_folder" not in record:
+        # Explicit Slurm scripts are independent; serialize staging and sbatch,
+        # then let Slurm schedule the jobs concurrently.
+        if not (remote and jobs.is_slurm_script(record["name"])):
             self.batch_active = directory
         if remote:
             self._submit_remote(directory, record, files, options[0], auth)
@@ -1615,7 +1632,7 @@ class EsenWorkspace(QDialog):
         if remote:
             if self._run_truba_selection:
                 ready = ready and self.truba_browser.task is None
-            elif self.folder_root is not None and not self.folder_slurm:
+            elif self.unsent_slurm_jobs or (self.folder_root is not None and not self.folder_slurm):
                 ready = ready and self._upload_ready(auth)
         self.start.setEnabled(self.command_valid and ready and not batch_busy and not uploading)
         has_inputs = self.folder_root is not None or (
@@ -1809,7 +1826,19 @@ class EsenWorkspace(QDialog):
                 )
                 self.folder_replay = True
                 self.resume_input.setText(self.record.get("resume_input", ""))
-                self._scan_folder(checked={self.record["name"]})
+                if self.record.get("batch_folder") and self._unsent_slurm_job(self.record):
+                    for row in range(self.history.count()):
+                        path = Path(self.history.item(row).data(Qt.ItemDataRole.UserRole))
+                        try:
+                            record = jobs.read_job(path)
+                        except (OSError, ValueError):
+                            continue
+                        if (self._unsent_slurm_job(record) and all(
+                            record.get(key) == self.record.get(key)
+                            for key in ("folder_upload", "username", "source", "batch_folder")
+                        )):
+                            self.unsent_slurm_jobs[record["name"]] = path
+                self._scan_folder(checked=set(self.unsent_slurm_jobs) or {self.record["name"]})
                 return
             self.input_root = directory / "inputs"
             self.entry = self.record["name"]
@@ -1819,6 +1848,11 @@ class EsenWorkspace(QDialog):
             self.whole_folder.setChecked(True)
             self._update_inputs()
 
+
+    @staticmethod
+    def _unsent_slurm_job(record):
+        return (record["target"] == "remote" and record["state"] == "Preparing"
+                and not record.get("job_id") and jobs.is_slurm_script(record["name"]))
     @staticmethod
     def _downloaded_results(directory, record):
         if directory is None or record is None or record["state"] != "Completed":
