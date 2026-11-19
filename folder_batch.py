@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QApplication, QDialog, QGroupB
                               QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPushButton,
                               QSplitter, QTableWidget, QTableWidgetItem, QToolButton, QVBoxLayout)
 
+from camera_toolbar import camera_icon
 from file_dialog import QFileDialog
 from imported_geometry import (SURFACE_EXTENSIONS, SURFACE_FILE_FILTER, SurfaceComponents,
                                align_compression_surface, automatic_compression_selection,
@@ -225,9 +226,9 @@ class FolderBatchDialog(QDialog):
         panels.addWidget(specimens)
         self.table = QTableWidget(0, 4)
         self.table.setHorizontalHeaderLabels(['', 'Run', 'Specimen', 'Preflight'])
-        self.edit_icon = QIcon(str(Path(__file__).resolve().parent / 'assets' / 'ui' / 'edit-pencil.svg'))
+        self.face_icon = camera_icon('orthographic')
         edit_header = self.table.horizontalHeaderItem(FACES_COLUMN)
-        edit_header.setIcon(self.edit_icon)
+        edit_header.setIcon(QIcon(str(Path(__file__).resolve().parent / 'assets' / 'ui' / 'edit-pencil.svg')))
         edit_header.setToolTip('Edit specimen geometry and faces')
         edit_header.setData(Qt.ItemDataRole.AccessibleTextRole, 'Edit')
         self.table.horizontalHeader().setSectionResizeMode(FACES_COLUMN, QHeaderView.ResizeMode.Fixed)
@@ -510,7 +511,7 @@ class FolderBatchDialog(QDialog):
             button = self.table.cellWidget(index, FACES_COLUMN)
             if button is None:
                 button = QToolButton()
-                button.setIcon(self.edit_icon)
+                button.setIcon(self.face_icon)
                 button.setIconSize(QSize(16, 16))
                 button.setFixedSize(CONTROL_HEIGHT, CONTROL_HEIGHT)
                 button.setFocusPolicy(Qt.FocusPolicy.StrongFocus)

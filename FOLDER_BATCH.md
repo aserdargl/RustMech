@@ -19,7 +19,7 @@
    Numunenin yüksekliği korunur ve işlem ön kontrol sütununda gösterilir.
    Aynı düzlemdeki birden fazla temas yaması
    birlikte seçilir. Yön bilgisi aktarılır; üçgen kimlikleri aktarılmaz.
-5. Numunenin en solundaki kalem düğmesiyle 3B görünümü açın. **Connected
+5. Kalem simgeli sütunda, numune satırındaki kutu düğmesiyle 3B görünümü açın. **Connected
    components** listesinden kalacak tek katıyı seçebilirsiniz. Mavi bileşen
    kalır, kırmızı bileşenler ayıklanır. Destek yeşil, yükleme turuncudur.
    Bir yüzey atamasını değiştirmek için rolü seçin ve modeldeki yüzeye sağ
