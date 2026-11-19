@@ -13,7 +13,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import ANY, patch
 
-from PySide6.QtCore import QItemSelectionModel, QMimeData, QObject, QPoint, QSettings, Qt, QUrl, Signal
+from PySide6.QtCore import QDateTime, QItemSelectionModel, QMimeData, QObject, QPoint, QSettings, Qt, QUrl, Signal
 from PySide6.QtGui import QDragEnterEvent, QDropEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QMessageBox
@@ -515,7 +515,13 @@ class EsenTests(unittest.TestCase):
                     self.assertEqual(workspace.batch_folder.width(), workspace.upload.width())
                     self.assertEqual(workspace.sync.width(), workspace.upload.width())
                     self.assertEqual({button.width() for button in workspace._compact_input_actions}, {25})
+                    local_navigation = (workspace.input_back, workspace.input_forward, workspace.input_up)
+                    self.assertEqual({button.width() for button in local_navigation}, {25})
+                    self.assertEqual(len({button.y() for button in local_navigation}), 1)
                     browser = workspace.truba_browser
+                    date_header = "Değiştirilme tarihi" if locale == "tr" else "Date modified"
+                    self.assertEqual(workspace.inputs.headerItem().text(2), date_header)
+                    self.assertEqual(browser.files.headerItem().text(2), date_header)
                     navigation = browser.up, browser.open_folder, browser.refresh, browser.slurm_inputs
                     self.assertEqual(len({button.y() for button in navigation}), 1)
                     self.assertEqual([button.x() for button in navigation],
@@ -527,7 +533,8 @@ class EsenTests(unittest.TestCase):
                     self.assertEqual(len({button.width() for button in history_actions}), 1)
                     self.assertEqual(len({button.width() for button in history_commands}), 1)
                     buttons = [button for button in workspace._command_buttons
-                               if button not in (*toolbar, *navigation, *history_actions, *history_commands)]
+                               if button not in (*toolbar, *navigation, *local_navigation,
+                                                 *history_actions, *history_commands)]
                     width = max(button.sizeHint().width() for button in buttons) + 2
                     self.assertEqual({button.maximumWidth() for button in buttons}, {width})
                     self.assertEqual({button.width() for button in buttons if button.isVisible()}, {width})
@@ -797,6 +804,45 @@ class EsenTests(unittest.TestCase):
         workspace.folder_scan[0].result(timeout=5)
         workspace._tick()
 
+    def test_job_settings_browse_folders_without_changing_checked_jobs(self):
+        app = QApplication.instance() or QApplication([])
+        preferences = QSettings(str(self.root / "settings.ini"), QSettings.Format.IniFormat)
+        nested = self.source / "data" / "nested"
+        nested.mkdir()
+        (nested / "in.deep").touch()
+        (self.source / "in.root").touch()
+        timestamp = 1_700_000_000
+        os.utime(nested / "in.deep", (timestamp, timestamp))
+        expected_date = QDateTime.fromSecsSinceEpoch(timestamp).toString("yyyy-MM-dd HH:mm")
+        with patch("esen_workspace.QSettings", return_value=preferences):
+            workspace = EsenWorkspace(FakeTruba(), history=self.history)
+        self.addCleanup(workspace.dispose)
+        workspace.target.setCurrentIndex(workspace.target.findData("local"))
+        self.load_batch(workspace)
+        app.processEvents()
+        tree = workspace.inputs
+
+        def open_folder(name):
+            tree.setCurrentItem(tree.folders[name])
+            QTest.keyClick(tree, Qt.Key.Key_Return)
+
+        self.assertEqual(tree.headerItem().text(2), "Date modified")
+        self.assertFalse(workspace.input_back.isEnabled())
+        open_folder("data")
+        open_folder("data/nested")
+        self.assertEqual(workspace.input_path.text(), str(nested.resolve()))
+        self.assertEqual(tree.itemFromIndex(tree.rootIndex()), tree.folders["data/nested"])
+        self.assertEqual(tree.itemFromIndex(tree.rootIndex()).child(0).text(2), expected_date)
+        workspace.input_back.click()
+        self.assertEqual(workspace.input_path.text(), str(nested.parent.resolve()))
+        workspace.input_forward.click()
+        self.assertEqual(workspace.input_path.text(), str(nested.resolve()))
+        workspace.input_back.click()
+        workspace.input_up.click()
+        self.assertFalse(tree.rootIndex().isValid())
+        self.assertFalse(workspace.input_forward.isEnabled())
+        self.assertCountEqual(workspace._folder_jobs(), ["in.root", "data/nested/in.deep"])
+
     def test_folder_loads_directly_and_runs_checked_local_scripts_in_order(self):
         app = QApplication.instance() or QApplication([])
         preferences = QSettings(str(self.root / "settings.ini"), QSettings.Format.IniFormat)
@@ -1004,7 +1050,12 @@ class EsenTests(unittest.TestCase):
         browser._sync_connection()
         browser.directory = folder
         browser.loaded = True
-        browser._show_entries([SimpleNamespace(filename=jobs.RUN_LIST, st_mode=S_IFREG, st_size=42)])
+        timestamp = 1_700_000_000
+        browser._show_entries([SimpleNamespace(filename=jobs.RUN_LIST, st_mode=S_IFREG, st_size=42,
+                                               st_mtime=timestamp)])
+        self.assertEqual(browser.files.headerItem().text(2), "Date modified")
+        self.assertEqual(browser.files.currentItem().text(2),
+                         QDateTime.fromSecsSinceEpoch(timestamp).toString("yyyy-MM-dd HH:mm"))
         self.assertEqual(browser.selected_file(self.auth), (folder, jobs.RUN_LIST))
         self.assertTrue(workspace.start.isEnabled())
         self.assertEqual(workspace.history.count(), 0)

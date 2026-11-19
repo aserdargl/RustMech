@@ -4,6 +4,10 @@ from setup_help import GEOMETRY_HELP
 _TEXT = '''
 Open the LAMMPS workspace|LAMMPS çalışma alanını aç
 Job settings|İş ayarları
+Date modified|Değiştirilme tarihi
+Job folder path|İş klasörü yolu
+Previous folder|Önceki klasör
+Next folder|Sonraki klasör
 Copy ESEN file preparation instructions for AI|ESEN dosya hazırlama yönergesini yapay zekâ için kopyala
 ESEN instructions copied to the clipboard.|ESEN yönergesi panoya kopyalandı.
 Advanced TRUBA settings|Gelişmiş TRUBA ayarları

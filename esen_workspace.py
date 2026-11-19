@@ -12,7 +12,7 @@ import subprocess
 from threading import Event
 from time import time
 
-from PySide6.QtCore import QItemSelectionModel, QPoint, QSettings, QSignalBlocker, QSize, Qt, QTimer, QUrl, Signal
+from PySide6.QtCore import QModelIndex, QItemSelectionModel, QPoint, QSettings, QSignalBlocker, QSize, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QCheckBox, QDialog, QFormLayout, QFrame, QHeaderView, QHBoxLayout, QLabel,
@@ -28,7 +28,7 @@ from studio_style import (
     ActionFlowLayout, CompactComboBox, CompactSpinBox, CONTROL_HEIGHT,
     STUDIO_STYLESHEET, SidebarGroupBox, configure_form, field_label,
 )
-from truba_file_browser import TrubaFileBrowser
+from truba_file_browser import TrubaFileBrowser, modified_date_text
 from truba_files import project_root, sync_tree
 from ui_language import translate
 
@@ -192,20 +192,23 @@ class InputFileTree(QTreeWidget):
             yield child
             yield from InputFileTree.walk(child)
 
-    def add_path(self, item, root):
+    def add_path(self, item, root, modified=None):
         parent = self.invisibleRootItem()
         folder = ""
         for part in Path(item.path).parts[:-1]:
             folder = f"{folder}/{part}" if folder else part
             if folder not in self.folders:
-                self.add_path(InputFileItem(folder), root)
+                self.add_path(InputFileItem(folder), root, modified)
             parent = self.folders[folder]
         directory = item.job_order is None
         if directory:
             self.folders[item.path] = item
         item.setIcon(0, self.folder_icon if directory else self.file_icon)
         if root is not None:
-            item.setToolTip(0, str(root / item.path))
+            path = root / item.path
+            item.setToolTip(0, str(path))
+            timestamp = jobs.file_modified_time(path) if modified is None else modified.get(item.path)
+            item.setText(2, modified_date_text(timestamp))
         parent.addChild(item)
 
     def clear(self):
@@ -239,12 +242,16 @@ class InputFileTree(QTreeWidget):
         self.folders = {}
         self.folder_icon = self.style().standardIcon(QStyle.StandardPixmap.SP_DirIcon)
         self.file_icon = self.style().standardIcon(QStyle.StandardPixmap.SP_FileIcon)
-        self.setColumnCount(2)
+        self.setColumnCount(3)
         self.setColumnHidden(1, True)
         self.header().setStretchLastSection(False)
         self.header().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         self.header().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
-        self.setHeaderHidden(True)
+        self.header().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        self.set_headers()
+        language = getattr(QApplication.instance(), "_rustmech_language", None)
+        if language is not None:
+            language.changed.connect(self.set_headers)
         self.setProperty("preserveItemText", True)
         self.setUniformRowHeights(True)
         self.setMinimumHeight(63)
@@ -252,6 +259,9 @@ class InputFileTree(QTreeWidget):
         help_text = translate("Use Ctrl or Shift to select files. Press Space to check or uncheck selected scripts.")
         self.setAccessibleDescription(help_text)
         self.setToolTip(help_text)
+
+    def set_headers(self, *_):
+        self.setHeaderLabels([translate("Name"), translate("Job order"), translate("Date modified")])
 
     def sizeHint(self):
         size = super().sizeHint()
@@ -333,6 +343,9 @@ class EsenWorkspace(QDialog):
         self.local_stop = Event()
         self.record = None
         self.input_root = None
+        self._browse_root = None
+        self._input_locations = [""]
+        self._input_location = 0
         self.entry = ""
         self.extra = []
         self.command_valid = False
@@ -425,6 +438,28 @@ class EsenWorkspace(QDialog):
         actions.addStretch()
         layout.addLayout(actions)
 
+        self.input_back = command("", lambda: self._step_input_directory(-1), hint="Previous folder")
+        self.input_forward = command("", lambda: self._step_input_directory(1), hint="Next folder")
+        self.input_up = command("", self._up_input_directory, hint="Up")
+        navigation = QHBoxLayout()
+        navigation.setSpacing(INPUT_TOOL_SPACING)
+        for button, icon in ((self.input_back, QStyle.StandardPixmap.SP_ArrowBack),
+                             (self.input_forward, QStyle.StandardPixmap.SP_ArrowForward),
+                             (self.input_up, QStyle.StandardPixmap.SP_FileDialogToParent)):
+            button.setProperty("compactInputAction", True)
+            button.setAccessibleName(button.toolTip())
+            button.setIcon(self.style().standardIcon(icon))
+            button.setIconSize(QSize(14, 14))
+            button.setFixedWidth(CONTROL_HEIGHT)
+            navigation.addWidget(button)
+        self.input_path = QLineEdit()
+        self.input_path.setReadOnly(True)
+        self.input_path.setFixedHeight(CONTROL_HEIGHT)
+        self.input_path.setAccessibleName("Job folder path")
+        self.input_path.textChanged.connect(self.input_path.setToolTip)
+        navigation.addWidget(self.input_path, 1)
+        layout.addLayout(navigation)
+
         self.input_filter = QLineEdit()
         self.input_filter.setObjectName("esenFileFilter")
         self.input_filter.setFixedHeight(CONTROL_HEIGHT)
@@ -449,6 +484,8 @@ class EsenWorkspace(QDialog):
         self.inputs.setAccessibleName("LAMMPS input files")
         self.inputs.itemChanged.connect(self._select_local_input)
         self.inputs.itemClicked.connect(self._select_local_input)
+        self.inputs.itemActivated.connect(self._open_input_directory)
+        self.inputs.setExpandsOnDoubleClick(False)
         self.inputs.itemSelectionChanged.connect(self._local_selection_changed)
         layout.addWidget(self.inputs, 1)
         self.transfer_progress = QProgressBar()
@@ -623,10 +660,11 @@ class EsenWorkspace(QDialog):
         # Reserve space for the shared focus border on both sides.
         toolbar_labels = (self.batch_folder, self.upload, self.sync)
         navigation = self.truba_browser.navigation_buttons
+        local_navigation = (self.input_back, self.input_forward, self.input_up)
         history_actions = (self.select_history, self.delete_job)
         history_commands = (self.use_inputs, self.refresh, self.resume, self.stop)
         other_buttons = [button for button in self._command_buttons
-                         if button not in (*toolbar_labels, *self._compact_input_actions, *navigation,
+                         if button not in (*toolbar_labels, *self._compact_input_actions, *navigation, *local_navigation,
                                            *history_actions, *history_commands)]
         for group in (other_buttons, toolbar_labels, navigation, history_actions, history_commands):
             width = max(button.sizeHint().width() for button in group) + 2
@@ -776,6 +814,55 @@ class EsenWorkspace(QDialog):
             self.inputs.clear()
         self._preview()
 
+    def _open_input_directory(self, item, _column):
+        if item.job_order is None:
+            self._visit_input_directory(item.path)
+
+    def _up_input_directory(self):
+        parent = PurePosixPath(self._input_locations[self._input_location]).parent
+        self._visit_input_directory(parent.as_posix() if parent.parts else "")
+
+    def _visit_input_directory(self, path):
+        if path == self._input_locations[self._input_location]:
+            return
+        self._input_location += 1
+        self._input_locations[self._input_location:] = [path]
+        self._restore_input_directory()
+        self._buttons()
+
+    def _step_input_directory(self, step):
+        self._input_location += step
+        self._restore_input_directory()
+        self._buttons()
+
+    def _sync_input_browse_root(self):
+        root = self.folder_root or self.input_root
+        if root != self._browse_root:
+            self._browse_root = root
+            self._input_locations = [""]
+            self._input_location = 0
+            self.inputs.setRootIndex(QModelIndex())
+        return root
+
+    def _restore_input_directory(self):
+        self._sync_input_browse_root()
+        path = self._input_locations[self._input_location]
+        if path and path not in self.inputs.folders:
+            self._input_locations = [""]
+            self._input_location = 0
+            path = ""
+        else:
+            locations = [name for name in self._input_locations if not name or name in self.inputs.folders]
+            if locations != self._input_locations:
+                self._input_location = sum(not name or name in self.inputs.folders
+                                           for name in self._input_locations[:self._input_location])
+                self._input_locations = locations
+        folder = self.inputs.folders.get(path)
+        with QSignalBlocker(self.inputs):
+            self.inputs.clearSelection()
+            self.inputs.setRootIndex(self.inputs.indexFromItem(folder) if folder else QModelIndex())
+        self.inputs.scrollToTop()
+
     def _clear_batch_source(self):
         self.reuse_batch = []
         if self.folder_scan is not None:
@@ -818,14 +905,14 @@ class EsenWorkspace(QDialog):
         (scan, checked), self.folder_scan = self.folder_scan, None
         remote = self.target.currentData() == "remote"
         try:
-            directories, names = scan.result()
+            directories, names, modified = scan.result()
         except (OSError, ValueError) as error:
             self.folder_error = str(error)
         else:
             self.folder_slurm = any(map(jobs.is_slurm_script, names))
             with QSignalBlocker(self.inputs):
                 for name in directories:
-                    self.inputs.add_path(InputFileItem(name), self.folder_root)
+                    self.inputs.add_path(InputFileItem(name), self.folder_root, modified)
                 for position, name in enumerate(names):
                     item = InputFileItem(name, position)
                     runnable = (jobs.is_slurm_script(name) if remote and self.folder_slurm else
@@ -834,7 +921,8 @@ class EsenWorkspace(QDialog):
                         selected = name in checked if checked is not None else not remote
                         item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
                         item.setCheckState(0, Qt.CheckState.Checked if selected else Qt.CheckState.Unchecked)
-                    self.inputs.add_path(item, self.folder_root)
+                    self.inputs.add_path(item, self.folder_root, modified)
+            self._restore_input_directory()
             self._sort_inputs()
             if not remote and next(self._folder_jobs(), None) is None:
                 self.folder_error = "No LAMMPS input scripts named in.* or *.in were found."
@@ -1092,8 +1180,13 @@ class EsenWorkspace(QDialog):
                     font.setBold(True)
                     item.setFont(0, font)
             self.inputs.expandToDepth(0)
+            self._restore_input_directory()
             if names and (slurm or not self.entry):
-                self.inputs.setCurrentItem(self.inputs.items()[0])
+                path = self._input_locations[self._input_location]
+                first = next((item for item in self.inputs.items()
+                              if not path or item.path.startswith(f"{path}/")), None)
+                if first is not None:
+                    self.inputs.setCurrentItem(first)
         self._sort_inputs()
         self._preview()
 
@@ -1700,6 +1793,13 @@ class EsenWorkspace(QDialog):
         ready = authenticated and not self.remote_task if remote else not self.local_task
         batch_busy = bool(self.batch_active or self.batch_queue)
         uploading = self.upload_task is not None or self.sync_task is not None or self.run_list_task is not None
+        root = self._sync_input_browse_root()
+        path = self._input_locations[self._input_location]
+        self.input_path.setText(str(root / path) if root is not None else "")
+        browsing = not uploading and not self.folder_scan
+        self.input_back.setEnabled(browsing and self._input_location > 0)
+        self.input_forward.setEnabled(browsing and self._input_location + 1 < len(self._input_locations))
+        self.input_up.setEnabled(browsing and bool(path))
         if remote:
             if self._run_truba_selection:
                 ready = ready and self.truba_browser.task is None

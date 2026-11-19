@@ -5,7 +5,7 @@ from pathlib import Path, PurePosixPath
 import re
 from stat import S_ISDIR, S_ISLNK, S_ISREG
 
-from PySide6.QtCore import QLocale, Qt
+from PySide6.QtCore import QDateTime, QLocale, Qt
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QHeaderView, QHBoxLayout, QLabel, QLineEdit, QStyle,
     QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
@@ -16,6 +16,10 @@ from esen_jobs import RUN_LIST, is_input_script, is_slurm_script
 from studio_style import ActionFlowLayout, CONTROL_HEIGHT
 import truba_files
 from ui_language import translate
+
+
+def modified_date_text(timestamp):
+    return "" if timestamp is None else QDateTime.fromSecsSinceEpoch(timestamp).toString("yyyy-MM-dd HH:mm")
 
 
 BUSY_MESSAGES = {
@@ -87,10 +91,11 @@ class TrubaFileBrowser(QWidget):
         self.files.setProperty("preserveItemText", True)
         self.files.setRootIsDecorated(False)
         self.files.setUniformRowHeights(True)
-        self.files.setColumnCount(2)
+        self.files.setColumnCount(3)
         self.files.header().setStretchLastSection(False)
         self.files.header().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         self.files.header().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        self.files.header().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
         self.files.itemActivated.connect(self._open_folder)
         self.files.itemSelectionChanged.connect(self._update_controls)
         layout.addWidget(self.files, 1)
@@ -127,7 +132,7 @@ class TrubaFileBrowser(QWidget):
         self._update_controls()
 
     def _set_headers(self, *_):
-        self.files.setHeaderLabels([translate("Name"), translate("Size")])
+        self.files.setHeaderLabels([translate("Name"), translate("Size"), translate("Date modified")])
 
     def showEvent(self, event):
         super().showEvent(event)
@@ -369,7 +374,7 @@ class TrubaFileBrowser(QWidget):
             mode = entry.st_mode or 0
             folder = S_ISDIR(mode)
             size = "" if folder or entry.st_size is None else locale.formattedDataSize(entry.st_size)
-            row = QTreeWidgetItem([entry.filename, size])
+            row = QTreeWidgetItem([entry.filename, size, modified_date_text(getattr(entry, "st_mtime", None))])
             row.setData(0, Qt.ItemDataRole.UserRole, mode)
             row.setToolTip(0, entry.filename)
             if entry.filename == selected_name:

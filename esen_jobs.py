@@ -156,7 +156,14 @@ def scan_folder_files(root, *, include_results=False, directories=None):
 def scan_folder_tree(root, *, include_results=False):
     directories = []
     files = scan_folder_files(root, include_results=include_results, directories=directories)
-    return directories, files
+    modified = {name: file_modified_time(root / name) for name in (*directories, *files)}
+    return directories, files, modified
+
+
+def file_modified_time(path):
+    with suppress(OSError):
+        return int(path.stat().st_mtime)
+    return None
 
 
 def save_job(directory, record, **changes):
