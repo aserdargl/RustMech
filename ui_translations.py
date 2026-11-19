@@ -27,6 +27,7 @@ Add Folder|Klasör Ekle
 Select Folder|Klasör Seç
 Upload to TRUBA|TRUBA’ya Aktar
 Upload the folder to TRUBA before running selected scripts.|Seçtiğiniz betikleri çalıştırmadan önce klasörü TRUBA’ya aktarın.
+Run syncs the folder and submits the selected Slurm scripts with their resource settings.|Çalıştır, klasörü TRUBA’ya eşitler ve seçili Slurm betiklerini kendi kaynak ayarlarıyla gönderir.
 Uploading folder to TRUBA…|Klasör TRUBA’ya aktarılıyor…
 Uploaded to TRUBA: {path}|TRUBA’ya aktarıldı: {path}
 Folder upload failed: {error}|Klasör aktarılamadı: {error}

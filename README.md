@@ -33,6 +33,21 @@ geçmişteki işi seçip **Girdileri yeniden kullan** düğmesine basın ve hede
 
 ### Klasörden TRUBA’ya toplu gönderim
 
+Hazır Slurm betikleriyle çalışmak için TRUBA hedefini seçin ve **Klasör Seç**
+ile `run_*.slurm` dosyalarını içeren proje klasörünü açın. Çalıştıracağınız
+betikleri işaretleyin ve **Çalıştır** düğmesine basın. ESEN proje girdilerini
+TRUBA’ya aktarır ve her betiği kendi klasöründeki göreli yollarla ayrı bir
+Slurm işi olarak gönderir. Aynı aktarım birden fazla işte kullanılır.
+Çalışan işlerin ayrı çalışma kopyaları vardır.
+
+Kuyruk, hesap, MPI görev sayısı, bellek ve süreyi betiğin `#SBATCH`
+satırlarında belirleyin. ESEN iş takibi için iş adını, çalışma dizinini ve
+standart günlük yollarını ayarlar. MPI ile derlenmiş LAMMPS'i örneğin
+`mpirun -np "$SLURM_NTASKS" lmp -in 07-cekme.in` ile başlatın. İş durumu,
+günlükler ve çıktılar **İş geçmişi**'nde görünür.
+
+### Klasörden LAMMPS girdi betiği gönderimi
+
 **TRUBA analiz klasörü…** ile tek bir analiz klasörünü veya bağımsız analizleri
 içeren üst klasörü seçin. ESEN, seçilen klasörü ve alt klasörlerini tarar ve
 `in.*` ya da `*.in` betiği bulduğu her klasörü bir satırda gösterir. `Results`

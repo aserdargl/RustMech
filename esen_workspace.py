@@ -172,6 +172,8 @@ class EsenWorkspace(QDialog):
         self.folder_scan = None
         self.folder_error = ""
         self.folder_upload = None
+        self.folder_slurm = False
+        self.folder_replay = False
         self.upload_task = None
         self.upload_error = ""
         self.batch_queue = {}
@@ -501,7 +503,8 @@ class EsenWorkspace(QDialog):
     def _scan_folder(self, checked=None):
         if self.folder_scan is not None:
             self.folder_scan[0].cancel()
-        root = self._folder_source()
+        root = (self.folder_root if self.folder_slurm and not self.folder_replay
+                else self._folder_source())
         remote = self.target.currentData() == "remote"
         self.folder_error = ""
         self.folder_scan = self.executor.submit(jobs.scan_folder_files, root, include_results=remote), checked
@@ -515,6 +518,8 @@ class EsenWorkspace(QDialog):
         self.folder_root = self.folder_scan = None
         self.folder_error = ""
         self.folder_upload = None
+        self.folder_slurm = False
+        self.folder_replay = False
         self.upload_error = ""
 
     def _check_folder_scan(self):
@@ -527,11 +532,14 @@ class EsenWorkspace(QDialog):
         except (OSError, ValueError) as error:
             self.folder_error = str(error)
         else:
+            self.folder_slurm = any(map(jobs.is_slurm_script, names))
             with QSignalBlocker(self.inputs):
                 for name in names:
                     item = QListWidgetItem(name)
                     item.setToolTip(str(self.folder_root / name))
-                    if remote or jobs.is_input_script(name):
+                    runnable = (jobs.is_slurm_script(name) if remote and self.folder_slurm else
+                                remote or jobs.is_input_script(name))
+                    if runnable:
                         selected = name in checked if checked is not None else not remote
                         item.setCheckState(Qt.CheckState.Checked if selected else Qt.CheckState.Unchecked)
                     else:
@@ -547,9 +555,11 @@ class EsenWorkspace(QDialog):
             if item.checkState() == Qt.CheckState.Checked:
                 yield item.text()
 
-    def _folder_job_files(self, name):
+    def _folder_job_files(self, name, *, preview=False):
         path = jobs.relative_file(name)
-        return self._folder_source() / path.parent, path.name, (), True
+        root = (self.folder_root if preview and self.folder_slurm and not self.folder_replay
+                else self._folder_source())
+        return root / path.parent, path.name, (), True
 
     def _upload_ready(self, auth):
         return bool(auth and self.folder_upload and self.folder_upload[1] == auth.username
@@ -561,21 +571,23 @@ class EsenWorkspace(QDialog):
             return
         self.upload_error = ""
         future = self.executor.submit(jobs.upload_folder, self.history_root, self.folder_root, auth)
-        self.upload_task = (future, auth.username)
+        self.upload_task = (future, auth, ())
         self._preview()
 
     def _check_upload(self):
         if self.upload_task is None or not self.upload_task[0].done():
             return
-        (future, username), self.upload_task = self.upload_task, None
+        (future, auth, selected), self.upload_task = self.upload_task, None
         try:
             upload_id = future.result()
+            self.folder_upload = upload_id, auth.username
+            if selected:
+                self._queue_batch("remote", auth, selected=selected)
+            else:
+                self._scan_folder(checked=set(self._folder_jobs()))
         except Exception as error:
             self.upload_error = str(error)
-            self._preview()
-        else:
-            self.folder_upload = upload_id, username
-            self._scan_folder(checked=set(self._folder_jobs()))
+        self._preview()
 
     def _load_files(self, files):
         if not files or self.upload_task:
@@ -664,6 +676,8 @@ class EsenWorkspace(QDialog):
             raise ValueError("The selected input script is missing.")
         if self.target.currentData() == "local":
             return jobs.local_command(entry, self.ranks.value(), self.local_exe.text().strip(), self.local_mpi.text().strip())
+        if files is not None and self.folder_slurm and jobs.is_slurm_script(entry):
+            return jobs.read_slurm_script(root / jobs.relative_file(entry))
         settings = self._remote_settings(self.truba.analysis_auth())
         if settings["resume_input"]:
             relative = jobs.relative_file(settings["resume_input"])
@@ -678,17 +692,18 @@ class EsenWorkspace(QDialog):
 
     def _preview(self, *_):
         remote = self.target.currentData() == "remote"
+        slurm = remote and self.folder_slurm
         for field in self.local_fields:
             self.job_form.setRowVisible(field, not remote)
-        self.job_form.setRowVisible(self.partition, remote)
-        self.job_form.setRowVisible(self.walltime, remote)
-        self.truba_settings.setVisible(remote)
+        self.job_form.setRowVisible(self.partition, remote and not slurm)
+        self.job_form.setRowVisible(self.walltime, remote and not slurm)
+        self.truba_settings.setVisible(remote and not slurm)
         folder_mode = self.folder_root is not None
         self.use_as_script.setVisible(not folder_mode)
         self.remove_inputs.setVisible(not folder_mode)
         self.whole_folder.setVisible(not folder_mode)
         self.pick_root.setVisible(not folder_mode)
-        self.upload.setVisible(remote)
+        self.upload.setVisible(remote and not slurm)
         first = next(self._folder_jobs(), None) if folder_mode else None
         root, entry, extra, whole_folder = self._input_files()
         try:
@@ -697,7 +712,7 @@ class EsenWorkspace(QDialog):
                                                        else "Select a script to run."))
             work_subdir = ""
             if first:
-                root, entry, extra, whole_folder = self._folder_job_files(first)
+                root, entry, extra, whole_folder = self._folder_job_files(first, preview=True)
                 if remote and Path(first).parent != Path():
                     work_subdir = Path(first).parent.as_posix()
             invocation = self._command((root, entry, extra, whole_folder), work_subdir=work_subdir)
@@ -716,11 +731,13 @@ class EsenWorkspace(QDialog):
                 upload_id, username = self.folder_upload
                 path = jobs.upload_location(upload_id, username) + "/inputs"
                 lines.append(translate("Uploaded to TRUBA: {path}").format(path=path))
-            else:
+            elif not slurm:
                 lines.append(translate("Upload the folder to TRUBA before running selected scripts."))
             if self.upload_error:
                 lines.append(translate("Folder upload failed: {error}").format(error=self.upload_error))
-        if remote:
+        if slurm:
+            lines.append(translate("Run syncs the folder and submits the selected Slurm scripts with their resource settings."))
+        elif remote:
             lines.append(translate("Preview values are estimates. Slurm limits apply at submission."))
         if folder_mode and self.inputs.count():
             lines.append(translate("{files} files · {scripts} scripts selected").format(
@@ -807,6 +824,19 @@ class EsenWorkspace(QDialog):
             return
         try:
             if self.folder_root is not None:
+                if target == "remote" and self.folder_slurm:
+                    if not self.command_valid or self.folder_scan:
+                        return
+                    selected = tuple(self._folder_jobs())
+                    if not selected:
+                        return
+                    self.upload_error = ""
+                    source = self._folder_source() if self.folder_replay else self.folder_root
+                    future = self.executor.submit(jobs.sync_slurm_folder, self.history_root,
+                                                  source, auth, selected)
+                    self.upload_task = future, auth, selected
+                    self._preview()
+                    return
                 if target == "remote" and not self._upload_ready(auth):
                     return
                 self._queue_batch(target, auth)
@@ -836,8 +866,9 @@ class EsenWorkspace(QDialog):
                                       memory_mib=memory_mib)
         self.local_task = (directory, future)
 
-    def _queue_batch(self, target, auth):
-        selected = list(self._folder_jobs())
+    def _queue_batch(self, target, auth, *, selected=None):
+        if selected is None:
+            selected = list(self._folder_jobs())
         if not selected:
             raise ValueError("Select a script to run.")
         root = self.folder_root
@@ -991,12 +1022,12 @@ class EsenWorkspace(QDialog):
         ready = authenticated and not self.remote_task if remote else not self.local_task
         batch_busy = bool(self.batch_active or self.batch_queue)
         uploading = self.upload_task is not None
-        if remote and self.folder_root is not None:
+        if remote and self.folder_root is not None and not self.folder_slurm:
             ready = ready and self._upload_ready(auth)
         self.start.setEnabled(self.command_valid and ready and not batch_busy and not uploading)
-        self.upload.setEnabled(bool(remote and authenticated and self.folder_root is not None
+        self.upload.setEnabled(bool(remote and authenticated and not self.folder_slurm and self.folder_root is not None
                                     and not self.folder_scan and not uploading and not batch_busy))
-        for control in (self.target, self.batch_folder, self.load_files, self.pick_script):
+        for control in (self.target, self.batch_folder, self.load_files, self.pick_script, self.inputs):
             control.setEnabled(not uploading)
         item = self.inputs.currentItem()
         supporting_file_selected = bool(item and item.text() in self.extra)
@@ -1162,6 +1193,7 @@ class EsenWorkspace(QDialog):
                 self.target.setCurrentIndex(self.target.findData("remote"))
                 self.folder_root = Path(self.record["source"])
                 self.folder_upload = upload_id, self.record["username"]
+                self.folder_replay = True
                 self.resume_input.setText(self.record.get("resume_input", ""))
                 self._scan_folder(checked={self.record["name"]})
                 return

@@ -5,6 +5,7 @@ from contextlib import suppress
 from datetime import datetime
 from filecmp import cmp
 from functools import partial
+import hashlib
 import json
 import ntpath
 import os
@@ -71,6 +72,20 @@ def is_link(path):
 def is_input_script(name):
     path = Path(name)
     return path.name.lower().startswith("in.") or path.suffix.lower() == ".in"
+
+
+def is_slurm_script(name):
+    return re.fullmatch(r"run_.+\.slurm", Path(name).name, re.IGNORECASE) is not None
+
+
+def read_slurm_script(path):
+    try:
+        script = path.read_text(encoding="utf-8-sig")
+    except UnicodeError as error:
+        raise ValueError(f"Save the Slurm script as UTF-8: {path.name}") from error
+    if not script.startswith("#!") or "\x00" in script:
+        raise ValueError(f"Start the Slurm script with an interpreter line: {path.name}")
+    return script
 
 
 def scan_folder_files(root, *, include_results=False):
@@ -207,6 +222,92 @@ def upload_folder(history, root, auth):
             with suppress(Exception):
                 transport.command(f"rm -rf -- {quoted}")
             raise
+    return upload_id
+
+
+def sync_slurm_folder(history, root, auth, selected):
+    """Publish one content-identified snapshot for the selected Slurm jobs."""
+    if history.resolve().is_relative_to(root.resolve()):
+        raise ValueError("Choose a job folder outside the ESEN history directory.")
+    uploads = history / ".uploads"
+    uploads.mkdir(parents=True, exist_ok=True)
+    project_key = hashlib.sha256(
+        f"{auth.username}\0{os.path.normcase(str(root.resolve()))}".encode()
+    ).hexdigest()
+    latest = uploads / f"slurm-{project_key}.json"
+    previous_id = None
+    with suppress(OSError, ValueError, KeyError):
+        previous_id = json.loads(latest.read_text("utf-8"))["upload_id"]
+    with TemporaryDirectory(dir=uploads) as temporary:
+        staging = Path(temporary)
+        snapshot = snapshot_inputs(staging, root, None, (), True)
+        for name in selected:
+            read_slurm_script(snapshot / relative_file(name))
+
+        manifest = {}
+        for path in sorted(snapshot.rglob("*")):
+            digest = None
+            if path.is_file():
+                with path.open("rb") as stream:
+                    digest = hashlib.file_digest(stream, "sha256").hexdigest()
+            manifest[path.relative_to(snapshot).as_posix()] = digest
+        upload_id = hashlib.sha256(json.dumps(manifest, sort_keys=True).encode()).hexdigest()[:32]
+        destination = upload_snapshot(history, upload_id)
+        remote = upload_location(upload_id, auth.username)
+        published = shlex.quote(remote + "/inputs")
+        transport = RemoteTransport(RemoteContext(transport="ssh"), auth)
+        if transport.command(f"if test -d {published}; then printf 'READY=1\\n'; fi").strip() != "READY=1":
+            previous = {}
+            previous_root = ""
+            if previous_id and previous_id != upload_id:
+                previous_snapshot = upload_snapshot(history, previous_id)
+                with suppress(OSError, ValueError):
+                    previous = json.loads((previous_snapshot.parent / "manifest.json").read_text("utf-8"))
+                previous_root = shlex.quote(upload_location(previous_id, auth.username) + "/inputs")
+                if previous and transport.command(
+                    f"if test -d {previous_root}; then printf 'READY=1\\n'; fi"
+                ).strip() != "READY=1":
+                    previous = {}
+
+            unchanged = [name for name, digest in manifest.items()
+                         if digest is not None and previous.get(name) == digest]
+            reused = set(unchanged)
+            incoming = remote + "/.incoming-" + uuid4().hex
+            quoted = shlex.quote(incoming)
+            archive = staging / "inputs.tar.gz"
+            copy_list = staging / "copy.list"
+            copy_list.write_bytes(b"".join(name.encode("utf-8") + b"\0" for name in unchanged))
+            with tarfile.open(archive, "w:gz") as bundle:
+                bundle.add(copy_list, arcname="copy.list")
+                for name in manifest:
+                    if name not in reused:
+                        bundle.add(snapshot / relative_file(name), arcname="inputs/" + name, recursive=False)
+            transport.command(f"umask 077; mkdir -p -- {quoted}/inputs")
+            try:
+                transport.put(archive, incoming + "/inputs.tar.gz")
+                copy = ""
+                if unchanged:
+                    copy = f"""cd {previous_root}
+while IFS= read -r -d '' name; do
+    cp --reflink=auto --parents -- "$name" {quoted}/inputs
+done < {quoted}/copy.list
+"""
+                transport.command(f"""set -e
+tar -xzf {quoted}/inputs.tar.gz -C {quoted}
+{copy}mv -T -- {quoted}/inputs {published} || test -d {published}
+""", timeout=1800)
+            finally:
+                with suppress(Exception):
+                    transport.command(f"rm -rf -- {quoted}")
+        destination.parent.mkdir(exist_ok=True)
+        if not destination.is_dir():
+            try:
+                snapshot.rename(destination)
+            except OSError:
+                if not destination.is_dir():
+                    raise
+        write_record(destination.parent / "manifest.json", manifest)
+        write_record(latest, {"upload_id": upload_id})
     return upload_id
 
 
@@ -347,6 +448,10 @@ def full_node_resources(partition, walltime, catalog):
 
 def submit_full_node(directory, record, files, settings, auth):
     try:
+        if record.get("folder_upload") and is_slurm_script(record["name"]):
+            script = read_slurm_script(job_inputs(directory, record) / relative_file(record["name"]))
+            submit_remote(directory, record, files, script, auth)
+            return
         catalog = fetch_catalog(RemoteContext(transport="ssh"), auth, live_node_capacity=True)
         ranks, memory = full_node_resources(settings["partition"], settings["walltime"], catalog)
         script = remote_script(files[1], ranks, memory=memory, **settings,
@@ -443,8 +548,21 @@ def submit_remote(directory, record, files, script, auth):
         # the durable job ID or unique Slurm name, without replaying sbatch.
         save_job(directory, record, state="Submitting", username=auth.username)
         name = "ESEN-" + directory.name
+        options = ""
+        if upload_id and is_slurm_script(record["name"]):
+            working = (remote + "/work/" + record.get("work_subdir", "")).rstrip("/")
+            options = (f"--chdir={shlex.quote(working)} "
+                       f"--output={shlex.quote(remote + '/stdout.log')} "
+                       f"--error={shlex.quote(remote + '/stderr.log')} ")
+            # sbatch sets SLURM_SUBMIT_DIR from the caller's cwd.
+            batch_path = shlex.quote(remote + "/run.slurm")
+            submit_from = f"cd {shlex.quote(working)} && "
+        else:
+            batch_path = "run.slurm"
+            submit_from = ""
+        rejection = shlex.quote(remote + "/submit.err") if submit_from else "submit.err"
         reply = transport.command(f"""cd {shlex.quote(remote)} && {{
-if job=$(sbatch --parsable --job-name={name} run.slurm 2>submit.err); then
+if job=$({submit_from}sbatch --parsable --job-name={name} {options}{batch_path} 2>{rejection}); then
     job=${{job%%;*}}
     [[ "$job" =~ ^[0-9]+$ ]] || exit 2
     printf '%s\\n' "$job" > job.id.tmp && mv -- job.id.tmp job.id || exit 3
@@ -601,10 +719,11 @@ printf '\n'
         save_file_list(directory, record, names[:FILE_LIMIT], len(names) > FILE_LIMIT,
                        state="Results available" if names else "Waiting for results")
         return
+    outputs = remote_output_scan(record)
     reply = transport.command(f"""cd {shlex.quote(remote)} || exit
 set -eo pipefail
 printf 'FILES='
-find -P work -type f -printf '%P\\0' | sort -z | sed -z -n '1,{FILE_LIMIT + 1}p' | base64 -w0
+{outputs} | sort -z | sed -z -n '1,{FILE_LIMIT + 1}p' | base64 -w0
 printf '\\n'
 for log in {' '.join(LOGS)}; do
     if [ -f "$log" ] && [ ! -L "$log" ]; then printf 'LOG=%s\\n' "$log"; fi
@@ -615,6 +734,21 @@ done
     paths = ["work/" + name for name in names[:FILE_LIMIT]]
     paths[:0] = re.findall(r"^LOG=(stdout\.log|stderr\.log)$", reply, re.MULTILINE)
     save_file_list(directory, record, paths, len(names) > FILE_LIMIT)
+
+
+def remote_output_scan(record, *, archive=False):
+    """List changed files from a Slurm work copy and all files for legacy jobs."""
+    find = "find -P work -type f " + ("-print0" if archive else "-printf '%P\\0'")
+    if not (record.get("folder_upload") and is_slurm_script(record["name"])):
+        return find
+    source = shlex.quote(upload_location(record["folder_upload"], record["username"]) + "/inputs")
+    output = "$file" if archive else "${file#work/}"
+    return f"""find -P work -type f -print0 | while IFS= read -r -d '' file; do
+    original={source}/"${{file#work/}}"
+    if [ ! -f "$original" ] || ! cmp -s -- "$file" "$original"; then
+        printf '%s\\0' "{output}"
+    fi
+done"""
 
 
 def save_file_list(directory, record, paths, omitted, **changes):
@@ -651,12 +785,13 @@ def export_remote_results(directory, record, auth):
     root.mkdir(exist_ok=True)
     transport, remote = remote_location(directory, record, auth)
     archive = f".esen-results-{uuid4().hex}.tar.gz"
+    outputs = remote_output_scan(record, archive=True)
     # Select regular files explicitly so links and solver control files are excluded.
     script = f"""cd {shlex.quote(remote)} || exit
 set -eo pipefail
 umask 077
 {{
-    find -P work -type f -print0
+    {outputs}
     for log in {' '.join(LOGS)}; do
         if [ -f "$log" ] && [ ! -L "$log" ]; then printf '%s\\0' "$log"; fi
     done

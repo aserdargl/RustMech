@@ -216,6 +216,71 @@ class EsenTests(unittest.TestCase):
             self.assertTrue(all(remote + "/inputs" in command for command in copies))
             self.assertNotEqual(copies[0], copies[1])
 
+    def test_slurm_sync_reuses_remote_snapshot_and_uploads_only_changed_files(self):
+        run = self.source / "run_pilot.slurm"
+        run.write_text("#!/bin/bash\n#SBATCH --ntasks=56\n", encoding="utf-8")
+        (self.source / "obsolete.txt").touch()
+        with patch("esen_jobs.RemoteTransport") as factory:
+            transport = factory.return_value
+            transport.command.return_value = ""
+            upload_id = jobs.sync_slurm_folder(self.history, self.source, self.auth, [run.name])
+            transport.put.assert_called_once()
+            transport.reset_mock()
+            transport.command.return_value = "READY=1\n"
+            self.assertEqual(jobs.sync_slurm_folder(self.history, self.source, self.auth, [run.name]), upload_id)
+            transport.put.assert_not_called()
+            run.write_text("#!/bin/bash\n#SBATCH --ntasks=112\n", encoding="utf-8")
+            (self.source / "obsolete.txt").unlink()
+            transport.command.side_effect = ["", "READY=1\n", "", "", ""]
+
+            def inspect_delta(path, _remote):
+                with tarfile.open(path) as bundle:
+                    self.assertEqual(bundle.extractfile("copy.list").read(),
+                                     b"data/cell.lmp\0run example.txt\0")
+                    self.assertCountEqual(bundle.getnames(), [
+                        "copy.list", "inputs/data", "inputs/run_pilot.slurm",
+                    ])
+
+            transport.put.side_effect = inspect_delta
+            revised = jobs.sync_slurm_folder(self.history, self.source, self.auth, [run.name])
+            self.assertNotEqual(upload_id, revised)
+            self.assertTrue((jobs.upload_snapshot(self.history, upload_id) / "obsolete.txt").exists())
+            self.assertFalse((jobs.upload_snapshot(self.history, revised) / "obsolete.txt").exists())
+            self.assertIn("cp --reflink=auto --parents", transport.command.call_args_list[-2].args[0])
+
+    def test_slurm_submission_preserves_directives_and_uses_script_folder(self):
+        name = "data/run_pilot.slurm"
+        script = "#!/bin/bash\n#SBATCH --ntasks=56\nmpirun -np \"$SLURM_NTASKS\" lmp -in model.in\n"
+        upload_id = "a" * 32
+        snapshot = jobs.upload_snapshot(self.history, upload_id)
+        (snapshot / "data").mkdir(parents=True)
+        (snapshot / name).write_bytes(b"\xef\xbb\xbf" + script.replace("\n", "\r\n").encode())
+        directory, record = jobs.new_job(
+            self.source, name, "remote", None, parent=self.history,
+            folder_upload=(upload_id, self.auth.username),
+        )
+        files = (snapshot / "data", "run_pilot.slurm", (), True)
+        with (patch("esen_jobs.RemoteTransport") as factory,
+              patch("esen_jobs.fetch_catalog") as catalog):
+            transport = factory.return_value
+            transport.command.side_effect = ["", "JOB_ID=123\n"]
+            jobs.submit_full_node(directory, record, files, None, self.auth)
+            catalog.assert_not_called()
+            self.assertEqual((directory / "run.slurm").read_bytes(), script.encode())
+            submission = transport.command.call_args.args[0]
+            self.assertIn("/work/data && sbatch --parsable", submission)
+            self.assertIn(f"--job-name=ESEN-{directory.name}", submission)
+            self.assertIn("/stderr.log ", submission)
+            self.assertIn(f"/{directory.name}/submit.err", submission)
+            self.assertNotIn("--ntasks=", submission)
+            self.assertEqual(jobs.read_job(directory)["job_id"], "123")
+            transport.command.side_effect = None
+            encoded = base64.b64encode(b"data/stress.csv\0").decode()
+            transport.command.return_value = f"FILES={encoded}\nLOG=stdout.log\n"
+            jobs.remote_files(directory, record, self.auth)
+            self.assertIn("cmp -s", transport.command.call_args.args[0])
+            self.assertEqual(jobs.read_job(directory)["files"], ["stdout.log", "work/data/stress.csv"])
+
     def test_full_node_submission_uses_live_partition_and_matching_node_memory(self):
         directory, record = self.new_job()
         settings = dict(partition="smp", account=self.auth.username, walltime="00:02:00",
@@ -662,6 +727,60 @@ class EsenTests(unittest.TestCase):
         workspace._tick()
         self.assertEqual(list(workspace._folder_jobs()), ["02/in.run"])
         self.assertEqual(jobs.upload_snapshot(self.history, workspace.folder_upload[0]), snapshot)
+
+
+    def test_run_syncs_selected_slurm_scripts_and_waits_for_success(self):
+        app = QApplication.instance() or QApplication([])
+        preferences = QSettings(str(self.root / "settings.ini"), QSettings.Format.IniFormat)
+        for name in ("run_first.slurm", "run_second.slurm", "in.model"):
+            (self.source / name).write_text("#!/bin/bash\n", encoding="utf-8")
+        truba = FakeTruba()
+        truba.auth = self.auth
+        with patch("esen_workspace.QSettings", return_value=preferences):
+            workspace = EsenWorkspace(truba, history=self.history)
+        self.addCleanup(workspace.dispose)
+        workspace.show()
+        app.processEvents()
+        self.load_batch(workspace)
+        for index in range(workspace.inputs.count()):
+            item = workspace.inputs.item(index)
+            if item.text() == "in.model":
+                self.assertFalse(item.flags() & Qt.ItemFlag.ItemIsUserCheckable)
+            if item.text() == "run_second.slurm":
+                item.setCheckState(Qt.CheckState.Checked)
+        self.assertFalse(workspace.upload.isVisible())
+        self.assertTrue(workspace.start.isEnabled())
+        with (patch("esen_jobs.sync_slurm_folder") as sync,
+              patch("esen_jobs.submit_full_node") as launch):
+            sync.side_effect = OSError("sync interrupted")
+            workspace.start.click()
+            with self.assertRaisesRegex(OSError, "sync interrupted"):
+                workspace.upload_task[0].result(timeout=5)
+            workspace._tick()
+            self.assertIn("sync interrupted", workspace.input_note.text())
+            launch.assert_not_called()
+            self.assertEqual(workspace.history.count(), 0)
+            self.assertTrue(workspace.start.isEnabled())
+            upload_id = "b" * 32
+            sync.side_effect = None
+            sync.return_value = upload_id
+            snapshot = jobs.upload_snapshot(self.history, upload_id)
+            snapshot.mkdir(parents=True)
+            (snapshot / "run_second.slurm").write_text("#!/bin/bash\n", encoding="utf-8")
+            launch.side_effect = lambda directory, record, *_: jobs.save_job(
+                directory, record, state="Submitted", job_id="123"
+            )
+            workspace.start.click()
+            workspace.upload_task[0].result(timeout=5)
+            workspace._tick()
+            if workspace.remote_task:
+                workspace.remote_task[1].result(timeout=5)
+                workspace._tick()
+            sync.assert_called_with(self.history, self.source.resolve(), self.auth, ("run_second.slurm",))
+            launch.assert_called_once()
+            self.assertEqual(workspace.history.count(), 1)
+            self.assertIn("run_second.slurm", workspace.history.item(0).text())
+            self.assertIn("Submitted", workspace.history.item(0).text())
 
 
 if __name__ == "__main__":
