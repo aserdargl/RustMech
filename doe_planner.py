@@ -4,13 +4,13 @@ from dataclasses import replace
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QGridLayout, QLabel,
-    QPushButton, QCheckBox, QListWidget, QTreeWidget, QTreeWidgetItem,
+    QButtonGroup, QPushButton, QCheckBox, QListWidget, QTreeWidget, QTreeWidgetItem,
     QTabWidget, QScrollArea, QSplitter, QSizePolicy,
 )
 
 from model import MIN_MESH_INPUT_MM, validate_geometry
 from structure_library import STRUCTURE_FAMILIES
-from studio_style import CompactComboBox, CONTROL_HEIGHT, NUMERIC_FIELD_WIDTH, SidebarGroupBox
+from studio_style import ActionFlowLayout, CompactComboBox, CONTROL_HEIGHT, NUMERIC_FIELD_WIDTH, SidebarGroupBox
 
 
 SELECTED_LABEL_WIDTH = 132
@@ -24,6 +24,35 @@ def geometry_group(settings):
             settings.imported_geometry_path, settings.test_profile)
 
 
+class DoENavigation(QWidget):
+    """Show tab selections as command buttons while retaining the tab model."""
+
+    def __init__(self):
+        super().__init__()
+        self.setObjectName('doeNavigation')
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+        ActionFlowLayout(self, equal_width=True)
+
+    def add_button(self, button):
+        button.setFixedHeight(CONTROL_HEIGHT)
+        layout = self.layout()
+        previous = layout.itemAt(layout.count() - 1)
+        layout.addWidget(button)
+        if previous is not None:
+            QWidget.setTabOrder(previous.widget(), button)
+
+    def add_tabs(self, tabs):
+        group = QButtonGroup(self)
+        for index in range(tabs.count()):
+            button = QPushButton(tabs.tabText(index))
+            button.setCheckable(True)
+            group.addButton(button, index)
+            self.add_button(button)
+        group.button(tabs.currentIndex()).setChecked(True)
+        group.idClicked.connect(tabs.setCurrentIndex)
+        tabs.currentChanged.connect(lambda _: group.button(tabs.currentIndex()).setChecked(True))
+
+
 class SimpleDoEPlanner(QWidget):
     def __init__(self, studio, factor_specs):
         super().__init__()
@@ -34,26 +63,26 @@ class SimpleDoEPlanner(QWidget):
         self._group_factors = {}
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        file_actions = QHBoxLayout()
-        file_actions.setSpacing(6)
+        self.navigation = DoENavigation()
+        layout.addWidget(self.navigation)
         s.open_plan_btn = QPushButton('Open')
         s.save_plan_btn = QPushButton('Save')
         s.open_plan_btn.clicked.connect(s.open_plan_dialog)
         s.save_plan_btn.clicked.connect(s.save_plan_dialog)
-        s._size_action_group(s.open_plan_btn, s.save_plan_btn)
-        file_actions.addWidget(s.open_plan_btn)
-        file_actions.addWidget(s.save_plan_btn)
+        self.navigation.add_button(s.open_plan_btn)
+        self.navigation.add_button(s.save_plan_btn)
+        plan_status = QHBoxLayout()
         s.plan_file_label = QLabel('Untitled plan')
         s.plan_file_label.setObjectName('mutedHintLabel')
         s.plan_file_label.setMinimumWidth(140)
         s.plan_file_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
-        file_actions.addWidget(s.plan_file_label, 1)
+        plan_status.addWidget(s.plan_file_label, 1)
         from ui_language import LanguageSelector, install_language
         self.language_selector = LanguageSelector(install_language(), self)
-        file_actions.addWidget(self.language_selector)
-        layout.addLayout(file_actions)
+        plan_status.addWidget(self.language_selector)
+        layout.addLayout(plan_status)
         self.tabs = s.settings_tabs = QTabWidget()
-        self.tabs.tabBar().setExpanding(False)
+        self.tabs.tabBar().hide()
         layout.addWidget(self.tabs)
         page = QWidget()
         page_layout = QVBoxLayout(page)

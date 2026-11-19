@@ -175,6 +175,17 @@ class DoEWindowTests(unittest.TestCase):
 
     def test_geometry_actions_and_matrix_tabs_fit_their_content(self):
         _, studio = self.window()
+        navigation = studio.planner.navigation.layout()
+        buttons = [navigation.itemAt(index).widget() for index in range(navigation.count())]
+        self.assertEqual(buttons[:2], [studio.open_plan_btn, studio.save_plan_btn])
+        self.assertEqual([button.text() for button in buttons[2:]],
+                         [studio.settings_tabs.tabText(index)
+                          for index in range(studio.settings_tabs.count())])
+        self.assertEqual(len({button.width() for button in buttons}), 1)
+        self.assertTrue(studio.settings_tabs.tabBar().isHidden())
+        studio.save_plan_btn.setFocus()
+        QTest.keyClick(studio.save_plan_btn, Qt.Key.Key_Tab)
+        self.assertTrue(buttons[2].hasFocus())
         self.assertEqual(studio.settings_tabs.tabText(0), "Design experiments")
         self.assertEqual(studio.settings_tabs.tabText(3), "Experiment matrix")
         self.assertEqual(studio.plan_splitter.count(), 3)
@@ -183,9 +194,22 @@ class DoEWindowTests(unittest.TestCase):
         self.assertEqual(studio.plan_splitter.handleWidth(), 3)
         self.assertEqual(studio.vertical_splitter.handleWidth(), 3)
         self.assertFalse(studio.matrix_tabs.expanding())
-        studio.settings_tabs.setCurrentIndex(3)
+        buttons[5].click()
         self.app.processEvents()
-        self.assertLess(studio.matrix_tabs.width(), studio.width() // 2)
+        self.assertEqual(studio.settings_tabs.currentIndex(), 3)
+        self.assertTrue(buttons[5].isChecked())
+        matrix = studio.matrix_navigation.layout()
+        experiments, learning = [matrix.itemAt(index).widget() for index in range(matrix.count())]
+        self.assertLess(experiments.width() + learning.width(), studio.width() // 2)
+        self.assertEqual(experiments.width(), learning.width())
+        learning.click()
+        self.assertEqual(studio.matrix_tabs.currentIndex(), 1)
+        studio.matrix_tabs.setCurrentIndex(0)
+        self.assertTrue(experiments.isChecked())
+        studio.table.setFocus()
+        QTest.keyClick(studio.table, Qt.Key.Key_Tab, Qt.KeyboardModifier.ControlModifier)
+        self.assertEqual(studio.settings_tabs.currentIndex(), 4)
+        self.assertTrue(buttons[6].isChecked())
         for buttons in studio._action_groups:
             self.assertEqual(len({button.size().width() for button in buttons}), 1)
             for button in buttons:

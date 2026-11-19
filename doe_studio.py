@@ -602,7 +602,7 @@ class DoEStudioWidget(TrubaParallelMixin, QWidget):
         self.vertical_splitter.setOpaqueResize(True)
         self.vertical_splitter.setHandleWidth(3)
 
-        from doe_planner import SimpleDoEPlanner
+        from doe_planner import DoENavigation, SimpleDoEPlanner
         self.planner = SimpleDoEPlanner(self, (*FACTOR_SPECS, SIZE_FACTOR_SPEC))
         self.vertical_splitter.addWidget(self.planner)
 
@@ -614,15 +614,16 @@ class DoEStudioWidget(TrubaParallelMixin, QWidget):
         bottom_layout = QVBoxLayout(bottom_panel)
         bottom_layout.setContentsMargins(0, 0, 0, 0)
         bottom_layout.setSpacing(4)
-        self.matrix_tabs = QTabBar()
+        self.matrix_tabs = QTabBar(bottom_panel)
         self.matrix_tabs.setObjectName("doeMatrixTabs")
         self.matrix_tabs.setExpanding(False)
-        self.matrix_tabs.setDrawBase(True)
-        self.matrix_tabs.setShape(QTabBar.Shape.RoundedNorth)
         self.matrix_tabs.addTab("DoE experiment matrix")
         self.matrix_tabs.addTab("Machine learning matrix")
         self.matrix_tabs.currentChanged.connect(self._switch_matrix)
-        bottom_layout.addWidget(self.matrix_tabs, 0, Qt.AlignmentFlag.AlignLeft)
+        self.matrix_tabs.hide()
+        self.matrix_navigation = DoENavigation()
+        self.matrix_navigation.add_tabs(self.matrix_tabs)
+        bottom_layout.addWidget(self.matrix_navigation)
 
         # 3. Spreadsheet & Batch Execution Toolbar
         bar_frame = _DoEActionBar()
@@ -709,6 +710,7 @@ class DoEStudioWidget(TrubaParallelMixin, QWidget):
         from doe_sample_settings import SampleSettingsPage
         self.sample_settings = SampleSettingsPage(self)
         self.planner.tabs.addTab(self.sample_settings, "Sample Settings")
+        self.planner.navigation.add_tabs(self.planner.tabs)
         self.vertical_splitter.setStretchFactor(0, 0)
         self.vertical_splitter.setSizes([730])
         root.addWidget(self.vertical_splitter, 1)
@@ -1055,6 +1057,7 @@ class DoEStudioWidget(TrubaParallelMixin, QWidget):
         self.design_mesh_strategy.setEnabled(tetra)
         self.library_btn.setEnabled(idle)
         self.matrix_tabs.setEnabled(idle)
+        self.matrix_navigation.setEnabled(idle)
         self.sample_settings.setEnabled(idle)
         self.design_count_badge.setText(f"{len(self._designs)} designs")
         self.remove_design_btn.setEnabled(has_design and idle)
