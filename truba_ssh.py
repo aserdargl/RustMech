@@ -39,6 +39,17 @@ def unregister_session(username, client):
             del _sessions[username]
 
 
+def active_session_client(auth):
+    """Return the connection panel's authenticated client without opening SSH."""
+    with _lock:
+        cached = _sessions.get(auth.username)
+        if cached and cached[0] == auth.password and not cached[2]:
+            transport = cached[1].get_transport()
+            if transport is not None and transport.is_active() and transport.is_authenticated():
+                return cached[1]
+    raise ConnectionError("Connect through RustMech's TRUBA button first.")
+
+
 def close_owned_sessions():
     with _lock:
         for username, (_, client, owned) in list(_sessions.items()):

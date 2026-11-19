@@ -92,6 +92,20 @@ Automatic result download failed. Use Refresh job to retry.|Sonuçlar otomatik i
 Choose a TRUBA run folder under your scratch directory.|Scratch alanınızdaki bir TRUBA koşu klasörünü seçin.
 Stop job|İşi durdur
 Command preview|Komut önizlemesi
+TRUBA files|TRUBA dosyaları
+TRUBA folder path|TRUBA klasör yolu
+Up|Üst klasör
+Folder name|Klasör adı
+New folder|Yeni klasör
+Loading TRUBA files…|TRUBA dosyaları yükleniyor…
+Creating folder…|Klasör oluşturuluyor…
+This folder is empty.|Bu klasör boş.
+Enter a single folder name.|Tek bir klasör adı girin.
+This folder is outside the RustMech project.|Bu klasör RustMech projesinin dışında.
+TRUBA folder was not found.|TRUBA klasörü bulunamadı.
+Permission denied on TRUBA.|TRUBA'da erişim reddedildi.
+Could not load TRUBA files.|TRUBA dosyaları yüklenemedi.
+Could not create the folder. Check if the name already exists.|Klasör oluşturulamadı. Bu adın zaten kullanılıp kullanılmadığını kontrol edin.
 Logs and files|Günlükler ve dosyalar
 Standard output|Standart çıktı
 Standard error|Standart hata

@@ -183,7 +183,8 @@ class LanguageManager(QObject):
                     item = table.horizontalHeaderItem(index)
                     if item is not None:
                         self._property(table, f'header/{index}', item.text, item.setText)
-            if isinstance(widget, QAbstractItemView) and not isinstance(widget, QHeaderView):
+            if (isinstance(widget, QAbstractItemView) and not isinstance(widget, QHeaderView)
+                    and not widget.property("preserveItemText")):
                 if type(widget.itemDelegate()) is QStyledItemDelegate:
                     widget.setItemDelegate(_DisplayDelegate(widget))
         finally:

@@ -27,6 +27,7 @@ from studio_style import (
     ActionFlowLayout, CompactComboBox, CompactSpinBox, CONTROL_HEIGHT,
     STUDIO_STYLESHEET, SidebarGroupBox, configure_form, field_label,
 )
+from truba_file_browser import TrubaFileBrowser
 from ui_language import translate
 
 
@@ -54,7 +55,7 @@ QFrame[esenCard="true"] { background: #FCFCFB; border: 1px solid #D5DBE2; border
 QFrame[esenCard="paper"] { background: #FFFFFF; border: 1px solid #D5DBE2; border-radius: 7px; }
 #esenSection { background: #E5ECF4; border: 1px solid #D5DBE2; border-radius: 5px;
                color: #0F172A; font-size: 13px; padding: 0 5px; }
-#esenWorkspace QPlainTextEdit, #esenWorkspace QListWidget {
+#esenWorkspace QPlainTextEdit, #esenWorkspace QListWidget, #esenWorkspace QTreeWidget {
     background: #FFFFFF; border: 1px solid #DCE3EC; border-radius: 3px;
 }
 #esenWorkspace QListWidget::indicator { width: 13px; height: 13px; background: #FFFFFF;
@@ -242,7 +243,7 @@ class EsenWorkspace(QDialog):
         self.setWindowTitle(WORKSPACE_TITLE)
         self.setWindowFlag(Qt.WindowType.WindowMinMaxButtonsHint)
         self.setStyleSheet(STUDIO_STYLESHEET + ESEN_STYLE)
-        self.resize(1020, 750)
+        self.resize(1300, 750)
         self.truba = truba
         self.history_root = history if history is not None else jobs.jobs_directory()
         self.preferences = QSettings("RustMech", "RustMech")
@@ -302,7 +303,7 @@ class EsenWorkspace(QDialog):
         title.setFixedHeight(30)
         outer.addWidget(title)
         split = QSplitter(Qt.Orientation.Horizontal)
-        split.setObjectName("esenColumns")
+        split.setObjectName("esenThreeColumns")
         split.setChildrenCollapsible(False)
         split.setHandleWidth(7)
         outer.addWidget(split, 1)
@@ -320,7 +321,6 @@ class EsenWorkspace(QDialog):
         split.addWidget(right)
         split.setStretchFactor(0, 1)
         split.setStretchFactor(1, 1)
-        split.setSizes([405, 590])
 
         self.batch_folder = command("Folder", self._pick_batch_folder, hint="Select Folder")
         self.upload = command("Send Truba", self._upload_inputs, hint="Upload to TRUBA")
@@ -512,6 +512,13 @@ class EsenWorkspace(QDialog):
         self.download = command("Download", self._download, hint="Download file")
         layout.addLayout(button_row(self.open_file, self.download, self.open_folder, self.open_results_folder))
         right.setSizes([240, 450])
+
+        truba_card, truba_layout = panel("TRUBA files", paper=True)
+        self.truba_browser = TrubaFileBrowser(self.truba, self.executor, command)
+        truba_layout.addWidget(self.truba_browser, 1)
+        split.addWidget(truba_card)
+        split.setStretchFactor(2, 1)
+        split.setSizes([385, 570, 315])
 
         self.start = command("Run", self._start, role="esenRun", hint="Run LAMMPS")
         self.copy_ai = command("Copy AI", self._copy_ai, hint="Copy ESEN file preparation instructions for AI")
@@ -1365,6 +1372,7 @@ class EsenWorkspace(QDialog):
         self.download.setEnabled(bool(remote_ready and self.results.currentItem()))
 
     def _tick(self):
+        self.truba_browser.check_task()
         self._check_folder_scan()
         self._check_upload()
         for field in ("local_task", "remote_task"):
