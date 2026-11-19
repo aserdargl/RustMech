@@ -71,6 +71,10 @@ class AnalysisProcess:
             return self._remote_future.done()
         return not self._process.is_alive()
 
+    @property
+    def is_remote(self):
+        return self._remote_marker is not None
+
     def remote_status(self):
         if self._remote_marker is not None and self._remote_marker.exists():
             import json
@@ -104,6 +108,19 @@ class AnalysisProcess:
             self._process.close()
             self._scratch.cleanup()
 
+    def detach_remote(self):
+        """Finish the SSH submission and stop local tracking of the Slurm job."""
+        if self._remote_future is None:
+            self._terminate_local()
+            return None
+        self._remote_marker.with_suffix('.detach').touch()
+        self._remote_future.add_done_callback(self._cleanup_detached_remote)
+        return self._remote_future
+
+    def _cleanup_detached_remote(self, _):
+        self._remote_executor.shutdown(wait=False)
+        self._scratch.cleanup()
+
     def force_stop(self):
         if self._remote_marker is not None:
             if getattr(self,"_generic_remote_target",False): self._remote_marker.with_suffix(".cancel").touch()
@@ -119,6 +136,9 @@ class AnalysisProcess:
             self._remote_executor.shutdown(wait=False)
             self._scratch.cleanup()
             return
+        self._terminate_local()
+
+    def _terminate_local(self):
         if self._process.is_alive():
             if os.name == "nt":
                 # The same force-termination mechanism used by Task Manager,

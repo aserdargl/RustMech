@@ -6,9 +6,10 @@ import tempfile
 import unittest
 import shlex
 import subprocess
+from threading import Event
 from unittest.mock import MagicMock, patch
 
-from truba_remote import RemoteContext, run_remote_job
+from truba_remote import RemoteContext, run_remote_job, sync_background_analysis
 from truba_jobs import HOST, cancel_remote, write_record
 from truba_session import create_session, refresh_session, release_session, session_path
 from truba_session_worker import run_request
@@ -94,6 +95,31 @@ class ResourceSessionTests(unittest.TestCase):
         released = release_session(result)
         self.assertEqual(released['state'], 'released')
         self.assertIn('scancel 321', SessionTransport.commands[-1])
+
+    def test_detached_step_can_be_tracked_and_downloaded_after_reconnecting(self):
+        context = replace(self.context, session_id='321')
+        closing = Event()
+        closing.set()
+        result, directory = run_remote_job(dict(operation='probe'), context,
+            directory=self.root/'detached-step', detach_requested=closing)
+        self.assertIsNone(result)
+        path = directory/'remote_job.json'
+        record = json.loads(path.read_text())
+        self.assertTrue(record['detached'])
+        self.assertTrue(record['submission_attempted'])
+        self.assertEqual(record['job_id'], '321')
+        self.assertEqual(refresh_session(self.session)['state'], 'RUNNING')
+
+        SessionTransport.step = 'RUNNING'
+        self.assertIsNone(sync_background_analysis(record, None))
+        record = json.loads(path.read_text())
+        self.assertEqual(record['state'], 'session · running')
+        SessionTransport.step = 'COMPLETED|0:0'
+        result, _ = sync_background_analysis(record, None)
+        self.assertEqual(result['slurm_job_id'], '321')
+        self.assertEqual(json.loads(path.read_text())['state'], 'downloaded')
+        self.assertFalse(any('scancel' in script or 'sbatch' in script for script in SessionTransport.commands))
+        self.assertEqual(sum('mv --' in script for script in SessionTransport.commands), 1)
 
     def test_confirmed_release_clears_only_requests_owned_by_that_session(self):
         directory = self.root / 'active-request'

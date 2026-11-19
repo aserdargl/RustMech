@@ -178,7 +178,7 @@ def run_remote_folder_doe(index, settings, context, solve, destination, remote_a
     from types import SimpleNamespace
     from truba_remote import run_remote_doe
     payload = run_remote_doe(index, settings, context, solve, remote_auth, job_marker)
-    if solve:
+    if solve and payload is not None:
         try:
             row = SimpleNamespace(folder_job={'destination': destination})
             payload = collect_folder_output(row, payload)

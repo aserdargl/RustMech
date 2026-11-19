@@ -196,10 +196,8 @@ class RemoteModeUiTests(unittest.TestCase):
             self.assertEqual(submit.call_args.args[1].walltime, '72:00:00')
             self.assertEqual(submit.call_args.args[1].partition, 'auto')
             self.assertTrue(self.controller.requested)
-            self.assertTrue(self.controller.release_on_exit)
         finally:
             self.controller.session_future = None
-            self.controller.release_on_exit = False
 
     def test_ready_banner_requires_running_allocation_and_verified_runtime(self):
         from dataclasses import asdict
@@ -356,33 +354,54 @@ class RemoteModeUiTests(unittest.TestCase):
             controller.session_watch = False
             self.window._preview_is_remote = False
 
-    def test_close_waits_for_resource_release_and_failure_keeps_window_open(self):
+    def test_close_waits_for_submission_without_releasing_resource_session(self):
         from concurrent.futures import Future
         pending = Future()
-        self.controller.session = dict(job_id='321', state='RUNNING', ready=True)
-        self.controller.release_on_exit = True
-        with patch.object(self.controller.close_executor, 'submit', return_value=pending):
+        session = dict(job_id='321', state='PENDING')
+        self.controller.session_future = pending
+        self.controller.session_action = 'allocate'
+        with patch('remote_controller.release_session') as release:
             self.window.close()
-        self.assertTrue(self.window.isVisible())
-        self.assertTrue(self.controller.closing)
-        pending.set_exception(RuntimeError('VPN disconnected'))
-        self.controller.poll_close()
-        self.assertTrue(self.window.isVisible())
-        self.assertIn('not confirmed', self.window.status.text())
-        retry = Future()
-        retry.set_result(dict(job_id='321', state='released', ready=False))
-        with patch.object(self.controller.close_executor, 'submit', return_value=retry):
-            self.window.close()
+            self.assertTrue(self.window.isVisible())
+            self.assertTrue(self.controller.closing)
             self.controller.poll_close()
-        self.assertFalse(self.window.isVisible())
-        self.assertTrue(self.controller.close_confirmed)
+            self.assertTrue(self.window.isVisible())
+            pending.set_result(session)
+            self.controller.poll_close()
+            self.assertFalse(self.window.isVisible())
+            self.assertTrue(self.controller.close_confirmed)
+            release.assert_not_called()
 
-    def test_unattached_saved_session_is_not_cancelled_on_close(self):
+    def test_running_saved_session_stays_alive_on_close(self):
         self.controller.session = dict(job_id='321', state='RUNNING', ready=True)
-        self.controller.release_on_exit = False
-        with patch.object(self.controller.close_executor, 'submit') as submit:
-            self.assertTrue(self.controller.request_close())
+        self.controller.session_watch = True
+        with patch('remote_controller.release_session') as release:
+            self.window.close()
+            self.assertFalse(self.window.isVisible())
+            self.assertEqual(self.controller.session['state'], 'RUNNING')
+            release.assert_not_called()
+
+    def test_connection_refreshes_saved_session_only_for_its_owner(self):
+        from concurrent.futures import Future
+        from remote_controller import refresh_session
+        self.controller.session = dict(job_id='321', state='RUNNING', ready=True, username='tester')
+        pending = Future()
+        with patch.object(self.controller.session_executor, 'submit', return_value=pending) as submit:
+            owner = SimpleNamespace(username='other')
+            with patch.object(self.window.truba_dialog, 'analysis_auth', return_value=owner):
+                self.controller.connection_changed(True)
+                self.controller.poll_session()
             submit.assert_not_called()
+            owner.username = 'tester'
+            with patch.object(self.window.truba_dialog, 'analysis_auth', return_value=owner):
+                self.controller.connection_changed(True)
+                self.assertFalse(self.controller.session['ready'])
+                self.controller.poll_session()
+            submit.assert_called_once_with(refresh_session, self.controller.session, owner)
+        pending.set_result(dict(self.controller.session, ready=True))
+        self.controller.poll_session()
+        self.assertTrue(self.controller.session_watch)
+        self.assertTrue(self.controller.session['ready'])
 
     def test_old_debug_preference_does_not_shorten_the_72_hour_default(self):
         import json
@@ -695,30 +714,28 @@ class RemoteModeUiTests(unittest.TestCase):
         self.assertFalse(self.controller.requested)
         self.assertIn('Local mode', self.controller.status.text())
 
-    def test_unconfirmed_remote_cancel_keeps_workspace_open_and_job_available(self):
-        job=MagicMock()
-        job._generic_remote_target=True
-        job.force_stop.side_effect=RuntimeError("Connection unavailable")
-        self.window.analysis_job=job
-        self.window.reject()
+    def test_closing_detaches_active_remote_analyses_without_cancelling_them(self):
+        from concurrent.futures import Future
+        pending = Future()
+        analysis, flow, thermal, first_row, second_row = [MagicMock(is_remote=True) for _ in range(5)]
+        jobs = (analysis, flow, thermal, first_row, second_row)
+        for job in jobs:
+            job.detach_remote.return_value = pending
+        self.window.analysis_job = analysis
+        self.window.flow_workspace.job = flow
+        self.window.thermal_workspace.job = thermal
+        self.window.doe_studio._active_future = first_row
+        self.window.doe_studio._parallel_futures = {0: (first_row, 0), 1: (second_row, 0)}
+        self.window.close()
         self.assertTrue(self.window.isVisible())
-        self.assertIs(self.window.analysis_job,job)
-        self.window.analysis_job=None
-
-    def test_background_submission_survives_window_close_after_confirmation(self):
-        job = MagicMock(background_submission=True)
-        job.done.return_value = False
-        self.window.analysis_job = job
-        self.assertFalse(self.window._stop_remote_for_close())
-        self.assertIn('submission confirmation', self.window.status.text())
-        job.done.return_value = True
-        job.result.return_value = dict(request_id='a' * 32, job_id='123', state='submitted')
-        with patch.object(self.controller, 'request_close', return_value=True):
-            self.assertTrue(self.window._stop_remote_for_close())
         self.assertIsNone(self.window.analysis_job)
-        self.assertIn('RM-AAAAAAAAAAAA', self.window.status.text())
-        self.assertIn('Slurm #123', self.window.status.text())
-        job.force_stop.assert_not_called()
+        self.assertFalse(self.window.doe_studio._parallel_futures)
+        pending.set_result(None)
+        self.controller.poll_close()
+        self.assertFalse(self.window.isVisible())
+        for job in jobs:
+            job.detach_remote.assert_called_once_with()
+            job.force_stop.assert_not_called()
 
     def test_mechanics_cfd_and_cht_dispatch_only_remote_operations(self):
         self.enable()

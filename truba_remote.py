@@ -257,7 +257,7 @@ def _rebase_paths(directory,result):
 
 
 def run_remote_job(request,context,auth=None,marker=None,*,directory=None,resume_record=None,on_progress=None,cancelled=None,
-                   submit_only=False, poll_once=False):
+                   submit_only=False, poll_once=False, detach_requested=None):
     from remote_operations import required_capability
     study_name = context.study_name
     if not resume_record:
@@ -323,6 +323,11 @@ def run_remote_job(request,context,auth=None,marker=None,*,directory=None,resume
         return (saved.get('state') == 'cancelled'
                 or (cancelled is not None and cancelled.is_set())
                 or (marker is not None and Path(marker).with_suffix(".cancel").exists()))
+
+    def is_detaching():
+        return ((detach_requested is not None and detach_requested.is_set())
+                or (marker is not None and Path(marker).with_suffix('.detach').exists()))
+
     def update(stage):
         with job_record_lock:
             saved = json.loads(paths[0].read_text()) if paths[0].exists() else {}
@@ -372,7 +377,7 @@ printf 'RUSTMECH_JOB_ID=%s\n' "$(cat job.id)"
                       " mv -- "+shlex.quote(inbox+".tmp")+" "+shlex.quote(inbox)+"\n"+
                       " printf '%s\\n' "+job_id+" > job.id\nfi\n"+
                       "printf 'RUSTMECH_JOB_ID=%s\\n' \"$(cat job.id)\"\n")
-        if submit_only:
+        if not poll_once and (submit_only or marker is not None or detach_requested is not None):
             record["submission_attempted"] = True
             update("submitting")
             script = "trap '' HUP\n" + script
@@ -403,6 +408,10 @@ if [ -s job.id ]; then printf 'RUSTMECH_JOB_ID=%s\n' "$(cat job.id)"; fi
                 cancel_remote(paths[0],auth)
                 from concurrent.futures import CancelledError
                 raise CancelledError
+            if is_detaching():
+                record['detached'] = True
+                update(record['state'])
+                return None, directory
             if (context.auto_renew and record.get('session') and record.get('operation') in ('doe_mesh', 'doe_solve')
                     and time.monotonic() >= next_renewal_check):
                 from truba_handover import prepare_if_needed
@@ -431,6 +440,9 @@ if [ -s job.id ]; then printf 'RUSTMECH_JOB_ID=%s\n' "$(cat job.id)"; fi
             queue_state = value.partition("|")[0].rstrip("+")
             if not value or (poll_once and queue_state in SLURM_TERMINAL_STATES):
                 if record.get("session"):
+                    if poll_once:
+                        update('FAILED|Resource session ended before this analysis completed')
+                        return None
                     raise RuntimeError("Resource session ended before this analysis completed. Results and job record remain available.")
                 break
             if record.get("session"):
@@ -487,6 +499,8 @@ if [ -s job.id ]; then printf 'RUSTMECH_JOB_ID=%s\n' "$(cat job.id)"; fi
         return result,directory
     except BaseException:
         saved = json.loads(paths[0].read_text()) if paths[0].exists() else {}
+        if is_detaching() and record.get('submission_attempted') and not submit_only:
+            record['detached'] = True
         if saved.get("state")!="cancelled": update("interrupted; resume using this job record")
         raise
 
@@ -519,23 +533,26 @@ def load_remote_preview(directory, *, settings=None):
     return preview
 
 
-def run_remote_preview(settings,context,auth,on_progress,cancelled,*,include_mesh=True):
+def run_remote_preview(settings,context,auth,on_progress,cancelled,*,include_mesh=True,detach_requested=None):
     if not include_mesh:
         from mesh_engine import Preview, preview_key
-        return Preview(run_remote_surface(settings,context,auth,cancelled),None,preview_key(settings))
-    result,directory = run_remote_job(dict(operation="preview",settings=asdict(settings)),context,auth,on_progress=on_progress,cancelled=cancelled)
+        grid = run_remote_surface(settings,context,auth,cancelled,detach_requested=detach_requested)
+        return Preview(grid,None,preview_key(settings)) if grid is not None else None
+    result,directory = run_remote_job(dict(operation="preview",settings=asdict(settings)),context,auth,on_progress=on_progress,cancelled=cancelled,detach_requested=detach_requested)
+    if result is None:
+        return None
     preview = load_remote_preview(directory/"output/preview",settings=settings)
     return preview
 
 
 def run_remote_operation(request,context,remote_auth=None,job_marker=None):
     result,directory = run_remote_job(request,context,remote_auth,job_marker)
-    return str(directory/"output")
+    return str(directory/"output") if result is not None else None
 run_remote_operation.remote_job_target = True
 
 
 def submit_remote_analysis(request, context, remote_auth=None, job_marker=None):
-    # Use a standalone job so the analysis survives closing the resource session.
+    # Interactive mechanics and FFT keep their own independent Slurm allocation.
     return run_remote_job(request, replace(context, session_id=""), remote_auth, job_marker, submit_only=True)
 submit_remote_analysis.remote_job_target = True
 submit_remote_analysis.remote_submit_target = True
@@ -554,6 +571,8 @@ def sync_background_analysis(record, auth):
 
 def run_remote_level(settings,context,max_elements,selected,remote_auth=None,job_marker=None):
     result,_ = run_remote_job(dict(operation="convergence_level",settings=asdict(settings),max_elements=max_elements,selected=selected),context,remote_auth,job_marker)
+    if result is None:
+        return None
     from convergence_execution import Level
     from model import settings_from_dict
     value = result["level"]
@@ -567,7 +586,7 @@ def run_remote_doe(index,settings,context,solve,remote_auth=None,job_marker=None
     cores, _ = request_resources(context, 'doe_solve' if solve else 'doe_mesh')
     settings = replace(settings, cores=min(settings.cores, cores), automatic_cores=False)
     result,_ = run_remote_job(dict(operation="doe_solve" if solve else "doe_mesh",settings=asdict(settings),row=index),context,remote_auth,job_marker)
-    return result["row"]
+    return result["row"] if result is not None else None
 run_remote_doe.remote_job_target = True
 
 
@@ -578,11 +597,15 @@ def resume_remote_job(record_path,auth=None,marker=None):
 
 def retrieve_remote_operation(record_path,remote_auth=None,job_marker=None):
     result,directory = resume_remote_job(record_path,remote_auth,job_marker)
+    if result is None:
+        return None
     return dict(remote_retrieval=True,result=result,directory=str(directory))
 retrieve_remote_operation.remote_job_target = True
 
 
-def run_remote_surface(settings,context,auth,cancelled,on_progress=None):
-    result,directory = run_remote_job(dict(operation="surface",settings=asdict(settings)),context,auth,cancelled=cancelled,on_progress=on_progress)
+def run_remote_surface(settings,context,auth,cancelled,on_progress=None,*,detach_requested=None):
+    result,directory = run_remote_job(dict(operation="surface",settings=asdict(settings)),context,auth,cancelled=cancelled,on_progress=on_progress,detach_requested=detach_requested)
+    if result is None:
+        return None
     import pyvista as pv
     return pv.read(directory/"output/surface.vtp")

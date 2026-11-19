@@ -595,7 +595,7 @@ Stop remote check/setup|Uzak denetimi / kurulumu durdur
 Local mode. Connecting alone does not move computations to TRUBA.|Yerel mod. Bağlanmak tek başına hesaplamaları TRUBA'ya taşımaz.
 Local mode. Remote jobs already submitted can be retrieved using their records.|Yerel mod. Gönderilmiş uzak işler kayıtlarıyla geri alınabilir.
 No resource session. Wall time sets the requested session duration (72:00:00 = 3 days).|Kaynak oturumu yok. Oturum süresi istenen kaynak kullanım süresidir (72:00:00 = 3 gün).
-Default session: 72 hours. Auto prefers an eligible queue with an idle fit; Slurm decides start time. Apply runs generation on the ready session and downloads the geometry. Normal closing releases sessions allocated or explicitly attached here. Idle time counts.|Varsayılan oturum: 72 saat. Otomatik seçim uygun boş kaynakları tercih eder; başlangıç zamanını Slurm belirler. Uygula, hazır oturumda geometriyi üretip indirir. Normal kapanış, burada ayrılan veya bağlanan kaynakları bırakır. Boşta geçen süre de sayılır.
+The default session lasts 72 hours, including idle time. Closing RustMech keeps the session and submitted jobs running.|Varsayılan oturum boşta geçen süreyle birlikte 72 saat sürer. RustMech kapatıldığında oturum ve gönderilmiş işler devam eder.
 Queue unavailable. Connect and refresh limits or choose another queue.|Kuyruk kullanılamıyor. Bağlanıp sınırları yenileyin veya başka kuyruk seçin.
 Min: unavailable|Min: bilinmiyor
 Max: unavailable|Maks: bilinmiyor
@@ -608,7 +608,8 @@ Resource request submitted. Waiting for Slurm; runtime will be verified when rea
 Cancelling the remote check/setup job…|Uzak denetim / kurulum işi iptal ediliyor…
 TRUBA ready. Click Apply to generate the geometry remotely.|TRUBA hazır. Geometriyi uzakta üretmek için Uygula'ya tıklayın.
 TRUBA · remote compute|TRUBA · Uzak hesaplama
-TRUBA · releasing resources…|TRUBA · Kaynaklar bırakılıyor…
+TRUBA · saving work for reconnection…|TRUBA · Yeniden bağlantı için işler kaydediliyor…
+Saving TRUBA work before closing…|Kapatmadan önce TRUBA işleri kaydediliyor…
 Finish or stop current computations before changing execution mode.|Çalıştırma modunu değiştirmeden önce hesaplamaları bitirin veya durdurun.
 Finish or stop current computations before changing the resource session.|Kaynak oturumunu değiştirmeden önce hesaplamaları bitirin veya durdurun.
 Finish or stop current computations before refreshing the remote runtime.|Uzak ortamı yenilemeden önce hesaplamaları bitirin veya durdurun.

@@ -14,7 +14,7 @@ from preview_viewport import create_preview_viewport
 class DoEBoundaryPreview(QDialog):
     """Compare the reference and factor endpoints without modifying the active model."""
 
-    def __init__(self, factor_label: str, cases: dict[str, Settings], surface_builder, parent):
+    def __init__(self, factor_label: str, cases: dict[str, Settings], surface_builder, parent, *, detach_requested=None):
         super().__init__(parent)
         from window_state import install_window_state
         install_window_state(QApplication.instance())
@@ -27,6 +27,7 @@ class DoEBoundaryPreview(QDialog):
         extent = max((case.size for case in self._cases if not validate_geometry(case, include_mesh=False)), default=1.0)
         self._comparison_bounds = (0.0, extent) * 3
         self._surface_builder = surface_builder
+        self._detach_requested = detach_requested
         self._cache = {}
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="doe-preview")
         self._job = None
@@ -197,10 +198,18 @@ class DoEBoundaryPreview(QDialog):
         self._dispose()
         super().closeEvent(event)
 
+    def detach_remote_job(self):
+        if self._detach_requested is not None and self._job is not None:
+            self._detach_requested.set()
+            self._timer.stop()
+            return self._job[1]
+        return None
+
     def _dispose(self, *_) -> None:
         if self._disposed:
             return
         self._disposed = True
+        self.detach_remote_job()
         self._timer.stop()
         self._executor.shutdown(wait=False, cancel_futures=True)
         self.plotter.close()

@@ -71,7 +71,7 @@ class JobListTests(unittest.TestCase):
     def test_background_jobs_show_distinct_codes_and_track_connected_owner(self):
         first, running = self.record('1', state='RUNNING|None', request_id='a' * 32,
                                      background=True, submission_attempted=True)
-        second, queued = self.record('2', request_id='b' * 32, background=True, submission_attempted=True)
+        second, queued = self.record('2', request_id='b' * 32, detached=True, submission_attempted=True)
         self.record('3', username='other', request_id='c' * 32, background=True, submission_attempted=True)
         panel = self.dialog.job_list
         panel.refresh()

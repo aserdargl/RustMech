@@ -14,10 +14,12 @@ from truba_session import saved_session, create_session, refresh_session, releas
 from truba_resources import BASELINES, AUTO_QUEUES, candidates, fetch_catalog, allocate_with_limits, automatic_context
 
 
-def ensure_remote_runtime(context, auth, *, cancelled, on_progress=None, prepare_damask=False):
+def ensure_remote_runtime(context, auth, *, cancelled, on_progress=None, prepare_damask=False, detach_requested=None):
     """Reuse a verified runtime; repair the app-owned environment once if needed."""
     result, directory = run_remote_job(dict(operation='probe'), context, auth,
-                                     cancelled=cancelled, on_progress=on_progress)
+                                     cancelled=cancelled, on_progress=on_progress, detach_requested=detach_requested)
+    if result is None or (detach_requested is not None and detach_requested.is_set()):
+        return result, directory
     capabilities = result['capabilities']
     required = ('mesh', 'damask') if prepare_damask else ('mesh', 'netgen', 'kratos')
     if all(capabilities.get(key) for key in required):
@@ -32,40 +34,7 @@ def ensure_remote_runtime(context, auth, *, cancelled, on_progress=None, prepare
     if prepare_damask:
         request['prepare_damask'] = True
     return run_remote_job(request, context, auth,
-                          cancelled=cancelled, on_progress=on_progress)
-
-
-def release_on_close(session, pending_session, pending_runtime, pending_preview, auth):
-    """Finish submission/cancellation, then release only this app's allocation."""
-    if pending_session is not None:
-        try:
-            session = pending_session.result()
-        except Exception:
-            # Submission writes a durable record before sbatch. Never submit a
-            # replacement or forget an unconfirmed job while the app closes.
-            session = saved_session() or session
-    errors = []
-    for future in (pending_runtime, pending_preview):
-        if future is None:
-            continue
-        try:
-            future.result()
-        except CancelledError:
-            pass
-        except Exception as error:
-            errors.append(error)
-    # Persist the final released state after background requests have stopped
-    # refreshing the same session record. A parent release also stops any step
-    # whose individual cancellation acknowledgement was lost.
-    released = False
-    if session is not None:
-        session = release_session(session, auth)
-        released = session.get('state') == 'released'
-        if not released:
-            raise RuntimeError('The resource allocation has not been released.')
-    if errors and not released:
-        raise errors[0]
-    return session
+                          cancelled=cancelled, on_progress=on_progress, detach_requested=detach_requested)
 
 
 def release_while_busy(session, pending, allocating, auth):
@@ -108,10 +77,9 @@ class RemoteController(QObject):
         self.cancelled = Event()
         self.closing = False
         self.close_confirmed = False
-        self.close_future = None
-        self.release_on_exit = False  # Only explicitly allocated/attached sessions.
+        self.close_pending = ()
+        self.runtime_detach = Event()
         self._auto_probe_session = None
-        self.close_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix='truba-close')
         self.executor = ThreadPoolExecutor(max_workers=1,thread_name_prefix="truba-runtime")
         self.timer = QTimer(self)
         self.timer.setInterval(200)
@@ -247,7 +215,7 @@ class RemoteController(QObject):
         self.session_refresh.clicked.connect(lambda:self.session_command("refresh"))
         self.session_release.clicked.connect(lambda:self.session_command("release"))
         layout.addLayout(session_buttons)
-        hint = QLabel("Default session: 72 hours. Auto compares CPU queue start estimates; without estimates it prefers an idle fit. Slurm decides start time. Apply runs generation on the ready session and downloads the geometry. Normal closing releases sessions allocated or explicitly attached here. Idle time counts.")
+        hint = QLabel("The default session lasts 72 hours, including idle time. Closing RustMech keeps the session and submitted jobs running.")
         hint.setWordWrap(True)
         hint.setObjectName("mutedHintLabel")
         layout.addWidget(hint)
@@ -517,10 +485,9 @@ class RemoteController(QObject):
             else:
                 if not self.session: return
                 self.session_future = self.session_executor.submit(
-                    release_session if action == "release" else refresh_session, self.session, auth)
+                    refresh_session, self.session, auth)
             self.session_action = action
             self.session_watch = True
-            self.release_on_exit = True
             self.capabilities = None
             if action == 'allocate':
                 self._auto_probe_session = None
@@ -548,7 +515,6 @@ class RemoteController(QObject):
         if getattr(self.window, '_preview_is_remote', False):
             self.window.mesh_cancelled.set()
         self.capabilities = None
-        self.release_on_exit = True
         message = 'Cancelling resource session; waiting for Slurm to release resources…'
         try:
             self.release_future = self.release_executor.submit(
@@ -599,12 +565,15 @@ class RemoteController(QObject):
                 if self.session_action == "allocate":
                     self.status.setText("Resource request submitted. Waiting for Slurm; runtime will be verified when ready.")
             except Exception as error:
-                try: self.session = saved_session()
+                try: self.session = saved_session() or self.session
                 except (OSError,ValueError): pass
-                self.session_watch = False
+                self.session_watch = bool(self.session_action == 'watch' and self.session_watch and self.session)
+                if self.session_watch:
+                    self.session = dict(self.session, ready=False)
                 self.update_session_controls()
                 self.session_status.setText("Resource session: " + str(error))
             self.session_next_refresh = time.monotonic() + 5
+            self.window.truba_dialog.job_list.refresh()
             self.changed.emit()
         if (self.requested and self.session_watch and self.session and self.session.get('ready')
                 and self.session.get('state') == 'RUNNING' and self.future is None
@@ -668,7 +637,7 @@ class RemoteController(QObject):
         # Keep submitted job/session records available for explicit retrieval.
         self.session_watch = False
         self._auto_probe_session = None
-        self.cancelled.set()
+        self.runtime_detach.set()
         if self.requested:
             self.toggle.blockSignals(True)
             self.toggle.setChecked(False)
@@ -681,6 +650,19 @@ class RemoteController(QObject):
         self.update_session_controls()
 
     def connection_changed(self,connected):
+        if self.closing:
+            return
+        self.session_watch = False
+        if connected:
+            auth = self.auth()
+            if (auth is not None and self.session and self.session.get('username') == auth.username
+                    and self.session.get('state') not in ('released', 'ended')):
+                self.session_watch = True
+                self.session = dict(self.session, ready=False)
+                self.session_next_refresh = 0
+        else:
+            self.runtime_detach.set()
+        self.update_session_controls()
         if self.requested:
             self.capabilities = None
             self._auto_probe_session = None
@@ -710,17 +692,19 @@ class RemoteController(QObject):
             self.preferences.setValue("remote/context",json.dumps({**asdict(context), "session_id": ""}))
             self.preferences.sync()
             self.cancelled = Event()
+            self.runtime_detach = Event()
             self.capabilities = None
             fft_selected = self.window.setup_tabs.currentIndex() == self.window._fft_method_index
             if automatic:
                 self.future = self.executor.submit(ensure_remote_runtime, context, auth,
-                    cancelled=self.cancelled, on_progress=self.runtime_progress.emit, prepare_damask=fft_selected)
+                    cancelled=self.cancelled, on_progress=self.runtime_progress.emit, prepare_damask=fft_selected,
+                    detach_requested=self.runtime_detach)
             else:
                 request = dict(operation="prepare" if prepare else "probe")
                 if prepare and fft_selected:
                     request['prepare_damask'] = True
                 self.future = self.executor.submit(run_remote_job,request,context,auth,
-                    cancelled=self.cancelled, on_progress=self.runtime_progress.emit)
+                    cancelled=self.cancelled, on_progress=self.runtime_progress.emit, detach_requested=self.runtime_detach)
             self._auto_probe_session = self.session.get('job_id')
         except Exception as error:
             self.status.setText(str(error))
@@ -752,7 +736,7 @@ class RemoteController(QObject):
         self.recover.setEnabled(True)
         self.stop.setEnabled(False)
         self.update_session_controls()
-        if self.cancelled.is_set():
+        if self.cancelled.is_set() or self.runtime_detach.is_set():
             self.capabilities = None
             self.changed.emit()
             return
@@ -776,7 +760,7 @@ class RemoteController(QObject):
         self.status.setText("Cancelling the remote check/setup job…")
 
     def require(self,capability,settings=None, *, allow_handover=False):
-        if self.closing: raise RuntimeError('TRUBA resources are being released for closing.')
+        if self.closing: raise RuntimeError('RustMech is closing.')
         can_renew = (allow_handover and self.session and self.session.get('state') == 'ended'
                      and self.session.get('context', {}).get('auto_renew', True)
                      and not self.session.get('renewal_disabled'))
@@ -824,76 +808,43 @@ class RemoteController(QObject):
                     combo.setCurrentIndex(i)
                     break
 
-    def request_close(self):
+    def request_close(self, detached_jobs=()):
         if self.close_confirmed:
             return True
         if self.closing:
             return False
         preview = self.window.future if getattr(self.window, '_preview_is_remote', False) else None
-        owned = self.session if self.release_on_exit else None
-        pending_session = (self.release_future or self.session_future) if self.release_on_exit else None
-        if owned is None and pending_session is None and self.future is None and preview is None:
+        self.runtime_detach.set()
+        if preview is not None:
+            self.window._preview_detach.set()
+        self.close_pending = tuple(future for future in (
+            *detached_jobs, self.session_future, self.release_future, self.future, preview
+        ) if future is not None and not future.done())
+        if not self.close_pending:
             return True
         self.closing = True
-        self.cancelled.set()
-        self.window.mesh_cancelled.set()
         self.window.debounce.stop()
         self.window._analysis_after_mesh = None
-        self.capabilities = None
-        self.status.setText('Closing: stopping remote work and releasing the resource session…')
-        self.window.status.setText(self.status.text())
+        message = 'Saving TRUBA work before closing…'
+        self.status.setText(message)
+        self.window.status.setText(message)
         self.update_session_controls()
-        for button in (self.check, self.prepare, self.recover):
+        for button in (self.check, self.prepare, self.recover, self.stop):
             button.setEnabled(False)
-        try:
-            self.close_future = self.close_executor.submit(release_on_close, owned, pending_session,
-                                                           self.future, preview, self.auth())
-        except Exception as error:
-            self.closing = False
-            self.update_session_controls()
-            for button in (self.check, self.prepare, self.recover):
-                button.setEnabled(self.future is None)
-            self.window.status.setText(f'Cannot release TRUBA resources: {error}. Reconnect and close again.')
         self.changed.emit()
         return False
 
     def poll_close(self):
-        if self.close_future is None or not self.close_future.done():
+        if any(not future.done() for future in self.close_pending):
             return
-        future, self.close_future = self.close_future, None
-        try:
-            session = future.result()
-        except Exception as error:
-            self.closing = False
-            self.session_watch = False
-            # These terminal futures were already consumed by the close worker.
-            # Do not let normal polling overwrite the release failure message.
-            if self.session_future is not None and self.session_future.done():
-                self.session_future = None
-            if self.future is not None and self.future.done():
-                self.future = None
-                self.timer.stop()
-            self.update_session_controls()
-            for button in (self.check, self.prepare, self.recover):
-                button.setEnabled(self.future is None)
-            message = f'TRUBA release is not confirmed: {error}. Reconnect and close again; the window remains open.'
-            self.status.setText(message)
-            self.changed.emit()
-            self.window.status.setText(message)
-            return
-        if session is not None:
-            self.session = session
-        self.release_future = self.session_future = self.future = None
-        self.session_watch = False
+        self.close_pending = ()
         self.close_confirmed = True
-        self.changed.emit()
         self.close_ready.emit()
 
     def shutdown(self):
-        self.cancelled.set()
+        self.runtime_detach.set()
         self.timer.stop()
         self.session_timer.stop()
         self.session_executor.shutdown(wait=False,cancel_futures=True)
         self.release_executor.shutdown(wait=False,cancel_futures=True)
         self.executor.shutdown(wait=False,cancel_futures=True)
-        self.close_executor.shutdown(wait=False,cancel_futures=True)

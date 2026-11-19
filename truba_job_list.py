@@ -28,6 +28,10 @@ def terminal_record(record):
     return bool(state and state[0].rstrip('+') in TERMINAL)
 
 
+def tracked_analysis(record):
+    return bool(record.get('background') or record.get('detached'))
+
+
 def unfinished_records(directory, *, include_background_history=False):
     paths = sorted((directory / 'jobs').glob('*.json'))
     paths.append(directory / 'resource_session.json')
@@ -37,7 +41,7 @@ def unfinished_records(directory, *, include_background_history=False):
             record = json.loads(path.read_text(encoding='utf-8'))
             if not isinstance(record, dict) or record.get('host') != HOST:
                 continue
-            if not terminal_record(record) or (include_background_history and record.get('background')):
+            if not terminal_record(record) or (include_background_history and tracked_analysis(record)):
                 result.append((path, record))
         except (OSError, ValueError, IndexError):
             continue
@@ -194,7 +198,7 @@ class TrubaJobList(QGroupBox):
                             f"{record.get('local_directory') or path}")
             self.table.setItem(row, 0, item)
             saved_state = str(record.get('state', 'unknown'))
-            state = QTableWidgetItem(background_status(record) if record.get('background') else saved_state)
+            state = QTableWidgetItem(background_status(record) if tracked_analysis(record) else saved_state)
             state.setToolTip(saved_state)
             self.table.setItem(row, 1, state)
             if terminal_record(record):
@@ -225,7 +229,7 @@ class TrubaJobList(QGroupBox):
         if auth is None:
             return
         records = [(path, record) for path, record in unfinished_records(self.dialog.state_dir)
-                   if record.get('background') and record.get('submission_attempted')
+                   if tracked_analysis(record) and record.get('submission_attempted')
                    and not (self.submitting and record.get('state') == 'submitting')
                    and record.get('username') == auth.username and path not in self.workers]
         if records:

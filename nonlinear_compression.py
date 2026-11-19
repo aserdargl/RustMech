@@ -285,6 +285,7 @@ class RustMechDialog(QDialog):
         self._fft_preview_error = ""
         self._fft_preview_size = None
         self.mesh_cancelled = Event()
+        self._preview_detach = Event()
         self.mesh_progress_updates = SimpleQueue()
         self.worker_key = None
         self.failed_key = None
@@ -1204,7 +1205,7 @@ class RustMechDialog(QDialog):
         from operation_progress import OperationProgress
         self.operation_progress = OperationProgress(self, provider=lambda: (
             self.future is not None or self.analysis_job is not None
-            or getattr(getattr(self, "remote_controller", None), "close_future", None) is not None,
+            or getattr(getattr(self, "remote_controller", None), "closing", False),
             self.status.text(),
         ))
         self.mesh_progress = self.operation_progress.bar
@@ -1537,7 +1538,7 @@ class RustMechDialog(QDialog):
         verified = allocated and controller.ready
         state = 'local'
         if controller.closing:
-            state, text = 'pending', 'TRUBA · releasing resources…'
+            state, text = 'pending', 'TRUBA · saving work for reconnection…'
         elif verified:
             partition = session.get('allocated_partition') or session.get('context', {}).get('partition', '')
             state, text = 'ready', f'TRUBA · READY · {partition}'
@@ -2556,6 +2557,7 @@ class RustMechDialog(QDialog):
         )
         self.mesh_progress_updates = SimpleQueue()
         self.mesh_cancelled = Event()
+        self._preview_detach = Event()
         self.mesh_progress.show()
         self._preview_is_remote = bool(controller is not None and controller.requested)
         if controller is not None and controller.requested:
@@ -2565,7 +2567,8 @@ class RustMechDialog(QDialog):
             self.cancel_mesh_button.show()
             self.future = self.executor.submit(run_remote_preview,settings,context,auth,
                                                self.mesh_progress_updates.put,self.mesh_cancelled,
-                                               include_mesh=getattr(self, '_mesh_requested', False))
+                                               include_mesh=getattr(self, '_mesh_requested', False),
+                                               detach_requested=self._preview_detach)
         elif self.builder is build_preview:
             self.cancel_mesh_button.setEnabled(True)
             self.cancel_mesh_button.show()
@@ -2966,19 +2969,19 @@ class RustMechDialog(QDialog):
 
     def _show_doe_bounds(self, label: str, cases: dict[str, Settings]) -> None:
         surface_builder = make_surface
-        cancelled = None
+        detach_requested = None
         if self.remote_controller.requested:
             try:
                 from functools import partial
                 from truba_remote import run_remote_surface
                 context,auth = self.remote_controller.require("mesh")
-                cancelled = Event()
-                surface_builder = partial(run_remote_surface,context=context,auth=auth,cancelled=cancelled)
+                detach_requested = Event()
+                surface_builder = partial(run_remote_surface, context=context, auth=auth,
+                                          cancelled=None, detach_requested=detach_requested)
             except (ValueError,RuntimeError) as error:
                 self.status.setText(str(error))
                 return
-        dialog = DoEBoundaryPreview(label, cases, surface_builder, self)
-        if cancelled is not None: dialog.finished.connect(lambda *_:cancelled.set())
+        dialog = DoEBoundaryPreview(label, cases, surface_builder, self, detach_requested=detach_requested)
         dialog.setStyleSheet(STUDIO_STYLESHEET)
         dialog.exec()
         dialog.deleteLater()
@@ -3131,12 +3134,16 @@ class RustMechDialog(QDialog):
         if not filename:return
         try:
             record=json.loads(Path(filename).read_text())
-            if record.get("background") and record.get("submission_attempted"):
+            from truba_job_list import tracked_analysis
+            if tracked_analysis(record) and record.get("submission_attempted"):
                 if record.get("state") == "downloaded":
                     result = json.loads((Path(record["local_directory"]) / "output" / "result.json").read_text(encoding="utf-8"))
                     from truba_remote import _rebase_paths
                     result = _rebase_paths(Path(record["local_directory"]), result)
-                    self._show_remote_analysis_result(result, record, open_workspace=True)
+                    if result.get("operation") in ("mechanical", "fft_solve"):
+                        self._show_remote_analysis_result(result, record, open_workspace=True)
+                    else:
+                        self.status.setText(f'TRUBA results retrieved: {Path(record["local_directory"]) / "output"}')
                 else:
                     self.truba_dialog.job_list.sync_background()
                     self.status.setText("See TRUBA jobs for this analysis. Results download automatically when connected.")
@@ -3212,11 +3219,12 @@ class RustMechDialog(QDialog):
         idle = self.analysis_job is None and self.future is None
         if result is not None:
             payload, _ = result
-            self._show_remote_analysis_result(payload, record, announce=idle)
+            if payload.get("operation") in ("mechanical", "fft_solve"):
+                self._show_remote_analysis_result(payload, record, announce=idle)
         elif idle and self._latest_background_analysis == record.get("request_id"):
             self._show_background_analysis(record)
 
-    def _poll_analysis(self, *, track_background=True) -> None:
+    def _poll_analysis(self) -> None:
         if self.analysis_job is None:
             return
         if not self.analysis_job.done():
@@ -3242,8 +3250,7 @@ class RustMechDialog(QDialog):
                 self._latest_background_analysis = folder["request_id"]
                 self._show_background_analysis(folder)
                 self.truba_dialog.job_list.refresh()
-                if track_background:
-                    self.truba_dialog.job_list.sync_background()
+                self.truba_dialog.job_list.sync_background()
                 return
             if isinstance(folder,dict) and folder.get("remote_retrieval"):
                 result = folder["result"]
@@ -3310,41 +3317,48 @@ class RustMechDialog(QDialog):
                     self.solver_profile_store.settings.sync()
         except (OSError,ValueError):pass
 
-    def _stop_remote_for_close(self):
+    def _detach_remote_jobs(self):
+        jobs = []
+        job = self.analysis_job
+        if getattr(job, 'is_remote', False) is True:
+            jobs.append(job)
+            self.analysis_job = None
+            self.analysis_poll.stop()
+        for workspace in (self.flow_workspace, self.thermal_workspace):
+            if getattr(workspace.job, 'is_remote', False) is True:
+                jobs.append(workspace.job)
+                workspace.job = None
+                workspace.timer.stop()
+        for queue in (self.doe_studio, self.analysis_queue_widget):
+            if queue is not None:
+                jobs.extend(queue.detach_remote_queue())
+        from mesh_convergence import MeshConvergenceWidget
+        for study in self.findChildren(MeshConvergenceWidget):
+            if getattr(study.future, 'is_remote', False) is True:
+                jobs.append(study.future)
+                study.future = None
+                study.dispose()
+        pending = [job.detach_remote() for job in jobs]
+        pending.extend(dialog.detach_remote_job() for dialog in self.findChildren(DoEBoundaryPreview))
+        return pending
+
+    def _prepare_truba_close(self):
         if self.disposed:
             return True
-        # Keep the job handle available for retry if remote cancellation cannot
-        # be confirmed. Never label a disconnected, still-running job cancelled.
-        job = self.analysis_job
-        if job is not None and getattr(job, "background_submission", False) is True:
-            if not job.done():
-                self.status.setText("Waiting for TRUBA submission confirmation. Close once the Slurm job number is visible.")
-                return False
-            self._poll_analysis(track_background=False)
-        elif job is not None and getattr(job,"_generic_remote_target",False) is True:
-            self.force_stop_analysis()
-            if self.analysis_job is not None:
-                return False
-        for workspace in (self.flow_workspace,self.thermal_workspace):
-            if workspace.job is not None and getattr(workspace.job,"_generic_remote_target",False) is True:
-                workspace.cancel()
-                if workspace.job is not None:
-                    self.status.setText("Remote cancellation is not confirmed. Reconnect and retry Stop before closing.")
-                    return False
-        for doe in (self.doe_studio, self.analysis_queue_widget):
-            if doe is not None and doe._active_future is not None and getattr(doe._active_future,"_generic_remote_target",False) is True:
-                doe.stop_active_queue()
-                if doe._active_future is not None:
-                    self.status.setText("Remote batch cancellation is not confirmed. Reconnect and retry Stop before closing.")
-                    return False
-        controller = getattr(self, 'remote_controller', None)
-        return controller is None or controller.request_close()
+        controller = self.remote_controller
+        if controller.closing:
+            return controller.close_confirmed
+        if controller.request_close(self._detach_remote_jobs()):
+            return True
+        self.poll.stop()
+        self.setEnabled(False)
+        return False
 
     def reject(self):
-        if self._stop_remote_for_close(): super().reject()
+        if self._prepare_truba_close(): super().reject()
 
     def done(self, result):
-        if not self._stop_remote_for_close():
+        if not self._prepare_truba_close():
             return
         # QDialog.done hides its native children before emitting finished.
         # Release WGL resources while their native window handles still exist.
@@ -3352,7 +3366,7 @@ class RustMechDialog(QDialog):
         super().done(result)
 
     def closeEvent(self,event):
-        if not self._stop_remote_for_close():
+        if not self._prepare_truba_close():
             event.ignore()
             return
         self.dispose()
@@ -3366,6 +3380,17 @@ class RustMechDialog(QDialog):
             self.solver_profile_store.save_workspace(draft)
             self.solver_profile_store.save(self._active_solver_id, profile_values(draft))
             self._save_fft_preferences()
+        from concurrent.futures import wait
+        detached = self._detach_remote_jobs()
+        if getattr(self, "_preview_is_remote", False) and self.future is not None:
+            self._preview_detach.set()
+            detached.append(self.future)
+        if hasattr(self, "remote_controller"):
+            controller = self.remote_controller
+            controller.runtime_detach.set()
+            detached.extend((*controller.close_pending, controller.future,
+                             controller.session_future, controller.release_future))
+        wait(future for future in detached if future is not None)
         self.force_stop_analysis()
         if hasattr(self,"remote_controller"):
             self.remote_controller.shutdown()

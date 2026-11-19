@@ -251,7 +251,7 @@ class TrubaConnectionDialog(QDialog):
     def _operation_state(self):
         controller = getattr(self.parent(), "remote_controller", None)
         if controller is not None:
-            if controller.close_future is not None or controller.future is not None:
+            if controller.closing or controller.future is not None:
                 return True, controller.status.text()
             if controller.limits_future is not None:
                 return True, "Checking TRUBA resource limits…"

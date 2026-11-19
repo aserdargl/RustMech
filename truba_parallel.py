@@ -157,6 +157,18 @@ class TrubaParallelMixin:
         if not active:
             self._launch_next_serial()
 
+    def detach_remote_queue(self):
+        active = getattr(self, '_parallel_futures', {})
+        jobs = [future for future, _ in active.values()]
+        if not jobs and getattr(self._active_future, 'is_remote', False) is True:
+            jobs.append(self._active_future)
+        if jobs:
+            self._stop_requested = True
+            self._poll_timer.stop()
+            self._active_future = None
+            active.clear()
+        return jobs
+
     def _operation_state(self):
         active = getattr(self, '_parallel_futures', {})
         if not active:
