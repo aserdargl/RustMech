@@ -2,10 +2,13 @@
 
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack, contextmanager, suppress
+from hashlib import file_digest
+from itertools import batched
 import ntpath
 import os
 from pathlib import Path, PurePosixPath, PureWindowsPath
 import re
+import shlex
 from stat import FILE_ATTRIBUTE_REPARSE_POINT, S_ISDIR, S_ISREG
 from tempfile import NamedTemporaryFile
 from threading import Event, Lock
@@ -77,7 +80,7 @@ def upload_file(auth, relative, source):
         _publish_file(sftp, source, target)
 
 
-def _publish_file(sftp, source, target, *, progress=None):
+def _publish_file(sftp, source, target, *, progress=None, sync_source=None, existing=None):
     temporary = str(PurePosixPath(target).with_name(f".rustmech-upload-{uuid4().hex}.part"))
     with source.open("rb") as local:
         remote = sftp.open(temporary, "wx")
@@ -90,12 +93,22 @@ def _publish_file(sftp, source, target, *, progress=None):
                         progress(local.tell())
             if sftp.stat(temporary).st_size != local.tell():
                 raise OSError("Upload size mismatch")
-            try:
-                # The standard SFTP rename fails if another client created the target.
-                sftp.rename(temporary, target)
-            except OSError:
-                _require_missing(sftp, target)
-                raise
+            if sync_source is not None:
+                if _file_version(os.fstat(local.fileno())) != _file_version(sync_source):
+                    raise FileExistsError(str(source))
+                mtime = int(sync_source.st_mtime)
+                sftp.utime(temporary, (mtime, mtime))
+            if existing is not None:
+                if _file_version(sftp.lstat(target)) != _file_version(existing):
+                    raise FileExistsError(target)
+                sftp.posix_rename(temporary, target)
+            else:
+                try:
+                    # The standard SFTP rename fails if another client created the target.
+                    sftp.rename(temporary, target)
+                except OSError:
+                    _require_missing(sftp, target)
+                    raise
         except BaseException:
             with suppress(OSError, EOFError):
                 sftp.remove(temporary)
@@ -203,18 +216,27 @@ def download_file(auth, relative, name, destination):
         _download_file(sftp, source, destination)
 
 
-def _download_file(sftp, source, destination, *, expected_size=None):
+def _download_file(sftp, source, destination, *, sync_source=None, existing=None):
     local = NamedTemporaryFile(dir=destination.parent, prefix=".rustmech-download-",
                                suffix=".part", delete=False)
     temporary = Path(local.name)
     try:
         with local:
             size = sftp.getfo(source, local, max_concurrent_prefetch_requests=64)
-        if expected_size is None:
+        if sync_source is not None:
+            if size != sync_source.st_size:
+                raise OSError("Download size mismatch")
+            if _file_version(sftp.lstat(source)) != _file_version(sync_source):
+                raise FileExistsError(source)
+            if (mtime := getattr(sync_source, "st_mtime", None)) is not None:
+                os.utime(temporary, (mtime, mtime))
+        if existing is not None:
+            if _file_version(destination.lstat()) != _file_version(existing):
+                raise FileExistsError(str(destination))
+            temporary.replace(destination)
+        elif sync_source is None:
             temporary.replace(destination)
         else:
-            if size != expected_size:
-                raise OSError("Download size mismatch")
             # Both operations fail if a competing transfer creates the destination.
             if os.name == "nt":
                 temporary.rename(destination)
@@ -242,15 +264,39 @@ def _sync_kind(attrs):
     return None
 
 
+def _file_version(attrs):
+    return (_sync_kind(attrs), attrs.st_size, getattr(attrs, "st_mtime_ns", getattr(attrs, "st_mtime", None)))
+
+
+def _remote_digests(auth, paths):
+    """Read hashes over SSH without downloading the corresponding file data."""
+    digests = {}
+    for batch in batched(paths, 16):
+        command = "sha256sum --zero -- " + shlex.join(batch)
+        try:
+            _, stdout, _ = active_session_client(auth).exec_command(command, timeout=120)
+            output = stdout.read()
+            if stdout.channel.recv_exit_status() != 0:
+                continue
+        except (SSHException, OSError, EOFError):
+            break
+        expected = {path.encode("utf-8"): path for path in batch}
+        for line in output.split(b"\0"):
+            match = re.fullmatch(rb"([0-9a-f]{64}) [ *](.+)", line)
+            if match and match[2] in expected:
+                digests[expected[match[2]]] = match[1].decode("ascii")
+    return digests
+
+
 def sync_tree(auth, relative, source):
-    """Merge two folder trees, rejecting differing paths before transferring."""
+    """Merge missing or outdated files, with content checks before making changes."""
     if not relative.parts or _sync_kind(source.lstat()) != "directory":
         raise ValueError("Select a local folder and a TRUBA project subfolder.")
     with _project_directory(auth, relative) as (sftp, directory):
         if "esen-folders" in relative.parts or "esen-folders" in directory.parts:
             raise ValueError("Synchronized inputs are read-only.")
         folders = [(source, directory, True, True)]
-        create_local, create_remote, uploads, downloads = [], [], [], []
+        create_local, create_remote, uploads, downloads, common = [], [], [], [], []
         while folders:
             local, remote, has_local, has_remote = folders.pop()
             local_entries = {entry.name: entry.lstat() for entry in local.iterdir()} if has_local else {}
@@ -280,18 +326,41 @@ def sync_tree(auth, relative, source):
                         create_remote.append(str(remote_path))
                     folders.append((local_path, remote_path, local_entry is not None, remote_entry is not None))
                 elif remote_entry is None:
-                    uploads.append((local_path, str(remote_path)))
+                    uploads.append((local_path, str(remote_path), local_entry, None))
                 elif local_entry is None:
-                    downloads.append((str(remote_path), local_path, remote_entry.st_size))
-                elif not _matches_file(sftp, local_path, str(remote_path), remote_entry):
-                    raise FileExistsError(str(remote_path))
+                    downloads.append((str(remote_path), local_path, remote_entry, None))
+                else:
+                    common.append((local_path, str(remote_path), local_entry, remote_entry))
+
+        comparable = [path for _, path, local, remote in common if local.st_size == remote.st_size]
+        compare_bytes = sum(local.st_size for _, _, local, remote in common if local.st_size == remote.st_size)
+        digests = _remote_digests(auth, comparable) if len(comparable) >= 4 or compare_bytes >= 1024 ** 2 else {}
+        for local_path, remote_path, local, remote in common:
+            if local.st_size == remote.st_size:
+                if remote_path in digests:
+                    with local_path.open("rb") as stream:
+                        same = file_digest(stream, "sha256").hexdigest() == digests[remote_path]
+                else:
+                    same = _matches_file(sftp, local_path, remote_path, remote)
+                if same:
+                    continue
+            remote_time = getattr(remote, "st_mtime", None)
+            local_time = int(local.st_mtime)
+            if remote_time is None or local_time == remote_time:
+                raise FileExistsError(remote_path)
+            if local_time > remote_time:
+                uploads.append((local_path, remote_path, local, remote))
+            else:
+                downloads.append((remote_path, local_path, remote, local))
 
         for path in create_local:
             path.mkdir()
         for path in create_remote:
             sftp.mkdir(path)
-        for path, target in uploads:
-            _publish_file(sftp, path, target)
-        for path, target, size in downloads:
-            _download_file(sftp, path, target, expected_size=size)
+        for path, target, local, existing in uploads:
+            if _file_version(path.lstat()) != _file_version(local):
+                raise FileExistsError(str(path))
+            _publish_file(sftp, path, target, sync_source=local, existing=existing)
+        for path, target, remote, existing in downloads:
+            _download_file(sftp, path, target, sync_source=remote, existing=existing)
     return len(uploads), len(downloads)

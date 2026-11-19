@@ -1,8 +1,11 @@
 """Cover the SFTP browser's project boundary and desktop entry points."""
 
 from contextlib import contextmanager
+from hashlib import sha256
 from io import BytesIO
+import os
 from pathlib import PurePosixPath
+import shlex
 from stat import S_IFDIR, S_IFLNK, S_IFREG
 from threading import Barrier
 from types import SimpleNamespace
@@ -16,7 +19,7 @@ from paramiko import SSHException
 
 from esen_workspace import EsenWorkspace
 from truba_files import create_directory, download_file, list_directory, project_root, sync_tree, upload_file, upload_tree
-from truba_ssh import RemoteAuth, register_session, unregister_session
+from truba_ssh import RemoteAuth, active_session_client, register_session, unregister_session
 from window_state import WindowStateStore
 
 
@@ -219,13 +222,20 @@ def test_sync_merges_both_ways_and_preflights_conflicts(remote, tmp_path):
     (server / "results/data").write_bytes(b"result")
     (local / "common").write_bytes(b"same")
     (server / "common").write_bytes(b"diff")
+    base_time = 1_700_000_000
+    for copy in (local / "common", server / "common"):
+        os.utime(copy, (base_time, base_time))
 
     def path(name):
         return server / PurePosixPath(name).relative_to(target).as_posix()
 
     def entries(name):
-        return [SimpleNamespace(filename=entry.name, st_mode=entry.stat().st_mode,
-                                st_size=entry.stat().st_size) for entry in path(name).iterdir()]
+        return [attrs(entry) for entry in path(name).iterdir()]
+
+    def attrs(entry):
+        info = entry.lstat()
+        return SimpleNamespace(filename=entry.name, st_mode=info.st_mode,
+                               st_size=info.st_size, st_mtime=int(info.st_mtime))
 
     def open_file(name, mode):
         stream = path(name).open("xb" if mode == "wx" else mode)
@@ -233,10 +243,13 @@ def test_sync_merges_both_ways_and_preflights_conflicts(remote, tmp_path):
         return stream
 
     sftp.listdir_attr.side_effect = entries
+    sftp.lstat.side_effect = lambda name: attrs(path(name))
     sftp.mkdir.side_effect = lambda name: path(name).mkdir()
     sftp.open.side_effect = open_file
     sftp.stat.side_effect = lambda name: path(name).stat()
     sftp.rename.side_effect = lambda source, destination: path(source).rename(path(destination))
+    sftp.posix_rename.side_effect = lambda source, destination: path(source).replace(path(destination))
+    sftp.utime.side_effect = lambda name, times: os.utime(path(name), times)
     sftp.getfo.side_effect = lambda source, stream, **_: stream.write(path(source).read_bytes())
 
     with pytest.raises(FileExistsError, match="common"):
@@ -251,6 +264,41 @@ def test_sync_merges_both_ways_and_preflights_conflicts(remote, tmp_path):
     assert (server / "empty").is_dir()
     assert not (local / "esen-folders").exists()
     assert sync_tree(auth, folder, local) == (0, 0)
+
+    (local / "inputs/model").write_bytes(b"newer")
+    (server / "results/data").write_bytes(b"update")
+    # Both changes keep the old file size.
+    for newer, older in ((local / "inputs/model", server / "inputs/model"),
+                          (server / "results/data", local / "results/data")):
+        os.utime(older, (base_time, base_time))
+        os.utime(newer, (base_time + 60, base_time + 60))
+    assert sync_tree(auth, folder, local) == (1, 1)
+    assert (server / "inputs/model").read_bytes() == b"newer"
+    assert (local / "results/data").read_bytes() == b"update"
+    assert int((server / "inputs/model").stat().st_mtime) == base_time + 60
+    assert int((local / "results/data").stat().st_mtime) == base_time + 60
+
+    large_name = "large input.bin"
+    large = b"x" * (1024 ** 2)
+    for side in (local, server):
+        (side / large_name).write_bytes(large)
+
+    def digest_command(command, *, timeout):
+        arguments = shlex.split(command)
+        assert arguments[:3] == ["sha256sum", "--zero", "--"]
+        stdout = BytesIO(b"".join(sha256(path(name).read_bytes()).hexdigest().encode("ascii")
+                                 + b"  " + name.encode("utf-8") + b"\0" for name in arguments[3:]))
+        stdout.channel = SimpleNamespace(recv_exit_status=lambda: 0)
+        return None, stdout, None
+
+    client = active_session_client(auth)
+    client.exec_command.side_effect = digest_command
+    sftp.open.reset_mock()
+    sftp.getfo.reset_mock()
+    assert sync_tree(auth, folder, local) == (0, 0)
+    client.exec_command.assert_called_once()
+    sftp.open.assert_not_called()
+    sftp.getfo.assert_not_called()
 
     (server / "new").write_bytes(b"server version")
 
