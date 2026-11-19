@@ -443,15 +443,22 @@ dağıtımına kurun. Ubuntu 26.04 için
 izlenebilir. İlk sürüm DAMASK 3.1.0 ile doğrulandı.
 
 1. Mekanik ayarlarda periyodik bir TPMS veya lattice yapısı seçin.
-2. Yöntem menüsünde **FFT Homojenleştirme** sayfasını açın. Izgarayı, boşluk/katı
-   rijitlik oranını ve Windows'ta WSL dağıtım adını girin. Ayarların altındaki
+2. Yöntem menüsünde **FFT Homojenleştirme** sayfasını açın. Izgarayı ve boşluk/katı
+   rijitlik oranını girin. Yerel Windows çalıştırması için WSL dağıtımını seçin. Ayarların altındaki
    **Katı faz malzemesi** panelinden malzemeyi seçin veya Young modülü ile Poisson
-   oranını düzenleyin. TRUBA hesaplama modunu kapatın ve **Analizi çalıştır**
-   düğmesine basın.
+   oranını düzenleyin. Yerelde çalıştırmak için **Analizi çalıştır** düğmesine
+   basın. TRUBA'da çalıştırmak için TRUBA hesaplama modunu açın, CPU kaynak
+   oturumunun hazır olmasını bekleyin ve aynı düğmeyle işi gönderin.
 3. Tamamlanan koşuda etkin 6×6 rijitlik matrisi MPa cinsinden, örneklenen katı
    hacim oranıyla birlikte gösterilir. **FFT sonuçlarını aç** düğmesi
    `results/FFT_DAMASK_*/` klasörünü açar. Klasörde CSV, girdi özeti, DAMASK
    çıktıları ve her yüklemenin yakınsama kaydı bulunur.
+
+TRUBA çalışma ortamı DAMASK'ı bulamazsa FFT sekmesi açıkken TRUBA panelinde
+**Prepare remote runtime** kullanın. Uygulamaya ait özel ortam, DAMASK Grid'i
+[conda-forge](https://github.com/conda-forge/damask-feedstock) üzerinden kurar.
+İş, TRUBA iş listesinden izlenir ve sonuç matrisi tamamlandığında otomatik
+indirilir. Ham HDF5 çıktıları ile geometri TRUBA'daki çözücü klasöründe kalır.
 
 Çözücü altı bağımsız yükleme yönünün her birinde pozitif ve negatif küçük
 pertürbasyon uygular. Matris sırası `xx, yy, zz, yz, xz, xy` ve kayma

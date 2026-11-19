@@ -900,8 +900,8 @@ Open FFT results|FFT sonuçlarını aç
 FFT requires a procedural periodic TPMS or lattice cell.|FFT, periyodik TPMS veya kafes birim hücresi gerektirir.
 FFT requires a positive Young's modulus.|FFT için Young modülü pozitif olmalıdır.
 FFT requires a Poisson ratio between -1 and 0.5.|FFT için Poisson oranı -1 ile 0,5 arasında olmalıdır.
-Turn off TRUBA calculation mode to run local DAMASK FFT.|Yerel DAMASK FFT için TRUBA hesaplama modunu kapatın.
 Ready to run local DAMASK FFT.|Yerel DAMASK FFT çalıştırmaya hazır.
+Ready to submit DAMASK FFT to TRUBA.|DAMASK FFT, TRUBA'ya gönderilmeye hazır.
 Enter a WSL distribution for DAMASK.|DAMASK için WSL dağıtım adını girin.
 Sampling the periodic cell…|Periyodik hücre örnekleniyor…
 Crack initiation and propagation in mechanical tests.|Mekanik deneylerde çatlak başlangıcı ve ilerlemesi.

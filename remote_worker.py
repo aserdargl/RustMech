@@ -49,7 +49,7 @@ def probe(request,missing=False):
     full = operation in ('probe', 'prepare')
     mechanics = operation in ('mechanical', 'convergence_level', 'doe_solve')
     tetra = request.get('settings', {}).get('mesh_type') in ('TET4', 'TET10') and operation != 'surface'
-    capabilities = dict(mesh=False,netgen=False,kratos=False,flow=False,thermal=False,ansys_mapdl=False,
+    capabilities = dict(mesh=False,netgen=False,kratos=False,damask=False,flow=False,thermal=False,ansys_mapdl=False,
                         mesh_types=[],reasons={},hostname=socket.gethostname(),python=sys.executable,
                         foam_version=os.environ.get("WM_PROJECT_VERSION",""))
     capabilities["packages"] = {}
@@ -73,6 +73,17 @@ def probe(request,missing=False):
     except Exception as error:
         capabilities["reasons"]["mesh"] = f"Mesh runtime unavailable: {_exception_detail(error)}"
         return capabilities
+    if full or operation == 'fft_solve':
+        try:
+            from damask_fft import damask_grid_executable
+            importlib.import_module('h5py')
+            subprocess.run([damask_grid_executable(), '-h'], check=True, timeout=30,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            capabilities['damask'] = True
+        except Exception as error:
+            capabilities['reasons']['damask'] = f"DAMASK unavailable: {error}. Use Prepare remote runtime."
+        if not full:
+            return capabilities
     # Geometry and HEX meshing do not need Netgen, Kratos or OpenFOAM.
     if not full and not tetra and not mechanics and not operation.startswith(('flow_', 'thermal_')):
         return capabilities
@@ -210,6 +221,17 @@ def _run_operation(request,output):
         errors = KRATOS_CAPABILITIES.validate(settings)
         if errors:
             raise ValueError("\n".join(errors))
+    if operation == 'fft_solve':
+        from damask_fft import run_periodic_fft
+        case = Path.cwd() / 'solver_case'
+        case.mkdir()
+        run_periodic_fft(settings, request['grid'], request['void_ratio'], None, case, on_progress=_stage)
+        folder = output / 'fft'
+        folder.mkdir()
+        for pattern in ('*.csv', '*.json', '*.yaml', '*.log', '*.sta'):
+            for path in case.glob(pattern):
+                shutil.copy2(path, folder / path.name)
+        return dict(run_folder=str(folder.resolve()), remote_solver_case=str(case.resolve()))
     if settings.mesh_type not in capabilities["mesh_types"] and operation not in ("surface","flow_export","flow_solve","thermal_export","thermal_solve"):
         raise RuntimeError(f"Remote mesher does not support {settings.mesh_type} in this environment.")
     if operation=="preview":

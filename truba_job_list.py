@@ -15,6 +15,7 @@ OPERATIONS = {
     'probe': 'Runtime capability check', 'prepare': 'Remote runtime setup',
     'preview': 'Mesh preview', 'surface': 'Surface generation',
     'mechanical': 'Mechanical analysis', 'convergence_level': 'Mesh convergence',
+    'fft_solve': 'FFT Homogenization',
     'doe_mesh': 'DOE mesh generation', 'doe_solve': 'DOE analysis',
     'flow_export': 'Flow export', 'flow_solve': 'Flow analysis',
     'thermal_export': 'Thermal export', 'thermal_solve': 'Thermal analysis',

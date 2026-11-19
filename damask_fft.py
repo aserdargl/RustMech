@@ -6,8 +6,10 @@ import json
 import os
 from pathlib import Path
 import shlex
+import shutil
 import struct
 import subprocess
+import sys
 from dataclasses import asdict
 from tempfile import mkdtemp
 
@@ -46,7 +48,7 @@ import numpy as np
 
 case = sys.argv[1]
 cancel = Path('.cancel')
-solver = shutil.which('damask_grid') or shutil.which('DAMASK_grid')
+solver = sys.argv[2] if len(sys.argv) > 2 else (shutil.which('damask_grid') or shutil.which('DAMASK_grid'))
 if solver is None:
     sys.exit('Install the DAMASK grid solver in this Linux environment.')
 if cancel.exists():
@@ -141,17 +143,17 @@ def sample_periodic_cell(settings, grid):
     return field < 0
 
 
-def run_periodic_fft(settings, grid, void_ratio, distribution, folder):
+def run_periodic_fft(settings, grid, void_ratio, distribution, folder, *, on_progress=report_analysis_step):
     folder = Path(folder)
     try:
         errors = validate_periodic_fft(settings)
         if errors:
             raise ValueError("\n".join(errors))
-        report_analysis_step("Sampling the periodic cell…")
+        on_progress("Sampling the periodic cell…")
         solid = sample_periodic_cell(settings, grid)
         return solve_cell(solid, settings.cell_size, settings.young_modulus,
                           settings.poisson_ratio, void_ratio, distribution, folder,
-                          settings_snapshot=asdict(settings))
+                          settings_snapshot=asdict(settings), on_progress=on_progress)
     except Exception as exc:
         state = "cancelled" if (folder / CANCEL_FILE).exists() else "failed"
         write_json(folder / "status.json", {"state": state, "error": str(exc)})
@@ -164,7 +166,7 @@ def _validate_grid(grid):
 
 
 def solve_cell(solid, size_mm, young_mpa, poisson, void_ratio, distribution, folder,
-               *, settings_snapshot=None):
+               *, settings_snapshot=None, on_progress=report_analysis_step):
     """Solve six independent engineering strain modes using paired perturbations."""
     solid = np.asarray(solid, dtype=bool)
     if solid.ndim != 3 or len(set(solid.shape)) != 1:
@@ -196,7 +198,7 @@ def solve_cell(solid, size_mm, young_mpa, poisson, void_ratio, distribution, fol
     write_json(folder / "inputs.json", metadata)
     stiffness = np.empty((6, 6))
     for column, (label, (i, j)) in enumerate(zip(COMPONENTS, TENSOR_INDICES)):
-        report_analysis_step(f"DAMASK · {column + 1}/6 · {label}")
+        on_progress(f"DAMASK · {column + 1}/6 · {label}")
         stresses = []
         for suffix, sign in (("plus", 1), ("minus", -1)):
             if (folder / CANCEL_FILE).exists():
@@ -294,6 +296,19 @@ def _write_load(path, deformation):
     )
 
 
+def damask_grid_executable():
+    private_bin = Path(sys.prefix) / "damask" / "bin"
+    for name in ("damask_grid", "DAMASK_grid"):
+        executable = shutil.which(str(private_bin / name))
+        if executable:
+            return executable
+    for name in ("damask_grid", "DAMASK_grid"):
+        executable = shutil.which(name)
+        if executable:
+            return executable
+    raise RuntimeError("DAMASK grid solver was not found")
+
+
 def _solve_load(folder, distribution, case):
     # WSL --cd accepts a Windows absolute path. Quote the Linux argv once for
     # bash, since wsl.exe reconstructs a command line from the Windows argv.
@@ -302,10 +317,14 @@ def _solve_load(folder, distribution, case):
         command = ["wsl.exe", "-d", distribution, "--cd", str(folder.resolve()),
                    "--", "bash", "-c", shlex.join(argv)]
         flags = subprocess.CREATE_NO_WINDOW
+    elif distribution is None:
+        command = [sys.executable, "-c", _LINUX_DRIVER, case, damask_grid_executable()]
+        flags = 0
     else:
         command, flags = argv, 0
     completed = subprocess.run(command, cwd=folder, capture_output=True,
-                               text=True, encoding="utf-8", errors="replace", creationflags=flags)
+                               text=True, encoding="utf-8", errors="replace", creationflags=flags,
+                               env={**os.environ, "OMP_NUM_THREADS": os.environ.get("OMP_NUM_THREADS", "2")})
     if completed.returncode:
         message = completed.stderr.strip() or completed.stdout.strip()
         raise RuntimeError(message or f"DAMASK exited with code {completed.returncode}.")

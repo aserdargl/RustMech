@@ -173,6 +173,7 @@ def slurm_script(context,username,request):
     if not SAFE_NAME.fullmatch(account): raise ValueError("Invalid TRUBA account.")
     runtime = _shell_path(context.runtime_python)
     prepare = request["operation"]=="prepare"
+    prepare_damask = prepare and request.get('prepare_damask') is True
     python_load = "module load "+shlex.quote(context.python_module) if context.python_module else ":"
     needs_foam = request['operation'] in ('probe', 'prepare', 'flow_export', 'flow_solve', 'thermal_export', 'thermal_solve')
     foam_load = "module load "+shlex.quote(context.foam_module)+" >/dev/null 2>&1 || true" if context.foam_module and needs_foam else ":"
@@ -209,7 +210,11 @@ set -u
 runtime_python={runtime}
 export RUSTMECH_CORE_LIBRARY="$(dirname "$(dirname "$runtime_python")")/native/librustmech_core.so"
 test ! -e cancel.request
-'''+('bash engine/tools/truba/prepare-remote.sh "$runtime_python" "'+request["native_sha256"]+'"\n' if prepare else '')+f'''
+'''+('bash engine/tools/truba/prepare-remote.sh "$runtime_python" "'+request["native_sha256"]+'"\n' if prepare else '')+('''
+if ! bash engine/tools/truba/prepare-damask.sh "$runtime_python"; then
+    printf '%s\\n' 'DAMASK setup did not complete. See the runtime capability report and Slurm logs.' >&2
+fi
+''' if prepare_damask else '')+f'''
 if [ ! -x "$runtime_python" ]; then
     python3 engine/remote_worker.py request.json --missing-runtime
 else
@@ -526,9 +531,16 @@ def run_remote_operation(request,context,remote_auth=None,job_marker=None):
 run_remote_operation.remote_job_target = True
 
 
+def submit_remote_analysis(request, context, remote_auth=None, job_marker=None):
+    # Use a standalone job so the analysis survives closing the resource session.
+    return run_remote_job(request, replace(context, session_id=""), remote_auth, job_marker, submit_only=True)
+submit_remote_analysis.remote_job_target = True
+submit_remote_analysis.remote_submit_target = True
+
+
 def run_remote_mechanics(settings,context,mesh_source="",remote_auth=None,job_marker=None):
     request = dict(operation="mechanical", settings=asdict(settings), mesh_source=mesh_source)
-    return run_remote_job(request, replace(context, session_id=""), remote_auth, job_marker, submit_only=True)
+    return submit_remote_analysis(request, context, remote_auth, job_marker)
 run_remote_mechanics.remote_job_target = True
 run_remote_mechanics.remote_submit_target = True
 

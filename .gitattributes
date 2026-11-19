@@ -1,0 +1,2 @@
+# These scripts are bundled from Windows and executed by Bash on TRUBA.
+tools/truba/*.sh text eol=lf

@@ -14,12 +14,13 @@ from truba_session import saved_session, create_session, refresh_session, releas
 from truba_resources import BASELINES, AUTO_QUEUES, candidates, fetch_catalog, allocate_with_limits, automatic_context
 
 
-def ensure_remote_runtime(context, auth, *, cancelled, on_progress=None):
+def ensure_remote_runtime(context, auth, *, cancelled, on_progress=None, prepare_damask=False):
     """Reuse a verified runtime; repair the app-owned environment once if needed."""
     result, directory = run_remote_job(dict(operation='probe'), context, auth,
                                      cancelled=cancelled, on_progress=on_progress)
     capabilities = result['capabilities']
-    if all(capabilities.get(key) for key in ('mesh', 'netgen', 'kratos')):
+    required = ('mesh', 'damask') if prepare_damask else ('mesh', 'netgen', 'kratos')
+    if all(capabilities.get(key) for key in required):
         return result, directory
     if cancelled.is_set():
         raise CancelledError
@@ -27,7 +28,10 @@ def ensure_remote_runtime(context, auth, *, cancelled, on_progress=None):
     # resolved remote paths before changing anything.
     if not context.runtime_python.startswith('~/.local/share/RustMech/remote-'):
         return result, directory
-    return run_remote_job(dict(operation='prepare'), context, auth,
+    request = dict(operation='prepare')
+    if prepare_damask:
+        request['prepare_damask'] = True
+    return run_remote_job(request, context, auth,
                           cancelled=cancelled, on_progress=on_progress)
 
 
@@ -707,11 +711,15 @@ class RemoteController(QObject):
             self.preferences.sync()
             self.cancelled = Event()
             self.capabilities = None
+            fft_selected = self.window.setup_tabs.currentIndex() == self.window._fft_method_index
             if automatic:
                 self.future = self.executor.submit(ensure_remote_runtime, context, auth,
-                    cancelled=self.cancelled, on_progress=self.runtime_progress.emit)
+                    cancelled=self.cancelled, on_progress=self.runtime_progress.emit, prepare_damask=fft_selected)
             else:
-                self.future = self.executor.submit(run_remote_job,dict(operation="prepare" if prepare else "probe"),context,auth,
+                request = dict(operation="prepare" if prepare else "probe")
+                if prepare and fft_selected:
+                    request['prepare_damask'] = True
+                self.future = self.executor.submit(run_remote_job,request,context,auth,
                     cancelled=self.cancelled, on_progress=self.runtime_progress.emit)
             self._auto_probe_session = self.session.get('job_id')
         except Exception as error:
@@ -753,7 +761,7 @@ class RemoteController(QObject):
             self.capabilities = result["capabilities"]
             import json
             self.owner = json.loads((directory/"remote_job.json").read_text())["username"]
-            active = [label for key,label in (("mesh","Mesh"),("kratos","Kratos mechanics"),("flow","OpenFOAM CFD"),("thermal","OpenFOAM CHT")) if self.capabilities.get(key)]
+            active = [label for key,label in (("mesh","Mesh"),("kratos","Kratos mechanics"),("damask","DAMASK FFT"),("flow","OpenFOAM CFD"),("thermal","OpenFOAM CHT")) if self.capabilities.get(key)]
             reasons = self.capabilities.get("reasons",{})
             self.status.setText("Available: "+(", ".join(active) if active else "none")+".\n"+
                                 "\n".join(f"{key}: {value}" for key,value in reasons.items() if not self.capabilities.get(key)))

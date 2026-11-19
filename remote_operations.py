@@ -8,6 +8,7 @@ OPERATIONS = {
     "probe": "mesh", "prepare": "mesh",
     "preview": "mesh", "surface": "mesh", "doe_mesh": "mesh",
     "mechanical": "kratos", "convergence_level": "kratos", "doe_solve": "kratos",
+    "fft_solve": "damask",
     "flow_export": "mesh", "flow_solve": "flow",
     "thermal_export": "mesh", "thermal_solve": "thermal",
 }

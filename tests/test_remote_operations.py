@@ -10,7 +10,7 @@ from unittest.mock import patch, PropertyMock
 from model import Settings
 from remote_operations import required_capability
 from remote_worker import run_operation
-from truba_remote import RemoteContext, run_remote_job
+from truba_remote import RemoteContext, run_remote_job, slurm_script, submit_remote_analysis
 
 
 class RemoteOperationTests(unittest.TestCase):
@@ -69,6 +69,43 @@ class RemoteOperationTests(unittest.TestCase):
             self.assertEqual(required_capability(dict(operation=operation, settings=asdict(Settings()))), 'mesh')
         self.assertEqual(required_capability(dict(operation='flow_solve')), 'flow')
         self.assertEqual(required_capability(dict(operation='thermal_solve')), 'thermal')
+        self.assertEqual(required_capability(dict(operation='fft_solve', settings=asdict(Settings()))), 'damask')
+
+    def test_fft_job_uses_the_shared_durable_submission(self):
+        request = dict(operation='fft_solve', settings=asdict(Settings()), grid=128, void_ratio=.05)
+        context = RemoteContext(session_id='123')
+        with patch('truba_remote.run_remote_job') as submit:
+            self.assertIs(submit_remote_analysis(request, context, 'auth', 'marker'), submit.return_value)
+        submit.assert_called_once_with(request, replace(context, session_id=''), 'auth', 'marker', submit_only=True)
+
+    def test_fft_worker_exports_small_results_without_finite_element_meshing(self):
+        settings = Settings(mesh_type='TET10')
+        request = dict(operation='fft_solve', settings=asdict(settings), grid=128, void_ratio=.05)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            output = root / 'output'
+            output.mkdir()
+
+            def solve(_, grid, ratio, distribution, case, *, on_progress):
+                self.assertEqual((grid, ratio, distribution), (128, .05, None))
+                on_progress('DAMASK progress')
+                for name in ('stiffness_mpa.csv', 'status.json', 'xx_plus.hdf5', 'cell.vti'):
+                    (case / name).touch()
+
+            with patch('remote_worker.probe', return_value=dict(damask=True)), patch(
+                    'remote_worker.Path.cwd', return_value=root), patch('remote_worker._stage') as stage, patch(
+                    'damask_fft.run_periodic_fft', side_effect=solve), patch('mesh_engine.generate_volume_mesh') as mesh:
+                result = run_operation(request, output)
+            stage.assert_any_call('DAMASK progress')
+            mesh.assert_not_called()
+            self.assertEqual(Path(result['run_folder']), (output / 'fft').resolve())
+            self.assertEqual({path.name for path in (output / 'fft').iterdir()}, {'stiffness_mpa.csv', 'status.json'})
+
+    def test_fft_runtime_preparation_is_scoped_to_fft_setup(self):
+        request = dict(operation='prepare', source_sha256='checksum', native_sha256='native')
+        self.assertNotIn('prepare-damask.sh', slurm_script(RemoteContext(), 'tester', request))
+        request['prepare_damask'] = True
+        self.assertIn('prepare-damask.sh', slurm_script(RemoteContext(), 'tester', request))
 
     def test_unsupported_operations_and_ansys_never_connect_or_compute(self):
         requests = [dict(operation='unknown'), dict(operation='ansys_mapdl')]

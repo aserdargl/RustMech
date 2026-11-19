@@ -20,8 +20,12 @@
   centering, fixed geometry or unconditional maximization. Verify persistence when
   implementing window changes.
 
-# Repository
+# Analysis execution
 
+- Give each new analysis a TRUBA compute adapter. Reuse the remote operation and
+  capability registry, Slurm submission and tracking, and result retrieval.
+
+# Repository
 - Canonical remote: https://github.com/aserdargl/RustMech.git (remote name `origin`, branch `main`).
 - Local working copy: `D:\MySoftware\RustMech`. Commit and push finished work there; never force-push.
 - Stage only the files you changed (`git add <file>`), never `git add -A`: the working copy often holds the owner's uncommitted work.

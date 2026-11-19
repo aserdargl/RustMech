@@ -13,7 +13,8 @@ from model import Settings
 from nonlinear_compression import RustMechDialog
 from solver_profiles import SolverProfileStore
 from window_state import WindowStateStore
-from truba_remote import run_remote_operation,run_remote_mechanics,run_remote_preview,run_remote_level,run_remote_doe
+from truba_remote import (run_remote_operation,run_remote_mechanics,run_remote_preview,
+                          run_remote_level,run_remote_doe,submit_remote_analysis)
 
 
 class RemoteModeUiTests(unittest.TestCase):
@@ -80,6 +81,47 @@ class RemoteModeUiTests(unittest.TestCase):
         field.setFocus()
         QTest.keyClick(field,Qt.Key.Key_Return)
         self.assertFalse(self.controller.requested)
+
+    def test_fft_submits_assigned_material_without_local_wsl(self):
+        window = self.window
+        window._select_settings_method(window._fft_method_index)
+        self.enable(damask=False)
+        self.assertFalse(window.apply_button.isEnabled())
+        self.controller.capabilities['damask'] = True
+        self.controller.changed.emit()
+        self.assertTrue(window.apply_button.isEnabled())
+        self.assertFalse(window.fft_distribution.isEnabled())
+        window.fft_distribution.clear()
+        window.fft_grid.setValue(128)
+        window.fft_material_editor.controls['young_modulus'].setValue(125000)
+        try:
+            with patch('nonlinear_compression.AnalysisProcess') as process, patch(
+                    'nonlinear_compression.DamaskAnalysisProcess') as local:
+                process.return_value.remote_status.return_value = None
+                process.return_value.progress_status.return_value = None
+                window.apply()
+                local.assert_not_called()
+                target, request, _ = process.call_args.args
+                self.assertIs(target, submit_remote_analysis)
+                self.assertEqual((request['operation'], request['grid']), ('fft_solve', 128))
+                self.assertEqual(request['settings']['young_modulus'], 125000)
+        finally:
+            window.analysis_job = None
+            window.analysis_poll.stop()
+            self.controller.session = None
+
+    def test_downloaded_fft_job_displays_the_matrix(self):
+        import json
+
+        folder = Path(self.temp.name) / 'fft'
+        folder.mkdir()
+        status = dict(grid=32, solid_volume_fraction=.3, void_stiffness_ratio=.01,
+                      stiffness_mpa=[[1000] * 6 for _ in range(6)])
+        (folder / 'status.json').write_text(json.dumps(status), encoding='utf-8')
+        result = dict(operation='fft_solve', run_folder=str(folder))
+        self.window._background_analysis_updated({}, (result, folder.parent))
+        self.assertEqual(self.window.fft_result_folder, folder)
+        self.assertIn('32³', self.window.fft_result_summary.text())
 
     def test_enabling_remote_mode_and_runtime_checks_without_session_submit_nothing(self):
         with patch.object(self.controller.executor, 'submit') as submit:

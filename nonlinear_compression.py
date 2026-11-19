@@ -2115,7 +2115,8 @@ class RustMechDialog(QDialog):
         self.refresh_validity()
         if controller.requested:
             self.brand_subtitle_lbl.setText("TRUBA · remote compute")
-            if controller.ready and self.future is None and self.preview is None and not controller.closing:
+            if (controller.ready and self.future is None and self.preview is None and not controller.closing
+                    and self.setup_tabs.currentIndex() != self._fft_method_index):
                 self.status.setText('TRUBA ready. Click Apply to generate the geometry remotely.')
         else:
             self.brand_subtitle_lbl.setText(self._local_workspace_solver_name())
@@ -3038,8 +3039,13 @@ class RustMechDialog(QDialog):
         if method == self._fft_method_index:
             fft_errors = validate_periodic_fft(self._fft_settings(settings))
             self._request_fft_preview(settings, valid=not fft_errors)
-            if controller is not None and controller.requested:
-                fft_errors.append("Turn off TRUBA calculation mode to run local DAMASK FFT.")
+            remote_fft = controller is not None and controller.requested
+            self.fft_distribution.setEnabled(os.name == 'nt' and not remote_fft)
+            if remote_fft:
+                try:
+                    controller.require("damask")
+                except (ValueError, RuntimeError) as error:
+                    fft_errors.append(str(error))
             self.apply_button.setEnabled(idle and not fft_errors)
         else:
             self.apply_button.setEnabled(
@@ -3051,7 +3057,8 @@ class RustMechDialog(QDialog):
             self._update_status_visuals("busy", "● ANALYSING", False)
             return
         if method == self._fft_method_index:
-            self.status.setText("\n".join(fft_errors) if fft_errors else "Ready to run local DAMASK FFT.")
+            ready_text = "Ready to submit DAMASK FFT to TRUBA." if remote_fft else "Ready to run local DAMASK FFT."
+            self.status.setText("\n".join(fft_errors) if fft_errors else ready_text)
             state, badge = ("error", "● VALIDATION ERROR") if fft_errors else ("ready", "● READY TO SOLVE")
             self._update_status_visuals(state, badge, False)
             return
@@ -3662,13 +3669,21 @@ class RustMechDialog(QDialog):
         self.analysis_poll.start()
 
     def _start_fft(self, settings):
+        remote = self.remote_controller.requested
         distribution = self.fft_distribution.text().strip()
-        if os.name == "nt" and not distribution:
+        if not remote and os.name == "nt" and not distribution:
             self.status.setText("Enter a WSL distribution for DAMASK.")
             return
         grid, void_ratio = self.fft_grid.value(), self.fft_void_ratio.value()
         try:
-            self.analysis_job = DamaskAnalysisProcess(settings, grid, void_ratio, distribution)
+            if remote:
+                from truba_remote import submit_remote_analysis
+                context, auth = self.remote_controller.require("damask")
+                request = dict(operation="fft_solve", settings=asdict(settings), grid=grid, void_ratio=void_ratio)
+                self.analysis_job = AnalysisProcess(submit_remote_analysis, request, context, remote_auth=auth)
+                self.truba_dialog.job_list.submitting = True
+            else:
+                self.analysis_job = DamaskAnalysisProcess(settings, grid, void_ratio, distribution)
         except (OSError, ValueError, RuntimeError) as exc:
             self.status.setText(str(exc))
             self._update_status_visuals("error", "● FAILED", False)
@@ -3697,7 +3712,7 @@ class RustMechDialog(QDialog):
                     result = json.loads((Path(record["local_directory"]) / "output" / "result.json").read_text(encoding="utf-8"))
                     from truba_remote import _rebase_paths
                     result = _rebase_paths(Path(record["local_directory"]), result)
-                    self._show_completed_analysis(result["run_folder"], record)
+                    self._show_remote_analysis_result(result, record, open_workspace=True)
                 else:
                     self.truba_dialog.job_list.sync_background()
                     self.status.setText("See TRUBA jobs for this analysis. Results download automatically when connected.")
@@ -3773,7 +3788,7 @@ class RustMechDialog(QDialog):
         idle = self.analysis_job is None and self.future is None
         if result is not None:
             payload, _ = result
-            self._show_completed_analysis(payload["run_folder"], record, announce=idle)
+            self._show_remote_analysis_result(payload, record, announce=idle)
         elif idle and self._latest_background_analysis == record.get("request_id"):
             self._show_background_analysis(record)
 
@@ -3831,10 +3846,27 @@ class RustMechDialog(QDialog):
                         self.status.setText(f"TRUBA preview retrieved: {directory}")
                 elif operation=="mechanical":
                     folder = result["run_folder"]
+                elif operation=="fft_solve":
+                    self._show_remote_analysis_result(result, open_workspace=True)
                 else:
                     self.status.setText(f"TRUBA results retrieved: {directory}")
                 if operation!="mechanical": return
             self._show_completed_analysis(folder)
+
+    def _show_remote_analysis_result(self, result, record=None, *, announce=True, open_workspace=False):
+        folder = result["run_folder"]
+        if result.get("operation") == "fft_solve":
+            folder = Path(folder)
+            try:
+                self._show_fft_results(json.loads((folder / "status.json").read_text(encoding="utf-8")), folder)
+            except (OSError, ValueError, KeyError, TypeError) as error:
+                if announce:
+                    self.status.setText(f"Analysis failed: {error}")
+                    self._update_status_visuals("error", "● FAILED", False)
+                return
+            if open_workspace:
+                self._select_settings_method(self._fft_method_index)
+        self._show_completed_analysis(folder, record, announce=announce)
 
     def _show_completed_analysis(self, folder, record=None, *, announce=True):
         if announce:
