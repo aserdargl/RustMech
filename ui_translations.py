@@ -522,7 +522,7 @@ Help|Yardım
 View|Görünüm
 Reset view|Görünümü sıfırla
 Update preview|Önizlemeyi güncelle
-Run analysis|Analizi çalıştır
+Run Analysis|Analizi çalıştır
 Run analysis queue|Analiz kuyruğunu çalıştır
 Forced Stop|Zorla durdur
 Cancel meshing|Ağı iptal et
@@ -664,6 +664,10 @@ Updating geometry preview…|Geometri önizlemesi güncelleniyor…
 Generating geometry in background...|Geometri arka planda üretiliyor...
 Preparing geometry preview...|Geometri önizlemesi hazırlanıyor...
 Preparing geometry preview…|Geometri önizlemesi hazırlanıyor…
+The selected analysis method is not available.|Seçilen analiz yöntemi kullanılamıyor.
+Allocate or refresh the resource session and wait until it is ready before computing.|Kaynak oturumunu ayırın veya yenileyin ve hesaplamadan önce hazır olmasını bekleyin.
+TRUBA runtime is being checked and prepared automatically. Wait until READY before computing.|TRUBA çalışma ortamı otomatik olarak denetleniyor ve hazırlanıyor. Hesaplamadan önce hazır olmasını bekleyin.
+TRUBA runtime preparation did not complete.|TRUBA çalışma ortamının hazırlığı tamamlanmadı.
 Settings changed — updating geometry preview...|Ayarlar değişti — Geometri önizlemesi güncelleniyor...
 Cancelling mesh generation…|Ağ üretimi iptal ediliyor…
 Smooth geometry · Ready|Pürüzsüz geometri · Hazır
@@ -1185,6 +1189,7 @@ TURKISH.update({
 })
 
 TEMPLATES = {
+    'Preview error: {error}': 'Önizleme hatası: {error}',
     'Saved to Analysis Queue ({count}). Open Analysis Queue and select Run analysis queue to start.':
         'Analiz Kuyruğuna {count} iş kaydedildi. Başlatmak için Analiz Kuyruğunu açıp Analiz kuyruğunu çalıştır düğmesine basın.',
     'Results folder is {path}': 'Sonuç klasörü {path}',

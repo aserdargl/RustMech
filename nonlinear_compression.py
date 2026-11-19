@@ -295,6 +295,7 @@ class RustMechDialog(QDialog):
         self.mesh_progress_updates = SimpleQueue()
         self.worker_key = None
         self.failed_key = None
+        self._preview_failure_reason = ""
         self.disposed = False
 
         self.setWindowTitle(
@@ -1184,7 +1185,7 @@ class RustMechDialog(QDialog):
         cancel.setCursor(Qt.CursorShape.PointingHandCursor)
         cancel.clicked.connect(self.reject)
 
-        self.apply_button = QPushButton("Run analysis")
+        self.apply_button = QPushButton("Run Analysis")
         self.apply_button.setObjectName("primaryLaunchBtn")
         icon_dir = Path(__file__).resolve().parent / "assets" / "ui"
         play_icon = QIcon(str(icon_dir / "analysis-play-green.svg"))
@@ -1193,7 +1194,6 @@ class RustMechDialog(QDialog):
         self.apply_button.setIcon(play_icon)
         self.apply_button.setIconSize(QSize(16, 16))
         self.apply_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.apply_button.setEnabled(False)
         self.apply_button.setAutoDefault(False)
         self.apply_button.setToolTip("Save settings and start the selected solver.")
         self.apply_button.clicked.connect(self.apply)
@@ -1230,10 +1230,21 @@ class RustMechDialog(QDialog):
         readout.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         kpi_row.addWidget(readout, 1)
         self.status.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.analysis_blocker = QLabel()
+        self.analysis_blocker.setObjectName("analysisBlocker")
+        self.analysis_blocker.setTextFormat(Qt.TextFormat.PlainText)
+        self.analysis_blocker.setWordWrap(True)
+        self.analysis_blocker.setMinimumHeight(CONTROL_HEIGHT + 4)
+        self.analysis_blocker.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        status_layout.addWidget(self.analysis_blocker, 1)
+        self._set_analysis_blocker("Preparing geometry preview…")
         from operation_progress import OperationProgress
         self.local_analysis_progress = OperationProgress(self, provider=lambda: (
             self._local_analysis_in_progress(), self.status.text(),
         ), bar_at_end=True)
+        progress_policy = self.local_analysis_progress.sizePolicy()
+        progress_policy.setRetainSizeWhenHidden(False)
+        self.local_analysis_progress.setSizePolicy(progress_policy)
         status_layout.addWidget(self.local_analysis_progress, 1)
         self._analysis_action_buttons = (cancel, self.apply_button, self.force_stop_button)
         for button in self._analysis_action_buttons:
@@ -1315,6 +1326,7 @@ class RustMechDialog(QDialog):
             flow_active = index in (2,3)
             for button in self._analysis_action_buttons:
                 button.setVisible(not flow_active)
+            self._show_analysis_blocker()
             fft_selected = self.setup_tabs.currentIndex() == self._fft_method_index
             if flow_active:
                 title = "Transient Heat Transfer" if index == 3 else "Isothermal Flow"
@@ -2476,7 +2488,7 @@ class RustMechDialog(QDialog):
         self.mode.setCurrentIndex(0)
         self.failed_key = None
         self.debounce.stop()
-        self.apply_button.setEnabled(False)
+        self._set_analysis_blocker("Preparing geometry preview…")
         self.doe_studio.use_model_btn.setEnabled(True)
         self.start_preview()
 
@@ -2501,6 +2513,17 @@ class RustMechDialog(QDialog):
             self.failed_key = None
             self.start_preview()
         self.render_preview()
+
+    def _set_analysis_blocker(self, reason: str) -> None:
+        self._analysis_blocker_reason = reason
+        self.apply_button.setEnabled(not reason)
+        self._show_analysis_blocker()
+
+    def _show_analysis_blocker(self) -> None:
+        reason = self._analysis_blocker_reason if self.workspace_tabs.currentIndex() in (-1, 0) else ""
+        self.analysis_blocker.setText(reason.partition("\n")[0])
+        self.analysis_blocker.setToolTip(reason)
+        self.analysis_blocker.setVisible(not self._local_analysis_in_progress())
 
     def refresh_validity(self, *_) -> None:
         if self._switching_solver:
@@ -2548,12 +2571,25 @@ class RustMechDialog(QDialog):
                     controller.require("damask")
                 except (ValueError, RuntimeError) as error:
                     fft_errors.append(str(error))
-            self.apply_button.setEnabled(idle and not fft_errors)
+            blockers = fft_errors
+        elif method != 0:
+            blockers = ["The selected analysis method is not available."]
         else:
-            self.apply_button.setEnabled(
-                method == 0 and idle and
-                bool((current or remote) and not pending and not errors and not mesh_errors)
-            )
+            blockers = errors + mesh_errors
+            if pending:
+                blockers.append("Geometry or mesh settings have changed. Click Apply to update the preview.")
+            elif not (current or remote):
+                blockers.append(
+                    self._preview_failure_reason if self.failed_key is not None and self._preview_failure_reason
+                    else "Preparing geometry preview…"
+                )
+        if self.analysis_job is not None:
+            blocker = "Analysis running..."
+        elif self.future is not None:
+            blocker = "Building FE mesh in background…" if self._mesh_requested else "Preparing geometry preview…"
+        else:
+            blocker = blockers[0] if blockers else ""
+        self._set_analysis_blocker(blocker)
         if self.analysis_job is not None:
             self._show_analysis_progress(self.analysis_job)
             self._update_status_visuals("busy", "● ANALYSING", False)
@@ -2603,9 +2639,10 @@ class RustMechDialog(QDialog):
 
     def schedule_preview(self, *_) -> None:
         self.failed_key = None
-        self.apply_button.setEnabled(False)
+        message = "Settings changed — updating geometry preview..."
+        self._set_analysis_blocker(message)
         self.doe_studio.use_model_btn.setEnabled(not validate_geometry(self.collect(), include_mesh=False))
-        self.status.setText("Settings changed — updating geometry preview...")
+        self.status.setText(message)
         self._update_status_visuals(
             "working", "● UPDATING PREVIEW", self.has_pending_geometry()
         )
@@ -2620,11 +2657,13 @@ class RustMechDialog(QDialog):
             try: controller.require("mesh",settings if self._mesh_requested else None)
             except (RuntimeError,ValueError) as error:
                 self.status.setText(str(error))
+                if not self.apply_button.isEnabled():
+                    self._set_analysis_blocker(str(error))
                 return
         errors = validate_geometry(settings, include_mesh=self._mesh_requested)
         if errors:
             self.status.setText("\n".join(errors))
-            self.apply_button.setEnabled(False)
+            self._set_analysis_blocker(errors[0])
             self._update_status_visuals(
                 "error", "● GEOMETRY ERROR", self.has_pending_geometry()
             )
@@ -2636,9 +2675,8 @@ class RustMechDialog(QDialog):
             self.refresh_validity()
             return
         self.worker_key = key
-        self.status.setText(
-            "Building FE mesh in background…" if getattr(self, '_mesh_requested', False) else "Preparing geometry preview…"
-        )
+        message = "Building FE mesh in background…" if self._mesh_requested else "Preparing geometry preview…"
+        self.status.setText(message)
         self._update_status_visuals(
             "working", "● BUILDING FE MESH" if getattr(self, '_mesh_requested', False) else "● BUILDING GEOMETRY", self.has_pending_geometry()
         )
@@ -2666,6 +2704,7 @@ class RustMechDialog(QDialog):
             )
         else:
             self.future = self.executor.submit(self.builder, settings, self.preview)
+        self._set_analysis_blocker(message)
 
     def cancel_meshing(self) -> None:
         if self.future is None:
@@ -2674,7 +2713,9 @@ class RustMechDialog(QDialog):
         self._analysis_after_mesh = None
         self.debounce.stop()
         self.cancel_mesh_button.setEnabled(False)
-        self.status.setText("Cancelling mesh generation…")
+        message = "Cancelling mesh generation…"
+        self._set_analysis_blocker(message)
+        self.status.setText(message)
 
     def _show_mesh_stage(self) -> None:
         stage = None
@@ -2702,12 +2743,17 @@ class RustMechDialog(QDialog):
                 try: future.result()
                 except CancelledError: pass
                 except Exception as error:
-                    self.status.setText(f"Remote mesh operation stopped without a confirmed cancellation: {error}. Retrieve the saved job record.")
+                    message = f"Remote mesh operation stopped without a confirmed cancellation: {error}. Retrieve the saved job record."
                     self.failed_key = key
+                    self._preview_failure_reason = message
+                    self.refresh_validity()
+                    self.status.setText(message)
                     return
+            message = "Mesh generation cancelled. Select Update preview to retry."
             self.failed_key = key
+            self._preview_failure_reason = message
             self.refresh_validity()
-            self.status.setText("Mesh generation cancelled. Select Update preview to retry.")
+            self.status.setText(message)
             self._update_status_visuals("pending", "● MESH CANCELLED", self.has_pending_geometry())
             controller = getattr(self,"remote_controller",None)
             if controller is not None and getattr(self,"_restart_preview_for_mode",False) and (not controller.requested or controller.ready):
@@ -2730,9 +2776,11 @@ class RustMechDialog(QDialog):
         except Exception as exc:
             self._analysis_after_mesh = None
             if self.worker_key == key:
+                message = f"Preview error: {exc}"
                 self.failed_key = key
-                self.status.setText(f"Preview error: {exc}")
-                self.apply_button.setEnabled(False)
+                self._preview_failure_reason = message
+                self.status.setText(message)
+                self._set_analysis_blocker(message)
                 self._update_status_visuals(
                     "error", "● PREVIEW ERROR", self.has_pending_geometry()
                 )
@@ -3227,7 +3275,7 @@ class RustMechDialog(QDialog):
             QMessageBox.critical(self, "Cannot start analysis", str(exc))
             return
         self.accepted_settings = settings
-        self.apply_button.setEnabled(False)
+        self._set_analysis_blocker("Analysis running...")
         self.force_stop_button.setEnabled(True)
         self._show_analysis_progress(self.analysis_job)
         self._update_status_visuals("busy", "● ANALYSING", False)
@@ -3301,7 +3349,7 @@ class RustMechDialog(QDialog):
         except Exception as error:
             QMessageBox.warning(self,"TRUBA job",str(error))
             return
-        self.apply_button.setEnabled(False)
+        self._set_analysis_blocker("Waiting for TRUBA job and retrieving results…")
         self.force_stop_button.setEnabled(True)
         self.status.setText("Waiting for TRUBA job and retrieving results…")
         self.analysis_poll.start()

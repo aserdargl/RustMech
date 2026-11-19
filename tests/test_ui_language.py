@@ -68,7 +68,7 @@ class LanguageTests(unittest.TestCase):
     def test_live_roundtrip_preserves_identifiers_input_and_selector_sync(self):
         root = QWidget()
         self.windows.append(root)
-        button = QPushButton('Run analysis', root)
+        button = QPushButton('Run Analysis', root)
         label = QLabel('Connecting...', root)
         password = QLineEdit('MyPassword-and-file-path', root)
         password.setEchoMode(QLineEdit.EchoMode.Password)
@@ -86,7 +86,7 @@ class LanguageTests(unittest.TestCase):
         self.assertEqual(first.combo.currentData(), 'tr')
         self.assertEqual(second.combo.currentData(), 'tr')
         self.manager.set_language('en')
-        self.assertEqual(button.text(), 'Run analysis')
+        self.assertEqual(button.text(), 'Run Analysis')
         self.assertEqual(label.text(), 'Connecting...')
         self.assertEqual(first.combo.currentData(), 'en')
 
