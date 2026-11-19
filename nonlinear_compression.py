@@ -1976,7 +1976,7 @@ class RustMechDialog(QDialog):
         width = max(
             max(button.fontMetrics().horizontalAdvance(button.text()) for button in navigation),
             max(self.sidebar_toggle.fontMetrics().horizontalAdvance(translate(name))
-                for name in self.method_names),
+                for name in self.method_button_labels),
             max(self.workspace_button.fontMetrics().horizontalAdvance(action.text())
                 for action in self.workspace_menu.actions() if action.isVisible()),
         ) + 32
@@ -2203,6 +2203,7 @@ class RustMechDialog(QDialog):
 
     def _add_method_pages(self) -> None:
         self.method_names = ["Finite Element"]
+        self.method_button_labels = self.method_names.copy()
         methods = (
             ("Voxel", "Geometry-trimmed voxel mesh", "Clip boundary voxels against the reference geometry. Cut-cell element types, small cells and ANSYS compatibility require validation."),
             ("FFT", "FFT Homogenization", "Effective stiffness from periodic unit-cell tests."),
@@ -2211,6 +2212,7 @@ class RustMechDialog(QDialog):
         )
         for tab, name, description in methods:
             self.method_names.append(name)
+            self.method_button_labels.append("Geometry Trimmed" if tab == "Voxel" else name)
             fields = self._add_setup_page(tab)
             self.setup_tabs.setTabToolTip(self.setup_tabs.count() - 1, name)
             heading = QLabel(name)
@@ -2351,7 +2353,8 @@ class RustMechDialog(QDialog):
 
     def _sync_settings_method(self, index: int) -> None:
         from ui_language import translate
-        self.sidebar_toggle.setText(translate(self.method_names[index]))
+        self.sidebar_toggle.setText(translate(self.method_button_labels[index]))
+        self.sidebar_toggle.setAccessibleName(translate(self.method_names[index]))
         for action in self.method_actions.actions():
             action.setChecked(action.data() == index)
         if hasattr(self, "remote_controller"):

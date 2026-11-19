@@ -137,7 +137,11 @@ class LanguageTests(unittest.TestCase):
             methods = window.sidebar_toggle.menu().actions()
             self.assertEqual(window.sidebar_toggle.text(), 'Sonlu Eleman')
             self.assertEqual(window.sidebar_toggle.text(), methods[0].text())
-            for index in (1, 3, 4):
+            methods[1].trigger()
+            self.assertEqual(window.sidebar_toggle.text(), 'Geometriye göre kırpılmış')
+            self.assertEqual(methods[1].text(), 'Geometriye göre kırpılmış voksel ağı')
+            self.assertFalse(window.apply_button.isEnabled())
+            for index in (3, 4):
                 methods[index].trigger()
                 self.assertFalse(window.apply_button.isEnabled())
             methods[2].trigger()

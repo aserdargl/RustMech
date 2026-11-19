@@ -115,18 +115,27 @@ class DialogKeyboardTests(unittest.TestCase):
                         expected = dialog.main_splitter.sizes()
                         menu = dialog.sidebar_toggle.menu()
                         opened = QSignalSpy(menu.aboutToShow)
+                        button_width = dialog.sidebar_toggle.width()
+                        self.assertLess(button_width,
+                            dialog.sidebar_toggle.fontMetrics().horizontalAdvance(
+                                "Geometry-trimmed voxel mesh") + 32)
                         for action in menu.actions():
                             QTimer.singleShot(30, menu.close)
                             QTest.mouseClick(dialog.sidebar_toggle, Qt.MouseButton.LeftButton)
                             self.assertEqual(dialog.main_splitter.sizes(), expected)
                             action.trigger()
                             self.app.processEvents()
-                            self.assertEqual(dialog.sidebar_toggle.text(), action.text())
+                            label = action.text()
+                            if label == "Geometry-trimmed voxel mesh":
+                                label = "Geometry Trimmed"
+                            self.assertEqual(dialog.sidebar_toggle.text(), label)
+                            self.assertEqual(dialog.sidebar_toggle.accessibleName(), action.text())
                             self.assertEqual(dialog.setup_tabs.currentIndex(), action.data())
                             self.assertTrue(action.isChecked())
                             self.assertEqual(dialog.workspace_tabs.currentIndex(), 0)
-                            self.assertGreaterEqual(dialog.sidebar_toggle.width(),
-                                dialog.sidebar_toggle.fontMetrics().horizontalAdvance(action.text()) + 24)
+                            self.assertEqual(dialog.sidebar_toggle.width(), button_width)
+                            self.assertGreaterEqual(button_width,
+                                dialog.sidebar_toggle.fontMetrics().horizontalAdvance(label) + 24)
                         self.assertEqual(opened.count(), len(menu.actions()))
                         self.assertFalse(dialog.setup_tabs.tabBar().isVisible())
                         # Selecting settings also recovers a previously collapsed saved sidebar.

@@ -883,6 +883,7 @@ Voxel spacing|Voksel aralığı
 Solid fraction|Katı oranı
 Meshing method|Ağ oluşturma yöntemi
 Geometry-trimmed voxel mesh|Geometriye göre kırpılmış voksel ağı
+Geometry Trimmed|Geometriye göre kırpılmış
 Planned|Planlanıyor
 Material Point Method|Malzeme noktası yöntemi
 Peridynamics|Peridinamik
