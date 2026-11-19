@@ -9,7 +9,7 @@ import shlex
 
 from PySide6.QtCore import QSignalBlocker, QThread, QTimer, Qt
 from PySide6.QtWidgets import (QAbstractItemView, QFormLayout, QHBoxLayout, QHeaderView,
-                               QItemDelegate, QLabel, QLineEdit, QPushButton, QSplitter,
+                               QItemDelegate, QLabel, QLineEdit, QMessageBox, QPushButton, QSplitter,
                                QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
 
 from esen_jobs import jobs_directory as esen_jobs_directory, read_job as read_esen_job
@@ -106,6 +106,7 @@ class ActiveJobsWorker(QThread):
         self.username = auth.username
         self.state_dir = state_dir
         self.groups = None
+        self.invalidated = False
 
     def run(self):
         try:
@@ -116,11 +117,34 @@ class ActiveJobsWorker(QThread):
             self.auth = None
 
 
+class CancelSlurmJobWorker(QThread):
+    def __init__(self, auth, job_id, parent):
+        super().__init__(parent)
+        self.auth = auth
+        self.job_id = job_id
+        self.failed = False
+        self.invalidated = False
+
+    def run(self):
+        try:
+            if not re.fullmatch(r'[0-9]+', self.job_id):
+                raise ValueError('Expected a single Slurm allocation ID')
+            transport = RemoteTransport(RemoteContext(transport='ssh'), self.auth)
+            transport.command(f'scancel --user={shlex.quote(self.auth.username)} {self.job_id}')
+        except Exception:
+            self.failed = True
+        finally:
+            self.auth = None
+
+
 class TrubaActiveJobs(QWidget):
     def __init__(self, dialog):
         super().__init__(dialog)
         self.dialog = dialog
         self.worker = None
+        self.cancel_worker = None
+        self.refresh_after_cancel = False
+        self.shutting_down = False
         self.groups = {}
         self.selected_jobs = []
         self.timer = QTimer(self, interval=10000)
@@ -180,6 +204,20 @@ class TrubaActiveJobs(QWidget):
         self.notice.setObjectName('mutedHintLabel')
         self.notice.setWordWrap(True)
         layout.addWidget(self.notice)
+        actions = QHBoxLayout()
+        self.cancel_notice = QLabel()
+        self.cancel_notice.setObjectName('mutedHintLabel')
+        self.cancel_notice.setWordWrap(True)
+        actions.addWidget(self.cancel_notice, 1)
+        self.cancel_button = QPushButton('Cancel job')
+        self.cancel_button.setObjectName('destructiveActionBtn')
+        self.cancel_button.setFixedHeight(CONTROL_HEIGHT)
+        self.cancel_button.setStyleSheet(self.refresh_button.styleSheet())
+        self.cancel_button.setAutoDefault(False)
+        self.cancel_button.setEnabled(False)
+        self.cancel_button.clicked.connect(self.cancel_selected_job)
+        actions.addWidget(self.cancel_button)
+        layout.addLayout(actions)
 
     @staticmethod
     def _table(headers):
@@ -205,13 +243,18 @@ class TrubaActiveJobs(QWidget):
     def connection_changed(self, connected):
         self.refresh_button.setEnabled(connected and self.worker is None)
         if not connected:
+            if self.worker is not None:
+                self.worker.invalidated = True
+            if self.cancel_worker is not None:
+                self.cancel_worker.invalidated = True
+            self.cancel_notice.clear()
             self.show_groups({})
             self.notice.setText('Connect to TRUBA to see active jobs.')
         else:
             self.refresh()
 
     def refresh(self):
-        if not self.isVisible() or self.worker is not None:
+        if self.shutting_down or not self.isVisible() or self.worker is not None:
             return
         auth = self.dialog.analysis_auth()
         if auth is None:
@@ -228,11 +271,12 @@ class TrubaActiveJobs(QWidget):
         if worker is None:
             return
         worker.deleteLater()
+        refresh_again, self.refresh_after_cancel = self.refresh_after_cancel, False
         auth = self.dialog.analysis_auth()
         self.refresh_button.setEnabled(auth is not None)
         if auth is None:
             return
-        if auth.username != worker.username:
+        if refresh_again or worker.invalidated or auth.username != worker.username:
             self.refresh()
             return
         if worker.groups is None:
@@ -287,15 +331,64 @@ class TrubaActiveJobs(QWidget):
             self.jobs.setCurrentCell(row, 0)
         self.show_details()
 
-    def show_details(self, *_):
+    def selected_job(self):
         row = self.jobs.currentRow()
-        job = self.selected_jobs[row] if 0 <= row < len(self.selected_jobs) else None
+        return self.selected_jobs[row] if 0 <= row < len(self.selected_jobs) else None
+
+    def show_details(self, *_):
+        job = self.selected_job()
         started = job is not None and job.state not in ('PENDING', 'CONFIGURING')
         self.started.setText(display_start(job) if started else '—')
         self.elapsed.setText(display_duration(job.elapsed) if started else '—')
         self.remaining.setText(display_duration(job.remaining) if started else '—')
+        single_job = job is not None and bool(re.fullmatch(r'[0-9]+', job.job_id))
+        self.cancel_button.setEnabled(single_job and self.cancel_worker is None)
+        self.cancel_button.setToolTip(translate(
+            'Only individual Slurm allocations can be cancelled here.'
+        ) if job is not None and not single_job else '')
+
+    def cancel_selected_job(self):
+        auth = self.dialog.analysis_auth()
+        job = self.selected_job()
+        if self.shutting_down or auth is None or job is None or self.cancel_worker is not None:
+            return
+        if not re.fullmatch(r'[0-9]+', job.job_id):
+            return
+        # Keep the confirmed target even if a refresh changes the current row.
+        answer = QMessageBox.question(
+            self, 'Cancel job',
+            f'Cancel Slurm job {job.job_id}? This stops the entire allocation and any analyses using it.',
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if (answer != QMessageBox.StandardButton.Yes or self.shutting_down or self.cancel_worker is not None
+                or self.dialog.analysis_auth() != auth
+                or not any(item.job_id == job.job_id for group in self.groups.values() for item in group)):
+            return
+        self.cancel_worker = CancelSlurmJobWorker(auth, job.job_id, self)
+        self.cancel_worker.finished.connect(self.finish_cancel)
+        self.cancel_notice.setText('Sending cancellation request to Slurm…')
+        self.cancel_button.setEnabled(False)
+        self.cancel_worker.start()
+
+    def finish_cancel(self):
+        worker, self.cancel_worker = self.cancel_worker, None
+        worker.deleteLater()
+        self.show_details()
+        if worker.invalidated or self.shutting_down:
+            return
+        message = ('Could not request cancellation for Slurm job {job_id}. Refresh and retry.' if worker.failed
+                   else 'Cancellation requested for Slurm job {job_id}.')
+        self.cancel_notice.setText(message.format(job_id=worker.job_id))
+        if self.worker is not None:
+            self.refresh_after_cancel = True
+        else:
+            self.refresh()
 
     def shutdown(self):
+        self.shutting_down = True
         self.timer.stop()
         if self.worker is not None:
             self.worker.wait()
+        if self.cancel_worker is not None:
+            self.cancel_worker.wait()

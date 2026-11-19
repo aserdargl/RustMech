@@ -1117,6 +1117,9 @@ Top platen displacement in −Z; reaction force is calculated (N).|Üst plakanı
 Pending / active remote jobs|Bekleyen / Etkin uzak işler
 TRUBA jobs|TRUBA işleri
 Active jobs|Aktif işler
+Cancel job|İşi iptal et
+Only individual Slurm allocations can be cancelled here.|Buradan yalnızca tekil Slurm tahsisleri iptal edilebilir.
+Sending cancellation request to Slurm…|Slurm’a iptal isteği gönderiliyor…
 All jobs|Tüm işler
 Work name for new jobs|Yeni işler için çalışma adı
 Use the same work name to group multiple submissions.|Birden çok gönderimi gruplamak için aynı çalışma adını kullanın.
@@ -1298,6 +1301,12 @@ TURKISH.update({
 })
 
 TEMPLATES = {
+    'Cancel Slurm job {job_id}? This stops the entire allocation and any analyses using it.':
+        '{job_id} numaralı Slurm işi iptal edilsin mi? Tahsisin tamamı ve onu kullanan analizler durdurulur.',
+    'Could not request cancellation for Slurm job {job_id}. Refresh and retry.':
+        '{job_id} numaralı Slurm işi için iptal isteği gönderilemedi. Listeyi yenileyip tekrar deneyin.',
+    'Cancellation requested for Slurm job {job_id}.':
+        '{job_id} numaralı Slurm işi için iptal isteği gönderildi.',
     'Could not write VTU: {file}': 'VTU dosyası yazılamadı: {file}',
     'Missing or invalid nodal result field: {field}': 'Düğüm sonuç alanı eksik veya geçersiz: {field}',
     'Unsupported EnSight Gold cell types: {types}': 'Desteklenmeyen EnSight Gold eleman tipleri: {types}',

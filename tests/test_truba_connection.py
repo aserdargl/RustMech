@@ -296,6 +296,68 @@ class TrubaTests(unittest.TestCase):
         dialog.connection_changed.emit(False)
         self.assertFalse(tab.refresh_button.isEnabled())
 
+    def test_active_jobs_cancels_only_confirmed_selection_and_refreshes(self):
+        dialog = self.dialog()
+        tab = dialog.active_jobs
+        dialog.tabs.setCurrentWidget(tab)
+        dialog.show()
+        self.assertFalse(tab.cancel_button.isEnabled())
+        queue = ('11|RUNNING|N/A|4:00|8:00:00|First job\n'
+                 '23|PENDING|N/A|0:00|8:00:00|Second job\n'
+                 '42_5|PENDING|N/A|0:00|8:00:00|Array task\n')
+        with (patch.object(dialog, 'analysis_auth', return_value=RemoteAuth('tester', 'test')),
+              patch('truba_active_jobs.RemoteTransport') as transport,
+              patch.object(QMessageBox, 'question') as question):
+            command = transport.return_value.command
+            command.return_value = queue
+            dialog.connection_changed.emit(True)
+            self.assertTrue(tab.worker.wait(5000))
+            self.app.processEvents()
+            tab.timer.stop()
+
+            tab.jobs.setCurrentCell(2, 0)
+            self.assertFalse(tab.cancel_button.isEnabled())
+            tab.jobs.setCurrentCell(1, 0)
+            self.assertTrue(tab.cancel_button.isEnabled())
+            tab.study_name.setFocus()
+            QTest.keyClick(tab.study_name, Qt.Key.Key_Return)
+            question.assert_not_called()
+            question.return_value = QMessageBox.StandardButton.No
+            tab.cancel_button.click()
+            command.assert_called_once()
+            self.assertIn('23', question.call_args.args[2])
+            self.assertEqual(question.call_args.args[-1], QMessageBox.StandardButton.No)
+
+            def confirm(*_):
+                tab.jobs.setCurrentCell(0, 0)
+                return QMessageBox.StandardButton.Yes
+
+            question.side_effect = confirm
+            command.side_effect = ['', queue.splitlines()[0]]
+            tab.cancel_button.click()
+            self.assertFalse(tab.cancel_button.isEnabled())
+            self.assertTrue(tab.cancel_worker.wait(5000))
+            self.app.processEvents()
+            self.assertTrue(tab.worker.wait(5000))
+            self.app.processEvents()
+            self.assertEqual(command.call_args_list[1].args[0], 'scancel --user=tester 23')
+            self.assertTrue(command.call_args_list[2].args[0].startswith('TZ=UTC'))
+            self.assertEqual([job.job_id for job in tab.selected_jobs], ['11'])
+            self.assertEqual(tab.cancel_notice.text(), 'Cancellation requested for Slurm job 23.')
+
+            command.side_effect = [RuntimeError('Rejected'), queue.splitlines()[0]]
+            tab.cancel_button.click()
+            self.assertTrue(tab.cancel_worker.wait(5000))
+            self.app.processEvents()
+            self.assertTrue(tab.worker.wait(5000))
+            self.app.processEvents()
+            self.assertTrue(tab.cancel_button.isEnabled())
+            self.assertEqual(tab.selected_job().job_id, '11')
+            self.assertIn('Could not request cancellation', tab.cancel_notice.text())
+
+        dialog.connection_changed.emit(False)
+        self.assertFalse(tab.cancel_button.isEnabled())
+
     def test_active_jobs_show_purposes_by_work_and_selected_slurm_times(self):
         dialog = self.dialog()
         tab = dialog.active_jobs
