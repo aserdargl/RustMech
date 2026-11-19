@@ -50,9 +50,10 @@ class ForcedStopUiTests(unittest.TestCase):
             self.assertFalse(progress.isHidden())
             self.assertEqual(progress.bar.maximum(), 0)
 
-            job.progress_status.return_value = "Exporting result fields…"
+            job.progress_status.return_value = ("Exporting result fields…", 5, 6)
             dialog._poll_analysis()
             self.assertEqual(progress.label.text(), "Exporting result fields…")
+            self.assertEqual(progress.bar.text(), "83%")
             dialog.operation_progress.refresh()
             self.assertTrue(dialog.operation_progress.isHidden())
 

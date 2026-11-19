@@ -198,7 +198,11 @@ def solve_cell(solid, size_mm, young_mpa, poisson, void_ratio, distribution, fol
     write_json(folder / "inputs.json", metadata)
     stiffness = np.empty((6, 6))
     for column, (label, (i, j)) in enumerate(zip(COMPONENTS, TENSOR_INDICES)):
-        on_progress(f"DAMASK · {column + 1}/6 · {label}")
+        message = f"DAMASK · {column + 1}/{len(COMPONENTS)} · {label}"
+        if on_progress is report_analysis_step:
+            report_analysis_step(message, column, len(COMPONENTS))
+        else:
+            on_progress(message)
         stresses = []
         for suffix, sign in (("plus", 1), ("minus", -1)):
             if (folder / CANCEL_FILE).exists():

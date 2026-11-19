@@ -235,6 +235,8 @@ QSplitter::handle:hover { border-color: #3978BE; }
 }
 QProgressBar { border: 1px solid #CBD5E1; border-radius: 2px; background: #E8E8E8; text-align: center; }
 QProgressBar::chunk { background: #505050; border-radius: 1px; }
+QProgressBar#operationProgressBar { color: #0F172A; background: #E9EDF2; }
+QProgressBar#operationProgressBar::chunk { background: #16A34A; border-radius: 1px; }
 QToolTip { background: #FFFFFF; color: #111827; border: 1px solid #B8B8B8; padding: 4px 6px; }
 
 /* Expanded View controls below the orientation marker. */

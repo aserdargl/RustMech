@@ -14,7 +14,7 @@ from operation_progress import OperationProgress
 
 
 def staged_operation(release_path):
-    report_analysis_step("Exporting result fields…")
+    report_analysis_step("Exporting result fields…", 5, 6)
     while not Path(release_path).exists():
         time.sleep(.01)
     return "completed"
@@ -65,6 +65,7 @@ class OperationProgressTests(unittest.TestCase):
         self.layout.addWidget(footer)
         footer.update_step(True, "Experiment 2 · Solving", 1, 3)
         self.assertEqual((footer.bar.value(), footer.bar.maximum()), (1, 3))
+        self.assertEqual(footer.bar.text(), "33%")
         footer.update_step(False, "Completed")
         footer.bar.hide()  # Existing mesh lifecycle hides its bar on completion.
         footer.update_step(True, "Starting analysis…")
@@ -108,6 +109,7 @@ class OperationProgressTests(unittest.TestCase):
                         break
                     QTest.qWait(20)
                 self.assertEqual(stage, "Exporting result fields…")
+                self.assertEqual(job.progress_status(with_counts=True), (stage, 5, 6))
                 self.assertFalse(job.done())
                 release.touch()
                 while not job.done() and time.monotonic() < deadline:

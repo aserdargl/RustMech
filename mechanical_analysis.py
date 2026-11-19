@@ -54,7 +54,8 @@ def run_analysis(
     *,
     result_root=None,
 ) -> Path:
-    report_analysis_step("Validating analysis settings and mesh…")
+    total_stages = 6
+    report_analysis_step("Validating analysis settings and mesh…", 0, total_stages)
     require_settings(settings)
     errors = backend.capabilities.validate(settings) + mesh.solve_errors
     if errors:
@@ -72,7 +73,7 @@ def run_analysis(
     print(f"Results: {paths.human}", flush=True)
     try:
         write_json(status, report)
-        report_analysis_step("Exporting geometry and mesh…")
+        report_analysis_step("Exporting geometry and mesh…", 1, total_stages)
         report["mesh"] = export_geometry(settings, mesh, paths, images=images)
         report["status"] = "solving"
         write_json(status, report)
@@ -82,7 +83,7 @@ def run_analysis(
             f"Starting {backend.capabilities.display_name}...",
             flush=True,
         )
-        report_analysis_step(f"Solving · {backend.capabilities.display_name}…")
+        report_analysis_step(f"Solving · {backend.capabilities.display_name}…", 2, total_stages)
         execution = backend.solve(AnalysisRequest(settings, mesh, paths.raw))
         report["solve_attempted"] = execution.solve_attempted
         report["licensed_solve_executed"] = execution.solve_attempted and backend.capabilities.identifier == "ansys_mapdl"
@@ -94,13 +95,13 @@ def run_analysis(
                 execution.error or "Solver did not return results."
             )
         result = execution.results
-        report_analysis_step("Extracting reactions and response curves…")
+        report_analysis_step("Extracting reactions and response curves…", 3, total_stages)
         history, report["reactions"] = extract_curve(result)
-        report_analysis_step("Exporting graphs…")
+        report_analysis_step("Exporting graphs…", 4, total_stages)
         report["graphs"] = export_graphs(
             history, settings, paths.human / "04_Graphs", mesh=mesh, images=images, result=result
         )
-        report_analysis_step("Exporting result fields…")
+        report_analysis_step("Exporting result fields…", 5, total_stages)
         report["fields"] = export_field_results(
             result, mesh, paths.human / "03_Results", images=images
         )

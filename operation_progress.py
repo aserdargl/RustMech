@@ -8,7 +8,7 @@ from studio_style import CONTROL_HEIGHT
 
 
 class OperationProgress(QWidget):
-    """Show a real count when available; otherwise use an indeterminate bar.
+    """Show the percentage of completed work when counts are available.
 
     The provider returns (active, step[, completed, total]) on the GUI thread.
     Keeping lifecycle ownership in the workspace also covers failure and cancel.
@@ -69,7 +69,7 @@ class OperationProgress(QWidget):
             if total is not None and total > 0:
                 self.bar.setRange(0, total)
                 self.bar.setValue(max(0, min(completed or 0, total)))
-                self.bar.setFormat("%v / %m")
+                self.bar.setFormat("%p%")
                 self.bar.setTextVisible(True)
             else:
                 self.bar.setRange(0, 0)

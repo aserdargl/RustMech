@@ -1,5 +1,6 @@
 """Isolated analysis jobs whose owned process tree can be forcibly stopped."""
 
+import json
 import multiprocessing
 import os
 from pathlib import Path
@@ -13,12 +14,12 @@ from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
 _progress_path = None
 
 
-def report_analysis_step(message):
+def report_analysis_step(message, completed=None, total=None):
     """Publish a stage from an owned analysis process without affecting its result."""
     if _progress_path is not None:
         try:
             temporary = _progress_path.with_suffix(".tmp")
-            temporary.write_text(message, encoding="utf-8")
+            temporary.write_text(json.dumps((message, completed, total)), encoding="utf-8")
             temporary.replace(_progress_path)
         except OSError:
             pass
@@ -79,16 +80,20 @@ class AnalysisProcess:
 
     def remote_status(self):
         if self._remote_marker is not None and self._remote_marker.exists():
-            import json
             try:return json.loads(self._remote_marker.read_text())
             except (OSError,ValueError):pass
         return None
 
-    def progress_status(self):
+    def progress_status(self, *, with_counts=False):
         try:
-            return self._result_path.with_suffix(".progress").read_text(encoding="utf-8")
-        except OSError:
+            payload = self._result_path.with_suffix(".progress").read_text(encoding="utf-8")
+        except (OSError, UnicodeError):
             return None
+        try:
+            message, completed, total = json.loads(payload)
+        except (ValueError, TypeError):
+            message, completed, total = payload, None, None
+        return (message, completed, total) if with_counts else message
 
     def result(self):
         if self._remote_future is not None:

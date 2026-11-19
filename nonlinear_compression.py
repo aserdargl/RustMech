@@ -1242,9 +1242,12 @@ class RustMechDialog(QDialog):
         status_layout.addWidget(self.analysis_blocker, 1)
         self._set_analysis_blocker("Preparing geometry preview…")
         from operation_progress import OperationProgress
+        self._analysis_progress_counts = (None, None)
         self.local_analysis_progress = OperationProgress(self, provider=lambda: (
             self._local_analysis_in_progress(), self.status.text(),
+            *(self._analysis_progress_counts if self.analysis_job is not None else (None, None)),
         ), bar_at_end=True)
+        self.local_analysis_progress.bar.setToolTip("Percentage of completed analysis stages")
         progress_policy = self.local_analysis_progress.sizePolicy()
         progress_policy.setRetainSizeWhenHidden(False)
         self.local_analysis_progress.setSizePolicy(progress_policy)
@@ -3393,6 +3396,7 @@ class RustMechDialog(QDialog):
         self._update_status_visuals("error", "● CANCELLED", False)
 
     def _show_analysis_progress(self, job):
+        self._analysis_progress_counts = (None, None)
         record = job.remote_status()
         if record and record.get("background"):
             self._show_background_analysis(record)
@@ -3401,7 +3405,10 @@ class RustMechDialog(QDialog):
         elif getattr(job, "background_submission", False) is True:
             self.status.setText("Preparing analysis for TRUBA…")
         else:
-            stage = job.progress_status() if hasattr(job, "progress_status") else None
+            stage = job.progress_status(with_counts=True) if hasattr(job, "progress_status") else None
+            if isinstance(stage, tuple):
+                stage, completed, total = stage
+                self._analysis_progress_counts = (completed, total)
             self.status.setText(stage or "Analysis running...")
         self.local_analysis_progress.refresh()
 
