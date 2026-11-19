@@ -12,8 +12,8 @@ import re
 from PySide6.QtCore import QSignalBlocker, QSize, Qt, QTimer
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (QAbstractItemView, QApplication, QDialog, QGridLayout, QGroupBox, QHeaderView,
-                              QHBoxLayout, QLabel, QLineEdit, QPushButton,
-                              QSplitter, QTableWidget, QTableWidgetItem, QVBoxLayout)
+                              QHBoxLayout, QLabel, QLineEdit, QPushButton, QSplitter, QStyle,
+                              QTableWidget, QTableWidgetItem, QToolButton, QVBoxLayout)
 
 from camera_toolbar import camera_icon
 from file_dialog import QFileDialog
@@ -228,7 +228,14 @@ class FolderBatchDialog(QDialog):
         self.folder.setPlaceholderText('Folder containing specimen geometries')
         self.folder.setAccessibleName('Specimen folder')
         row.addWidget(self.folder, 1)
-        self.browse = self.button('Choose folder...', self.choose_folder)
+        self.browse = QToolButton(self)
+        self.browse.setIcon(self.browse.style().standardIcon(QStyle.StandardPixmap.SP_DirOpenIcon))
+        self.browse.setIconSize(QSize(16, 16))
+        self.browse.setFixedSize(CONTROL_HEIGHT, CONTROL_HEIGHT)
+        self.browse.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.browse.setToolTip('Choose folder...')
+        self.browse.setAccessibleName('Choose folder...')
+        self.browse.clicked.connect(self.choose_folder)
         row.addWidget(self.browse)
         self.check = self.button('Check Folder', self.check_folder, primary=True)
         row.addWidget(self.check)
