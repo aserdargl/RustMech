@@ -390,6 +390,11 @@ Analysis queue...|Analiz kuyruğu...
 Analysis Queue|Analiz Kuyruğu
 Add to Queue|Kuyruğa Ekle
 Add Truba|TRUBA'ya Ekle
+Check at least one ready specimen.|Hazır numunelerden en az birini işaretleyin.
+Checking source files before saving jobs to Analysis Queue…|İşler Analiz Kuyruğuna kaydedilmeden önce kaynak dosyalar kontrol ediliyor…
+The selected jobs are already in Analysis Queue.|Seçili işler zaten Analiz Kuyruğunda.
+TRUBA is disconnected. Connect to TRUBA and prepare a resource session before running the queue.|TRUBA bağlantısı yok. Kuyruğu çalıştırmadan önce TRUBA'ya bağlanın ve kaynak oturumunu hazırlayın.
+Source changed after preparation. Check the folder again.|Kaynak dosya hazırlıktan sonra değişti. Klasörü yeniden kontrol edin.
 Execution|Yürütme
 Execution target|Yürütme hedefi
 Kratos runs on TRUBA. Select TRUBA or choose ANSYS MAPDL for local execution.|Kratos TRUBA'da çalışır. TRUBA'yı seçin veya yerel çalıştırma için ANSYS MAPDL'yi seçin.
@@ -1158,6 +1163,9 @@ TURKISH.update({
 })
 
 TEMPLATES = {
+    'Saved to Analysis Queue ({count}). Open Analysis Queue and select Run analysis queue to start.':
+        'Analiz Kuyruğuna {count} iş kaydedildi. Başlatmak için Analiz Kuyruğunu açıp Analiz kuyruğunu çalıştır düğmesine basın.',
+    'Results folder is {path}': 'Sonuç klasörü {path}',
     'Ready | height {height} mm | Excluded components: {count} | End faces flattened': 'Hazır | yükseklik {height} mm | Ayıklanan bileşen: {count} | Uç yüzeyler düzleştirildi',
     'Ready | height {height} mm | End faces flattened': 'Hazır | yükseklik {height} mm | Uç yüzeyler düzleştirildi',
     'Ready | height {height} mm': 'Hazır | yükseklik {height} mm',

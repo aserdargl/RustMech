@@ -12,7 +12,7 @@ import re
 from PySide6.QtCore import QSignalBlocker, QSize, Qt, QTimer
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (QAbstractItemView, QApplication, QDialog, QGridLayout, QGroupBox, QHeaderView,
-                              QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPushButton,
+                              QHBoxLayout, QLabel, QLineEdit, QPushButton,
                               QSplitter, QTableWidget, QTableWidgetItem, QVBoxLayout)
 
 from camera_toolbar import camera_icon
@@ -209,6 +209,7 @@ class FolderBatchDialog(QDialog):
         self.settings_provider, self.queue = settings_provider, queue
         self.executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix='folder-preflight')
         self.future = None
+        self.adding_target = None
         self.items = []
         self.pending = []
         self.root = None
@@ -660,6 +661,10 @@ class FolderBatchDialog(QDialog):
         if self.future is None or not self.future.done():
             return
         future, self.future = self.future, None
+        if self.adding_target is not None:
+            target, self.adding_target = self.adding_target, None
+            self.finish_enqueue(future, target)
+            return
         try:
             self.items[self.working_index] = future.result()
         except Exception as error:
@@ -726,24 +731,47 @@ class FolderBatchDialog(QDialog):
             self.status.setText(str(error))
 
     def enqueue_ready(self):
-        if self.future is not None or self.base is None:
+        if self.future is not None or self.pending or self.base is None:
             return
+        items = [item for index, item in enumerate(self.items)
+                 if not self.table.isRowHidden(index)
+                 and self.table.item(index, RUN_COLUMN).checkState() == Qt.CheckState.Checked]
+        if not items:
+            self.status.setText(translate('Check at least one ready specimen.'))
+            return
+        root, base, solvers = self.root, self.batch_settings(), self.selected_solvers()
+        target = self.execution_target.currentData()
+        self.status.setText(translate('Checking source files before saving jobs to Analysis Queue…')
+                            + self.truba_queue_hint(target))
+        self.adding_target = target
+        self.future = self.executor.submit(
+            lambda: [snapshot for item in items for snapshot in
+                     specimen_snapshots(item, root, base, solvers, execution_target=target)])
+        self.set_busy(True)
+
+    def truba_queue_hint(self, target):
+        if target != 'truba':
+            return ''
+        controller = getattr(self.queue, 'remote_controller', None)
+        if controller is None or controller.auth() is None:
+            return '\n' + translate('TRUBA is disconnected. Connect to TRUBA and prepare a resource session before running the queue.')
+        return ''
+
+    def finish_enqueue(self, future, target):
         try:
-            solvers = self.selected_solvers()
-            base = self.batch_settings()
-            target = self.execution_target.currentData()
-            snapshots = []
-            for index, item in enumerate(self.items):
-                if (not self.table.isRowHidden(index)
-                        and self.table.item(index, RUN_COLUMN).checkState() == Qt.CheckState.Checked):
-                    snapshots.extend(specimen_snapshots(item, self.root, base, solvers, execution_target=target))
-            if not snapshots:
-                raise ValueError('Check at least one ready specimen.')
-            added = self.queue.add_folder_snapshots(snapshots)
-            self.status.setText(f'{len(added)} jobs added. Identical jobs already in the queue were skipped. '
-                                f'Results: {batch_directory(self.root) / "Results"}. Open the queue and explicitly start it.')
+            added = self.queue.add_folder_snapshots(future.result())
         except Exception as error:
-            QMessageBox.warning(self, 'Folder analysis', str(error))
+            self.status.setText(translate(str(error)))
+        else:
+            if added:
+                message = translate(f'Saved to Analysis Queue ({len(added)}). Open Analysis Queue and select Run analysis queue to start.')
+            else:
+                message = translate('The selected jobs are already in Analysis Queue.')
+            results = batch_directory(self.root) / 'Results'
+            self.status.setText(message + self.truba_queue_hint(target)
+                                + '\n' + translate(f'Results folder is {results}'))
+        finally:
+            self.set_busy(False)
 
     def open_queue(self):
         window = self.queue.window()
@@ -755,6 +783,7 @@ class FolderBatchDialog(QDialog):
         if self.future is not None:
             self.future.cancel()
             self.future = None
+        self.adding_target = None
         self.set_busy(False)
         super().closeEvent(event)
 

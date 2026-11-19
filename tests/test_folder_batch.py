@@ -95,6 +95,16 @@ class FolderBatchTests(unittest.TestCase):
         self.addCleanup(dialog.dispose)
         return dialog
 
+    def finish_enqueue(self, dialog):
+        self.assertIsNotNone(dialog.future)
+        # poll() delivers both validation success and failure on the UI thread.
+        for _ in range(1000):
+            dialog.poll()
+            if dialog.future is None:
+                return
+            QTest.qWait(10)
+        self.fail('Enqueue did not finish')
+
     def test_reopened_folder_batch_restores_inputs_and_local_choices(self):
         batch = self.dialog()
         batch.folder.setText(str(self.root))
@@ -602,6 +612,7 @@ class FolderBatchTests(unittest.TestCase):
         self.assertIsNone(reopened.future)
         self.assertEqual(reopened.items[1].cells, selected)
         reopened.enqueue_ready()
+        self.finish_enqueue(reopened)
         self.assertEqual(len(reopened.queue.rows), 1)
         self.assertEqual(reopened.queue.rows[0].design_settings.size, 4)
 
@@ -693,6 +704,7 @@ class FolderBatchTests(unittest.TestCase):
         self.assertEqual(visible_jobs(), [(legacy[1].exp_id, 'kratos', 'Current workspace')])
         self.assertTrue(dialog.enqueue.isEnabled())
         dialog.enqueue.click()
+        self.finish_enqueue(dialog)
         remote = queue.rows[-1]
         self.assertEqual(visible_jobs(), [(legacy[1].exp_id, 'kratos', 'Current workspace'),
                                          (remote.exp_id, 'kratos', 'TRUBA')])
@@ -719,8 +731,14 @@ class FolderBatchTests(unittest.TestCase):
         self.assertEqual(dialog.enqueue.text(), 'Add Truba')
         with patch('doe_studio.AnalysisProcess') as serial, patch('truba_parallel.AnalysisProcess') as parallel:
             dialog.enqueue.click()
+            self.assertFalse(dialog.enqueue.isEnabled())
+            self.assertFalse(dialog.enqueue.isDown())
+            self.assertIn('TRUBA is disconnected', dialog.status.text())
+            self.finish_enqueue(dialog)
             serial.assert_not_called()
             parallel.assert_not_called()
+        self.assertIn('Saved to Analysis Queue (1)', dialog.status.text())
+        self.assertIn('TRUBA is disconnected', dialog.status.text())
         remote, = QueueStore(queue.store.path).load()
         self.assertEqual(remote.folder_job['execution_target'], 'truba')
         self.assertEqual(remote.design_settings.solver_backend, 'kratos')
@@ -730,6 +748,7 @@ class FolderBatchTests(unittest.TestCase):
 
         dialog.execution_target.setCurrentIndex(1)
         dialog.enqueue.click()
+        self.finish_enqueue(dialog)
         self.assertEqual(queue.rows[1].folder_job['execution_target'], 'local')
         self.assertEqual(queue.rows[1].design_settings.self_contact_mode, 'frictional')
         self.assertEqual(queue.rows[1].design_settings.solver_backend, 'ansys_mapdl')
@@ -781,6 +800,7 @@ class FolderBatchTests(unittest.TestCase):
         self.assertEqual(dialog.enqueue.text(), 'Add to Queue')
 
         dialog.enqueue.click()
+        self.finish_enqueue(dialog)
         self.assertTrue(dialog.table.isRowHidden(0))
         dialog.mesh_resolution.setValue(.6)
         dialog.local_mesh_size.setValue(.2)
@@ -790,6 +810,7 @@ class FolderBatchTests(unittest.TestCase):
             QTest.keyClick(dialog.local_mesh_size, Qt.Key.Key_Return)
             self.assertEqual(len(queue.rows), 1)
             dialog.enqueue.click()
+            self.finish_enqueue(dialog)
             process.assert_not_called()
         self.assertEqual(len(queue.rows), 2)
         first, second = (row.design_settings for row in QueueStore(queue.store.path).load())
@@ -809,6 +830,7 @@ class FolderBatchTests(unittest.TestCase):
         dialog.table.item(1, RUN_COLUMN).setCheckState(Qt.CheckState.Unchecked)
         dialog.solver.setCurrentIndex(1)
         dialog.enqueue.click()
+        self.finish_enqueue(dialog)
 
         self.assertTrue(dialog.table.isRowHidden(0))
         self.assertFalse(dialog.table.isRowHidden(1))
@@ -835,6 +857,7 @@ class FolderBatchTests(unittest.TestCase):
         dialog.refresh_table()
         dialog.set_busy(False)
         dialog.enqueue.click()
+        self.finish_enqueue(dialog)
         first, second = dialog.queue.rows[1:]
         self.assertFalse(dialog.remove_from_queue.isEnabled())
         dialog.queue_table.selectRow(0)
@@ -863,8 +886,25 @@ class FolderBatchTests(unittest.TestCase):
         self.assertTrue((Path(first.folder_job['destination']) / 'job.json').is_file())
 
         dialog.enqueue.click()
+        self.finish_enqueue(dialog)
         self.assertTrue(dialog.table.isRowHidden(0))
         self.assertEqual(dialog.queue.rows[-1].folder_job['key'], first.folder_job['key'])
+
+    def test_enqueue_keeps_unmodified_queue_when_a_source_changes(self):
+        dialog = self.dialog()
+        dialog.root, dialog.base = self.root, self.base
+        dialog.items = [self.prepared('part1.stl'), self.prepared('part2.stl')]
+        dialog.refresh_table()
+        dialog.set_busy(False)
+        Path(dialog.items[1].source).write_bytes(b'changed')
+
+        dialog.enqueue.click()
+        self.finish_enqueue(dialog)
+
+        self.assertIn('Source changed after preparation', dialog.status.text())
+        self.assertFalse(dialog.queue.rows)
+        self.assertTrue(dialog.enqueue.isEnabled())
+        self.assertFalse(dialog.table.isRowHidden(0))
 
     def test_async_check_and_enter_never_start_or_enqueue(self):
         dialog = self.dialog()
