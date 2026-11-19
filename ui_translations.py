@@ -2,6 +2,15 @@
 from setup_help import GEOMETRY_HELP
 
 _TEXT = '''
+Choose TRUBA folder|TRUBA klasörü seç
+Select an upload folder on TRUBA|TRUBA’da yükleme klasörünü seçin
+TRUBA folders|TRUBA klasörleri
+Use this folder|Bu klasörü kullan
+Loading TRUBA folders…|TRUBA klasörleri yükleniyor…
+Could not load TRUBA folders.|TRUBA klasörleri yüklenemedi.
+Choose a TRUBA folder for the connected account.|Bağlı hesap için bir TRUBA klasörü seçin.
+TRUBA upload folder selected. Send the prepared specimens to this folder.|Yükleme klasörü seçildi. Hazırlanan numuneleri bu klasöre gönderin.
+TRUBA results folder: {path}|TRUBA sonuç klasörü: {path}
 Open the LAMMPS workspace|LAMMPS çalışma alanını aç
 Job settings|İş ayarları
 Date modified|Değiştirilme tarihi

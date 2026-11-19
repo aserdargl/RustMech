@@ -208,7 +208,9 @@ def _run_operation(request,output):
         if staged is None:
             geometry.write_bytes(base64.b64decode(request['imported_geometry_vtp'], validate=True))
         else:
-            source = output.resolve().parent.parent / BATCH_INPUT_DIRECTORY / batch_geometry_name(staged['sha256'])
+            inputs = (Path(os.environ['RUSTMECH_BATCH_INPUTS']) if 'directory' in staged
+                      else output.resolve().parent.parent / BATCH_INPUT_DIRECTORY)
+            source = inputs / batch_geometry_name(staged['sha256'])
             if not source.is_file():
                 raise FileNotFoundError('Prepared geometry is missing on TRUBA. Remove the job from the queue and send the specimen again.')
             shutil.copyfile(source, geometry)
@@ -313,7 +315,10 @@ def main():
             raise RuntimeError("Reference tetrahedral mesh is not solve-ready.")
         return 0
     request = json.loads(Path(sys.argv[1]).read_text())
-    output = Path.cwd()/"output"
+    if 'directory' in request.get('staged_geometry', {}):
+        output = Path(os.environ['RUSTMECH_BATCH_OUTPUT'])
+    else:
+        output = Path.cwd()/"output"
     output.mkdir(exist_ok=True)
     result = dict(schema_version=1,request_id=request["request_id"],source_sha256=request["source_sha256"],
                   slurm_job_id=os.environ.get("SLURM_JOB_ID"),operation=request["operation"],

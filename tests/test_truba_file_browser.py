@@ -169,7 +169,8 @@ def test_batch_geometry_upload_is_verified_and_reused(remote, tmp_path):
     sftp.rename.assert_not_called()
 
 
-def test_batch_settings_upload_references_verified_geometry(remote, tmp_path, monkeypatch):
+@pytest.mark.parametrize('relative', [None, PurePosixPath('Projects/Compression 1')])
+def test_batch_settings_upload_references_verified_geometry(remote, tmp_path, monkeypatch, relative):
     auth, sftp = remote
     source = tmp_path / 'prepared.vtp'
     source.write_bytes(b'prepared geometry')
@@ -187,12 +188,18 @@ def test_batch_settings_upload_references_verified_geometry(remote, tmp_path, mo
     sftp.lstat.side_effect = stat
     sftp.open.side_effect = lambda path, _: BytesIO(remote_inputs[path])
     monkeypatch.setattr('truba_files._publish_file', publish)
-    stage_batch_geometries(auth, [source], settings_by_geometry={str(source): [settings]})
+    staged = stage_batch_geometries(auth, [source], settings_by_geometry={str(source): [settings]},
+                                   relative=relative)
 
     manifest_path, = (path for path in remote_inputs if path.endswith('.json'))
     contents = remote_inputs[manifest_path]
     assert PurePosixPath(manifest_path).stem == sha256(contents).hexdigest()
     geometry = sha256(source.read_bytes()).hexdigest() + '.vtp'
+    destination = project_root(auth.username) / (relative or PurePosixPath('BatchInputs'))
+    assert PurePosixPath(manifest_path).parent == destination
+    assert str(destination / geometry) in remote_inputs
+    if relative is not None:
+        assert staged[str(source)]['directory'] == relative.as_posix()
     assert json.loads(contents) == dict(schema_version=1, jobs=[dict(geometry=geometry, settings=settings)])
 
 

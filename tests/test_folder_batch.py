@@ -1,11 +1,11 @@
 """Real surfaces, folder preflight, durable sequential jobs and output routing."""
-from concurrent.futures import Future
+from concurrent.futures import Future, ThreadPoolExecutor
 import csv
 from dataclasses import replace
 import json
 from hashlib import sha256
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import tempfile
 import time
 from types import SimpleNamespace
@@ -113,11 +113,14 @@ class FolderBatchTests(unittest.TestCase):
         context = RemoteContext(cores=2, session_id='123')
         dialog.remote_controller = SimpleNamespace(auth=lambda: auth, context=lambda: context,
                                                   require=Mock(return_value=(context, auth)))
+        dialog.remote_destination = auth.username, PurePosixPath('project/batch')
 
-        def stage(active_auth, sources, *, settings_by_geometry):
+        def stage(active_auth, sources, *, settings_by_geometry, relative):
             self.assertEqual(list(sources), list(settings_by_geometry))
             self.assertIs(active_auth, auth)
-            return {source: dict(username=auth.username, sha256=sha256(Path(source).read_bytes()).hexdigest())
+            self.assertEqual(relative, PurePosixPath('project/batch'))
+            return {source: dict(username=auth.username, sha256=sha256(Path(source).read_bytes()).hexdigest(),
+                                 directory=relative.as_posix())
                     for source in sources}
 
         upload = patch('truba_files.stage_batch_geometries', side_effect=stage)
@@ -146,6 +149,36 @@ class FolderBatchTests(unittest.TestCase):
         restarted.execution_target.setCurrentIndex(restarted.execution_target.findData("local"))
         self.assertEqual(restarted.solver.currentIndex(), 1)
         self.assertEqual(restarted.mesh_type.currentText(), "TET10")
+
+    def test_truba_picker_navigates_and_restores_window_size(self):
+        from truba_folder_picker import TrubaFolderPicker
+
+        parent = self.dialog()
+        auth = SimpleNamespace(username='test-user')
+        root = PurePosixPath()
+        selected = root / 'Compression 1'
+        with ThreadPoolExecutor(max_workers=1) as executor, patch(
+                'truba_folder_picker.list_batch_folders',
+                side_effect=lambda auth, directory: ['Compression 1'] if directory == root else []):
+            picker = TrubaFolderPicker(parent, auth, executor, root)
+            picker.show()
+            self.assertFalse(picker.use.isEnabled())
+            picker.future.result(timeout=5)
+            picker._poll()
+            self.assertEqual(picker.folders.item(0).text(), selected.name)
+            picker.folders.itemActivated.emit(picker.folders.item(0))
+            picker.future.result(timeout=5)
+            picker._poll()
+            self.assertEqual(picker.directory, selected)
+            self.assertTrue(picker.address.text().endswith('/RustMech/Compression 1'))
+            picker.resize(601, 381)
+            picker.use.click()
+            self.assertEqual(picker.result(), picker.DialogCode.Accepted)
+
+            reopened = TrubaFolderPicker(parent, auth, executor, selected)
+            self.addCleanup(reopened.close)
+            reopened.show()
+            self.assertEqual(reopened.size(), picker.size())
 
     def test_mesh_display_precision_is_saved_without_rounding_batch_values(self):
         batch = self.dialog()
@@ -770,7 +803,8 @@ class FolderBatchTests(unittest.TestCase):
                     self.assertEqual((index, settings.solver_backend, settings.mesh_resolution, solve),
                                      (0, 'kratos', .9, True))
                     self.assertEqual(staged, dict(username=auth.username,
-                                                 sha256=sha256(Path(dialog.items[0].cached).read_bytes()).hexdigest()))
+                                                 sha256=sha256(Path(dialog.items[0].cached).read_bytes()).hexdigest(),
+                                                 directory='project/batch'))
                     self.assertFalse(dialog.run.isEnabled())
                     result.set_result(dict(r_idx=0, status='Completed'))
                     dialog.runner._poll_worker()

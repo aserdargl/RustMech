@@ -170,6 +170,30 @@ def _shell_path(path):
     return '"$HOME"/'+shlex.quote(path[2:]) if path.startswith("~/") else shlex.quote(path)
 
 
+def _batch_output_setup(staged):
+    if staged is None or 'directory' not in staged:
+        return """mkdir -p output
+trap 'tar -czf result.tar.gz output' EXIT"""
+    relative = staged['directory']
+    path = PurePosixPath(relative)
+    if (path.is_absolute() or '..' in path.parts or '\\' in relative
+            or any(ord(char) < 32 for char in relative)):
+        raise ValueError('This folder is outside the RustMech project.')
+    return f"""project=$(realpath -e -- ..)
+batch=$(realpath -e -- "$project"/{shlex.quote(path.as_posix())})
+case "$batch" in
+    "$project"|"$project"/*) ;;
+    *) printf '%s\\n' 'Batch folder is outside the RustMech project.' >&2; exit 1 ;;
+esac
+export RUSTMECH_BATCH_INPUTS="$batch"
+results="$batch/Result"
+test ! -L "$results"
+mkdir -p -- "$results"
+export RUSTMECH_BATCH_OUTPUT="$results/${{PWD##*/}}"
+mkdir -- "$RUSTMECH_BATCH_OUTPUT"
+trap 'tar -czf result.tar.gz --transform="s|^\\.$|output|;s|^\\./|output/|" -C "$RUSTMECH_BATCH_OUTPUT" .' EXIT"""
+
+
 def slurm_script(context,username,request):
     context.validate()
     if context.gpus or context.partition.endswith('-cuda'):
@@ -205,8 +229,8 @@ rustmech_stage 'Preparing request sources'
 export TERM=dumb
 export QT_API=pyside6 QT_QPA_PLATFORM=offscreen MPLBACKEND=Agg
 export OMP_NUM_THREADS={step_cores} RUSTMECH_THREADS={step_cores} OPENBLAS_NUM_THREADS=1
-mkdir -p output engine
-trap 'tar -czf result.tar.gz output' EXIT
+{_batch_output_setup(request.get('staged_geometry'))}
+mkdir -p engine
 echo "{request['source_sha256']}  engine.tar.gz" | sha256sum -c -
 tar -xzf engine.tar.gz -C engine
 rustmech_stage 'Loading runtime modules'

@@ -82,13 +82,22 @@ def upload_file(auth, relative, source):
         _publish_file(sftp, source, target)
 
 
-def stage_batch_geometries(auth, sources, *, settings_by_geometry=None):
+def list_batch_folders(auth, relative):
+    if relative == PurePosixPath():
+        _ensure_project_root(auth)
+    return [item.filename for item in list_directory(auth, relative)
+            if S_ISDIR(item.st_mode or 0)]
+
+
+def stage_batch_geometries(auth, sources, *, settings_by_geometry=None, relative=None):
     """Publish face-tagged geometry and optional batch settings without submitting jobs."""
     sources = list(dict.fromkeys(map(Path, sources)))
     if not sources:
         return {}
-    relative = PurePosixPath(BATCH_INPUT_DIRECTORY)
-    _create_batch_input_directory(auth, relative)
+    selected_directory = relative is not None
+    if not selected_directory:
+        relative = PurePosixPath(BATCH_INPUT_DIRECTORY)
+        _create_batch_input_directory(auth, relative)
     staged = {}
     with _project_directory(auth, relative) as (sftp, directory):
         for source in sources:
@@ -96,6 +105,8 @@ def stage_batch_geometries(auth, sources, *, settings_by_geometry=None):
                 digest = file_digest(stream, 'sha256').hexdigest()
             _publish_batch_input(sftp, source, directory / batch_geometry_name(digest), digest)
             staged[str(source)] = {'username': auth.username, 'sha256': digest}
+            if selected_directory:
+                staged[str(source)]['directory'] = relative.as_posix()
         if settings_by_geometry is not None:
             jobs = [dict(geometry=batch_geometry_name(staged[path]['sha256']), settings=settings)
                     for path, snapshots in settings_by_geometry.items() for settings in snapshots]
