@@ -29,9 +29,14 @@
 6. Çözücü olarak mevcut çalışma alanını, ANSYS MAPDL, Kratos veya her ikisini
    seçin. Aynı parametreler kullanılır; çözücünün desteklemediği malzeme, temas
    veya eleman seçimi açık hata verir, sessizce değiştirilmez. İçe aktarılan
-   numunelerde HEX seçimi TET4'e çevrilir; mevcut TET4/TET10 seçimi korunur.
-   Periyodik ağ yerine Netgen kullanılır.
-7. **Add to Queue** seçin. Çözücü uyumluluğu ve analiz ayarları doğrulanır.
+   numunelerin hacim ağı Netgen ile oluşturulur.
+7. **Mesh** bölümünde genel ve yerel ağ boyutlarını (mm) ve eleman türünü
+   (**TET4** veya **TET10**) ayarlayın. Başlangıç değerleri Mechanic çalışma
+   alanından gelir. Geometri ön kontrolünden sonra da bu değerleri
+   değiştirebilirsiniz. Kuyruğa eklenen her iş, o anda seçilen ağ ayarlarını saklar.
+   **Add to Queue** seçin. TRUBA hesaplama modu açıkken düğme **Add Truba**
+   olarak görünür. TRUBA'da Kratos basma için **TET4** kullanın.
+   Çözücü uyumluluğu ve analiz ayarları doğrulanır.
    Kaydedilen işler sağdaki **Analysis Queue** sütununa taşınır. Aynı kaynak
    içeriğine ve ayarlara sahip işler yeniden eklenmez. Kaynak dosya hazırlıktan
    sonra değişmişse yeniden ön kontrol gerekir.

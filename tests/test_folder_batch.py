@@ -13,7 +13,7 @@ from unittest.mock import patch
 
 import numpy as np
 import pyvista as pv
-from PySide6.QtCore import QSettings, Qt, QTimer
+from PySide6.QtCore import QObject, QSettings, Qt, QTimer, Signal
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QAbstractItemView, QApplication, QComboBox, QDialogButtonBox, QLineEdit, QPushButton, QSplitter
 
@@ -566,6 +566,47 @@ class FolderBatchTests(unittest.TestCase):
             QTest.mouseClick(dialog.table.cellWidget(0, FACES_COLUMN), Qt.MouseButton.LeftButton)
         fallback.stop()
         self.assertEqual(restored, [(True, True), specimen.cells], dialog.status.text())
+
+    def test_batch_mesh_fields_update_queue_identity_and_truba_label_follows_mode(self):
+        class RemoteMode(QObject):
+            mode_changed = Signal(bool)
+            requested = False
+
+        queue = self.queue()
+        queue.remote_controller = controller = RemoteMode(queue)
+        dialog = self.dialog(queue)
+        dialog.root, dialog.base = self.root, self.base
+        dialog.items = [self.prepared()]
+        dialog.refresh_table()
+        dialog.solver.setCurrentIndex(1)
+        dialog.set_busy(False)
+        self.assertEqual(dialog.mesh_resolution.value(), self.base.mesh_resolution)
+        self.assertEqual(dialog.local_mesh_size.value(), self.base.local_mesh_size)
+        self.assertEqual(dialog.enqueue.text(), 'Add to Queue')
+
+        controller.requested = True
+        controller.mode_changed.emit(True)
+        self.assertEqual(dialog.enqueue.text(), 'Add Truba')
+        controller.requested = False
+        controller.mode_changed.emit(False)
+        self.assertEqual(dialog.enqueue.text(), 'Add to Queue')
+
+        dialog.enqueue.click()
+        self.assertTrue(dialog.table.isRowHidden(0))
+        dialog.mesh_resolution.setValue(.6)
+        dialog.local_mesh_size.setValue(.2)
+        dialog.mesh_type.setCurrentText('TET10')
+        self.assertFalse(dialog.table.isRowHidden(0))
+        with patch('doe_studio.AnalysisProcess') as process:
+            QTest.keyClick(dialog.local_mesh_size, Qt.Key.Key_Return)
+            self.assertEqual(len(queue.rows), 1)
+            dialog.enqueue.click()
+            process.assert_not_called()
+        self.assertEqual(len(queue.rows), 2)
+        first, second = (row.design_settings for row in QueueStore(queue.store.path).load())
+        self.assertEqual((first.mesh_resolution, first.local_mesh_size, first.mesh_type), (1., .8, 'TET4'))
+        self.assertEqual((second.mesh_resolution, second.local_mesh_size, second.mesh_type), (.6, .2, 'TET10'))
+        self.assertTrue(dialog.table.isRowHidden(0))
 
     def test_queued_specimens_move_to_right_panel_and_keep_solver_options(self):
         dialog = self.dialog()

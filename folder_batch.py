@@ -10,7 +10,7 @@ import re
 
 from PySide6.QtCore import QSize, QSettings, Qt, QTimer
 from PySide6.QtGui import QIcon
-from PySide6.QtWidgets import (QAbstractItemView, QApplication, QDialog, QGroupBox, QHeaderView,
+from PySide6.QtWidgets import (QAbstractItemView, QApplication, QDialog, QGridLayout, QGroupBox, QHeaderView,
                               QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPushButton,
                               QSplitter, QTableWidget, QTableWidgetItem, QToolButton, QVBoxLayout)
 
@@ -19,8 +19,10 @@ from file_dialog import QFileDialog
 from imported_geometry import (SURFACE_EXTENSIONS, SURFACE_FILE_FILTER, SurfaceComponents,
                                align_compression_surface, automatic_compression_selection,
                                compression_direction, read_polygonal_surface, store_surface)
-from model import settings_from_dict
-from studio_style import ActionFlowLayout, CompactComboBox, CONTROL_HEIGHT, STUDIO_STYLESHEET
+from model import MIN_MESH_INPUT_MM, settings_from_dict
+from studio_style import (ActionFlowLayout, CompactComboBox, CompactDoubleSpinBox, CONTROL_HEIGHT,
+                          STUDIO_STYLESHEET, field_label)
+from ui_language import translate
 from window_state import install_window_state
 
 
@@ -209,10 +211,26 @@ class FolderBatchDialog(QDialog):
         controls.addWidget(self.solver)
         controls.addStretch()
         layout.addLayout(controls)
+        mesh = QGroupBox('Mesh')
+        mesh_layout = QGridLayout(mesh)
+        mesh_layout.setContentsMargins(6, 6, 6, 6)
+        mesh_layout.setVerticalSpacing(3)
+        initial = self.settings_provider()
+        self.mesh_resolution = self.add_mesh_size(mesh_layout, 0, 'Global mesh size',
+                                                  initial.mesh_resolution, 0.05)
+        self.local_mesh_size = self.add_mesh_size(mesh_layout, 1, 'Local mesh size',
+                                                  initial.local_mesh_size, 0.001)
+        self.mesh_type = CompactComboBox()
+        self.mesh_type.addItems(['TET4', 'TET10'])
+        self.mesh_type.setCurrentText('TET10' if initial.mesh_type == 'TET10' else 'TET4')
+        mesh_layout.addWidget(field_label('Element type', self.mesh_type), 0, 2)
+        self.mesh_type.setFixedWidth(100)
+        mesh_layout.addWidget(self.mesh_type, 0, 3)
+        mesh_layout.setColumnStretch(4, 1)
+        layout.addWidget(mesh)
         self.check = self.button('Check Folder', self.check_folder, primary=True)
         layout.addWidget(self.check, 0, Qt.AlignmentFlag.AlignLeft)
-        self.settings_hint = QLabel('Material, mesh, loading, contact and solver parameters are captured from the main Mechanic workspace when checking. '
-                                   'Displacement stays in mm; force stays in N. Imported geometries use tetrahedral elements.')
+        self.settings_hint = QLabel('Material, loading, contact and solver parameters are captured from the main Mechanic workspace when checking.')
         self.settings_hint.setWordWrap(True)
         layout.addWidget(self.settings_hint)
         panels = QSplitter(Qt.Orientation.Horizontal)
@@ -278,8 +296,31 @@ class FolderBatchDialog(QDialog):
         self.folder.textChanged.connect(self.invalidate)
         self.mode.currentIndexChanged.connect(self.invalidate)
         self.solver.currentIndexChanged.connect(self.refresh_queue_view)
+        self.mesh_resolution.valueChanged.connect(self.refresh_queue_view)
+        self.local_mesh_size.valueChanged.connect(self.refresh_queue_view)
+        self.mesh_type.currentIndexChanged.connect(self.refresh_queue_view)
         self.queue.queue_changed.connect(self.refresh_queue_view)
+        controller = getattr(self.queue, 'remote_controller', None)
+        if controller is not None:
+            controller.mode_changed.connect(self.update_enqueue_label)
+        self.update_enqueue_label(controller is not None and controller.requested)
         self.set_busy(False)
+
+    def add_mesh_size(self, layout, row, label, value, step):
+        control = CompactDoubleSpinBox()
+        control.setRange(min(MIN_MESH_INPUT_MM, value), max(5, value))
+        control.setSingleStep(step)
+        control.setSuffix(' mm')
+        control.setKeyboardTracking(False)
+        control.setValue(value)
+        layout.addWidget(field_label(label, control), row, 0)
+        layout.addWidget(control, row, 1)
+        return control
+
+    def update_enqueue_label(self, remote):
+        self.enqueue.setText(translate('Add Truba' if remote else 'Add to Queue'))
+        self.enqueue.setToolTip(translate('Add to the analysis queue. Start it with TRUBA mode active to submit jobs.')
+                                if remote else '')
 
     def button(self, text, callback, *, primary=False):
         button = QPushButton(text, self)
@@ -300,7 +341,8 @@ class FolderBatchDialog(QDialog):
         self.refresh_queue_view()
 
     def set_busy(self, busy):
-        for widget in (self.folder, self.browse, self.mode, self.solver, self.check):
+        for widget in (self.folder, self.browse, self.mode, self.solver, self.check,
+                       self.mesh_resolution, self.local_mesh_size, self.mesh_type):
             widget.setEnabled(not busy)
         for row in range(self.table.rowCount()):
             self.table.cellWidget(row, FACES_COLUMN).setEnabled(not busy)
@@ -309,6 +351,10 @@ class FolderBatchDialog(QDialog):
     def selected_solvers(self):
         return {0: [self.base.solver_backend], 1: ['ansys_mapdl'], 2: ['kratos'],
                 3: ['ansys_mapdl', 'kratos']}[self.solver.currentIndex()]
+
+    def batch_settings(self):
+        return replace(self.base, mesh_resolution=self.mesh_resolution.value(),
+                       local_mesh_size=self.local_mesh_size.value(), mesh_type=self.mesh_type.currentText())
 
     def refresh_queue_view(self, *, busy=None):
         root = str(self.root) if self.root is not None else None
@@ -325,10 +371,11 @@ class FolderBatchDialog(QDialog):
 
         keys = {row.folder_job['key'] for row in rows}
         solvers = self.selected_solvers() if keys else ()
+        base = self.batch_settings() if keys else None
         ready = False
         for index, specimen in enumerate(self.items):
             queued = bool(specimen.cached and keys) and all(
-                metadata['key'] in keys for _, metadata in _prepared_snapshots(specimen, self.root, self.base, solvers))
+                metadata['key'] in keys for _, metadata in _prepared_snapshots(specimen, self.root, base, solvers))
             self.table.setRowHidden(index, queued)
             ready |= bool(specimen.cached and not queued)
         if busy is None:
@@ -470,9 +517,8 @@ class FolderBatchDialog(QDialog):
             self.compression_axis = direction
             self.pending = [(i, path, direction, selection) for i, (path, selection) in enumerate(zip(paths, saved))
                             if (direction is not None or selection) and not (first and i == 0)]
-            self.settings_hint.setText(f'Captured: {base.material_name} | mesh {base.mesh_resolution:g} mm / local {base.local_mesh_size:g} mm | '
-                                       f'{base.loading_mode}: {base.compression:g} mm / {base.applied_force:g} N | {base.solver_backend}. '
-                                       'Original millimetre dimensions are preserved. HEX elements become TET4 for imported solids.')
+            self.settings_hint.setText(f'Captured: {base.material_name} | '
+                                       f'{base.loading_mode}: {base.compression:g} mm / {base.applied_force:g} N | {base.solver_backend}.')
             self.refresh_table()
             self.set_busy(bool(self.pending))
             self.launch_next()
@@ -561,6 +607,7 @@ class FolderBatchDialog(QDialog):
             return
         try:
             solvers = self.selected_solvers()
+            base = self.batch_settings()
             controller = getattr(self.queue, 'remote_controller', None)
             if controller is not None and controller.requested and solvers != [self.base.solver_backend]:
                 raise ValueError('TRUBA uses the current workspace solver. Choose Current workspace or switch to local execution.')
@@ -568,7 +615,7 @@ class FolderBatchDialog(QDialog):
             for index, item in enumerate(self.items):
                 if (not self.table.isRowHidden(index)
                         and self.table.item(index, RUN_COLUMN).checkState() == Qt.CheckState.Checked):
-                    snapshots.extend(specimen_snapshots(item, self.root, self.base, solvers))
+                    snapshots.extend(specimen_snapshots(item, self.root, base, solvers))
             if not snapshots:
                 raise ValueError('Check at least one ready specimen.')
             added = self.queue.add_folder_snapshots(snapshots)

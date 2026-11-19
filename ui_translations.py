@@ -369,6 +369,9 @@ Analysis queue|Analiz kuyruğu
 Analysis queue...|Analiz kuyruğu...
 Analysis Queue|Analiz Kuyruğu
 Add to Queue|Kuyruğa Ekle
+Add Truba|TRUBA'ya Ekle
+Add to the analysis queue. Start it with TRUBA mode active to submit jobs.|Analiz kuyruğuna ekler. İşleri göndermek için kuyruğu TRUBA modu açıkken çalıştırın.
+Material, loading, contact and solver parameters are captured from the main Mechanic workspace when checking.|Malzeme, yükleme, temas ve çözücü ayarları ön kontrol sırasında ana Mekanik çalışma alanından alınır.
 Remove from Queue|Kuyruktan Çıkar
 Selected job removed from the queue.|Seçili iş kuyruktan çıkarıldı.
 Stop the analysis queue before removing jobs.|İşleri çıkarmadan önce analiz kuyruğunu durdurun.
