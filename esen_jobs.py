@@ -44,6 +44,7 @@ SLURM_TERMINAL = frozenset({
 })
 LOG_BYTES = 16000
 FILE_LIMIT = 2000
+INPUT_ARCHIVE_COMPRESSION = 3
 RESULT_DIRECTORY = re.compile(r"(?:ESEN-[0-9a-f]{32}|\.esen-export-[0-9a-f]{32}-.+)", re.IGNORECASE)
 
 
@@ -307,7 +308,7 @@ def sync_slurm_folder(history, root, auth, selected, *, files=None, directory=""
             archive = staging / "inputs.tar.gz"
             copy_list = staging / "copy.list"
             copy_list.write_bytes(b"".join(name.encode("utf-8") + b"\0" for name in unchanged))
-            with tarfile.open(archive, "w:gz") as bundle:
+            with tarfile.open(archive, "w:gz", compresslevel=INPUT_ARCHIVE_COMPRESSION) as bundle:
                 bundle.add(copy_list, arcname="copy.list")
                 for name in manifest:
                     if name not in reused:
@@ -579,7 +580,7 @@ def submit_remote(directory, record, files, script, auth):
             transport.put(batch, remote + "/run.slurm")
         else:
             archive = directory / "inputs.tar.gz"
-            with tarfile.open(archive, "w:gz") as bundle:
+            with tarfile.open(archive, "w:gz", compresslevel=INPUT_ARCHIVE_COMPRESSION) as bundle:
                 bundle.add(snapshot, arcname=".")
             transport.command(f"umask 077; mkdir -p -- {work}")
             transport.put(archive, remote + "/inputs.tar.gz")

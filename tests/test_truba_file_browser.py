@@ -1,8 +1,10 @@
 """Cover the SFTP browser's project boundary and desktop entry points."""
 
+from contextlib import contextmanager
 from io import BytesIO
 from pathlib import PurePosixPath
 from stat import S_IFDIR, S_IFLNK, S_IFREG
+from threading import Barrier
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -10,6 +12,7 @@ from PySide6.QtCore import QObject, QSettings, Qt, Signal
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QSplitter
 import pytest
+from paramiko import SSHException
 
 from esen_workspace import EsenWorkspace
 from truba_files import create_directory, download_file, list_directory, project_root, upload_file, upload_tree
@@ -121,6 +124,7 @@ def test_job_inputs_go_directly_into_open_folder_and_retry_safely(remote, tmp_pa
         str(target / "job.slurm"): b"script",
     }
     assert updates == [(0, 11), (5, 11), (11, 11)]
+    assert [call.args[0] for call in sftp.lstat.call_args_list] == [str(target / "data"), str(target / "job.slurm")]
     assert not staged
     upload_tree(auth, folder, tmp_path)
     assert sftp.rename.call_count == 2
@@ -131,6 +135,47 @@ def test_job_inputs_go_directly_into_open_folder_and_retry_safely(remote, tmp_pa
         upload_tree(auth, folder, tmp_path)
     assert str(target / "extra.txt") not in known
     assert known[str(target / "job.slurm")] == b"script"
+
+
+@pytest.mark.parametrize("available_channels", [1, 3])
+def test_job_upload_uses_bounded_channels_and_falls_back(remote, tmp_path, monkeypatch, available_channels):
+    auth, _ = remote
+    channels = []
+    files = {f"part{index}.lmp": b"data" * index for index in range(1, 7)}
+    for name, content in files.items():
+        (tmp_path / name).write_bytes(content)
+
+    @contextmanager
+    def channel(_auth):
+        if len(channels) == available_channels:
+            raise SSHException("Channel limit")
+        sftp = MagicMock()
+        sftp.normalize.side_effect = str
+        sftp.lstat.side_effect = FileNotFoundError
+        channels.append(sftp)
+        yield sftp
+
+    first_write = Barrier(available_channels)
+    used_channels = set()
+    uploaded = {}
+
+    def publish(sftp, source, target, *, progress):
+        if sftp not in used_channels:
+            used_channels.add(sftp)
+            first_write.wait(timeout=5)
+        uploaded[PurePosixPath(target).name] = source.read_bytes()
+        progress(source.stat().st_size)
+
+    monkeypatch.setattr("truba_files._sftp_channel", channel)
+    monkeypatch.setattr("truba_files._publish_file", publish)
+    updates = []
+    upload_tree(auth, PurePosixPath(), tmp_path, progress=lambda sent, total: updates.append((sent, total)))
+    total = sum(map(len, files.values()))
+    assert len(used_channels) == available_channels
+    assert uploaded == files
+    assert updates[0] == (0, total)
+    assert updates[-1] == (total, total)
+    assert updates == sorted(updates)
 
 
 def test_download_replaces_local_file_only_after_complete_transfer(remote, tmp_path):
