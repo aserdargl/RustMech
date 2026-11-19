@@ -130,6 +130,9 @@ QGroupBox#materialGroup::title {
     color: #000000; font-size: 11px; font-weight: 400;
 }
 QGroupBox#materialGroup:focus::title { color: #1E4D8D; }
+QGroupBox#materialGroup QPushButton { padding: 0 8px; }
+/* Keep the label area stable with the shared 2 px focus border. */
+QGroupBox#materialGroup QPushButton:focus { padding: 0 7px; }
 /* Sidebar captions follow the compact Range / Result reference. */
 QGroupBox[sidebarSection="true"], QGroupBox#materialGroup[sidebarSection="true"] {
     background: #FFFFFF;

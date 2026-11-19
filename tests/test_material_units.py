@@ -5,7 +5,7 @@ from pathlib import Path
 
 from PySide6.QtCore import Qt
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QToolButton
+from PySide6.QtWidgets import QApplication, QPushButton, QStyle, QStyleOptionButton, QToolButton
 from material_editor import MaterialEditor
 from model import Settings, save_material, plastic_curve_from_total_true_strain
 
@@ -26,6 +26,37 @@ class MaterialUnitTests(unittest.TestCase):
         self.assertEqual(self.editor.title(), "Material")
         self.assertFalse(self.editor.content.isHidden())
         self.assertFalse(self.editor.findChildren(QToolButton))
+
+    def test_material_actions_have_label_padding_and_equal_sizes(self):
+        from studio_style import STUDIO_STYLESHEET
+
+        for elastic_only in (False, True):
+            with self.subTest(elastic_only=elastic_only):
+                editor = MaterialEditor(Settings(material_model="multilinear_isotropic"),
+                                        elastic_only=elastic_only)
+                try:
+                    editor.setStyleSheet(STUDIO_STYLESHEET)
+                    editor.library_button.setText("Kütüphane")
+                    editor.load_button.setText("Yükle")
+                    editor.edit_button.setText("Düzenle")
+                    editor.resize(245, 650)
+                    editor.show()
+                    self.app.processEvents()
+                    editor.library_button.setFocus()
+                    toolbar = [button for button in editor.findChildren(QPushButton)
+                               if button.isVisible() and button not in editor.curve_buttons]
+                    self.assertEqual(len({(button.width(), button.height()) for button in toolbar}), 1)
+                    for button in toolbar:
+                        option = QStyleOptionButton()
+                        button.initStyleOption(option)
+                        content = button.style().subElementRect(
+                            QStyle.SubElement.SE_PushButtonContents, option, button)
+                        self.assertGreaterEqual(content.left(), 8)
+                        self.assertGreaterEqual(content.width(), button.fontMetrics().horizontalAdvance(button.text()))
+                    if not elastic_only:
+                        self.assertEqual(len({button.width() for button in editor.curve_buttons}), 1)
+                finally:
+                    editor.close()
 
     def test_title_click_toggles_and_preserves_material(self):
         from studio_style import STUDIO_STYLESHEET

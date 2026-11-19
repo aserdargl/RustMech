@@ -213,7 +213,7 @@ class MaterialEditor(SidebarGroupBox):
         self.table.setMinimumHeight(130)
         curve_layout.addWidget(self.table, 1)
 
-        curve_buttons = ActionFlowLayout()
+        curve_buttons = ActionFlowLayout(equal_width=True)
         self.curve_buttons = []
         for label, callback in (
             ("+ Row", self.add_row),
