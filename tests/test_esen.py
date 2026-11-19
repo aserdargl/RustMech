@@ -460,7 +460,13 @@ class EsenTests(unittest.TestCase):
                     self.assertEqual(len({button.y() for button in toolbar if button.isVisible()}), 1)
                     self.assertEqual(workspace.batch_folder.width(), workspace.upload.width())
                     self.assertEqual({button.width() for button in workspace._compact_input_actions}, {25})
-                    buttons = [button for button in workspace._command_buttons if button not in toolbar]
+                    browser = workspace.truba_browser
+                    navigation = browser.up, browser.open_folder, browser.refresh, browser.slurm_inputs
+                    self.assertEqual(len({button.y() for button in navigation}), 1)
+                    self.assertEqual([button.x() for button in navigation],
+                                     sorted({button.x() for button in navigation}))
+                    self.assertEqual(len({button.width() for button in navigation}), 1)
+                    buttons = [button for button in workspace._command_buttons if button not in (*toolbar, *navigation)]
                     width = max(button.sizeHint().width() for button in buttons) + 2
                     self.assertEqual({button.maximumWidth() for button in buttons}, {width})
                     self.assertEqual({button.width() for button in buttons if button.isVisible()}, {width})

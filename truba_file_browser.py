@@ -55,13 +55,14 @@ class TrubaFileBrowser(QWidget):
         self.up = command("Up", self._up)
         self.open_folder = command("Open", self._open_selected_folder, hint="Open selected TRUBA folder")
         self.refresh = command("Refresh", self._refresh)
-        actions = ActionFlowLayout(equal_width=True)
-        actions.addWidget(self.up)
-        actions.addWidget(self.open_folder)
-        actions.addWidget(self.refresh)
-        layout.addLayout(actions)
         self.slurm_inputs = command("Slurm inputs", self._open_slurm_inputs, hint="Open synchronized Slurm inputs on TRUBA")
-        layout.addWidget(self.slurm_inputs, alignment=Qt.AlignmentFlag.AlignLeft)
+        self.navigation_buttons = self.up, self.open_folder, self.refresh, self.slurm_inputs
+        actions = QHBoxLayout()
+        actions.setSpacing(4)
+        for button in self.navigation_buttons:
+            actions.addWidget(button)
+        actions.addStretch()
+        layout.addLayout(actions)
 
         self.files = QTreeWidget()
         self.files.setAccessibleName("TRUBA files")

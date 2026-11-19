@@ -539,18 +539,17 @@ class EsenWorkspace(QDialog):
     def _size_command_buttons(self):
         # Reserve space for the shared focus border on both sides.
         toolbar_labels = (self.batch_folder, self.upload)
+        navigation = self.truba_browser.navigation_buttons
         other_buttons = [button for button in self._command_buttons
-                         if button not in (*toolbar_labels, *self._compact_input_actions)]
-        width = max(button.sizeHint().width() for button in other_buttons) + 2
-        for button in other_buttons:
-            button.setFixedWidth(width)
-        label_width = max(button.sizeHint().width() for button in toolbar_labels) + 2
-        for button in toolbar_labels:
-            button.setFixedWidth(label_width)
+                         if button not in (*toolbar_labels, *self._compact_input_actions, *navigation)]
+        for group in (other_buttons, toolbar_labels, navigation):
+            width = max(button.sizeHint().width() for button in group) + 2
+            for button in group:
+                button.setFixedWidth(width)
         # The two order arrows replace Use As Script in Slurm mode.
         icon_count = len(self._compact_input_actions) - 1
         gaps = (len(toolbar_labels) + icon_count - 1) * INPUT_TOOL_SPACING
-        toolbar_width = len(toolbar_labels) * label_width + icon_count * CONTROL_HEIGHT + gaps
+        toolbar_width = sum(button.width() for button in toolbar_labels) + icon_count * CONTROL_HEIGHT + gaps
         scrollbar = self.style().pixelMetric(QStyle.PixelMetric.PM_ScrollBarExtent)
         self._settings_column.setMinimumWidth(max(305, toolbar_width + 2 * PANEL_PADDING + scrollbar))
 
