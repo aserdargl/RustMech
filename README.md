@@ -23,9 +23,12 @@ Her çalıştırmada ESEN girdilerin bir kopyasını saklar.
   Linux'ta da çözülebilen göreli yollar kullanın.
 
 **LAMMPS'i çalıştır** düğmesinden önce komutu veya Slurm betiğini önizleyebilirsiniz.
-**İş geçmişi** üzerinden günlükleri ve dosyaları açabilir, TRUBA çıktılarından
-istediğinizi indirebilirsiniz. RustMech yeniden açıldığında TRUBA'ya tekrar bağlanıp
-aynı işi seçerek izlemeye devam edin. Aynı girdileri diğer hedefte çalıştırmak için
+Başarılı TRUBA işlerinin çıktıları ve günlükleri, bağlantı açıkken yerel iş
+klasöründeki `Results/ESEN-<iş-kimliği>` dizinine otomatik indirilir. Çıktıların
+alt klasörleri korunur. Aktarım kesilirse **İş geçmişi**'nden işi seçip
+**İşi yenile** ile tekrar deneyin. Dosyaları geçmişten tek tek de indirebilirsiniz.
+RustMech yeniden açıldığında TRUBA'ya tekrar bağlanıp aynı işi seçerek izlemeye
+devam edin. Aynı girdileri diğer hedefte çalıştırmak için
 geçmişteki işi seçip **Girdileri yeniden kullan** düğmesine basın ve hedefi değiştirin.
 
 ### TRUBA'da ara kayıttan devam ve 70. saatte devir

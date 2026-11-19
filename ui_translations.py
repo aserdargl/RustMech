@@ -42,6 +42,7 @@ TRUBA run folder|TRUBA koşu klasörü
 Attach folder|Klasörü ekle
 Waiting for results|Sonuç bekleniyor
 Results available|Sonuçlar hazır
+Automatic result download failed. Use Refresh job to retry.|Sonuçlar otomatik indirilemedi. Tekrar denemek için İşi yenile düğmesini kullanın.
 Choose a TRUBA run folder under your scratch directory.|Scratch alanınızdaki bir TRUBA koşu klasörünü seçin.
 Stop job|İşi durdur
 Command preview|Komut önizlemesi

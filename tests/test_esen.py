@@ -1,6 +1,7 @@
 """Focused regression coverage for ESEN file loading and job lifecycle."""
 
 import base64
+from io import BytesIO
 import os
 from pathlib import Path
 import sys
@@ -210,6 +211,50 @@ class EsenTests(unittest.TestCase):
             self.assertEqual(jobs.log_tail(directory / "stdout.log"), "LAMMPS done\n")
             self.assertEqual((directory / "downloads/work/sub/result.data").read_bytes(), b"result")
 
+    def test_completed_remote_results_publish_atomically_beside_inputs(self):
+        directory, record = self.new_job()
+        jobs.snapshot_inputs(directory, *self.files)
+        jobs.save_job(directory, record, state="Completed", username=self.auth.username)
+        output = self.source / "Results" / f"ESEN-{directory.name}"
+
+        def transfer(_, destination):
+            with tarfile.open(destination, "w:gz") as archive:
+                for name, data in {
+                    f"work/{self.entry}": (self.source / self.entry).read_bytes(),
+                    "work/data/cell.lmp": b"modified input",
+                    "work/sub/result.data": b"result",
+                    "stdout.log": b"LAMMPS done\n",
+                }.items():
+                    member = tarfile.TarInfo(name)
+                    member.size = len(data)
+                    archive.addfile(member, BytesIO(data))
+
+        with patch("esen_jobs.RemoteTransport") as factory:
+            transport = factory.return_value
+            transport.get.side_effect = OSError("Connection interrupted")
+            with self.assertRaisesRegex(OSError, "Connection interrupted"):
+                jobs.export_remote_results(directory, record, self.auth)
+            self.assertFalse(output.exists())
+            self.assertEqual(list(output.parent.iterdir()), [])
+            self.assertIn("rm -f -- .esen-results-", transport.command.call_args.args[0])
+
+            transport.get.side_effect = transfer
+            jobs.export_remote_results(directory, record, self.auth)
+            jobs.export_remote_results(directory, record, self.auth)
+            self.assertEqual(transport.get.call_count, 2)
+
+        self.assertFalse((output / "work" / self.entry).exists())
+        self.assertEqual((output / "work/data/cell.lmp").read_bytes(), b"modified input")
+        self.assertEqual((output / "work/sub/result.data").read_bytes(), b"result")
+        self.assertEqual((output / "stdout.log").read_bytes(), b"LAMMPS done\n")
+        (output.parent / "reference.dat").write_bytes(b"input under Results")
+        next_job, _ = self.new_job()
+        snapshot = jobs.snapshot_inputs(next_job, self.source, self.entry, (), True)
+        self.assertFalse((snapshot / "Results" / output.name).exists())
+        self.assertTrue((snapshot / "Results/reference.dat").is_file())
+        reused, reused_record = jobs.new_job(snapshot, self.entry, "remote", None, parent=self.history)
+        self.assertEqual(jobs.result_directory(reused, reused_record).parent, output.parent)
+
     def test_cancel_waits_for_slurm_to_confirm(self):
         directory, record = self.new_job()
         jobs.save_job(directory, record, username=self.auth.username, job_id="456", state="Running")
@@ -324,11 +369,16 @@ class EsenTests(unittest.TestCase):
         def complete(directory, record, *_, **__):
             jobs.save_job(directory, record, state="Completed")
 
-        with patch("esen_jobs.refresh_remote", side_effect=complete) as refresh, patch("esen_jobs.remote_files"):
+        workspace.hide()
+        with (patch("esen_jobs.refresh_remote", side_effect=complete) as refresh,
+              patch("esen_jobs.remote_files"), patch("esen_jobs.export_remote_results") as export):
             workspace._poll_remote()
             workspace.remote_task[1].result(timeout=5)
             workspace._tick()
         self.assertEqual(refresh.call_args.args[0], directory)
+        self.assertEqual(export.call_args.args[0], directory)
+        workspace.show()
+        workspace._tick()
         self.assertEqual(workspace.truba_badge.text(), "Connected")
 
         workspace.target.setCurrentIndex(workspace.target.findData("local"))

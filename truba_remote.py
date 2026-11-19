@@ -112,7 +112,7 @@ def make_source_bundle(destination, root=None):
     return digest,native.hexdigest()
 
 
-def safe_extract(archive_path,directory):
+def safe_extract(archive_path,directory,*,validate_name=None,max_size=40*1024**3):
     directory = Path(directory).resolve()
     with tarfile.open(archive_path,"r:gz") as archive:
         members = archive.getmembers()
@@ -121,9 +121,12 @@ def safe_extract(archive_path,directory):
             path = PurePosixPath(item.name)
             if path.is_absolute() or ".." in path.parts or "\\" in item.name or ":" in item.name or item.issym() or item.islnk() or not (item.isfile() or item.isdir()):
                 raise ValueError("Invalid path or link in the remote result archive.")
+            if validate_name is not None:
+                validate_name(item.name)
             if not (directory/item.name).resolve().is_relative_to(directory): raise ValueError("Remote archive escaped its destination.")
             total += item.size
-        if total>40*1024**3: raise ValueError("Remote result archive exceeds the 40 GiB extraction limit.")
+        if max_size is not None and total>max_size:
+            raise ValueError(f"Remote result archive exceeds the {max_size/(1024**3):g} GiB extraction limit.")
         archive.extractall(directory,members=members,filter="data")
 
 
@@ -132,10 +135,10 @@ class RemoteTransport:
         self.delegate = connection(context,auth,record)
         self.username = self.delegate.username
 
-    def command(self,script):
+    def command(self,script,*,timeout=60):
         if isinstance(self.delegate,SSHJobs):
             with self.delegate.connect() as client:
-                _,out,err = client.exec_command("env TERM=dumb bash -lc "+shlex.quote(script),timeout=60)
+                _,out,err = client.exec_command("env TERM=dumb bash -lc "+shlex.quote(script),timeout=timeout)
                 data = out.read().decode(errors="replace")
                 error = err.read().decode(errors="replace")
                 if out.channel.recv_exit_status(): raise RuntimeError("TRUBA command failed: "+error[-1500:])

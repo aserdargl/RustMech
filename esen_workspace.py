@@ -651,6 +651,12 @@ class EsenWorkspace(QDialog):
         state = translate(self._state(directory, record))
         details = [record.get("job_id", ""), state, record.get("created", ""),
                    self.job_error or translate(record.get("detail", ""))]
+        exported = jobs.result_directory(directory, record)
+        if exported is not None and exported.is_dir():
+            details.append(f"{translate('Results')} · {exported}")
+        if record.get("result_export_error"):
+            details.append(f"{translate('Automatic result download failed. Use Refresh job to retry.')} "
+                           f"{record['result_export_error']}")
         if record.get("files_omitted"):
             details.append(translate("Some files are omitted from this list."))
         self.status.setText(" · ".join(filter(None, details))[:900])
@@ -781,7 +787,7 @@ class EsenWorkspace(QDialog):
 
     def _poll_remote(self):
         auth = self.truba.analysis_auth()
-        if not self.isVisible() or self.remote_task or not auth:
+        if self.remote_task or not auth:
             return
         directory = next((path for path, username in self._active_truba_jobs.items()
                           if username == auth.username), None)
@@ -807,17 +813,31 @@ class EsenWorkspace(QDialog):
             return
         if record.get("remote_run") and not manual:
             return
-        if record["state"] in jobs.TERMINAL and (not record.get("job_id") or ("files" in record and not manual)):
+        exported = jobs.result_directory(directory, record)
+        was_terminal = record["state"] in jobs.TERMINAL
+        needs_export = (record["state"] == "Completed" and exported is not None
+                        and not exported.is_dir() and not record.get("result_export_error"))
+        if was_terminal and (
+            not record.get("job_id") or ("files" in record and not manual and not needs_export)
+        ):
             self._active_truba_jobs.pop(directory, None)
             return
         if directory == self._selected_directory():
             self.job_error = ""
 
         def refresh():
-            if record["state"] not in jobs.TERMINAL or (manual and record.get("resume_input")):
+            if not was_terminal or (manual and record.get("resume_input")):
                 jobs.refresh_remote(directory, record, auth, cancel=cancel)
-            if record["state"] in jobs.TERMINAL:
+            if record["state"] in jobs.TERMINAL and (not was_terminal or "files" not in record or manual):
                 jobs.remote_files(directory, record, auth)
+            if record["state"] == "Completed" and exported is not None and (manual or not record.get("result_export_error")):
+                try:
+                    jobs.export_remote_results(directory, record, auth)
+                except Exception as error:
+                    jobs.save_job(directory, record, result_export_error=str(error))
+                else:
+                    if record.get("result_export_error"):
+                        jobs.save_job(directory, record, result_export_error="")
 
         self.remote_task = (directory, self.executor.submit(refresh))
         self._buttons()
@@ -854,10 +874,16 @@ class EsenWorkspace(QDialog):
         item = self.results.currentItem()
         if not directory or not item or not self.record:
             return None
-        if self.record["target"] == "remote":
-            directory = directory / "downloads"
         try:
-            path = directory / jobs.relative_file(item.text())
+            relative = jobs.relative_file(item.text())
+            if self.record["target"] == "remote":
+                exported = jobs.result_directory(directory, self.record)
+                if exported is not None and (exported / relative).is_file():
+                    path = exported / relative
+                    if path.resolve().is_relative_to(exported.resolve()):
+                        return path
+                directory = directory / "downloads"
+            path = directory / relative
             return path if path.resolve().is_relative_to(directory.resolve()) else None
         except (OSError, ValueError):
             return None

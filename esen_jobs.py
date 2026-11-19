@@ -1,7 +1,9 @@
 """LAMMPS input snapshots, Windows execution and standalone TRUBA jobs."""
 
 import base64
+from contextlib import suppress
 from datetime import datetime
+from filecmp import cmp
 from functools import partial
 import json
 import ntpath
@@ -13,13 +15,14 @@ import shutil
 import signal
 import subprocess
 import tarfile
+from tempfile import TemporaryDirectory
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
 import esen_restart
 from esen_windows_job import limited_process
 from truba_credentials import state_directory
 from truba_jobs import SAFE_NAME, validated_remote_path, write_record
-from truba_remote import RemoteContext, RemoteTransport
+from truba_remote import RemoteContext, RemoteTransport, safe_extract
 from truba_resources import BASELINES, candidates, fetch_catalog
 
 
@@ -37,6 +40,7 @@ SLURM_TERMINAL = frozenset({
 })
 LOG_BYTES = 16000
 FILE_LIMIT = 2000
+RESULT_DIRECTORY = re.compile(r"(?:ESEN-[0-9a-f]{32}|\.esen-export-[0-9a-f]{32}-.+)", re.IGNORECASE)
 
 
 def jobs_directory():
@@ -79,6 +83,11 @@ def new_job(root, entry, target, ranks, *, parent):
     directory.mkdir(parents=True, exist_ok=False)
     record = dict(name=entry, target=target, ranks=ranks, state="Preparing",
                   created=datetime.now().astimezone().isoformat(timespec="seconds"), source=str(root))
+    if root.name == "inputs" and root.parent.parent == parent:
+        # Reused inputs are stored in job history, while their results belong in the original job folder.
+        with suppress(OSError, ValueError):
+            previous = read_job(root.parent)
+            record["results_source"] = previous.get("results_source") or previous.get("source")
     save_job(directory, record)
     return directory, record
 
@@ -109,7 +118,7 @@ def snapshot_inputs(directory, root, entry, extra, whole_folder, stop=None):
             folder = Path(folder)
             for name in dirs[:]:
                 source = folder / name
-                if is_link(source):
+                if is_link(source) or (source.parent == root / "Results" and RESULT_DIRECTORY.fullmatch(name)):
                     dirs.remove(name)
                 else:
                     relative = relative_file(source.relative_to(root).as_posix())
@@ -523,6 +532,75 @@ def save_file_list(directory, record, paths, omitted, **changes):
         else:
             portable.append(name)
     save_job(directory, record, files=portable, files_omitted=omitted, **changes)
+
+
+def result_directory(directory, record):
+    source = record.get("results_source") or record.get("source")
+    if record["target"] == "remote" and not record.get("remote_run") and source:
+        return Path(source) / "Results" / f"ESEN-{directory.name}"
+    return None
+
+
+def export_remote_results(directory, record, auth):
+    """Publish complete job outputs beside the original inputs in one rename."""
+    destination = result_directory(directory, record)
+    if destination is None or record["state"] != "Completed":
+        return
+    root = destination.parent
+    if is_link(root) or is_link(destination):
+        raise ValueError("The Results folder must not be a symbolic link or junction.")
+    if destination.is_dir():
+        return
+    if destination.exists():
+        raise ValueError(f"A file occupies the result folder path: {destination}")
+    root.mkdir(exist_ok=True)
+    transport, remote = remote_location(directory, record, auth)
+    archive = f".esen-results-{uuid4().hex}.tar.gz"
+    # Select regular files explicitly so links and solver control files are excluded.
+    script = f"""cd {shlex.quote(remote)} || exit
+set -eo pipefail
+umask 077
+{{
+    find -P work -type f -print0
+    for log in {' '.join(LOGS)}; do
+        if [ -f "$log" ] && [ ! -L "$log" ]; then printf '%s\\0' "$log"; fi
+    done
+}} | tar -czf {archive} --hard-dereference --null --verbatim-files-from -T -
+"""
+    with TemporaryDirectory(prefix=f".esen-export-{directory.name}-", dir=root) as temporary:
+        staging = Path(temporary)
+        local_archive = staging / "results.tar.gz"
+        try:
+            transport.command(script, timeout=1800)
+            transport.get(f"{remote}/{archive}", local_archive)
+        finally:
+            # A dropped connection should not mask the transfer error.
+            with suppress(Exception):
+                transport.command(f"cd {shlex.quote(remote)} && rm -f -- {archive}")
+        output = staging / "output"
+        output.mkdir()
+        names = set()
+
+        def validate_name(name):
+            relative = relative_file(name)
+            if name not in LOGS and (len(relative.parts) < 2 or relative.parts[0] != "work"):
+                raise ValueError(f"Unexpected file path in TRUBA results: {name}")
+            key = name.casefold()
+            if key in names:
+                raise ValueError(f"Conflicting file path in TRUBA results: {name}")
+            names.add(key)
+
+        safe_extract(local_archive, output, validate_name=validate_name, max_size=None)
+        for folder, _, files in os.walk(output / "work", topdown=False):
+            folder = Path(folder)
+            for name in files:
+                result = folder / name
+                original = directory / "inputs" / result.relative_to(output / "work")
+                if original.is_file() and cmp(original, result, shallow=False):
+                    result.unlink()
+            if not any(folder.iterdir()):
+                folder.rmdir()
+        output.rename(destination)
 
 
 def download_file(directory, record, name, auth):
