@@ -26,6 +26,8 @@
    Kaydedilen işler sağdaki **Analysis Queue** sütununa taşınır. Aynı kaynak
    içeriğine ve ayarlara sahip işler yeniden eklenmez. Kaynak dosya hazırlıktan
    sonra değişmişse yeniden ön kontrol gerekir.
+   Bir işi geri almak için sağdaki satırı seçip **Remove from Queue** düğmesine
+   tıklayın. Numune soldaki listede tekrar seçilir.
 8. **Analysis Queue > Run analysis queue** ile açıkça başlatın. Her
    numunenin seçili çözücüleri tamamlandıktan sonra sıradaki numuneye geçilir.
    Varsayılan hata politikası sonraki işe devam eder. Tamamlanan işler atlanır;

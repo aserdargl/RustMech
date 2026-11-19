@@ -498,6 +498,45 @@ class FolderBatchTests(unittest.TestCase):
         self.assertFalse(dialog.table.isRowHidden(0))
         self.assertEqual(dialog.queue_table.rowCount(), 0)
 
+    def test_remove_from_right_panel_persists_and_returns_only_the_selected_job(self):
+        dialog = self.dialog()
+        unrelated = dialog.queue.add_snapshot(self.base)
+        dialog.root, dialog.base = self.root, self.base
+        dialog.items = [self.prepared('part1.stl'), self.prepared('part2.stl')]
+        dialog.refresh_table()
+        dialog.set_busy(False)
+        dialog.enqueue.click()
+        first, second = dialog.queue.rows[1:]
+        self.assertFalse(dialog.remove_from_queue.isEnabled())
+        dialog.queue_table.selectRow(0)
+        self.assertTrue(dialog.remove_from_queue.isEnabled())
+
+        with patch.object(dialog.queue.store, 'save', side_effect=OSError('disk full')):
+            dialog.remove_from_queue.click()
+        self.assertEqual(dialog.status.text(), 'disk full')
+        self.assertTrue(dialog.table.isRowHidden(0))
+        self.assertEqual(dialog.queue_table.rowCount(), 2)
+
+        with patch.object(dialog.queue, '_active_mode', 'solve'):
+            dialog.remove_from_queue.click()
+            self.assertIn('Stop the analysis queue', dialog.status.text())
+            self.assertTrue(dialog.table.isRowHidden(0))
+
+        dialog.remove_from_queue.click()
+        self.assertEqual([job.exp_id for job in QueueStore(dialog.queue.store.path).load()],
+                         [unrelated.exp_id, second.exp_id])
+        self.assertEqual(dialog.queue_table.rowCount(), 1)
+        self.assertEqual(dialog.queue_table.item(0, 0).text(), 'part2.stl')
+        self.assertFalse(dialog.remove_from_queue.isEnabled())
+        self.assertFalse(dialog.table.isRowHidden(0))
+        self.assertTrue(dialog.table.isRowHidden(1))
+        self.assertEqual(dialog.table.selectionModel().selectedRows()[0].row(), 0)
+        self.assertTrue((Path(first.folder_job['destination']) / 'job.json').is_file())
+
+        dialog.enqueue.click()
+        self.assertTrue(dialog.table.isRowHidden(0))
+        self.assertEqual(dialog.queue.rows[-1].folder_job['key'], first.folder_job['key'])
+
     def test_async_check_and_enter_never_start_or_enqueue(self):
         dialog = self.dialog()
         self.specimen()

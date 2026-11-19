@@ -207,11 +207,16 @@ class FolderBatchDialog(QDialog):
         self.queue_table.setHorizontalHeaderLabels(['Specimen', 'Solver'])
         self.queue_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.queue_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.queue_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.queue_table.verticalHeader().hide()
         queue_header = self.queue_table.horizontalHeader()
         queue_header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         queue_header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
         queue_layout.addWidget(self.queue_table)
+        self.remove_from_queue = self.button('Remove from Queue', self.return_queued_specimen)
+        self.remove_from_queue.setEnabled(False)
+        self.queue_table.itemSelectionChanged.connect(self.update_remove_button)
+        queue_layout.addWidget(self.remove_from_queue, 0, Qt.AlignmentFlag.AlignLeft)
         panels.addWidget(queued)
         panels.setSizes([560, 320])
 
@@ -267,12 +272,14 @@ class FolderBatchDialog(QDialog):
     def refresh_queue_view(self, *, busy=None):
         root = str(self.root) if self.root is not None else None
         rows = [row for row in self.queue.rows if row.folder_job and row.folder_job['root'] == root]
+        self.queue_table.clearSelection()
         self.queue_table.setRowCount(len(rows))
         for index, row in enumerate(rows):
             settings = row.design_settings
             for column, value in enumerate((settings.imported_geometry_name, settings.solver_backend)):
                 item = QTableWidgetItem(value)
                 item.setToolTip(value)
+                item.setData(Qt.ItemDataRole.UserRole, row.exp_id)
                 self.queue_table.setItem(index, column, item)
 
         keys = {row.folder_job['key'] for row in rows}
@@ -286,6 +293,31 @@ class FolderBatchDialog(QDialog):
         if busy is None:
             busy = self.future is not None or bool(self.pending)
         self.enqueue.setEnabled(ready and not busy)
+        self.update_remove_button()
+
+    def update_remove_button(self):
+        idle = self.future is None and not self.pending
+        self.remove_from_queue.setEnabled(idle and bool(self.queue_table.selectionModel().hasSelection()))
+
+    def return_queued_specimen(self):
+        selected = self.queue_table.selectionModel().selectedRows()
+        if not selected or self.future is not None or self.pending:
+            return
+        item = self.queue_table.item(selected[0].row(), 0)
+        try:
+            removed = self.queue.remove_jobs({item.data(Qt.ItemDataRole.UserRole)})
+        except (OSError, ValueError) as error:
+            self.status.setText(str(error))
+            return
+        if not removed:
+            return
+        for index, specimen in enumerate(self.items):
+            if specimen.source == removed[0].folder_job['source']:
+                self.table.setRowHidden(index, False)
+                self.table.selectRow(index)
+                self.table.scrollToItem(self.table.item(index, SPECIMEN_COLUMN))
+                break
+        self.status.setText('Selected job removed from the queue.')
 
     def choose_folder(self):
         path = QFileDialog.getExistingDirectory(self, 'Specimen folder', self.folder.text().strip(),

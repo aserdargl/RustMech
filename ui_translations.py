@@ -369,6 +369,9 @@ Analysis queue|Analiz kuyruğu
 Analysis queue...|Analiz kuyruğu...
 Analysis Queue|Analiz Kuyruğu
 Add to Queue|Kuyruğa Ekle
+Remove from Queue|Kuyruktan Çıkar
+Selected job removed from the queue.|Seçili iş kuyruktan çıkarıldı.
+Stop the analysis queue before removing jobs.|İşleri çıkarmadan önce analiz kuyruğunu durdurun.
 Specimens|Numuneler
 Specimen|Numune
 Preflight|Ön Kontrol

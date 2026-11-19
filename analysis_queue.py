@@ -250,9 +250,25 @@ class AnalysisQueueWidget(DoEStudioWidget):
     def delete_selected_rows(self):
         if self._active_mode is not None:
             return
-        selected = {item.row() for item in self.table.selectedIndexes()}
-        self._rows[:] = [row for i, row in enumerate(self._rows) if i not in selected]
+        selected = {self._rows[index.row()].exp_id for index in self.table.selectedIndexes()}
+        try:
+            self.remove_jobs(selected)
+        except (OSError, ValueError) as error:
+            self.notice.setText(str(error))
+
+    def remove_jobs(self, job_ids):
+        if self._active_mode is not None or self._active_future is not None:
+            raise ValueError("Stop the analysis queue before removing jobs.")
+        if not self._storage_ready or self.storage_error:
+            raise ValueError(self.storage_error or "Analysis queue is not writable.")
+        removed = [row for row in self._rows if row.exp_id in job_ids]
+        if not removed:
+            return []
+        remaining = [row for row in self._rows if row.exp_id not in job_ids]
+        self.store.save(remaining)
+        self._rows[:] = remaining
         self._refresh_table_view()
+        return removed
 
     def move_selected(self, delta):
         if self._active_mode is not None:
