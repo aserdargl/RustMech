@@ -20,9 +20,15 @@ def picker_app(tmp_path):
     install_window_captions(app)
     install_file_dialogs(app)
     store = WindowStateStore(app, QSettings(str(tmp_path / "windows.ini"), QSettings.Format.IniFormat))
+    previous_store = getattr(app, "_rustmech_window_state", None)
+    app._rustmech_window_state = store
     yield app
     app.removeEventFilter(store)
     store.deleteLater()
+    if previous_store is None:
+        del app._rustmech_window_state
+    else:
+        app._rustmech_window_state = previous_store
     for name in ("_rustmech_file_dialog_service", "_rustmech_caption_service"):
         service = getattr(app, name)
         app.removeEventFilter(service)
@@ -82,3 +88,38 @@ def test_picker_navigation_and_geometry(picker_app, tmp_path, method):
         assert (entered, back, forward, address) == (nested, tmp_path, nested, tmp_path)
     finally:
         owner.close()
+
+
+def test_picker_remembers_each_actions_directory_on_cancel(picker_app, tmp_path):
+    nested = tmp_path / "last visited"
+    nested.mkdir()
+    visits = []
+
+    def visit(*, navigate=False):
+        dialog = picker_app.activeModalWidget()
+        try:
+            field = dialog.findChild(QLineEdit, "fileNameEdit")
+            visits.append((Path(dialog.directory().absolutePath()), field.text()))
+            if navigate:
+                address = dialog.findChild(QComboBox, "lookInCombo").lineEdit()
+                address.setText(str(nested))
+                QTest.keyClick(address, Qt.Key.Key_Return)
+        finally:
+            dialog.reject()
+
+    QTimer.singleShot(0, lambda: visit(navigate=True))
+    QFileDialog.getSaveFileName(None, "Export", str(tmp_path / "original.csv"), "CSV (*.csv)")
+
+    # Reload settings from disk, as on the next application launch.
+    store = picker_app._rustmech_window_state
+    store.settings = QSettings(store.settings.fileName(), QSettings.Format.IniFormat)
+    QTimer.singleShot(0, visit)
+    QFileDialog.getSaveFileName(None, "Export", str(tmp_path / "next.csv"), "CSV (*.csv)")
+    QTimer.singleShot(0, visit)
+    QFileDialog.getSaveFileName(None, "Other export", str(tmp_path / "other.csv"), "CSV (*.csv)")
+    nested.rmdir()
+    QTimer.singleShot(0, visit)
+    QFileDialog.getSaveFileName(None, "Export", str(tmp_path / "fallback.csv"), "CSV (*.csv)")
+
+    assert visits == [(tmp_path, "original.csv"), (nested, "next.csv"),
+                      (tmp_path, "other.csv"), (tmp_path, "fallback.csv")]

@@ -6,9 +6,13 @@ import numpy as np
 import pyvista as pv
 
 
+SURFACE_EXTENSIONS = ('.stl', '.obj', '.ply', '.vtp')
+SURFACE_FILE_FILTER = 'Surface geometry (' + ' '.join(f'*{suffix}' for suffix in SURFACE_EXTENSIONS) + ')'
+
+
 def read_surface(path, *, require_single=True):
     path = Path(path)
-    if path.suffix.lower() not in ('.stl', '.obj', '.ply', '.vtp'):
+    if path.suffix.lower() not in SURFACE_EXTENSIONS:
         raise ValueError('Supported geometry files: STL, OBJ, PLY and VTP (coordinates in mm).')
     surface = pv.read(path)
     if not isinstance(surface, pv.PolyData):

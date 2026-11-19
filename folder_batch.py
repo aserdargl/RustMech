@@ -14,8 +14,8 @@ from PySide6.QtWidgets import (QAbstractItemView, QApplication, QDialog,
                               QTableWidget, QTableWidgetItem, QVBoxLayout)
 
 from file_dialog import QFileDialog
-from imported_geometry import (automatic_compression_faces, compression_direction,
-                               read_surface, store_surface)
+from imported_geometry import (SURFACE_EXTENSIONS, SURFACE_FILE_FILTER,
+                               automatic_compression_faces, compression_direction, read_surface, store_surface)
 from model import settings_from_dict
 from studio_style import ActionFlowLayout, CompactComboBox, STUDIO_STYLESHEET
 from window_state import install_window_state
@@ -45,7 +45,7 @@ def discover_specimens(directory):
                                 and not (Path(parent) / name).is_junction())
         for name in files:
             path = Path(parent) / name
-            if path.suffix.lower() in ('.stl', '.obj', '.ply', '.vtp') and not path.is_symlink():
+            if path.suffix.lower() in SURFACE_EXTENSIONS and not path.is_symlink():
                 paths.append(path)
     def natural(path):
         return [int(part) if part.isdigit() else part.casefold()
@@ -202,7 +202,8 @@ class FolderBatchDialog(QDialog):
         self.enqueue.setEnabled(not busy and any(item.cached for item in self.items))
 
     def choose_folder(self):
-        path = QFileDialog.getExistingDirectory(self, 'Specimen folder', self.folder.text())
+        path = QFileDialog.getExistingDirectory(self, 'Specimen folder', self.folder.text(),
+                                                filter=SURFACE_FILE_FILTER)
         if path:
             self.folder.setText(path)
 

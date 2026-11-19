@@ -3,10 +3,10 @@
 import os
 import sys
 
-from PySide6.QtCore import QDir, QEvent, QFileInfo, QObject, QProcess, Qt, QUrl
+from PySide6.QtCore import QDir, QEvent, QFileInfo, QObject, QProcess, QSettings, Qt, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
-    QAbstractButton, QAbstractItemView, QComboBox, QDialog, QDialogButtonBox, QFileDialog as QtFileDialog,
+    QAbstractButton, QAbstractItemView, QApplication, QComboBox, QDialog, QDialogButtonBox, QFileDialog as QtFileDialog,
     QFileSystemModel, QInputDialog, QMenu, QMessageBox, QWidget,
 )
 
@@ -198,17 +198,38 @@ class QFileDialog(QtFileDialog):
 
     @classmethod
     def _choose(cls, parent, title, directory, filters, mode, *, save=False):
+        app = QApplication.instance()
+        store = getattr(app, "_rustmech_window_state", None)
+        settings = store.settings if store is not None else QSettings("RustMech", "RustMech")
+        owner = type(parent).__name__ if parent is not None else "default"
+        action = "save" if save else "open"
+        key = f"fileDialogs/{owner}/{action}/{mode.name}/{title or 'default'}/directory"
+        remembered = settings.value(key, "", type=str)
+        folder_mode = mode == cls.FileMode.Directory
+        if remembered and QDir(remembered).exists():
+            suggestion = QFileInfo(directory)
+            if save and directory and not suggestion.isDir():
+                directory = QDir(remembered).filePath(suggestion.fileName())
+            else:
+                directory = remembered
+
         dialog = cls(parent, title, directory, filters)
         dialog.setOption(cls.Option.DontUseNativeDialog)
         dialog.setAcceptMode(cls.AcceptMode.AcceptSave if save else cls.AcceptMode.AcceptOpen)
         dialog.setFileMode(mode)
-        if mode == cls.FileMode.Directory:
-            dialog.setOption(cls.Option.ShowDirsOnly)
         address = dialog.findChild(QComboBox, "lookInCombo")
         dialog._file_controls = FileDialogControls(dialog, address)
         try:
-            if dialog.exec() == QDialog.DialogCode.Accepted:
-                return dialog.selectedFiles(), dialog.selectedNameFilter()
+            accepted = dialog.exec() == QDialog.DialogCode.Accepted
+            files = dialog.selectedFiles() if accepted else []
+            visited = dialog.directory().absolutePath()
+            if files:
+                visited = files[0] if folder_mode else QFileInfo(files[0]).absolutePath()
+            if QDir(visited).exists():
+                settings.setValue(key, visited)
+                settings.sync()
+            if accepted:
+                return files, dialog.selectedNameFilter()
             return [], ""
         finally:
             dialog.deleteLater()
@@ -228,8 +249,8 @@ class QFileDialog(QtFileDialog):
         return (files[0] if files else ""), selected_filter
 
     @classmethod
-    def getExistingDirectory(cls, parent=None, caption="", dir=""):
-        folders, _ = cls._choose(parent, caption, dir, "", cls.FileMode.Directory)
+    def getExistingDirectory(cls, parent=None, caption="", dir="", *, filter=""):
+        folders, _ = cls._choose(parent, caption, dir, filter, cls.FileMode.Directory)
         return folders[0] if folders else ""
 
 
