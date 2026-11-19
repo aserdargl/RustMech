@@ -24,18 +24,21 @@ def choose_geometry(parent):
     return None
 
 
-from PySide6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton
+from PySide6.QtWidgets import QButtonGroup, QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton
 
 
 class GeometryImportDialog(QDialog):
-    def __init__(self, surface, filename, parent=None):
+    def __init__(self, surface, filename, parent=None, *, save_selection=None):
         super().__init__(parent)
         from pyvistaqt import QtInteractor
         from window_state import install_window_state
         from PySide6.QtWidgets import QApplication
         install_window_state(QApplication.instance())
-        self.setObjectName('geometryImport')
-        self.setWindowTitle(f'Import geometry — {filename}')
+        self.save_selection = save_selection
+        self.setObjectName('batchSpecimenFaces' if save_selection else 'geometryImport')
+        from ui_language import translate
+        title = translate('Specimen faces' if save_selection else 'Import geometry')
+        self.setWindowTitle(f'{title} — {filename}')
         self.setWindowFlags(self.windowFlags() | Qt.WindowType.WindowMinimizeButtonHint | Qt.WindowType.WindowMaximizeButtonHint)
         self.resize(900, 700)
         self.setSizeGripEnabled(True)
@@ -48,11 +51,20 @@ class GeometryImportDialog(QDialog):
         self.hint.setWordWrap(True)
         layout.addWidget(self.hint)
         row = QHBoxLayout()
+        self.role_buttons = QButtonGroup(self)
         for index, label in enumerate(('Select support face', 'Select compression face')):
-            button = QPushButton(label)
+            button = QPushButton(translate(label))
             button.setAutoDefault(False)
-            button.clicked.connect(lambda checked=False, i=index: self.set_role(i))
-            row.addWidget(button)
+            button.setCheckable(True)
+            self.role_buttons.addButton(button, index)
+            row.addWidget(button, 0, Qt.AlignmentFlag.AlignLeft)
+        role_buttons = self.role_buttons.buttons()
+        role_width = max(button.sizeHint().width() for button in role_buttons) + 8
+        for button in role_buttons:
+            button.setMinimumWidth(role_width)
+        self.role_buttons.button(self.role).setChecked(True)
+        self.role_buttons.idClicked.connect(self.set_role)
+        row.addStretch()
         layout.addLayout(row)
 
         from operation_progress import OperationProgress
@@ -69,15 +81,18 @@ class GeometryImportDialog(QDialog):
         self.status.setWordWrap(True)
         layout.addWidget(self.status)
         row = QHBoxLayout()
-        self.confirm = QPushButton('Use geometry')
+        self.confirm = QPushButton(translate('Save and close' if save_selection else 'Use geometry'))
         self.confirm.setEnabled(False)
         self.confirm.clicked.connect(self.commit)
-        cancel = QPushButton('Cancel')
+        cancel = QPushButton(translate('Cancel'))
         cancel.clicked.connect(self.reject)
+        action_width = max(self.confirm.sizeHint().width(), cancel.sizeHint().width()) + 8
         for button in (self.confirm, cancel):
             button.setAutoDefault(False)
             button.setDefault(False)
-            row.addWidget(button)
+            button.setMinimumWidth(action_width)
+            row.addWidget(button, 0, Qt.AlignmentFlag.AlignLeft)
+        row.addStretch()
         layout.addLayout(row)
         layout.addWidget(self.operation_progress)
 
@@ -92,7 +107,9 @@ class GeometryImportDialog(QDialog):
 
     def set_role(self, role):
         self.role = role
-        self.status.setText('Selecting ' + ('support' if role == 0 else 'compression') + ' face (right-click)')
+        self.role_buttons.button(role).setChecked(True)
+        self.status.setText('Selecting support face (right-click)' if role == 0
+                            else 'Selecting compression face (right-click)')
 
     def pick(self, point, picker):
         if picker.GetActor() != self.plotter.actors.get('geometry'):
@@ -120,7 +137,8 @@ class GeometryImportDialog(QDialog):
         if None not in self.selected:
             try:
                 self.result_surface = align_compression_surface(self.surface, *self.selected)
-                self.status.setText('Support: green. Compression: orange. Faces validated; ready to import.')
+                self.status.setText('Support: green. Compression: orange. Faces validated.' if self.save_selection
+                                    else 'Support: green. Compression: orange. Faces validated; ready to import.')
             except ValueError as error:
                 self.status.setText(str(error))
         else:
@@ -128,5 +146,12 @@ class GeometryImportDialog(QDialog):
         self.confirm.setEnabled(self.result_surface is not None)
 
     def commit(self):
-        if self.result_surface is not None:
-            self.accept()
+        if self.result_surface is None:
+            return
+        if self.save_selection is not None:
+            try:
+                self.save_selection(*self.result_surface, tuple(self.selected))
+            except (OSError, ValueError, RuntimeError) as error:
+                self.status.setText(str(error))
+                return
+        self.accept()

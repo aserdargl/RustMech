@@ -7,18 +7,22 @@ import os
 from pathlib import Path
 import re
 
-import numpy as np
-from PySide6.QtCore import Qt, QTimer
-from PySide6.QtWidgets import (QAbstractItemView, QApplication, QDialog,
+from PySide6.QtCore import QSize, QSettings, Qt, QTimer
+from PySide6.QtWidgets import (QAbstractItemView, QApplication, QDialog, QHeaderView,
                               QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPushButton,
-                              QTableWidget, QTableWidgetItem, QVBoxLayout)
+                              QTableWidget, QTableWidgetItem, QToolButton, QVBoxLayout)
 
+from camera_toolbar import camera_icon
 from file_dialog import QFileDialog
 from imported_geometry import (SURFACE_EXTENSIONS, SURFACE_FILE_FILTER,
-                               automatic_compression_faces, compression_direction, read_surface, store_surface)
+                               align_compression_surface, automatic_compression_faces,
+                               compression_direction, read_surface, store_surface)
 from model import settings_from_dict
-from studio_style import ActionFlowLayout, CompactComboBox, STUDIO_STYLESHEET
+from studio_style import ActionFlowLayout, CompactComboBox, CONTROL_HEIGHT, STUDIO_STYLESHEET
 from window_state import install_window_state
+
+
+FACES_COLUMN, RUN_COLUMN, SPECIMEN_COLUMN, PREFLIGHT_COLUMN = range(4)
 
 
 @dataclass
@@ -61,12 +65,25 @@ def source_digest(path):
     return digest.hexdigest()
 
 
-def prepare_specimen(path, direction):
-    item = PreparedSpecimen(str(path), direction=tuple(float(x) for x in direction))
+def face_assignment_key(path):
+    identity = sha256(os.fsencode(os.path.normcase(path))).hexdigest()
+    return f'folderBatch/faceAssignments/{identity}'
+
+
+def prepare_specimen(path, direction, saved_faces=None):
+    item = PreparedSpecimen(str(path))
     try:
         item.digest = source_digest(path)
-        surface = read_surface(path)
-        aligned, item.height, item.cells = automatic_compression_faces(surface, direction)
+        if saved_faces and saved_faces[0] == item.digest:
+            surface = read_surface(path)
+            item.cells = saved_faces[1]
+            aligned, item.height = align_compression_surface(surface, *item.cells)
+            direction = compression_direction(surface, *item.cells)
+        elif direction is None:
+            raise ValueError('Face selection required')
+        else:
+            aligned, item.height, item.cells = automatic_compression_faces(read_surface(path), direction)
+        item.direction = tuple(float(x) for x in direction)
         item.cached = store_surface(aligned)
         if source_digest(path) != item.digest:
             raise ValueError('Source changed during preparation. Check the folder again.')
@@ -103,7 +120,9 @@ def specimen_snapshots(item, root, base, solvers):
 class FolderBatchDialog(QDialog):
     def __init__(self, settings_provider, queue, parent=None):
         super().__init__(parent, Qt.WindowType.Window)
-        install_window_state(QApplication.instance())
+        app = QApplication.instance()
+        install_window_state(app)
+        self.preferences = app._rustmech_window_state.settings
         self.setObjectName('folderBatchWindow')
         self.setWindowTitle('Batch analysis from folder - RustMech')
         self.setStyleSheet(STUDIO_STYLESHEET)
@@ -152,22 +171,23 @@ class FolderBatchDialog(QDialog):
                                    'Displacement stays in mm; force stays in N. Imported geometries use tetrahedral elements.')
         self.settings_hint.setWordWrap(True)
         layout.addWidget(self.settings_hint)
-        self.table = QTableWidget(0, 3)
-        self.table.setHorizontalHeaderLabels(['Run', 'Specimen', 'Preflight'])
+        self.table = QTableWidget(0, 4)
+        self.table.setHorizontalHeaderLabels(['', 'Run', 'Specimen', 'Preflight'])
+        self.table.horizontalHeaderItem(FACES_COLUMN).setToolTip('Inspect / select faces')
+        self.table.horizontalHeader().setSectionResizeMode(FACES_COLUMN, QHeaderView.ResizeMode.Fixed)
+        self.table.setColumnWidth(FACES_COLUMN, CONTROL_HEIGHT + 5)
+        self.table.verticalHeader().setMinimumSectionSize(CONTROL_HEIGHT + 2)
+        self.face_icon = camera_icon('orthographic')
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.horizontalHeader().setStretchLastSection(True)
         layout.addWidget(self.table, 1)
         actions = ActionFlowLayout()
-        self.edit = self.button('Inspect / select faces...', self.edit_selected)
         self.enqueue = self.button('Add ready specimens to queue', self.enqueue_ready)
-        action_width = max(self.edit.sizeHint().width(), self.enqueue.sizeHint().width())
-        for button in (self.edit, self.enqueue):
-            button.setFixedWidth(action_width)
         self.show_queue = self.button('Open analysis queue', self.open_queue)
         close = self.button('Close', self.close)
-        for button in (self.edit, self.enqueue, self.show_queue, close):
+        for button in (self.enqueue, self.show_queue, close):
             actions.addWidget(button)
         layout.addLayout(actions)
         self.status = QLabel('Choose a folder and check it. No analysis starts during preparation.')
@@ -197,8 +217,10 @@ class FolderBatchDialog(QDialog):
         self.enqueue.setEnabled(False)
 
     def set_busy(self, busy):
-        for widget in (self.folder, self.browse, self.mode, self.solver, self.check, self.edit):
+        for widget in (self.folder, self.browse, self.mode, self.solver, self.check):
             widget.setEnabled(not busy)
+        for row in range(self.table.rowCount()):
+            self.table.cellWidget(row, FACES_COLUMN).setEnabled(not busy)
         self.enqueue.setEnabled(not busy and any(item.cached for item in self.items))
 
     def choose_folder(self):
@@ -207,25 +229,51 @@ class FolderBatchDialog(QDialog):
         if path:
             self.folder.setText(path)
 
-    def pick_faces(self, path, cells=None):
+    def saved_faces(self, path):
+        value = self.preferences.value(face_assignment_key(path), '')
+        try:
+            digest, cells = json.loads(value)
+            if (isinstance(digest, str) and isinstance(cells, list) and len(cells) == 2
+                    and all(type(cell) is int and cell >= 0 for cell in cells)):
+                return digest, tuple(cells)
+        except (TypeError, ValueError):
+            pass
+        return None
+
+    def pick_faces(self, path, selection=None):
         from geometry_import_dialog import GeometryImportDialog
         digest = source_digest(path)
         surface = read_surface(path)
-        dialog = GeometryImportDialog(surface, Path(path).name, self)
-        dialog.setStyleSheet(STUDIO_STYLESHEET)
-        try:
-            if cells:
-                for role, cell in enumerate(cells):
-                    dialog.set_role(role)
-                    dialog.select_cell(cell)
-            if not dialog.exec():
-                return None
-            aligned, height = dialog.result_surface
-            direction = compression_direction(surface, *dialog.selected)
+        prepared = None
+
+        def save_selection(aligned, height, cells):
+            nonlocal prepared
+            direction = compression_direction(surface, *cells)
+            cached = store_surface(aligned)
             if source_digest(path) != digest:
                 raise ValueError('Source changed during face selection. Check the folder again.')
-            return PreparedSpecimen(str(path), digest, store_surface(aligned), height,
-                                    tuple(float(x) for x in direction), tuple(dialog.selected))
+            key = face_assignment_key(path)
+            previous = self.preferences.value(key)
+            self.preferences.setValue(key, json.dumps([digest, cells]))
+            self.preferences.sync()
+            if self.preferences.status() != QSettings.Status.NoError:
+                if previous is None:
+                    self.preferences.remove(key)
+                else:
+                    self.preferences.setValue(key, previous)
+                raise OSError('Could not save the specimen faces.')
+            prepared = PreparedSpecimen(str(path), digest, cached, height,
+                                        tuple(float(x) for x in direction), cells)
+
+        dialog = GeometryImportDialog(surface, Path(path).name, self, save_selection=save_selection)
+        dialog.setStyleSheet(STUDIO_STYLESHEET)
+        try:
+            if (selection and selection[0] == digest and selection[1]
+                    and all(cell < surface.n_cells for cell in selection[1])):
+                for role, cell in enumerate(selection[1]):
+                    dialog.set_role(role)
+                    dialog.select_cell(cell)
+            return prepared if dialog.exec() else None
         finally:
             dialog.plotter.close()
             dialog.deleteLater()
@@ -242,9 +290,10 @@ class FolderBatchDialog(QDialog):
                 raise ValueError('No STL, OBJ, PLY or VTP specimens found. Result folders are excluded.')
             base = settings_from_dict(asdict(self.settings_provider()))
             direction = {0: (0, 0, 1), 1: (1, 0, 0), 2: (0, 1, 0)}.get(self.mode.currentIndex())
+            saved = [self.saved_faces(path) for path in paths]
             first = None
             if self.mode.currentIndex() == 3:
-                first = self.pick_faces(paths[0])
+                first = self.pick_faces(paths[0], saved[0])
                 if first is None:
                     return
                 direction = first.direction
@@ -252,8 +301,8 @@ class FolderBatchDialog(QDialog):
             if first:
                 self.items[0] = first
             self.root, self.base = root, base
-            self.pending = [(i, path, direction) for i, path in enumerate(paths)
-                            if direction is not None and not (first and i == 0)]
+            self.pending = [(i, path, direction, selection) for i, (path, selection) in enumerate(zip(paths, saved))
+                            if (direction is not None or selection) and not (first and i == 0)]
             self.settings_hint.setText(f'Captured: {base.material_name} | mesh {base.mesh_resolution:g} mm / local {base.local_mesh_size:g} mm | '
                                        f'{base.loading_mode}: {base.compression:g} mm / {base.applied_force:g} N | {base.solver_backend}. '
                                        'Original millimetre dimensions are preserved. HEX elements become TET4 for imported solids.')
@@ -265,10 +314,10 @@ class FolderBatchDialog(QDialog):
 
     def launch_next(self):
         if self.pending:
-            index, path, direction = self.pending.pop(0)
+            index, path, direction, selection = self.pending.pop(0)
             self.working_index = index
             self.status.setText(f'Checking {index + 1}/{len(self.items)}: {Path(path).name}')
-            self.future = self.executor.submit(prepare_specimen, path, direction)
+            self.future = self.executor.submit(prepare_specimen, path, direction, selection)
         else:
             self.set_busy(False)
             ready = sum(bool(item.cached) for item in self.items)
@@ -287,35 +336,47 @@ class FolderBatchDialog(QDialog):
         self.launch_next()
 
     def refresh_table(self):
-        checked = {self.table.item(i, 1).text(): self.table.item(i, 0).checkState()
-                   for i in range(self.table.rowCount()) if self.table.item(i, 1)
-                   and self.table.item(i, 2).text().startswith('Ready')}
+        checked = {self.table.item(i, SPECIMEN_COLUMN).text(): self.table.item(i, RUN_COLUMN).checkState()
+                   for i in range(self.table.rowCount()) if self.table.item(i, RUN_COLUMN).data(Qt.ItemDataRole.UserRole)}
         self.table.setRowCount(len(self.items))
         for index, specimen in enumerate(self.items):
             name = Path(specimen.source).relative_to(self.root).as_posix()
+            button = self.table.cellWidget(index, FACES_COLUMN)
+            if button is None:
+                button = QToolButton()
+                button.setIcon(self.face_icon)
+                button.setIconSize(QSize(16, 16))
+                button.setFixedSize(CONTROL_HEIGHT, CONTROL_HEIGHT)
+                button.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+                button.setAccessibleName('Inspect / select faces')
+                button.setToolTip('Inspect / select faces')
+                button.clicked.connect(lambda checked=False, row=index: self.edit_specimen(row))
+                self.table.setCellWidget(index, FACES_COLUMN, button)
+            button.setAccessibleDescription(name)
             check = QTableWidgetItem()
             check.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsUserCheckable)
             check.setCheckState(checked.get(name, Qt.CheckState.Checked) if specimen.cached else Qt.CheckState.Unchecked)
-            self.table.setItem(index, 0, check)
-            for column, value in ((1, name), (2, specimen.error or f'Ready | height {specimen.height:g} mm')):
+            check.setData(Qt.ItemDataRole.UserRole, bool(specimen.cached))
+            self.table.setItem(index, RUN_COLUMN, check)
+            for column, value in ((SPECIMEN_COLUMN, name),
+                                  (PREFLIGHT_COLUMN, specimen.error or f'Ready | height {specimen.height:g} mm')):
                 item = QTableWidgetItem(value)
                 item.setToolTip(value)
                 self.table.setItem(index, column, item)
-        self.table.resizeColumnToContents(0)
-        self.table.resizeColumnToContents(1)
+        self.table.resizeColumnToContents(RUN_COLUMN)
+        self.table.resizeColumnToContents(SPECIMEN_COLUMN)
 
-    def edit_selected(self):
-        index = self.table.currentRow()
-        if index < 0 or self.future is not None:
+    def edit_specimen(self, index):
+        if self.future is not None:
             return
         try:
             item = self.items[index]
-            prepared = self.pick_faces(item.source, item.cells)
+            prepared = self.pick_faces(item.source, (item.digest, item.cells))
             if prepared:
                 self.items[index] = prepared
                 self.refresh_table()
-                self.table.item(index, 0).setCheckState(Qt.CheckState.Checked)
                 self.set_busy(False)
+                self.status.setText('Specimen faces saved.')
         except Exception as error:
             self.status.setText(str(error))
 
@@ -330,7 +391,7 @@ class FolderBatchDialog(QDialog):
                 raise ValueError('TRUBA uses the current workspace solver. Choose Current workspace or switch to local execution.')
             snapshots = []
             for index, item in enumerate(self.items):
-                if self.table.item(index, 0).checkState() == Qt.CheckState.Checked:
+                if self.table.item(index, RUN_COLUMN).checkState() == Qt.CheckState.Checked:
                     snapshots.extend(specimen_snapshots(item, self.root, self.base, solvers))
             if not snapshots:
                 raise ValueError('Check at least one ready specimen.')

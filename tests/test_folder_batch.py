@@ -19,10 +19,12 @@ from PySide6.QtWidgets import QAbstractItemView, QApplication, QComboBox, QDialo
 
 from analysis_queue import AnalysisQueueWidget, QueueStore
 from doe_studio import ExperimentWorker
-from folder_batch import (FolderBatchDialog, discover_specimens, prepare_specimen,
+from folder_batch import (FACES_COLUMN, PREFLIGHT_COLUMN, RUN_COLUMN, SPECIMEN_COLUMN,
+                          FolderBatchDialog, discover_specimens, prepare_specimen,
                           source_digest, specimen_snapshots)
 from folder_batch_results import collect_folder_output, run_remote_folder_doe
-from imported_geometry import automatic_compression_faces, compression_direction
+from geometry_import_dialog import GeometryImportDialog
+from imported_geometry import automatic_compression_faces, compression_direction, read_surface
 from window_state import WindowStateStore
 from model import Settings
 
@@ -195,7 +197,7 @@ class FolderBatchTests(unittest.TestCase):
         batch.folder.setText(str(self.root))
         batch.mode.setCurrentIndex(4)
         batch.check_folder()
-        self.assertEqual([batch.table.item(row, 1).text() for row in range(batch.table.rowCount())],
+        self.assertEqual([batch.table.item(row, SPECIMEN_COLUMN).text() for row in range(batch.table.rowCount())],
                          ['nested/other.stl', 'part.STL'])
 
     def test_preflight_diagnostics_and_source_changes(self):
@@ -291,17 +293,100 @@ class FolderBatchTests(unittest.TestCase):
         dialog.folder.setText(str(self.root))
         dialog.mode.setCurrentIndex(4)
         dialog.check_folder()
-        self.assertEqual(dialog.table.item(0, 0).checkState(), Qt.CheckState.Unchecked)
-        self.assertIn('Face selection', dialog.table.item(0, 2).text())
+        self.assertEqual(dialog.table.item(0, RUN_COLUMN).checkState(), Qt.CheckState.Unchecked)
+        self.assertIn('Face selection', dialog.table.item(0, PREFLIGHT_COLUMN).text())
         dialog.items[0] = prepare_specimen(self.root / 'part.stl', (0, 0, 1))
         dialog.refresh_table()
-        self.assertEqual(dialog.table.item(0, 0).checkState(), Qt.CheckState.Checked)
-        dialog.table.item(0, 0).setCheckState(Qt.CheckState.Unchecked)
+        self.assertEqual(dialog.table.item(0, RUN_COLUMN).checkState(), Qt.CheckState.Checked)
+        dialog.table.item(0, RUN_COLUMN).setCheckState(Qt.CheckState.Unchecked)
         dialog.refresh_table()
-        self.assertEqual(dialog.table.item(0, 0).checkState(), Qt.CheckState.Unchecked)
+        self.assertEqual(dialog.table.item(0, RUN_COLUMN).checkState(), Qt.CheckState.Unchecked)
         for button in dialog.findChildren(QPushButton):
             self.assertFalse(button.autoDefault())
             self.assertFalse(button.isDefault())
+
+    def test_row_button_saves_only_its_specimen_and_reuses_faces_after_reopening(self):
+        first = self.specimen('part1.stl')
+        second = self.specimen('part2.stl')
+        _, _, selected = automatic_compression_faces(read_surface(second), (1, 0, 0))
+        batch = self.dialog()
+        batch.folder.setText(str(self.root))
+        batch.mode.setCurrentIndex(4)
+        batch.check_folder()
+        batch.show()
+        self.app.processEvents()
+        batch.table.selectRow(0)
+        button = batch.table.cellWidget(1, FACES_COLUMN)
+        self.assertEqual(button.accessibleDescription(), second.name)
+
+        bounds = []
+
+        def save(editor):
+            editor.show()
+            editor.resize(740, 560)
+            editor.move(50, 65)
+            self.app.processEvents()
+            self.assertIn(second.name, editor.windowTitle())
+            self.assertEqual(editor.confirm.text(), 'Save and close')
+            self.assertFalse(editor.confirm.isEnabled())
+            for role, cell in enumerate(selected):
+                editor.set_role(role)
+                editor.select_cell(cell)
+            self.assertTrue(editor.confirm.isEnabled())
+            with patch('folder_batch.store_surface', side_effect=OSError('Disk unavailable')):
+                QTest.mouseClick(editor.confirm, Qt.MouseButton.LeftButton)
+            self.assertTrue(editor.isVisible())
+            self.assertEqual(editor.status.text(), 'Disk unavailable')
+            self.assertIsNone(batch.saved_faces(second))
+            bounds.append(editor.frameGeometry())
+            QTest.mouseClick(editor.confirm, Qt.MouseButton.LeftButton)
+            return editor.result()
+
+        with patch.object(GeometryImportDialog, 'exec', save):
+            QTest.mouseClick(button, Qt.MouseButton.LeftButton)
+        self.assertFalse(batch.items[0].cached)
+        self.assertEqual(batch.items[1].cells, selected, batch.status.text())
+        self.assertEqual(batch.items[1].height, 4)
+        self.assertIsNone(batch.saved_faces(first))
+        self.assertEqual(batch.saved_faces(second), (source_digest(second), selected))
+        self.assertIs(batch.table.cellWidget(1, FACES_COLUMN), button)
+        self.assertEqual(batch.table.item(1, RUN_COLUMN).checkState(), Qt.CheckState.Checked)
+
+        def cancel(editor):
+            self.assertEqual(tuple(editor.selected), selected)
+            editor.show()
+            self.app.processEvents()
+            self.assertEqual(editor.frameGeometry(), bounds[0])
+            editor.set_role(0)
+            editor.select_cell(selected[1])
+            editor.reject()
+            return editor.result()
+
+        with patch.object(GeometryImportDialog, 'exec', cancel):
+            QTest.mouseClick(button, Qt.MouseButton.LeftButton)
+        self.assertEqual(batch.items[1].cells, selected)
+        self.assertEqual(batch.status.text(), 'Specimen faces saved.')
+        batch.close()
+
+        reopened = self.dialog(batch.queue)
+        reopened.preferences = QSettings(self.store.settings.fileName(), QSettings.Format.IniFormat)
+        reopened.folder.setText(str(self.root))
+        reopened.mode.setCurrentIndex(4)
+        reopened.check_folder()
+        reopened.future.result(timeout=10)
+        reopened.poll()
+        self.assertIsNone(reopened.future)
+        self.assertEqual(reopened.items[1].cells, selected)
+        reopened.enqueue_ready()
+        self.assertEqual(len(reopened.queue.rows), 1)
+        self.assertEqual(reopened.queue.rows[0].design_settings.size, 4)
+
+        self.surface.translate((4, 0, 0), inplace=False).save(second)
+        reopened.check_folder()
+        reopened.future.result(timeout=10)
+        reopened.poll()
+        self.assertFalse(reopened.items[1].cached)
+        self.assertEqual(reopened.items[1].error, 'Face selection required')
 
     def test_async_check_and_enter_never_start_or_enqueue(self):
         dialog = self.dialog()
@@ -318,7 +403,7 @@ class FolderBatchTests(unittest.TestCase):
                 dialog.poll()
             self.assertIsNone(dialog.future)
             self.assertTrue(dialog.items[0].cached)
-            self.assertEqual(dialog.table.item(0, 0).checkState(), Qt.CheckState.Checked)
+            self.assertEqual(dialog.table.item(0, RUN_COLUMN).checkState(), Qt.CheckState.Checked)
             self.assertFalse(dialog.queue.rows)
             process.assert_not_called()
 

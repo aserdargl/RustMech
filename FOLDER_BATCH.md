@@ -12,9 +12,11 @@
    kopyası bu anda alınır. Otomatik mod, her numunenin kendi uç sınırlarında
    düz ve paralel yüzeyler arar. Aynı düzlemdeki birden fazla temas yaması
    birlikte seçilir. Yön bilgisi aktarılır; üçgen kimlikleri aktarılmaz.
-5. **Inspect / select faces...** ile seçili numunenin yüzeylerini inceleyin veya
-   düzeltin. Destek yeşil, yükleme turuncudur. Hazır olmayan numuneler
-   işaretlenmez. Bunları hazırlayın veya çalışmanın dışında bırakın.
+5. Numunenin en solundaki yüzey düğmesiyle 3B görünümü açın. Destek yeşil,
+   yükleme turuncudur. Bir atamayı değiştirmek için rolü seçin, modeldeki
+   yüzeye sağ tıklayın ve **Save and close** düğmesine basın. Kaydedilen
+   atamalar, kaynak dosya değişmediği sürece sonraki ön kontrollerde de
+   kullanılır. Hazır olmayan numuneleri hazırlayın veya çalışmanın dışında bırakın.
 6. Çözücü olarak mevcut çalışma alanını, ANSYS MAPDL, Kratos veya her ikisini
    seçin. Aynı parametreler kullanılır; çözücünün desteklemediği malzeme, temas
    veya eleman seçimi açık hata verir, sessizce değiştirilmez. İçe aktarılan

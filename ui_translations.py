@@ -437,6 +437,12 @@ External compression work (J)|Dış basma işi (J)
 Load|Yükle
 Open|Aç
 Save|Kaydet
+Save and close|Kaydet ve kapat
+Specimen faces|Numune yüzeyleri
+Inspect / select faces|Yüzeyleri incele / seç
+Specimen faces saved.|Numune yüzeyleri kaydedildi.
+Could not save the specimen faces.|Numune yüzeyleri kaydedilemedi.
+Support: green. Compression: orange. Faces validated.|Mesnet: yeşil. Yükleme: turuncu. Yüzeyler doğrulandı.
 Apply|Uygula
 Add|Ekle
 Edit|Düzenle
@@ -461,6 +467,8 @@ No imported geometry|İçe aktarılan geometri yok
 Select support face|Mesnet yüzeyini seç
 Select compression face|Basma yüzeyini seç
 Selecting support face|Mesnet yüzeyi seçiliyor
+Selecting support face (right-click)|Mesnet yüzeyi seçiliyor (sağ tıklayın)
+Selecting compression face (right-click)|Basma yüzeyi seçiliyor (sağ tıklayın)
 Show platens|Plakaları göster
 Orthographic|Ortografik
 Perspective|Perspektif
