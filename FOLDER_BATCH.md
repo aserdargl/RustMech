@@ -13,7 +13,11 @@
    yüzey alanının %1'ini aşmıyorsa küçük bölgeler otomatik ayıklanır.
    Daha büyük bölgeler için kalacak bileşeni elle seçin. Ayıklama analiz
    geometrisine uygulanır ve kaynak dosya korunur. Otomatik mod, numunenin uç sınırlarında
-   düz ve paralel yüzeyler arar. Aynı düzlemdeki birden fazla temas yaması
+   düz ve paralel yüzeyler arar. TPMS ağında dış uçta yaygın bir temas bölgesi
+   hafif dalgalıysa, ön kontrol ilgili köşeleri analiz kopyasında en fazla
+   numune yüksekliğinin %1'i kadar dış düzleme taşıyarak yüzeyi düzleştirir.
+   Numunenin yüksekliği korunur ve işlem ön kontrol sütununda gösterilir.
+   Aynı düzlemdeki birden fazla temas yaması
    birlikte seçilir. Yön bilgisi aktarılır; üçgen kimlikleri aktarılmaz.
 5. Numunenin en solundaki kalem düğmesiyle 3B görünümü açın. **Connected
    components** listesinden kalacak tek katıyı seçebilirsiniz. Mavi bileşen

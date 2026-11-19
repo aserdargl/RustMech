@@ -265,6 +265,52 @@ class FolderBatchTests(unittest.TestCase):
         self.assertEqual(restored.cells, item.cells)
         self.assertEqual(restored.component, item.component)
 
+    def test_automatic_faces_on_padded_tpms_keep_height_and_survive_edit(self):
+        from skimage.measure import marching_cubes
+        from imported_geometry import SurfaceComponents, read_polygonal_surface
+
+        coordinates = np.linspace(0, 4 * np.pi, 41)
+        x, y, z = np.meshgrid(coordinates, coordinates, coordinates, indexing='ij', sparse=True)
+        field = np.abs(np.sin(x) * np.cos(y) + np.sin(y) * np.cos(z) + np.sin(z) * np.cos(x)) - .35
+        points, faces, _, _ = marching_cubes(np.pad(field, 1, constant_values=1), 0, spacing=(.5,) * 3)
+        surface = pv.PolyData(points, np.column_stack((np.full(len(faces), 3), faces)).ravel())
+        path = self.root / 'tpms.stl'
+        surface.merge(pv.Sphere(radius=.08, center=(5, 6, 23))).save(path)
+        digest = source_digest(path)
+        batch = self.dialog()
+        batch.folder.setText(str(self.root))
+        batch.check_folder()
+        batch.future.result(timeout=10)
+        batch.poll()
+        specimen = batch.items[0]
+        self.assertTrue(specimen.cached, specimen.error)
+        self.assertGreater(specimen.excluded_components, 0)
+        self.assertEqual(specimen.normalized_direction, (0, 0, 1))
+        self.assertIn('End faces flattened', batch.table.item(0, PREFLIGHT_COLUMN).text())
+        original = SurfaceComponents(read_polygonal_surface(path)).solid(specimen.component)
+        self.assertAlmostEqual(specimen.height, original.bounds.z_max - original.bounds.z_min)
+        aligned = read_surface(specimen.cached)
+        faces = aligned.faces.reshape(-1, 4)[:, 1:]
+        for role, height in ((1, 0), (2, specimen.height)):
+            contact = faces[aligned.cell_data['compression_face'] == role]
+            self.assertGreater(len(contact), 0)
+            np.testing.assert_allclose(aligned.points[contact, 2], height)
+
+        def save(editor):
+            editor.show()
+            self.app.processEvents()
+            self.assertEqual(tuple(editor.selected), specimen.cells)
+            self.assertTrue(editor.confirm.isEnabled(), editor.status.text())
+            editor.confirm.click()
+            return editor.result()
+
+        with patch.object(GeometryImportDialog, 'exec', save):
+            batch.table.cellWidget(0, FACES_COLUMN).click()
+        self.assertEqual(source_digest(path), digest)
+        restored = prepare_specimen(path, None, batch.saved_faces(path))
+        self.assertEqual(restored.cached, specimen.cached, batch.status.text())
+        self.assertEqual(restored.normalized_direction, (0, 0, 1))
+
     def test_snapshots_keep_loading_units_material_and_unique_output_names(self):
         first, second = self.prepared('a/same.stl'), self.prepared('b/same.stl')
         jobs = [*specimen_snapshots(first, self.root, self.base, ['ansys_mapdl', 'kratos']),

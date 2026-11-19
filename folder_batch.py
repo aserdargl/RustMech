@@ -3,6 +3,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, replace
 from hashlib import sha256
 import json
+from math import isfinite
 import os
 from pathlib import Path
 import re
@@ -15,7 +16,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QApplication, QDialog, QGroupB
 
 from file_dialog import QFileDialog
 from imported_geometry import (SURFACE_EXTENSIONS, SURFACE_FILE_FILTER, SurfaceComponents,
-                               align_compression_surface, automatic_compression_faces,
+                               align_compression_surface, automatic_compression_selection,
                                compression_direction, read_polygonal_surface, store_surface)
 from model import settings_from_dict
 from studio_style import ActionFlowLayout, CompactComboBox, CONTROL_HEIGHT, STUDIO_STYLESHEET
@@ -36,6 +37,7 @@ class PreparedSpecimen:
     error: str = ''
     component: int | None = None
     excluded_components: int = 0
+    normalized_direction: tuple | None = None
 
 
 def discover_specimens(directory):
@@ -87,12 +89,18 @@ def prepare_specimen(path, direction, saved_faces=None):
         surface = components.solid(component)
         item.cells = matching_cells(selection, components, component)
         if item.cells:
+            if len(selection) == 4:
+                surface, _ = automatic_compression_selection(surface, selection[3])
+                item.normalized_direction = selection[3]
             aligned, item.height = align_compression_surface(surface, *item.cells)
             direction = compression_direction(surface, *item.cells)
         elif direction is None:
             raise ValueError('Face selection required')
         else:
-            aligned, item.height, item.cells = automatic_compression_faces(surface, direction)
+            face_surface, item.cells = automatic_compression_selection(surface, direction)
+            if face_surface is not surface:
+                item.normalized_direction = tuple(float(value) for value in direction)
+            aligned, item.height = align_compression_surface(face_surface, *item.cells)
         item.direction = tuple(float(x) for x in direction)
         item.cached = store_surface(aligned)
         if source_digest(path) != item.digest:
@@ -104,7 +112,7 @@ def prepare_specimen(path, direction, saved_faces=None):
 
 
 def selected_component(components, selection):
-    if selection and len(selection) == 3:
+    if selection and len(selection) >= 3 and selection[2] is not None:
         index = selection[2]
         if 0 <= index < components.count:
             return index
@@ -112,7 +120,7 @@ def selected_component(components, selection):
 
 
 def matching_cells(selection, components, component):
-    if selection and (components.count == 1 or len(selection) == 3 and selection[2] == component):
+    if selection and (components.count == 1 or len(selection) >= 3 and selection[2] == component):
         return selection[1]
     return None
 
@@ -144,6 +152,8 @@ def _prepared_snapshots(item, root, base, solvers):
                         destination=str(root / 'Result' / name / 'Mechanical' / solver))
         if item.component is not None:
             metadata.update(kept_component=item.component + 1, excluded_components=item.excluded_components)
+        if item.normalized_direction is not None:
+            metadata['normalized_end_direction'] = list(item.normalized_direction)
         yield snapshot, metadata
 
 
@@ -358,12 +368,22 @@ class FolderBatchDialog(QDialog):
     def saved_faces(self, path):
         value = self.preferences.value(face_assignment_key(path), '')
         try:
-            digest, cells, *component = json.loads(value)
-            if (isinstance(digest, str) and isinstance(cells, list) and len(cells) == 2
-                    and all(type(cell) is int and cell >= 0 for cell in cells)
-                    and (not component or len(component) == 1 and type(component[0]) is int and component[0] >= 0)):
-                return digest, tuple(cells), *component
-        except (TypeError, ValueError):
+            digest, cells, *geometry = json.loads(value)
+            if not (isinstance(digest, str) and isinstance(cells, list) and len(cells) == 2
+                    and all(type(cell) is int and cell >= 0 for cell in cells)):
+                return None
+            if not geometry:
+                return digest, tuple(cells)
+            component, *normalization = geometry
+            if component is not None and (type(component) is not int or component < 0):
+                return None
+            if not normalization:
+                return digest, tuple(cells), component
+            axis, = normalization
+            if (isinstance(axis, list) and len(axis) == 3
+                    and all(type(x) in (int, float) and isfinite(x) for x in axis) and any(axis)):
+                return digest, tuple(cells), component, tuple(axis)
+        except (OverflowError, TypeError, ValueError):
             pass
         return None
 
@@ -393,8 +413,11 @@ class FolderBatchDialog(QDialog):
                 raise ValueError('Source changed during face selection. Check the folder again.')
             key = face_assignment_key(path)
             previous = self.preferences.value(key)
-            kept = [dialog.component_index] if components.count > 1 else []
-            self.preferences.setValue(key, json.dumps([digest, cells, *kept]))
+            kept = dialog.component_index if components.count > 1 else None
+            geometry = [kept] if kept is not None or dialog.normalized_direction is not None else []
+            if dialog.normalized_direction is not None:
+                geometry.append(dialog.normalized_direction)
+            self.preferences.setValue(key, json.dumps([digest, cells, *geometry]))
             self.preferences.sync()
             if self.preferences.status() != QSettings.Status.NoError:
                 if previous is None:
@@ -403,14 +426,16 @@ class FolderBatchDialog(QDialog):
                     self.preferences.setValue(key, previous)
                 raise OSError('Could not save the specimen faces.')
             prepared = PreparedSpecimen(str(path), digest, cached, height, tuple(float(x) for x in axis), cells,
-                                        component=kept[0] if kept else None, excluded_components=components.count - 1)
+                                        component=kept, excluded_components=components.count - 1,
+                                        normalized_direction=dialog.normalized_direction)
 
         cells = matching_cells(selection, components, component)
         initial_cells = cells if cells and all(0 <= cell < surface.n_cells for cell in cells) else ()
         dialog = GeometryImportDialog(surface, Path(path).name, self, save_selection=save_selection,
                                       initial_cells=initial_cells, geometry_error=geometry_error,
                                       components=components if components.count > 1 else None,
-                                      component_index=component, direction=direction)
+                                      component_index=component, direction=direction,
+                                      normalized_direction=selection[3] if initial_cells and len(selection) == 4 else None)
         dialog.setStyleSheet(STUDIO_STYLESHEET)
         try:
             return prepared if dialog.exec() else None
@@ -502,6 +527,8 @@ class FolderBatchDialog(QDialog):
             preflight = specimen.error or f'Ready | height {specimen.height:g} mm'
             if specimen.cached and specimen.excluded_components:
                 preflight += f' | Excluded components: {specimen.excluded_components}'
+            if specimen.cached and specimen.normalized_direction is not None:
+                preflight += ' | End faces flattened'
             for column, value in ((SPECIMEN_COLUMN, name), (PREFLIGHT_COLUMN, preflight)):
                 item = QTableWidgetItem(value)
                 item.setToolTip(value)
@@ -515,8 +542,10 @@ class FolderBatchDialog(QDialog):
         try:
             item = self.items[index]
             selection = (item.digest, item.cells)
-            if item.component is not None:
+            if item.component is not None or item.normalized_direction is not None:
                 selection += (item.component,)
+            if item.normalized_direction is not None:
+                selection += (item.normalized_direction,)
             prepared = self.pick_faces(item.source, selection, self.compression_axis)
             if prepared:
                 self.items[index] = prepared

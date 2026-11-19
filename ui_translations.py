@@ -452,6 +452,7 @@ Connected components|Bağlantılı bileşenler
 Choose one solid to keep. Blue remains, red is excluded.|Kalacak katıyı seçin. Mavi bileşen kalır, kırmızı bileşenler ayıklanır.
 Choose which connected component to keep.|Kalacak bağlantılı bileşeni seçin.
 Multiple substantial components. Choose which solid to keep in Edit.|Birden fazla büyük bileşen var. Düzenle penceresinde kalacak katıyı seçin.
+No planar end face at the specimen boundary; select faces manually or repair the end geometry.|Numune sınırında düz bir uç yüzey bulunamadı. Yüzeyleri elle seçin veya uç geometrisini onarın.
 Component {index}|Bileşen {index}
 Inspect / select faces|Yüzeyleri incele / seç
 Specimen faces saved.|Numune yüzeyleri kaydedildi.
@@ -1118,6 +1119,8 @@ TURKISH.update({
 })
 
 TEMPLATES = {
+    'Ready | height {height} mm | Excluded components: {count} | End faces flattened': 'Hazır | yükseklik {height} mm | Ayıklanan bileşen: {count} | Uç yüzeyler düzleştirildi',
+    'Ready | height {height} mm | End faces flattened': 'Hazır | yükseklik {height} mm | Uç yüzeyler düzleştirildi',
     'Ready | height {height} mm': 'Hazır | yükseklik {height} mm',
     'Ready | height {height} mm | Excluded components: {count}': 'Hazır | yükseklik {height} mm | Ayıklanan bileşen: {count}',
     'Could not build the DAMASK voxel preview: {detail}': 'DAMASK voksel önizlemesi oluşturulamadı: {detail}',

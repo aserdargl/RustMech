@@ -1,5 +1,5 @@
 """Interactive geometry import workspace."""
-from imported_geometry import (align_compression_surface, automatic_compression_faces, plane_faces,
+from imported_geometry import (align_compression_surface, automatic_compression_selection, plane_faces,
                                read_surface, store_surface)
 from pathlib import Path
 from contextlib import nullcontext
@@ -36,7 +36,7 @@ def choose_geometry(parent):
 
 class GeometryImportDialog(QDialog):
     def __init__(self, surface, filename, parent=None, *, save_selection=None, initial_cells=(), geometry_error='',
-                 components=None, component_index=None, direction=None):
+                 components=None, component_index=None, direction=None, normalized_direction=None):
         super().__init__(parent)
         from pyvistaqt import QtInteractor
         from window_state import install_window_state
@@ -55,6 +55,7 @@ class GeometryImportDialog(QDialog):
         self.components = components
         self.component_index = component_index
         self.direction = direction
+        self.normalized_direction = normalized_direction
         self._initial_cells = initial_cells
         self.selected = [None, None]
         self.role = 0
@@ -122,7 +123,7 @@ class GeometryImportDialog(QDialog):
 
     def showEvent(self, event):
         super().showEvent(event)
-        if self._initial_cells or (self.components is not None and self.direction is not None):
+        if self._initial_cells or self.direction is not None or self.normalized_direction is not None:
             # Wait for Qt to show the modal window and its native viewport.
             QTimer.singleShot(0, self, self._restore_faces)
 
@@ -130,11 +131,19 @@ class GeometryImportDialog(QDialog):
         if not self.isVisible():
             return
         cells, self._initial_cells = self._initial_cells, ()
-        if not cells and self.components is not None and self.direction is not None and not self.geometry_error:
+        direction = self.normalized_direction if self.normalized_direction is not None else self.direction
+        if direction is not None and not self.geometry_error and (not cells or self.normalized_direction is not None):
             try:
-                _, _, cells = automatic_compression_faces(self.surface, self.direction)
+                surface, automatic_cells = automatic_compression_selection(self.surface, direction)
             except ValueError as error:
+                self.normalized_direction = None
                 self.status.setText(str(error))
+                return
+            if surface is not self.surface:
+                self.surface = surface
+                self.normalized_direction = tuple(float(value) for value in direction)
+                self.draw_components()
+            cells = cells or automatic_cells
         for role, cell in enumerate(cells):
             self.set_role(role)
             try:
@@ -183,6 +192,7 @@ class GeometryImportDialog(QDialog):
             return
         self.component_index = index
         self._initial_cells = ()
+        self.normalized_direction = None
         self.selected = [None, None]
         self.result_surface = None
         self.confirm.setEnabled(False)
