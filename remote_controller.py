@@ -272,8 +272,13 @@ class RemoteController(QObject):
         self.session_status.setAlignment(Qt.AlignmentFlag.AlignTop)
         window.truba_dialog.language_manager.changed.connect(self.fit_action_buttons)
         self.fit_action_buttons()
-        if not window.truba_dialog.property('preferencesRestored'):
-            window.truba_dialog.resize(680, 760)
+        dialog = window.truba_dialog
+        if not dialog.property('preferencesRestored'):
+            area = dialog.screen().availableGeometry()
+            content = dialog.settings_content.size()
+            dialog.resize(min(content.width() + 48, area.width() - 16),
+                          min(max(760, content.height() + 265), area.height() - 32))
+            dialog.jobs_splitter.setSizes([content.height() + 32, 135])
 
     def fit_action_buttons(self, *_):
         dialog = self.window.truba_dialog

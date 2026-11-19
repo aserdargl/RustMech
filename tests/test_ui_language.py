@@ -195,7 +195,12 @@ class LanguageTests(unittest.TestCase):
             self.app.processEvents()
             self.assertEqual(window.apply_button.text(), 'Analizi çalıştır')
             self.assertEqual(panel.connect_button.text(), 'Bağlan')
-            self.assertEqual([panel.tabs.tabText(i) for i in range(3)], ['Bağlantı', 'Kaynaklar', 'Gelişmiş'])
+            self.assertEqual([panel.tabs.tabText(i) for i in range(panel.tabs.count())],
+                             ['Bağlantı', 'Aktif işler', 'Kuyruk durumu'])
+            self.assertEqual(window.remote_controller.resource_panel.title(), 'CPU, RAM ve kaynak oturumu')
+            advanced = window.remote_controller.advanced_panel
+            self.assertEqual(advanced.title(), 'Gelişmiş · Uzak çalışma ortamı')
+            self.assertTrue(advanced.rect().contains(window.remote_controller.controls['runtime_python'].geometry()))
             panel.password.setFocus()
             QTest.keyClick(panel.password, Qt.Key.Key_Return)
             panel._state_changed('waiting_for_network')

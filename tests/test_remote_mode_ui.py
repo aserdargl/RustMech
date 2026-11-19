@@ -231,7 +231,7 @@ class RemoteModeUiTests(unittest.TestCase):
         from concurrent.futures import Future
         panel = self.window.truba_dialog
         controller = self.controller
-        page = controller.resource_panel.parentWidget().parentWidget()
+        page = panel.settings_scroll
         panel.tabs.setCurrentWidget(page)
         panel.show()
         buttons = (controller.check, controller.prepare, controller.recover, controller.stop)
@@ -240,6 +240,7 @@ class RemoteModeUiTests(unittest.TestCase):
                                             ('tr', controller.prepare, 'prepare')):
             with self.subTest(language=language):
                 panel.language_manager.set_language(language)
+                page.ensureWidgetVisible(button)
                 self.app.processEvents()
                 self.assertIs(panel.tabs.currentWidget(), page)
                 self.assertTrue(page.viewport().rect().contains(
@@ -649,15 +650,17 @@ class RemoteModeUiTests(unittest.TestCase):
         panel = self.window.truba_dialog
         panel.show()
         self.app.processEvents()
-        sections = [panel.settings_layout.itemAt(i).widget()
-                    for i in range(panel.settings_layout.count())] + panel._remote_sections
-        groups = [section for section in sections if isinstance(section, QGroupBox)]
+        groups = [panel.settings_columns.itemAt(i).widget() for i in range(panel.settings_columns.count())]
+        self.assertTrue(all(isinstance(group, QGroupBox) for group in groups))
         self.assertEqual([section.title() for section in groups], [
             'Credentials and password storage',
             'CPU, RAM and resource session', 'Advanced · remote runtime'])
         self.assertEqual([panel.tabs.tabText(i) for i in range(panel.tabs.count())],
-                         ['Connection', 'Resources', 'Advanced', 'Active jobs'])
-        self.assertLess(sections[0].height(), 65)
+                         ['Connection', 'Active jobs', 'Queue status'])
+        self.assertIs(panel.tabs.currentWidget(), panel.settings_scroll)
+        self.assertEqual(len({group.y() for group in groups}), 1)
+        for left, right in zip(groups, groups[1:]):
+            self.assertLess(left.geometry().right(), right.x())
         self.assertIs(panel.connect_button.parentWidget(), panel.username.parentWidget())
         self.assertIs(self.controller.controls['cores'].parentWidget(), self.controller.resource_panel)
         self.assertIs(self.controller.controls['runtime_python'].parentWidget(), self.controller.advanced_panel)
@@ -680,6 +683,12 @@ class RemoteModeUiTests(unittest.TestCase):
         self.controller.update_session_controls()
         self.app.processEvents()
         self.assertEqual(positions(), expected)
+        scroll = panel.settings_scroll
+        self.assertGreater(scroll.horizontalScrollBar().maximum(), 0)
+        runtime_python = self.controller.controls['runtime_python']
+        scroll.ensureWidgetVisible(runtime_python)
+        self.assertTrue(scroll.viewport().rect().contains(
+            runtime_python.mapTo(scroll.viewport(), runtime_python.rect().center())))
 
     def test_only_verified_supported_solvers_and_no_local_fallback(self):
         self.enable(flow=False)

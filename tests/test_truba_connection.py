@@ -704,7 +704,7 @@ class TrubaTests(unittest.TestCase):
         dialog.show()
         self.app.processEvents()
         server = dialog.settings_layout.itemAt(0).widget()
-        account = dialog.settings_layout.itemAt(1).widget()
+        account = dialog.credentials_group
         self.assertLessEqual(server.height(), server.fontMetrics().lineSpacing() + 8)
         self.assertEqual(account.y() - server.geometry().bottom() - 1,
                          dialog.settings_layout.spacing())

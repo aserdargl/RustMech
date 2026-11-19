@@ -4,7 +4,7 @@ from __future__ import annotations
 from PySide6.QtCore import QRectF, QThread, Qt, Signal
 from PySide6.QtGui import QColor, QPainter, QPainterPath
 from PySide6.QtWidgets import (QApplication, QCheckBox, QDialog, QFormLayout, QFrame, QGroupBox, QHBoxLayout,
-                               QLabel, QLineEdit, QMessageBox, QPushButton, QScrollArea, QSplitter,
+                               QLabel, QLayout, QLineEdit, QMessageBox, QPushButton, QScrollArea, QSplitter,
                                QStyle, QStyleOptionTab, QTabBar, QTabWidget, QVBoxLayout, QWidget)
 
 from studio_style import CONTROL_HEIGHT, STUDIO_STYLESHEET
@@ -149,6 +149,8 @@ class TrubaConnectionDialog(QDialog):
         content.setContentsMargins(0, 0, 0, 0)
         content.setSpacing(4)
         self.settings_layout = content
+        self.settings_columns = QHBoxLayout()
+        self.settings_columns.setSpacing(7)
 
         server = QFrame()
         server_layout = QVBoxLayout(server)
@@ -213,12 +215,13 @@ class TrubaConnectionDialog(QDialog):
         buttons.addStretch()
         account_layout.addLayout(buttons)
         account_layout.addWidget(self.status)
-        content.addWidget(account)
+        self.credentials_group = account
+        self.settings_columns.addWidget(account, alignment=Qt.AlignmentFlag.AlignTop)
+        content.addLayout(self.settings_columns)
         # Keep the entire form anchored and unchanged on resize. Smaller
         # viewports scroll instead of squeezing, wrapping or relocating fields.
         self.settings_scroll.setWidget(self.settings_content)
         self._remote_sections = []
-        self._remote_tabs = []
         self.fit_settings_content()
         self.resize(500, 540)
         self.connect_button.clicked.connect(self.start_connection)
@@ -268,19 +271,14 @@ class TrubaConnectionDialog(QDialog):
 
     def install_remote_sections(self, resources, advanced):
         # The runtime controller owns the controls; this dialog owns presentation.
-        for previous in self._remote_tabs:
-            self.tabs.removeTab(self.tabs.indexOf(previous))
+        for previous in self._remote_sections:
+            self.settings_columns.removeWidget(previous)
             previous.hide()
             previous.setParent(self)
-        self._remote_tabs = []
         self._remote_sections = [resources, advanced]
-        for section, title in ((resources, 'Resources'), (advanced, 'Advanced')):
-            scroll = QScrollArea()
-            scroll.setWidgetResizable(False)
-            scroll.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
-            scroll.setWidget(section)
-            self.tabs.insertTab(self.tabs.indexOf(self.active_jobs), scroll, title)
-            self._remote_tabs.append(scroll)
+        for section in self._remote_sections:
+            self.settings_columns.addWidget(section, alignment=Qt.AlignmentFlag.AlignTop)
+            section.show()
         self.fit_settings_content()
 
     def _language_changed(self, *_):
@@ -296,23 +294,17 @@ class TrubaConnectionDialog(QDialog):
         for button in buttons:
             button.setFixedSize(button_width, CONTROL_HEIGHT)
         self.forget_button.setFixedSize(self.forget_button.fontMetrics().horizontalAdvance(self.forget_button.text()) + 24, CONTROL_HEIGHT)
-        width = max(460, self.settings_layout.minimumSize().width())
-        self.settings_content.setFixedWidth(width)
-        for index in range(self.settings_layout.count()):
-            section = self.settings_layout.itemAt(index).widget()
-            section.setFixedWidth(width)
+        for section in (self.credentials_group, *self._remote_sections):
             section.ensurePolished()
-            section.layout().invalidate()
+            for layout in section.findChildren(QLayout):
+                layout.invalidate()
+            width = max(460, section.minimumSizeHint().width())
+            section.setFixedWidth(width)
             height = section.heightForWidth(width)
             section.setFixedHeight(height if height >= 0 else section.sizeHint().height())
+        self.settings_columns.invalidate()
         self.settings_layout.invalidate()
-        self.settings_content.setFixedHeight(self.settings_layout.sizeHint().height())
-        for section in self._remote_sections:
-            # Long advanced paths must not widen the connection form.
-            section.ensurePolished()
-            section.layout().invalidate()
-            section.setFixedWidth(max(width, section.minimumSizeHint().width()))
-            section.setFixedHeight(section.heightForWidth(section.width()) if section.hasHeightForWidth() else section.sizeHint().height())
+        self.settings_content.setFixedSize(self.settings_layout.sizeHint())
 
     def keyPressEvent(self, event):
         if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
