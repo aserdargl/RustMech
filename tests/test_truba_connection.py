@@ -262,6 +262,40 @@ class TrubaTests(unittest.TestCase):
         finally:
             self.app.removeEventFilter(store)
 
+    def test_active_jobs_refresh_button_updates_slurm_queue(self):
+        dialog = self.dialog()
+        tab = dialog.active_jobs
+        dialog.tabs.setCurrentWidget(tab)
+        dialog.show()
+        self.app.processEvents()
+        self.assertFalse(tab.refresh_button.isEnabled())
+
+        with (patch.object(dialog, 'analysis_auth', return_value=RemoteAuth('tester', 'test')),
+              patch('truba_active_jobs.RemoteTransport') as transport):
+            command = transport.return_value.command
+            command.return_value = ''
+            dialog.connection_changed.emit(True)
+            self.assertTrue(tab.worker.wait(5000))
+            self.app.processEvents()
+            self.assertTrue(tab.refresh_button.isEnabled())
+
+            tab.study_name.setFocus()
+            QTest.keyClick(tab.study_name, Qt.Key.Key_Return)
+            command.assert_called_once()
+
+            command.return_value = '1|PENDING|N/A|0:00|8:00:00|New job\n'
+            QTest.mouseClick(tab.refresh_button, Qt.MouseButton.LeftButton)
+            self.assertFalse(tab.refresh_button.isEnabled())
+            tab.refresh_button.click()
+            self.assertTrue(tab.worker.wait(5000))
+            self.app.processEvents()
+            self.assertEqual(command.call_count, 2)
+            self.assertEqual(tab.jobs.item(0, 0).text(), '1')
+            self.assertTrue(tab.refresh_button.isEnabled())
+
+        dialog.connection_changed.emit(False)
+        self.assertFalse(tab.refresh_button.isEnabled())
+
     def test_active_jobs_show_purposes_by_work_and_selected_slurm_times(self):
         dialog = self.dialog()
         tab = dialog.active_jobs

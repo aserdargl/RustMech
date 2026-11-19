@@ -8,9 +8,9 @@ import re
 import shlex
 
 from PySide6.QtCore import QSignalBlocker, QThread, QTimer, Qt
-from PySide6.QtWidgets import (QAbstractItemView, QFormLayout, QHeaderView, QLabel,
-                               QItemDelegate, QLineEdit, QSplitter, QTableWidget, QTableWidgetItem,
-                               QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QAbstractItemView, QFormLayout, QHBoxLayout, QHeaderView,
+                               QItemDelegate, QLabel, QLineEdit, QPushButton, QSplitter,
+                               QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
 
 from esen_jobs import jobs_directory as esen_jobs_directory, read_job as read_esen_job
 from studio_style import CONTROL_HEIGHT
@@ -137,7 +137,16 @@ class TrubaActiveJobs(QWidget):
         self.study_name.setToolTip('Use the same work name to group multiple submissions.')
         form = QFormLayout()
         form.addRow('Work name for new jobs', self.study_name)
-        layout.addLayout(form)
+        self.refresh_button = QPushButton('Refresh')
+        self.refresh_button.setFixedHeight(CONTROL_HEIGHT)
+        self.refresh_button.setStyleSheet('QPushButton { padding: 0 8px; } QPushButton:focus { padding: 0 7px; }')
+        self.refresh_button.setAutoDefault(False)
+        self.refresh_button.setEnabled(False)
+        self.refresh_button.clicked.connect(self.refresh)
+        header_row = QHBoxLayout()
+        header_row.addLayout(form, 1)
+        header_row.addWidget(self.refresh_button)
+        layout.addLayout(header_row)
 
         self.splitter = QSplitter(Qt.Orientation.Horizontal)
         self.splitter.setObjectName('trubaActiveJobsSplitter')
@@ -194,6 +203,7 @@ class TrubaActiveJobs(QWidget):
         super().hideEvent(event)
 
     def connection_changed(self, connected):
+        self.refresh_button.setEnabled(connected and self.worker is None)
         if not connected:
             self.show_groups({})
             self.notice.setText('Connect to TRUBA to see active jobs.')
@@ -208,6 +218,7 @@ class TrubaActiveJobs(QWidget):
             return
         if not self.groups:
             self.notice.setText('Updating active jobs…')
+        self.refresh_button.setEnabled(False)
         self.worker = ActiveJobsWorker(auth, self.dialog.state_dir, self)
         self.worker.finished.connect(self.finish_refresh)
         self.worker.start()
@@ -218,6 +229,7 @@ class TrubaActiveJobs(QWidget):
             return
         worker.deleteLater()
         auth = self.dialog.analysis_auth()
+        self.refresh_button.setEnabled(auth is not None)
         if auth is None:
             return
         if auth.username != worker.username:
