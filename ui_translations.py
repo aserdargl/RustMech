@@ -430,8 +430,10 @@ Mesh / analysis settings|Ağ / Analiz ayarları
 Global mesh size (mm)|Genel ağ boyutu (mm)
 Local mesh size (mm)|Yerel ağ boyutu (mm)
 Mesh Size (mm)|Ağ boyutu (mm)
+Mesh Size|Ağ boyutu
 Global size|Genel boyut
 Local size|Yerel boyut
+Local Size|Yerel boyut
 Element type|Eleman türü
 Element|Eleman
 Elements|Elemanlar

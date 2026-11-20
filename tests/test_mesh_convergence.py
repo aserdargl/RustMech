@@ -349,9 +349,10 @@ class LiveConvergenceTests(unittest.TestCase):
     def test_tetra_local_sizes_scale_without_changing_design(self):
         widget = self.widget(settings=replace(SETTINGS, local_mesh_size=.05))
         self.assertEqual(widget.mesh_type_combo.currentData(), "HEX8")
-        self.assertTrue(widget.local_size_row.isHidden())
-        widget.mesh_type_combo.setCurrentIndex(widget.mesh_type_combo.findData("TET10"))
-        self.assertFalse(widget.local_size_row.isHidden())
+        for mesh_type, enabled in (("HEX8", False), ("TET4", True), ("HEX20", False), ("TET10", True)):
+            widget.mesh_type_combo.setCurrentIndex(widget.mesh_type_combo.findData(mesh_type))
+            self.assertEqual(widget.local_size.isEnabled(), enabled)
+            self.assertAlmostEqual(widget.local_size.value(), .05)
         level = widget.level_settings(.1)
         self.assertEqual(level.mesh_type, "TET10")
         self.assertEqual(level.local_mesh_size, .025)
@@ -363,6 +364,7 @@ class LiveConvergenceTests(unittest.TestCase):
         self.finish(widget)
         self.assertEqual([row.settings.mesh_type for row in widget.rows], ["TET10"] * 3)
         self.assertTrue(widget.mesh_type_combo.isEnabled())
+        self.assertTrue(widget.local_size.isEnabled())
 
     def test_mesh_types_follow_ready_truba_runtime(self):
         widget = self.widget()
@@ -483,18 +485,29 @@ class LiveConvergenceTests(unittest.TestCase):
             self.assertEqual(len(widget.rows), 3)
             self.assertEqual(widget.results.rowCount(), 3)
 
-    def test_controls_share_one_compact_toolbar(self):
+    def test_toolbar_and_bottom_mesh_settings_are_compact(self):
         widget = self.widget()
         widget.resize(1080, 430)
         widget.show()
         self.app.processEvents()
         self.assertEqual(widget.run_button.text(), "Run")
         self.assertLess(widget.toolbar.y(), widget.results.y())
-        for control in (widget.solver_combo, widget.mesh_type_combo, widget.export_button, widget.apply_button,
+        for control in (widget.solver_combo, widget.export_button, widget.apply_button,
                         widget.stop_button, widget.force_stop_button, widget.run_button):
             self.assertIs(control.parentWidget(), widget.toolbar)
-        for control in (widget.start_size, widget.tolerance):
-            self.assertIs(control.parentWidget().parentWidget(), widget.toolbar)
+        self.assertIs(widget.tolerance.parentWidget().parentWidget(), widget.toolbar)
+        layout = widget.layout()
+        self.assertIs(layout.itemAt(layout.count() - 1).widget(), widget.mesh_settings)
+        fields = widget.mesh_settings.layout()
+        for index, (text, control) in enumerate((
+                ("Element", widget.mesh_type_combo), ("Mesh Size", widget.start_size),
+                ("Local Size", widget.local_size))):
+            label = fields.itemAt(2 * index).widget()
+            self.assertEqual(label.text(), text)
+            self.assertIs(label.buddy(), control)
+            self.assertTrue(control.isVisible())
+        self.assertEqual(fields.itemAt(0).widget().x(), fields.contentsMargins().left())
+        self.assertTrue(fields.itemAt(6).spacerItem())
         buttons = (widget.export_button, widget.apply_button, widget.stop_button,
                    widget.force_stop_button, widget.run_button)
         self.assertEqual(len({(button.width(), button.height()) for button in buttons}), 1)

@@ -176,20 +176,8 @@ class MeshConvergenceWidget(QWidget):
                                          Qt.ItemDataRole.ToolTipRole)
         self.solver_combo.setCurrentIndex(max(0, self.solver_combo.findData(settings.solver_backend)))
         controls.addWidget(self.solver_combo)
-        self.mesh_type_combo = CompactComboBox()
-        for mesh_type in MESH_TYPES:
-            self.mesh_type_combo.addItem(mesh_type, mesh_type)
-        self.mesh_type_combo.setCurrentIndex(self.mesh_type_combo.findData(settings.mesh_type))
-        mesh_type_label = QLabel("Element type")
-        mesh_type_label.setBuddy(self.mesh_type_combo)
-        controls.addWidget(mesh_type_label)
-        controls.addWidget(self.mesh_type_combo)
-        self.start_size = self._number(settings.mesh_resolution, 1e-9, 1e6)
         self.tolerance = self._number(2, 0.01, 100)
-        for control in (self.start_size, self.tolerance):
-            control.setFixedWidth(NUMERIC_FIELD_WIDTH - 2)
-        controls.addWidget(QLabel("Starting mesh"))
-        controls.addWidget(stepper_with_unit(self.start_size, "mm"))
+        self.tolerance.setFixedWidth(NUMERIC_FIELD_WIDTH - 2)
         controls.addWidget(QLabel("Tolerance"))
         controls.addWidget(stepper_with_unit(self.tolerance, "%"))
         controls.addStretch(1)
@@ -214,20 +202,6 @@ class MeshConvergenceWidget(QWidget):
         self.apply_button.setEnabled(False)
         self.toolbar_scroll = ConvergenceToolbarScroll(self.toolbar)
         layout.addWidget(self.toolbar_scroll)
-
-        self.local_size = self._number(settings.local_mesh_size, 1e-9, 1e6)
-        self.local_size.setFixedWidth(NUMERIC_FIELD_WIDTH - 2)
-        self.local_size.setToolTip("Starting local size; scales with global size at every level.")
-        self.local_size_row = QWidget()
-        local_layout = QHBoxLayout(self.local_size_row)
-        local_layout.setContentsMargins(6, 0, 6, 0)
-        local_layout.setSpacing(3)
-        local_label = QLabel("Starting local size")
-        local_label.setBuddy(self.local_size)
-        local_layout.addWidget(local_label)
-        local_layout.addWidget(stepper_with_unit(self.local_size, "mm"))
-        local_layout.addStretch(1)
-        layout.addWidget(self.local_size_row)
 
         self.advanced = QWidget()
         self.advanced.setObjectName("convergenceAdvanced")
@@ -343,6 +317,31 @@ class MeshConvergenceWidget(QWidget):
             (self.status.text() + " · " + self.rows[-1].status) if self.rows else self.status.text(),
         ))
         layout.addWidget(self.operation_progress)
+
+        self.mesh_settings = QWidget()
+        mesh_fields = QHBoxLayout(self.mesh_settings)
+        mesh_fields.setContentsMargins(5, 0, 5, 0)
+        mesh_fields.setSpacing(4)
+        self.mesh_type_combo = CompactComboBox()
+        for mesh_type in MESH_TYPES:
+            self.mesh_type_combo.addItem(mesh_type, mesh_type)
+        self.mesh_type_combo.setCurrentIndex(self.mesh_type_combo.findData(settings.mesh_type))
+        element_label = QLabel("Element")
+        element_label.setBuddy(self.mesh_type_combo)
+        mesh_fields.addWidget(element_label)
+        mesh_fields.addWidget(self.mesh_type_combo)
+        self.start_size = self._number(settings.mesh_resolution, 1e-9, 1e6)
+        self.local_size = self._number(settings.local_mesh_size, 1e-9, 1e6)
+        self.local_size.setToolTip("Starting local size; scales with global size at every level.")
+        for text, control in (("Mesh Size", self.start_size), ("Local Size", self.local_size)):
+            control.setFixedWidth(NUMERIC_FIELD_WIDTH - 2)
+            label = QLabel(text)
+            label.setBuddy(control)
+            mesh_fields.addWidget(label)
+            mesh_fields.addWidget(stepper_with_unit(control, "mm"))
+        mesh_fields.addStretch(1)
+        layout.addWidget(self.mesh_settings)
+
         self.solver_combo.currentIndexChanged.connect(self._solver_changed)
         self.mesh_type_combo.currentIndexChanged.connect(self._mesh_type_changed)
         if self.remote_controller is not None: self.remote_controller.changed.connect(self._solver_changed)
@@ -442,7 +441,7 @@ class MeshConvergenceWidget(QWidget):
                                    capabilities.unavailable_reason)
 
     def _mesh_type_changed(self):
-        self.local_size_row.setVisible(self.mesh_type_combo.currentData() in TETRAHEDRAL_MESH_TYPES)
+        self.local_size.setEnabled(self.mesh_type_combo.currentData() in TETRAHEDRAL_MESH_TYPES)
         self.run_button.setEnabled(
             self.future is None and self._mesh_type_supported() and self._execution_available())
 
@@ -522,8 +521,7 @@ class MeshConvergenceWidget(QWidget):
             self.timer.start()
 
     def _set_running(self, running):
-        for control in (self.start_size, self.local_size_row, self.tolerance,
-                        self.advanced, self.solver_combo, self.mesh_type_combo):
+        for control in (self.mesh_settings, self.tolerance, self.advanced, self.solver_combo):
             control.setEnabled(not running)
         if running:
             self.run_button.setEnabled(False)
