@@ -294,7 +294,10 @@ def _run_operation(request,output):
         return dict(run_folder=summary["run_folder"],summary=summary)
     if operation=="convergence_level":
         from convergence_execution import solve_level
-        level = solve_level(settings,generate_volume_mesh,batch,max_elements=request["max_elements"],selected=request["selected"])
+        _stage('Meshing specimen')
+        level = solve_level(settings, generate_volume_mesh, batch,
+                            publish=lambda level: _stage(f'Solving · {level.elements:,} elements'),
+                            max_elements=request["max_elements"], selected=request["selected"])
         return dict(level=asdict(level))
     if operation in ("doe_mesh","doe_solve"):
         _stage('Meshing specimen' if operation == 'doe_mesh' else 'Meshing and solving DoE specimen')

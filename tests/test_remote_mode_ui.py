@@ -869,7 +869,7 @@ class RemoteModeUiTests(unittest.TestCase):
         connect.assert_not_called()
         self.assertTrue(self.controller.toggle.isChecked())
         self.assertEqual(self.window.execution_target.currentData(), "truba")
-        self.assertFalse(study.run_button.isEnabled())
+        self.assertTrue(study.run_button.isEnabled())
 
         with patch.object(study, "future", object()):
             study.run_on_truba.click()
@@ -881,6 +881,43 @@ class RemoteModeUiTests(unittest.TestCase):
         self.assertTrue(study.run_button.isEnabled())
         dialog.reject()
         self.assertIsNone(self.window._mesh_convergence_dialog)
+
+    def test_convergence_submits_directly_and_shows_per_job_state_without_allocation(self):
+        self.window.open_mesh_convergence()
+        dialog = self.window._mesh_convergence_dialog
+        study = dialog.study
+        study.start_size.setValue(.2)
+        study.run_on_truba.click()
+        self.assertFalse(self.controller.ready)
+        self.assertIsNone(self.controller.session)
+        self.assertEqual(study.solver_combo.currentData(), "kratos")
+        jobs = [MagicMock() for _ in range(5)]
+        for index, job in enumerate(jobs):
+            job.done.return_value = False
+            job.remote_status.return_value = {"job_id": str(470 + index), "state": "PENDING|Resources",
+                                              "script_name": f"RM-{index}.slurm", "remote_directory": f"/scratch/{index}"}
+        with patch("mesh_convergence.AnalysisProcess", side_effect=jobs) as submit, \
+                patch("remote_controller.create_session") as allocate:
+            study.run_button.click()
+            allocate.assert_not_called()
+        self.assertEqual(submit.call_count, 5)
+        self.assertTrue(all(call.args[0] is run_remote_level and not call.args[2].session_id
+                            for call in submit.call_args_list))
+        self.assertEqual(study.results.rowCount(), 5)
+        self.assertIn("preparing submission", study.results.item(0, 7).text())
+        study._poll()
+        for index in range(5):
+            self.assertEqual(study.results.item(index, 8).text(), str(470 + index))
+            self.assertEqual(study.results.item(index, 9).text(), f"RM-{index}.slurm")
+            self.assertIn(f"/scratch/{index}/RM-{index}.slurm", study.results.item(index, 9).toolTip())
+            self.assertEqual(study.results.item(index, 10).text(), "PENDING|Resources")
+        jobs[3].remote_status.return_value["state"] = "RUNNING"
+        study._poll()
+        self.assertEqual(study.results.item(3, 10).text(), "RUNNING")
+        study.force_stop()
+        self.assertEqual(study.results.item(3, 7).text(), "Cancelled (Forced Stop)")
+        self.assertEqual(study.results.item(3, 8).text(), "473")
+        dialog.reject()
 
     def test_convergence_and_doe_do_not_call_local_mesh_generator(self):
         from mesh_convergence import MeshConvergenceDialog

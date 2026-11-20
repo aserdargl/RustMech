@@ -300,13 +300,13 @@ class RemoteController(QObject):
         if not self.session_watch or not self.session.get("ready"): return False
         return self.capabilities is not None and bool(self.capabilities.get("mesh"))
 
-    def context(self):
+    def context(self, *, use_session=True):
         if self.controls['partition'].currentData() == 'auto' and not (self.session and self.session.get('state') not in ('released', 'ended')):
             self.apply_queue_limits()
         values = {key:control.currentData() if key == 'partition' else control.value() if key in ('cores', 'gpus', 'memory_mb', 'parallel_jobs') else control.text().strip() for key,control in self.controls.items()}
         values['auto_renew'] = self.auto_renew.isChecked()
         values['memory_mb'] = round(values['memory_mb'] * 1024)
-        active = self.session and (self.session.get("state") not in ("released","ended") or
+        active = use_session and self.session and (self.session.get("state") not in ("released","ended") or
                                    self.session.get("state") == "ended" and self.session.get("job_id"))
         if active and 'context' in self.session:
             values.update({key: self.session['context'].get(key, values[key]) for key in values})
@@ -774,6 +774,20 @@ class RemoteController(QObject):
     def require(self,capability,settings=None, *, allow_handover=False):
         return self._require(capability, settings, allow_handover=allow_handover)
 
+    def require_convergence(self, settings):
+        """Validate the resource request for an independent Slurm submission."""
+        if self.closing:
+            raise RuntimeError("RustMech is closing.")
+        if not self.requested or not self.convergence_solver_enabled(settings.solver_backend):
+            raise ValueError("Select Kratos and enable TRUBA for mesh convergence.")
+        context = self.context(use_session=False)
+        if context.gpus:
+            raise ValueError("Mesh convergence requires a CPU queue on TRUBA.")
+        candidates(context.partition, context.cores, context.memory_mb, context.walltime, self.queue_catalog)
+        self._validate_kratos_request(replace(settings, cores=min(settings.cores, context.cores)), context)
+        study_name = self.window.truba_dialog.active_jobs.study_name.text().strip()
+        return replace(context, study_name=study_name), self.auth()
+
     def require_batch_queue(self, partition, settings):
         return self._require(settings.solver_backend, settings, partition=partition)
 
@@ -813,29 +827,38 @@ class RemoteController(QObject):
         if settings is not None and capability=="kratos":
             if settings.cores > context.cores:
                 raise RuntimeError("Solver CPU count exceeds the TRUBA allocation. Increase remote CPU cores or reduce solver cores.")
-            from solver_api import KRATOS_CAPABILITIES
-            effective=replace(settings,truba_partition=context.partition,truba_account=context.account,
-                              truba_walltime=context.walltime,truba_memory_mb=context.memory_mb)
-            errors=KRATOS_CAPABILITIES.validate(effective)
-            if errors: raise RuntimeError("\n".join(errors))
+            self._validate_kratos_request(settings, context)
         study_name = self.window.truba_dialog.active_jobs.study_name.text().strip()
         return replace(context, study_name=study_name), self.auth()
+
+    @staticmethod
+    def _validate_kratos_request(settings, context):
+        from solver_api import KRATOS_CAPABILITIES
+        effective = replace(settings, truba_partition=context.partition, truba_account=context.account,
+                            truba_walltime=context.walltime, truba_memory_mb=context.memory_mb)
+        errors = KRATOS_CAPABILITIES.validate(effective)
+        if errors:
+            raise RuntimeError("\n".join(errors))
 
     def solver_enabled(self,identifier):
         return self.ready and bool(self.capabilities.get(identifier))
 
-    def apply_solver_combo(self,combo):
+    def convergence_solver_enabled(self, identifier):
+        return identifier == "kratos" and (not self.ready or self.solver_enabled(identifier))
+
+    def apply_solver_combo(self,combo, *, allow_direct_convergence=False):
         from solver_api import get_solver_capabilities,SOLVER_REGISTRY
+        remote_enabled = self.convergence_solver_enabled if allow_direct_convergence else self.solver_enabled
         for i in range(combo.count()):
             identifier = combo.itemData(i)
             capabilities = get_solver_capabilities(identifier) if identifier in SOLVER_REGISTRY else None
-            enabled = self.solver_enabled(identifier) if self.requested else capabilities.implemented if capabilities is not None else combo.model().item(i).isEnabled()
+            enabled = remote_enabled(identifier) if self.requested else capabilities.implemented if capabilities is not None else combo.model().item(i).isEnabled()
             combo.model().item(i).setEnabled(enabled)
             if self.requested and not enabled:
                 combo.setItemData(i,(self.capabilities or {}).get("reasons",{}).get(identifier,"Not verified as available/supported on TRUBA."),Qt.ItemDataRole.ToolTipRole)
             elif capabilities is not None:
                 combo.setItemData(i,capabilities.unavailable_reason or capabilities.display_name,Qt.ItemDataRole.ToolTipRole)
-        if self.requested and not self.solver_enabled(combo.currentData()):
+        if self.requested and not remote_enabled(combo.currentData()):
             for i in range(combo.count()):
                 if combo.model().item(i).isEnabled():
                     combo.setCurrentIndex(i)

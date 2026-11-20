@@ -30,8 +30,9 @@ from mesh_convergence_style import CONVERGENCE_STYLESHEET
 from studio_style import (CONTROL_HEIGHT, NUMERIC_FIELD_WIDTH, STUDIO_STYLESHEET, CompactDoubleSpinBox,
                           configure_form, mesh_precision_stepper, stepper_with_unit)
 
+REMOTE_RESULT_HEADERS = ("Slurm job ID", "Slurm script", "Slurm state")
 RESULT_HEADERS = ("Mesh / elements", "Mesh (s)", "Solve (s)", "Force (N)",
-                  "Modulus (MPa)", "SEA (J/g)", "Max Δ / ref.", "Status")
+                  "Modulus (MPa)", "SEA (J/g)", "Max Δ / ref.", "Status", *REMOTE_RESULT_HEADERS)
 MAX_FAILURE_RETRIES = 3
 TRUBA_BATCH_SIZE = 5
 TIME_UNITS = (
@@ -169,6 +170,7 @@ class MeshConvergenceWidget(QWidget):
         self.future = None
         self.remote_jobs = {}
         self.remote_outcomes = {}
+        self.remote_records = {}
         self.rows = []
         self.time_units = {1: "s", 2: "s"}
         self.recommended = None
@@ -201,8 +203,8 @@ class MeshConvergenceWidget(QWidget):
         controls.addWidget(stepper_with_unit(self.tolerance, "%"))
         self.run_on_truba = QCheckBox("Run on TRUBA")
         self.run_on_truba.setToolTip(
-            "Shared execution mode. TRUBA requires a ready resource session in the TRUBA panel. "
-            f"Each batch can run up to {TRUBA_BATCH_SIZE} mesh levels within the allocation. "
+            f"Submits up to {TRUBA_BATCH_SIZE} mesh levels per batch as separate Slurm jobs. "
+            "A resource session is optional. "
             "If the solver changes for TRUBA, the study uses that solver's main workspace profile.")
         controls.addWidget(self.run_on_truba)
         self.run_on_truba.setVisible(self.remote_controller is not None)
@@ -306,8 +308,9 @@ class MeshConvergenceWidget(QWidget):
         header.setMinimumSectionSize(50)
         header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         header.setStretchLastSection(True)
-        for column, width in enumerate((230, 70, 70, 95, 115, 90, 115, 160)):
+        for column, width in enumerate((230, 70, 70, 95, 115, 90, 115, 160, 90, 155, 195)):
             self.results.setColumnWidth(column, width)
+        self._show_remote_columns(False)
         for column in (3, 4, 5):
             self.results.horizontalHeaderItem(column).setToolTip(METRICS[column - 3][0])
         self.results.horizontalHeaderItem(6).setToolTip(
@@ -461,6 +464,11 @@ class MeshConvergenceWidget(QWidget):
     def _sync_execution_target(self):
         with QSignalBlocker(self.run_on_truba):
             self.run_on_truba.setChecked(self.remote_controller.requested)
+        self._show_remote_columns(self.run_on_truba.isChecked() or bool(self.remote_records))
+
+    def _show_remote_columns(self, visible):
+        for column in range(len(RESULT_HEADERS) - len(REMOTE_RESULT_HEADERS), len(RESULT_HEADERS)):
+            self.results.setColumnHidden(column, not visible)
 
     def _solver_changed(self):
         if not self.solver_combo.isEnabled():
@@ -471,20 +479,22 @@ class MeshConvergenceWidget(QWidget):
             if remote.requested and not self.local_solver_before_truba:
                 self.local_solver_before_truba = self.solver_combo.currentData()
             self._sync_execution_target()
-            remote.apply_solver_combo(self.solver_combo)
+            remote.apply_solver_combo(self.solver_combo, allow_direct_convergence=True)
             if not remote.requested and self.local_solver_before_truba:
                 previous_solver = self.local_solver_before_truba
                 self.local_solver_before_truba = None
                 self.solver_combo.setCurrentIndex(self.solver_combo.findData(previous_solver))
             if remote.requested and self.solver_combo.currentData() != self.settings.solver_backend:
                 active = remote.window.collect()
-                if active.solver_backend == self.solver_combo.currentData():
-                    self.level_base_settings = replace(
-                        active, loading_mode=self.settings.loading_mode,
-                        compression=self.settings.compression, applied_force=self.settings.applied_force,
-                        substeps=self.settings.substeps, minimum_substeps=self.settings.minimum_substeps,
-                        maximum_substeps=self.settings.maximum_substeps,
-                    )
+                solver = self.solver_combo.currentData()
+                if active.solver_backend != solver:
+                    active = remote.window.solver_profile_store.load(solver, self.settings)
+                self.level_base_settings = replace(
+                    active, loading_mode=self.settings.loading_mode,
+                    compression=self.settings.compression, applied_force=self.settings.applied_force,
+                    substeps=self.settings.substeps, minimum_substeps=self.settings.minimum_substeps,
+                    maximum_substeps=self.settings.maximum_substeps,
+                )
         capabilities = get_solver_capabilities(self.solver_combo.currentData())
         self.solver_combo.setToolTip(capabilities.display_name if capabilities.implemented else
                                     capabilities.unavailable_reason)
@@ -503,7 +513,7 @@ class MeshConvergenceWidget(QWidget):
                 (i for i, mesh_type in enumerate(MESH_TYPES) if mesh_type in mesh_types), -1))
         self._mesh_type_changed()
         if self.run_on_truba.isChecked() and not remote.ready:
-            hint = "Prepare the resource session in the TRUBA panel before running."
+            hint = "Run submits mesh levels directly to the TRUBA queue."
             if not self.rows:
                 self._set_status(f"TRUBA · {hint}")
             self.run_button.setToolTip(hint)
@@ -529,7 +539,7 @@ class MeshConvergenceWidget(QWidget):
 
     def _execution_available(self):
         if self.run_on_truba.isChecked():
-            return self.remote_controller.solver_enabled(self.solver_combo.currentData())
+            return self.remote_controller.convergence_solver_enabled(self.solver_combo.currentData())
         return get_solver_capabilities(self.solver_combo.currentData()).implemented
 
     def _number(self, value, low, high):
@@ -589,6 +599,8 @@ class MeshConvergenceWidget(QWidget):
             QMessageBox.warning(self, "Invalid convergence plan", str(exc))
             return
         self.rows.clear()
+        self.remote_records.clear()
+        self._show_remote_columns(self.run_on_truba.isChecked())
         self.recommended = None
         self.consecutive_failures = 0
         self.results.setRowCount(0)
@@ -640,12 +652,13 @@ class MeshConvergenceWidget(QWidget):
         from truba_remote import run_remote_level
 
         try:
-            context, auth = self.remote_controller.require(settings.solver_backend, settings)
+            context, auth = self.remote_controller.require_convergence(settings)
         except Exception as exc:
-            self._finish(f"Failed to start convergence: {exc}")
+            message = f"Failed to start convergence: {exc}"
+            self._add_level(settings, kind, message)
+            self._finish(message)
             return
-        limit = min(TRUBA_BATCH_SIZE, context.cores, context.memory_mb,
-                    self.max_levels.value() - len(self.rows))
+        limit = min(TRUBA_BATCH_SIZE, self.max_levels.value() - len(self.rows))
         plan = [(settings, kind)]
         if self.automatic.isChecked():
             attempted = [row.settings.mesh_resolution for row in self.rows]
@@ -664,18 +677,18 @@ class MeshConvergenceWidget(QWidget):
             while len(plan) < limit and self.manual_pending and self.manual_pending[0].mesh_resolution >= self.minimum.value():
                 plan.append((self.manual_pending.pop(0), "Manual"))
 
-        context = replace(context, parallel_jobs=len(plan))
-        for level_settings, level_kind in plan:
-            index = self._add_level(level_settings, level_kind, "TRUBA job")
+        context = replace(context, session_id="", parallel_jobs=1)
+        indices = [self._add_level(settings, kind, "TRUBA · preparing submission")
+                   for settings, kind in plan]
+        for index in indices:
             try:
                 self.remote_jobs[index] = AnalysisProcess(
-                    run_remote_level, level_settings, context, self.max_elements.value(), self.selected,
+                    run_remote_level, self.rows[index].settings, context, self.max_elements.value(), self.selected,
                     remote_auth=auth)
             except Exception as exc:
                 self.rows[index].status = f"Failed to start convergence: {exc}"
                 self.remote_outcomes[index] = False
                 self._render(index)
-                break
         self.future = next(iter(self.remote_jobs.values()), None)
         if self.future is None:
             self.remote_outcomes.clear()
@@ -700,6 +713,9 @@ class MeshConvergenceWidget(QWidget):
         if self.remote_jobs:
             errors = []
             for index, job in list(self.remote_jobs.items()):
+                record = job.remote_status()
+                if isinstance(record, dict) and record:
+                    self.remote_records[index] = dict(record)
                 try:
                     job.force_stop()
                 except Exception as exc:
@@ -763,9 +779,20 @@ class MeshConvergenceWidget(QWidget):
                 f"{label}: {f'{v:.2f}%' if v is not None else '—'} · #{level.reference + 1}"
                 for label, v in zip(("Displacement" if level.settings.loading_mode == "force" else "Force", "Modulus", "SEA"), level.differences)
             )
+        record = self.remote_records.get(index, {})
+        remote_values = self._remote_values(record)
+        script = record.get("script_name")
+        script_paths = "\n".join(f"{record[field]}/{script}" for field in
+                                 ("local_directory", "remote_directory") if record.get(field) and script)
+        resources = record.get("context", {})
+        if script_paths and resources.get("cores"):
+            script_paths += (f"\nRequested CPUs: {resources['cores']} · Solver CPUs: {record.get('solver_cores') or '—'}"
+                             f"\nRAM: {resources['memory_mb'] / 1024:g} GiB · Time: {resources['walltime']}"
+                             f"\nQueue request: {resources['partition']}")
         values = [mesh, self._format_time(mesh_time, 1), self._format_time(solve_time, 2),
                   *[f"{float(v):.6g}" if self._numeric(v) else "—" for v in level.metrics],
-                  delta, level.status]
+                  delta, level.status, *(value or "—" for value in remote_values)]
+        tooltips = {6: delta_hint, 8: values[8], 9: script_paths or values[9], 10: values[10]}
         for col, value in enumerate(values):
             item = QTableWidgetItem(value)
             detail = f"{level.kind}\n{level.status}\n{level.folder}"
@@ -776,7 +803,7 @@ class MeshConvergenceWidget(QWidget):
                 detail += f"\nFinal force: {level.final_force:.6g} N; displacement: {level.final_strain * level.settings.size / 100:.6g} mm"
             if col == 0 and level.settings.mesh_type in TETRAHEDRAL_MESH_TYPES:
                 detail += f"\nLocal mesh: {level.settings.local_mesh_size:.6g} mm"
-            item.setToolTip(delta_hint if col == 6 else detail)
+            item.setToolTip(tooltips.get(col, detail))
             item.setTextAlignment(Qt.AlignmentFlag.AlignVCenter |
                                   (Qt.AlignmentFlag.AlignRight if 1 <= col <= 5
                                    else Qt.AlignmentFlag.AlignLeft))
@@ -811,17 +838,30 @@ class MeshConvergenceWidget(QWidget):
         self._close_updates()
         self._after_levels([(index, retry_allowed)])
 
+    @staticmethod
+    def _remote_values(record):
+        return (str(record.get("job_id", "")), record.get("script_name", ""),
+                record.get("slurm_status") or record.get("step_status") or record.get("state", ""))
+
     def _poll_remote_batch(self):
         for index, job in list(self.remote_jobs.items()):
+            previous = self.remote_records.get(index, {})
+            snapshot = job.remote_status()
+            record = dict(snapshot) if isinstance(snapshot, dict) and snapshot else previous
+            self.remote_records[index] = record
             if job.done():
-                self.remote_outcomes[index] = self._collect_level(index, job, job.remote_status() or {})
+                self.remote_outcomes[index] = self._collect_level(index, job, record)
                 del self.remote_jobs[index]
                 self._render(index)
+            elif record:
+                status = f"TRUBA · {record.get('state', 'preparing submission')}"
+                if self.rows[index].status != status or record != previous:
+                    self.rows[index].status = status
+                    self._render(index)
         self.future = next(iter(self.remote_jobs.values()), None)
         if self.future is not None:
             if not self.stop_requested.is_set():
-                record = self.future.remote_status() or {}
-                self._set_status(f"TRUBA · {len(self.remote_jobs)} active · {record.get('state', 'preparing')}")
+                self._set_status(f"TRUBA · {len(self.remote_jobs)} analyses active")
             return
         outcomes = sorted(self.remote_outcomes.items())
         self.remote_outcomes.clear()
@@ -933,14 +973,18 @@ class MeshConvergenceWidget(QWidget):
                                  "Solve (s)", *(v[0] for v in response_metrics(self.rows[0].settings)), "Reference level",
                                  "Displacement difference (%)" if self.rows[0].settings.loading_mode == "force" else "Force difference (%)",
                                  "Modulus difference (%)", "SEA difference (%)",
-                                 "Final strain (%)", "Status", "Run folder", "Final force (N)", *ANALYSIS_FIELDS))
+                                 "Final strain (%)", "Status", "Run folder", "Final force (N)", *ANALYSIS_FIELDS,
+                                 *REMOTE_RESULT_HEADERS, "TRUBA job folder", "Requested CPUs", "Solver CPUs"))
                 for i, v in enumerate(self.rows):
+                    record = self.remote_records.get(i, {})
                     writer.writerow((i + 1, v.kind, v.settings.mesh_resolution,
                                      v.settings.local_mesh_size if v.settings.mesh_type in TETRAHEDRAL_MESH_TYPES else "",
                                      v.elements, v.mesh_seconds, v.solve_seconds, *v.metrics,
                                      v.reference + 1 if v.reference is not None else "",
                                      *(v.differences or [None] * 3), v.final_strain, v.status, v.folder,
-                                     v.final_force, *(getattr(v.settings, name) for name in ANALYSIS_FIELDS)))
+                                     v.final_force, *(getattr(v.settings, name) for name in ANALYSIS_FIELDS),
+                                     *self._remote_values(record), record.get("remote_directory", ""),
+                                     record.get("context", {}).get("cores", ""), record.get("solver_cores", "")))
         except OSError as exc:
             QMessageBox.warning(self, "Export failed", str(exc))
 

@@ -220,8 +220,8 @@ def slurm_script(context,username,request):
     foam_load = "module load "+shlex.quote(context.foam_module)+" >/dev/null 2>&1 || true" if context.foam_module and needs_foam else ":"
     step_cores, _ = request_resources(context, request['operation'])
     job_name = "RustMech-remote"
-    if request.get("background"):
-        job_name = analysis_code(request)
+    if request.get("background") or request["operation"] == "convergence_level":
+        job_name = analysis_code(request) or job_name
     return f'''#!/bin/bash -l
 #SBATCH --job-name={job_name}
 #SBATCH --partition={partition}
@@ -270,8 +270,9 @@ def _write_paths(paths,record):
 
 
 def request_resources(context, operation):
-    slots = min(context.parallel_jobs, context.cores, context.memory_mb) if operation in (
-        'doe_mesh', 'doe_solve', 'convergence_level') else 1
+    shared = operation in ('doe_mesh', 'doe_solve') or (
+        operation == 'convergence_level' and context.session_id)
+    slots = min(context.parallel_jobs, context.cores, context.memory_mb) if shared else 1
     return max(1, context.cores // slots), max(1, context.memory_mb // slots)
 
 
@@ -380,17 +381,24 @@ def run_remote_job(request,context,auth=None,marker=None,*,directory=None,resume
             record["state"] = stage
             _write_paths(paths,record)
         if on_progress: on_progress("TRUBA · "+stage)
+    code = analysis_code(record)
+    script_name = (f"{code}.slurm" if record.get('operation') == 'convergence_level'
+                   and not context.session_id and code else 'run.slurm')
     try:
         if not poll_once and (not resume_record or not record.get("job_id")):
             if resume_record: request = json.loads((directory/"request.json").read_text())
-            (directory/"run.slurm").write_text(slurm_script(context,transport.username,request),encoding="utf-8",newline="\n")
+            (directory/script_name).write_text(slurm_script(context,transport.username,request),encoding="utf-8",newline="\n")
+            if record.get('operation') == 'convergence_level':
+                record['script_name'] = script_name
+                record['solver_cores'] = request.get('settings', {}).get('cores')
+                _write_paths(paths, record)
             remote_path = shlex.quote(remote)
             setup = _batch_results_setup(request.get('staged_geometry'))
             command = "mkdir -p -- " + remote_path
             if setup:
                 command = f"set -e\n{command}\ncd {remote_path}\n{setup}"
             transport.command(command)
-            for name in ("engine.tar.gz","request.json","run.slurm"): transport.put(directory/name,remote+"/"+name)
+            for name in ("engine.tar.gz","request.json",script_name): transport.put(directory/name,remote+"/"+name)
         if is_cancelled():
             if poll_once:
                 return None
@@ -400,7 +408,7 @@ def run_remote_job(request,context,auth=None,marker=None,*,directory=None,resume
         script = "cd "+shlex.quote(remote)+''' && test ! -e cancel.request && {
 if [ ! -s job.id ]; then
  if mkdir submission.lock 2>/dev/null; then
-  job=$(sbatch --parsable run.slurm); job=${job%%;*}
+  job=$(sbatch --parsable '''+shlex.quote(script_name)+'''); job=${job%%;*}
   [[ "$job" =~ ^[0-9]+$ ]] || exit 2
   printf '%s\n' "$job" > job.id
  else
@@ -480,13 +488,16 @@ if [ -s job.id ]; then printf 'RUSTMECH_JOB_ID=%s\n' "$(cat job.id)"; fi
                     break
             else:
                 from truba_session import QUEUE_FUNCTION
-                reply = transport.command(QUEUE_FUNCTION +
-                    f"printf 'RUSTMECH_QUEUE='; rustmech_queue {record['job_id']} '%T|%r'")
+                queue_command = f"printf 'RUSTMECH_QUEUE='; rustmech_queue {record['job_id']} '%T|%r'"
+                if record.get('operation') == 'convergence_level':
+                    queue_command += ("\nprintf '\\nRUSTMECH_PROGRESS='; head -c 500 "
+                                      + shlex.quote(remote + '/progress.txt') + ' 2>/dev/null || true')
+                reply = transport.command(QUEUE_FUNCTION + queue_command)
             state = re.search(r"^RUSTMECH_QUEUE=(.*)$",reply,re.MULTILINE)
             if state is None: raise RuntimeError("Could not read the SLURM queue state; resume the job record.")
             value = state.group(1).strip()
             queue_state = value.partition("|")[0].rstrip("+")
-            if not value or (poll_once and queue_state in SLURM_TERMINAL_STATES):
+            if not value or ((poll_once or not record.get('session')) and queue_state in SLURM_TERMINAL_STATES):
                 if record.get("session"):
                     if poll_once:
                         update('FAILED|Resource session ended before this analysis completed')
@@ -498,6 +509,10 @@ if [ -s job.id ]; then printf 'RUSTMECH_JOB_ID=%s\n' "$(cat job.id)"; fi
                 progress = re.search(r'^RUSTMECH_PROGRESS=(.*)$', reply, re.MULTILINE)
                 if step and step[1] == 'RUNNING' and progress and progress[1].strip():
                     value += ' · ' + progress[1].strip()
+            elif queue_state == 'RUNNING' and record.get('operation') == 'convergence_level':
+                progress = re.search(r'^RUSTMECH_PROGRESS=(.*)$', reply, re.MULTILINE)
+                if progress and progress[1].strip():
+                    value = f"{value} · {progress[1].strip()}"
             if value!=record["state"]: update(value)
             if poll_once:
                 return None

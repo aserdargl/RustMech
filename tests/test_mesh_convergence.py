@@ -419,7 +419,7 @@ class LiveConvergenceTests(unittest.TestCase):
         self.assertEqual(widget.mesh_type_combo.currentData(), "TET4")
         self.assertFalse(widget.mesh_type_combo.model().item(widget.mesh_type_combo.findData("HEX8")).isEnabled())
         with patch("mesh_convergence.AnalysisProcess") as process:
-            widget.remote_controller.require.return_value = (RemoteContext(), object())
+            widget.remote_controller.require_convergence.return_value = (RemoteContext(session_id="321"), object())
             widget.start()
             self.assertEqual(process.call_args.args[1].mesh_type, "TET4")
             widget.force_stop()
@@ -430,12 +430,13 @@ class LiveConvergenceTests(unittest.TestCase):
                 widget = self.widget()
                 widget.remote_controller = MagicMock(requested=True, ready=True,
                                                      capabilities={"mesh_types": ["TET4"]})
-                widget.remote_controller.require.return_value = (RemoteContext(), object())
+                widget.remote_controller.require_convergence.return_value = (RemoteContext(session_id="321"), object())
                 widget._solver_changed()
                 process = MagicMock()
                 process.result.side_effect = RuntimeError("Remote results are unavailable")
                 process.remote_status.return_value = {"job_id": "1234", "slurm_status": accounting}
-                with patch("mesh_convergence.AnalysisProcess", return_value=process) as launch:
+                with patch("mesh_convergence.TRUBA_BATCH_SIZE", 1), \
+                        patch("mesh_convergence.AnalysisProcess", return_value=process) as launch:
                     widget.start()
                     widget._poll()
                     self.assertEqual(launch.call_count, 2 if accounting else 1)
@@ -450,10 +451,20 @@ class LiveConvergenceTests(unittest.TestCase):
         widget = self.widget()
         widget.remote_controller = MagicMock(requested=True, ready=True,
                                              capabilities={"mesh_types": ["HEX8"]})
-        context = RemoteContext(cores=cores, memory_mb=10000)
-        widget.remote_controller.require.return_value = (context, object())
+        context = RemoteContext(cores=cores, memory_mb=10000, session_id="321")
+        widget.remote_controller.require_convergence.return_value = (context, object())
         widget._solver_changed()
         return widget
+
+    def test_truba_preflight_error_is_visible_in_results(self):
+        widget = self.truba_study()
+        widget.remote_controller.require_convergence.side_effect = RuntimeError("Queue unavailable")
+        with patch("mesh_convergence.AnalysisProcess") as submit:
+            widget.start()
+        submit.assert_not_called()
+        self.assertEqual(widget.results.rowCount(), 1)
+        self.assertIn("Queue unavailable", widget.results.item(0, 7).text())
+        self.assertTrue(widget.run_button.isEnabled())
 
     def test_truba_runs_five_levels_and_uses_results_for_the_next_batch(self):
         widget = self.truba_study()
@@ -471,7 +482,8 @@ class LiveConvergenceTests(unittest.TestCase):
         with patch("mesh_convergence.AnalysisProcess", side_effect=launch) as submit:
             widget.start()
             self.assertEqual(len(jobs), 5)
-            self.assertEqual(request_resources(submit.call_args.args[2], "convergence_level"), (4, 2000))
+            self.assertFalse(submit.call_args.args[2].session_id)
+            self.assertEqual(request_resources(submit.call_args.args[2], "convergence_level"), (20, 10000))
             initial_sizes = [row.settings.mesh_resolution for row in widget.rows]
             for job in reversed(jobs[1:]):
                 job.done.return_value = True
@@ -480,7 +492,7 @@ class LiveConvergenceTests(unittest.TestCase):
             jobs[0].done.return_value = True
             widget._poll()
             self.assertEqual(len(jobs), 8)
-            self.assertEqual(request_resources(submit.call_args.args[2], "convergence_level"), (6, 3333))
+            self.assertEqual(request_resources(submit.call_args.args[2], "convergence_level"), (20, 10000))
             self.assertEqual(widget.rows[5].kind, "Intermediate")
             self.assertAlmostEqual(widget.rows[5].settings.mesh_resolution,
                                    math.sqrt(initial_sizes[-2] * initial_sizes[-1]))
@@ -489,14 +501,15 @@ class LiveConvergenceTests(unittest.TestCase):
         for job in jobs[5:]:
             job.force_stop.assert_called_once()
 
-    def test_truba_manual_batch_honors_allocation_and_detaches_all_jobs(self):
+    def test_truba_manual_batch_sends_independent_jobs_and_detaches_all_jobs(self):
         widget = self.truba_study(cores=3)
         widget.automatic.setChecked(False)
         widget.manual.setText(".2, .16, .13, .1, .08")
-        jobs = [MagicMock() for _ in range(3)]
+        jobs = [MagicMock() for _ in range(5)]
         with patch("mesh_convergence.AnalysisProcess", side_effect=jobs) as submit:
             widget.start()
-        self.assertEqual([call.args[1].mesh_resolution for call in submit.call_args_list], [.2, .16, .13])
+        self.assertEqual([call.args[1].mesh_resolution for call in submit.call_args_list], [.2, .16, .13, .1, .08])
+        self.assertTrue(all(not call.args[2].session_id for call in submit.call_args_list))
         self.assertEqual(widget.detach_remote_jobs(), jobs)
         self.assertIsNone(widget.future)
         self.assertFalse(widget.timer.isActive())

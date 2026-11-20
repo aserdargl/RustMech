@@ -1438,8 +1438,8 @@ istenen süreyi ve kaynak miktarını kabul etmesi gerekir. İlk tahsis Slurm'da
 **Refresh session** kayıtlı oturumu bu çalıştırmaya bağlar ve durumu yeniler.
 
 Bağlanmak veya TRUBA hesaplama modunu işaretlemek tek başına Slurm işi
-oluşturmaz. Ortam kontrolü, hazırlık ve hesaplamalar için önce bir kaynak
-oturumu ayırmak veya kayıtlı oturumu yenilemek gerekir.
+oluşturmaz. Oturum içinde çalışan işlemler için bir kaynak oturumu ayırın
+veya kayıtlı oturumu yenileyin.
 Allocate kaynak isteğiyle TRUBA hesaplama modu açılır. Oturum RUNNING ve işçi
 hazır olduğunda uzak ortam bir kez otomatik kontrol edilir; gerekirse aynı tahsiste
 otomatik hazırlanır ve doğrulanır. Başarısız kurulum kendiliğinden sürekli
@@ -1453,6 +1453,10 @@ Hazır olma bildirimi üretim başlatmaz. **Apply** geometriyi aynı kaynağın
 `surface` adımında (büyükse otomatik chunked/periyodik yolla) üretir; VTP sonucu
 indirilip yerel ekranda çizilir. FE Mesh isteği ayrıca hacim ağını üretir.
 Ağ üretimi ve analizler aynı kaynağın `srun` adımları olarak yürütülür.
+**Mesh Convergence** seçili TRUBA ayarlarıyla grup başına en çok beş seviyeyi
+doğrudan, ayrı `sbatch` işleri olarak kuyruğa gönderir. **Allocate** gerekmez. Her seviye kendi CPU,
+RAM ve süre isteğini kullanır. Sonuç tablosu ve CSV, Slurm iş kimliğini, betiği
+ve durumunu gösterir. Betik hücresinde dosya yolları ve kaynak isteği görünür.
 Tahsis öncesinde **Parallel analyses** ile DoE ve analiz kuyruğunda aynı anda
 çalışabilecek analiz sayısını seçin (varsayılan `1`). CPU ve RAM eşit paylara
 bölünür: örneğin 56 çekirdek ve 128 GiB RAM, dört analiz için analiz başına

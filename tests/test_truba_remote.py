@@ -35,7 +35,8 @@ class FakeTransport:
     def command(self,script):
         if "RUSTMECH_JOB_ID" in script:
             if not self.server_job:
-                self.server_job = str(320 + len(self.instances)) if self.request.get("background") else "321"
+                independent = self.request.get("background") or self.request.get("operation") == "convergence_level"
+                self.server_job = str(320 + len(self.instances)) if independent else "321"
                 self.submissions += 1
             return "RUSTMECH_JOB_ID="+self.server_job+"\n"
         if "RUSTMECH_QUEUE" in script: return "RUSTMECH_QUEUE=\n"
@@ -95,6 +96,37 @@ class RemoteProtocolTests(unittest.TestCase):
         self.assertIn("OMP_NUM_THREADS=4 RUSTMECH_THREADS=4", slurm_script(
             context, "tester", dict(request, source_sha256="0" * 64, native_sha256="0" * 64)))
 
+    def test_direct_convergence_level_requests_full_per_job_resources(self):
+        settings = Settings(solver_backend="kratos", cores=8)
+        context = RemoteContext(cores=8, memory_mb=4000, parallel_jobs=5)
+        with patch("truba_remote.run_remote_job", return_value=(None, self.root)) as submit:
+            run_remote_level(settings, context, 1000, [0])
+        request, submitted_context, *_ = submit.call_args.args
+        self.assertFalse(submitted_context.session_id)
+        self.assertEqual(request["settings"]["cores"], 8)
+        script = slurm_script(context, "tester", dict(request, source_sha256="0" * 64, native_sha256="0" * 64))
+        self.assertIn("#SBATCH --cpus-per-task=8", script)
+        self.assertIn("#SBATCH --mem=4000M", script)
+        self.assertIn("OMP_NUM_THREADS=8 RUSTMECH_THREADS=8", script)
+
+    def test_direct_convergence_submits_a_named_script_and_records_the_slurm_id(self):
+        class SubmissionTransport(FakeTransport):
+            def command(self, script):
+                if "sbatch --parsable" in script:
+                    self.submission_script = script
+                return super().command(script)
+
+        request = {"operation": "convergence_level", "settings": asdict(Settings(solver_backend="kratos"))}
+        with patch("truba_remote.RemoteTransport", SubmissionTransport):
+            _, directory = run_remote_job(request, RemoteContext(), directory=self.root / "level")
+        record = json.loads((directory / "remote_job.json").read_text())
+        name = f"{analysis_code(record)}.slurm"
+        transport = FakeTransport.instances[-1]
+        self.assertIn(f"sbatch --parsable {name}", transport.submission_script)
+        self.assertIn(name, transport.put_names)
+        self.assertEqual(record["script_name"], name)
+        self.assertEqual(record["job_id"], "321")
+
     def test_submission_download_checksum_and_resume_do_not_resubmit(self):
         result,directory = run_remote_job(dict(operation="probe"),RemoteContext(),directory=self.root/"job")
         self.assertTrue(result["capabilities"]["mesh"])
@@ -106,6 +138,18 @@ class RemoteProtocolTests(unittest.TestCase):
         run_remote_job({},RemoteContext(),resume_record=record)
         self.assertEqual(FakeTransport.instances[-1].submissions,0)
         self.assertEqual(FakeTransport.instances[-1].put_names,[])
+
+    def test_convergence_submits_separately_named_slurm_scripts(self):
+        request = dict(operation="convergence_level", settings=dict(solver_backend="kratos"))
+        records = [run_remote_job(request, RemoteContext(), directory=self.root / str(i), submit_only=True)
+                   for i in range(2)]
+        self.assertNotEqual(records[0]["job_id"], records[1]["job_id"])
+        self.assertNotEqual(records[0]["script_name"], records[1]["script_name"])
+        for record, transport in zip(records, FakeTransport.instances[-2:]):
+            name = record["script_name"]
+            script = Path(record["local_directory"]) / name
+            self.assertIn("#SBATCH --job-name=" + script.stem, script.read_text())
+            self.assertIn(name, transport.put_names)
 
     def test_background_analyses_upload_inputs_and_poll_independently(self):
         import base64

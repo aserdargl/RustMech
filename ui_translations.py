@@ -1283,6 +1283,9 @@ Mechanical analysis|Mekanik analiz
 Mechanical analysis (Kratos)|Mekanik analiz (Kratos)
 Resource session|Kaynak oturumu
 Mesh convergence|Ağ yakınsaması
+Slurm job ID|Slurm iş kimliği
+Slurm script|Slurm betiği
+Slurm state|Slurm durumu
 DOE mesh generation|DoE ağı üretimi
 DOE analysis|DoE analizi
 Flow export|Akış dışa aktarımı
