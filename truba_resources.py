@@ -195,6 +195,10 @@ def convergence_context(context, catalog, solver_cpus, max_jobs):
     """Size independent convergence jobs from the configured CPU and RAM budget."""
     if context.gpus:
         raise ValueError('Mesh convergence requires a CPU queue on TRUBA.')
+    if 'hamsi' in catalog:
+        # Hamsi's job-submit plugin requires a full 56-core node for sbatch.
+        hamsi = catalog['hamsi']
+        catalog = {**catalog, 'hamsi': replace(hamsi, min_cpus=max(hamsi.min_cpus, 56))}
     if context.partition == 'auto':
         partition = automatic_context(context, catalog, min_cpus=solver_cpus).partition
     else:

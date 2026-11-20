@@ -100,6 +100,19 @@ class QueuePolicyTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             convergence_context(replace(context, walltime='07:01:00'), catalog, solver_cpus=16, max_jobs=2)
 
+    def test_convergence_requests_a_full_hamsi_node_with_the_selected_solver_threads(self):
+        catalog = dict(BASELINES)
+        catalog['hamsi'] = replace(catalog['hamsi'], idle_capacities=((56, 191000),))
+        for partition in ('hamsi', 'auto'):
+            with self.subTest(partition=partition):
+                context = RemoteContext(partition=partition, cores=28, memory_mb=95200)
+                plan = convergence_context(context, catalog, solver_cpus=16, max_jobs=5)
+                self.assertEqual((plan.partition, plan.cores, plan.parallel_jobs), ('hamsi', 56, 1))
+                script = slurm_script(plan, 'tester', dict(operation='convergence_level',
+                                      settings={'cores': 16}, source_sha256='0' * 64))
+                self.assertIn('#SBATCH --cpus-per-task=56\n', script)
+                self.assertIn('OMP_NUM_THREADS=16 RUSTMECH_THREADS=16 ', script)
+
     def test_auto_retries_whole_node_if_job_submit_plugin_rejects_half(self):
         with patch('truba_resources.fetch_catalog', return_value=BASELINES), patch('truba_resources.test_submission', side_effect=[RuntimeError('Use whole node'), None, None, None]), patch('truba_session.create_session') as submit:
             allocate_with_limits(RemoteContext(partition='auto'))
