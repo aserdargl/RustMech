@@ -479,26 +479,29 @@ class LiveConvergenceTests(unittest.TestCase):
     def test_main_screen_reuses_modeless_study_and_applies_selected_mesh(self):
         from nonlinear_compression import RustMechDialog
         from studio_style import CompactDoubleSpinBox
-        owner = MagicMock()
+        owner = QDialog()
+        self.addCleanup(owner.deleteLater)
         owner._mesh_convergence_dialog = None
         owner._finish_mesh_convergence = partial(RustMechDialog._finish_mesh_convergence, owner)
-        owner.remote_controller = None
+        owner.geometry_changed = MagicMock()
         owner.loading_mode_combo = QComboBox()
         owner.solver_combo = self.widget().solver_combo
         owner.mesh_type_combo = self.widget().mesh_type_combo
         owner.self_contact_combo = QComboBox()
         owner.contact_formulation_combo = QComboBox()
         owner.platen_contact_combos = {}
-        owner.collect.return_value = SETTINGS
+        owner.collect = MagicMock(return_value=SETTINGS)
         owner.controls = {key: CompactDoubleSpinBox() for key in ("mesh_resolution", "local_mesh_size")}
         for control in owner.controls.values():
             control.setRange(.1, 10)
+        owner.show()
         RustMechDialog.open_mesh_convergence(owner)
         dialog = owner._mesh_convergence_dialog
         self.addCleanup(dialog.deleteLater)
-        self.assertIsNone(dialog.parentWidget())
-        self.assertIsNone(dialog.windowHandle().transientParent())
+        self.assertIs(dialog.parentWidget(), owner)
+        self.assertIs(dialog.windowHandle().transientParent(), owner.windowHandle())
         self.assertFalse(dialog.isModal())
+        self.assertIsNone(self.app.activeModalWidget())
         self.assertFalse(dialog.windowFlags() & Qt.WindowType.WindowStaysOnTopHint)
         dialog.showMaximized()
         dialog.showMinimized()

@@ -116,8 +116,8 @@ class ConvergenceToolbarScroll(QScrollArea):
 
 class MeshConvergenceDialog(QDialog):
     def __init__(self, settings, mesh_generator, solver, owner=None):
-        # An owned Windows dialog always stacks above its owner, even when modeless.
-        super().__init__(None, Qt.WindowType.Window | Qt.WindowType.WindowMinMaxButtonsHint
+        # Keep the study above its workspace without blocking it or pinning to the desktop.
+        super().__init__(owner, Qt.WindowType.Window | Qt.WindowType.WindowMinMaxButtonsHint
                          | Qt.WindowType.WindowCloseButtonHint)
         self.setWindowTitle("Mesh Convergence")
         self.setObjectName("meshConvergenceDialog")
