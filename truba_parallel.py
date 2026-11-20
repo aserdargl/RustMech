@@ -36,6 +36,9 @@ class TrubaParallelMixin:
     def _parallel_running(self):
         return bool(getattr(self, '_parallel_futures', {}))
 
+    def _require_truba_row(self, capability, settings):
+        return self.remote_controller.require(capability, settings, allow_handover=True)
+
     def _launch_next_in_queue(self):
         if not self._parallel_running() and (self._stop_requested or not self._queue or self._parallel_limit() <= 1):
             return self._launch_next_serial()
@@ -61,7 +64,8 @@ class TrubaParallelMixin:
             try:
                 from truba_remote import run_remote_doe
                 settings = self._truba_row_settings(row, row.to_settings(self._run_base()))
-                context, auth = self.remote_controller.require('mesh' if self._active_mode == 'check' else settings.solver_backend, settings, allow_handover=True)
+                context, auth = self._require_truba_row(
+                    'mesh' if self._active_mode == 'check' else settings.solver_backend, settings)
                 if getattr(row, 'folder_job', None):
                     from folder_batch_results import run_remote_folder_doe
                     future = AnalysisProcess(run_remote_folder_doe, index, settings, context,

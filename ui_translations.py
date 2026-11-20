@@ -568,6 +568,8 @@ Checking source files before saving jobs to Analysis Queue…|İşler Analiz Kuy
 The selected jobs are already in Analysis Queue.|Seçili işler zaten Analiz Kuyruğunda.
 Source changed after preparation. Check the folder again.|Kaynak dosya hazırlıktan sonra değişti. Klasörü yeniden kontrol edin.
 Execution|Yürütme
+Direction|Yön
+Choose the TRUBA queue for the generated Slurm script.|Oluşturulacak Slurm betiği için TRUBA kuyruğunu seçin.
 Execution target|Yürütme hedefi
 Install local Kratos from the Kratos settings before running this analysis.|Bu analizi çalıştırmadan önce Kratos ayarlarından yerel Kratos'u kurun.
 Install local Kratos|Yerel Kratos'u Kur

@@ -82,10 +82,14 @@ def upload_file(auth, relative, source):
         _publish_file(sftp, source, target)
 
 
-def list_batch_folders(auth, relative):
+def list_batch_directory(auth, relative):
     if relative == PurePosixPath():
         _ensure_project_root(auth)
-    return [item.filename for item in list_directory(auth, relative)
+    return list_directory(auth, relative)
+
+
+def list_batch_folders(auth, relative):
+    return [item.filename for item in list_batch_directory(auth, relative)
             if S_ISDIR(item.st_mode or 0)]
 
 

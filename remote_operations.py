@@ -8,6 +8,7 @@ import re
 
 
 BATCH_INPUT_DIRECTORY = 'BatchInputs'
+BATCH_RESULTS_DIRECTORY = 'results'
 
 
 def batch_geometry_name(digest):

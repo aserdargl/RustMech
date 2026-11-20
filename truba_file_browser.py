@@ -5,7 +5,7 @@ from pathlib import Path, PurePosixPath
 import re
 from stat import S_ISDIR, S_ISLNK, S_ISREG
 
-from PySide6.QtCore import QDateTime, QLocale, Qt
+from PySide6.QtCore import QDateTime, QLocale, Qt, Signal
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QHeaderView, QHBoxLayout, QLabel, QLineEdit, QStyle,
     QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
@@ -37,9 +37,12 @@ FAILURE_MESSAGES = {
 
 
 class TrubaFileBrowser(QWidget):
-    def __init__(self, truba, executor, command, preferences):
+    state_changed = Signal()
+
+    def __init__(self, truba, executor, command, preferences, *, batch_auth=None):
         super().__init__()
-        self.truba = truba
+        self._auth = batch_auth if batch_auth is not None else truba.analysis_auth
+        self._batch = batch_auth is not None
         self.executor = executor
         self.preferences = preferences
         self.auth = None
@@ -84,7 +87,8 @@ class TrubaFileBrowser(QWidget):
         self.group_files = QCheckBox("Group by type")
         self.group_files.toggled.connect(self._render_entries)
         filters.addWidget(self.group_files)
-        layout.addLayout(filters)
+        if not self._batch:
+            layout.addLayout(filters)
 
         self.files = QTreeWidget()
         self.files.setAccessibleName("TRUBA files")
@@ -105,19 +109,22 @@ class TrubaFileBrowser(QWidget):
         transfers = ActionFlowLayout(equal_width=True)
         transfers.addWidget(self.upload)
         transfers.addWidget(self.download)
-        layout.addLayout(transfers)
+        if not self._batch:
+            layout.addLayout(transfers)
 
         self.folder_name = QLineEdit()
         self.folder_name.setFixedHeight(CONTROL_HEIGHT)
         self.folder_name.setPlaceholderText("Folder name")
         self.folder_name.setAccessibleName("Folder name")
-        self.folder_name.returnPressed.connect(self._create_folder)
+        if not self._batch:
+            self.folder_name.returnPressed.connect(self._create_folder)
         self.folder_name.textChanged.connect(self._update_controls)
         self.create = command("New folder", self._create_folder)
         row = QHBoxLayout()
         row.addWidget(self.folder_name, 1)
         row.addWidget(self.create)
-        layout.addLayout(row)
+        if not self._batch:
+            layout.addLayout(row)
 
         self.status = QLabel("Connect using the main TRUBA button.")
         self.status.setObjectName("mutedHintLabel")
@@ -128,7 +135,17 @@ class TrubaFileBrowser(QWidget):
         language = getattr(QApplication.instance(), "_rustmech_language", None)
         if language is not None:
             language.changed.connect(self._set_headers)
-        self.truba.connection_changed.connect(self._sync_connection)
+        if self._batch:
+            self.files.setHeaderHidden(True)
+            self.files.setColumnHidden(1, True)
+            self.files.setColumnHidden(2, True)
+            self.files.setMinimumHeight(CONTROL_HEIGHT * 2 + 8)
+            for widget in (self.slurm_inputs, self.filter, self.group_files, self.upload, self.download,
+                           self.folder_name, self.create):
+                widget.setParent(self)
+                widget.hide()
+        else:
+            truba.connection_changed.connect(self._sync_connection)
         self._update_controls()
 
     def _set_headers(self, *_):
@@ -142,7 +159,7 @@ class TrubaFileBrowser(QWidget):
             self._refresh()
 
     def _sync_connection(self, *_):
-        auth = self.truba.analysis_auth()
+        auth = self._auth()
         if auth == self.auth:
             return
         if self.task is not None:
@@ -163,8 +180,12 @@ class TrubaFileBrowser(QWidget):
         self._update_address()
         self.status.setText("Connect using the main TRUBA button." if auth is None else "")
         self._update_controls()
+        self.state_changed.emit()
         if auth is not None and self.isVisible():
             self._refresh()
+
+    def sync_connection(self):
+        self._sync_connection()
 
     def _update_address(self):
         path = str(truba_files.project_root(self.auth.username) / self.directory) if self.auth else ""
@@ -174,13 +195,20 @@ class TrubaFileBrowser(QWidget):
 
     def _directory_key(self):
         account = self.auth.username.encode("utf-8").hex()
-        return f"esen/trubaFolders/{account}"
+        workspace = "folderBatch" if self._batch else "esen"
+        return f"{workspace}/trubaFolders/{account}"
 
     @property
     def restoring_directory(self):
         return not self.loaded and bool(self._initial_directory.parts)
 
+    @property
+    def navigating(self):
+        return self.task is not None and (not self.loaded or self.task[1] != self.directory)
+
     def _update_controls(self, *_):
+        if self._batch:
+            self.status.setVisible(bool(self.status.text()))
         ready = self.auth is not None and self.task is None
         can_change = ready and self.loaded
         can_write = can_change and not self.is_slurm_snapshot_open()
@@ -197,10 +225,13 @@ class TrubaFileBrowser(QWidget):
     def _submit(self, kind, operation, directory, *args, success_message=""):
         if self.auth is None or self.task is not None:
             return
+        if self._batch and kind == "list":
+            operation = truba_files.list_batch_directory
         future = self.executor.submit(operation, self.auth, directory, *args)
         self.task = (future, directory, kind, success_message)
         self.status.setText(BUSY_MESSAGES[kind])
         self._update_controls()
+        self.state_changed.emit()
 
     def _refresh(self, *, success_message=""):
         directory = self._initial_directory if self.restoring_directory else self.directory
@@ -276,7 +307,7 @@ class TrubaFileBrowser(QWidget):
             return
         auth, directory = self.auth, self.directory
         source, _ = QFileDialog.getOpenFileName(self, translate("Upload file to TRUBA"), str(Path.home()))
-        if source and self.truba.analysis_auth() is auth and self.directory == directory:
+        if source and self._auth() is auth and self.directory == directory:
             self._submit("upload", truba_files.upload_file, directory, Path(source))
 
     def _download_file(self):
@@ -290,7 +321,7 @@ class TrubaFileBrowser(QWidget):
         target, _ = QFileDialog.getSaveFileName(
             self, translate("Download file from TRUBA"), str(Path.home() / suggestion),
         )
-        if target and self.truba.analysis_auth() is auth and self.directory == directory:
+        if target and self._auth() is auth and self.directory == directory:
             self._submit("download", truba_files.download_file, directory, name, Path(target))
 
     def check_task(self):
@@ -352,6 +383,7 @@ class TrubaFileBrowser(QWidget):
                     self.status.setText(success_message or ("" if entries else "This folder is empty."))
         self._update_controls()
         self._refresh_after_upload_if_ready()
+        self.state_changed.emit()
 
     def _show_entries(self, entries, *, preserve_selection=False):
         self.entries = entries

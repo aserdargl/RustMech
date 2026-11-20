@@ -6,13 +6,13 @@ from html import escape
 import json
 from math import isfinite
 import os
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 import re
 
 from PySide6.QtCore import QSignalBlocker, QSize, Qt, QTimer
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QDialog, QGridLayout, QGroupBox, QHeaderView,
-                              QHBoxLayout, QLabel, QLineEdit, QPushButton, QStyle,
+                              QHBoxLayout, QLabel, QLineEdit, QPushButton, QSplitter, QStyle,
                               QTableWidget, QTableWidgetItem, QToolButton, QVBoxLayout, QWidget)
 
 from camera_toolbar import camera_icon
@@ -26,8 +26,11 @@ from imported_geometry import (SURFACE_EXTENSIONS, SURFACE_FILE_FILTER, SurfaceC
                                compression_direction, read_polygonal_surface, store_surface, surface_cache_directory)
 from model import MIN_MESH_INPUT_MM, settings_from_dict
 from operation_progress import OperationProgress
+from remote_operations import BATCH_RESULTS_DIRECTORY
 from studio_style import (CompactComboBox, CompactDoubleSpinBox, CONTROL_HEIGHT,
                           STUDIO_STYLESHEET, field_label, mesh_precision_stepper, stepper_with_unit)
+from truba_file_browser import TrubaFileBrowser
+from truba_resources import BASELINES
 from ui_language import translate
 from window_state import install_window_state
 
@@ -224,6 +227,20 @@ def prepare_batch_snapshots(items, root, base, solvers, target, auth=None, remot
 class FolderBatchRunner(FolderResultMixin, DoEStudioWidget):
     """Use the shared solver lifecycle for one explicit Batch run."""
 
+    batch_execution = None
+
+    def _require_truba_row(self, capability, settings):
+        if self.batch_execution is not None:
+            context, auth = self.batch_execution
+            return replace(context, parallel_jobs=1), auth
+        return super()._require_truba_row(capability, settings)
+
+    def _parallel_limit(self):
+        if self.batch_execution is not None:
+            context, _ = self.batch_execution
+            return context.parallel_jobs
+        return super()._parallel_limit()
+
     @property
     def active(self):
         return self._active_mode is not None
@@ -311,13 +328,13 @@ class FolderBatchDialog(QDialog):
         self.mode.addItems(['Z: bottom / top', 'X: min / max', 'Y: min / max',
                             'First specimen', 'Manual faces'])
         self.mode.setFixedWidth(108)
-        direction_label = QLabel('Compression direction')
+        direction_label = QLabel('Direction')
         direction_label.setBuddy(self.mode)
         controls.addWidget(direction_label)
         controls.addWidget(self.mode)
         self.solver = CompactComboBox()
         self.solver.addItems(['Current workspace', 'ANSYS MAPDL', 'Kratos', 'ANSYS + Kratos'])
-        self.solver.setFixedWidth(124)
+        self.solver.setFixedWidth(112)
         solver_label = QLabel('Solver')
         solver_label.setBuddy(self.solver)
         controls.addWidget(solver_label)
@@ -325,25 +342,24 @@ class FolderBatchDialog(QDialog):
         self.execution_target = CompactComboBox()
         self.execution_target.addItem('TRUBA', 'truba')
         self.execution_target.addItem(translate('Local'), 'local')
-        self.execution_target.setFixedWidth(110)
+        self.execution_target.setFixedWidth(82)
         execution_label = QLabel('Execution')
         execution_label.setBuddy(self.execution_target)
         controls.addWidget(execution_label)
         controls.addWidget(self.execution_target)
+        self.script = CompactComboBox()
+        self.script.addItem('Auto', 'auto')
+        for name, limits in BASELINES.items():
+            if not limits.min_gpus:
+                self.script.addItem(name, name)
+        self.script.setFixedWidth(84)
+        self.script.setToolTip('Choose the TRUBA queue for the generated Slurm script.')
+        self.script_label = QLabel('Script')
+        self.script_label.setBuddy(self.script)
+        controls.addWidget(self.script_label)
+        controls.addWidget(self.script)
         controls.addStretch()
         layout.addLayout(controls)
-        self.truba_destination_row = QWidget()
-        destination = QHBoxLayout(self.truba_destination_row)
-        destination.setContentsMargins(0, 0, 0, 0)
-        self.choose_truba = self.button('Choose TRUBA folder', self.choose_truba_folder)
-        destination.addWidget(self.choose_truba)
-        self.truba_path = QLineEdit()
-        self.truba_path.setReadOnly(True)
-        self.truba_path.setFixedHeight(CONTROL_HEIGHT)
-        self.truba_path.setPlaceholderText(translate('Select an upload folder on TRUBA'))
-        self.truba_path.setAccessibleName(translate('TRUBA folder path'))
-        destination.addWidget(self.truba_path, 1)
-        layout.addWidget(self.truba_destination_row)
         mesh = QGroupBox('Mesh')
         mesh_layout = QGridLayout(mesh)
         mesh_layout.setContentsMargins(6, 6, 6, 6)
@@ -368,7 +384,7 @@ class FolderBatchDialog(QDialog):
         self.settings_hint = QLabel()
         self.settings_hint.setWordWrap(True)
         layout.addWidget(self.settings_hint)
-        specimens = QGroupBox('Specimens')
+        specimens = QGroupBox('This computer')
         specimen_layout = QVBoxLayout(specimens)
         specimen_layout.setContentsMargins(6, 6, 6, 6)
         self.table = QTableWidget(0, 5)
@@ -398,10 +414,24 @@ class FolderBatchDialog(QDialog):
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         header.setSectionResizeMode(PREFLIGHT_COLUMN, QHeaderView.ResizeMode.Stretch)
+        self.table.setColumnWidth(ANALYSIS_COLUMN, 65)
         header.setStretchLastSection(True)
         specimen_layout.addWidget(self.table)
 
-        layout.addWidget(specimens, 1)
+        self.files_splitter = QSplitter(Qt.Orientation.Horizontal)
+        self.files_splitter.setObjectName('folderBatchFiles')
+        self.files_splitter.setChildrenCollapsible(False)
+        self.files_splitter.addWidget(specimens)
+        self.truba_group = QGroupBox('TRUBA files')
+        remote_layout = QVBoxLayout(self.truba_group)
+        remote_layout.setContentsMargins(6, 6, 6, 6)
+        self.truba_browser = TrubaFileBrowser(None, self.executor, self.button, self.preferences,
+                                             batch_auth=self.truba_auth)
+        self.truba_browser.state_changed.connect(self.update_truba_destination)
+        remote_layout.addWidget(self.truba_browser)
+        self.files_splitter.addWidget(self.truba_group)
+        self.files_splitter.setSizes([500, 410])
+        layout.addWidget(self.files_splitter, 1)
         footer = QHBoxLayout()
         self.close_button = self.button('Close', self.close)
         self.send = self.button('Send to TRUBA', self.send_to_truba)
@@ -491,7 +521,9 @@ class FolderBatchDialog(QDialog):
 
     def update_execution_target(self):
         remote = self.execution_target.currentData() == 'truba'
-        self.truba_destination_row.setVisible(remote)
+        self.script_label.setVisible(remote)
+        self.script.setVisible(remote)
+        self.truba_group.setVisible(remote)
         with QSignalBlocker(self.solver), QSignalBlocker(self.mesh_type):
             if remote:
                 self._local_solver_index = self.solver.currentIndex()
@@ -516,8 +548,10 @@ class FolderBatchDialog(QDialog):
                      f'{base.loading_mode}: {base.compression:g} mm / {base.applied_force:g} N')
         self.settings_hint.setText(text)
 
-    def button(self, text, callback, *, primary=False):
+    def button(self, text, callback, *, primary=False, hint=None):
         button = QPushButton(text, self)
+        if hint:
+            button.setToolTip(hint)
         if primary:
             button.setProperty('primary', True)
         button.setStyleSheet('QPushButton { padding: 0 8px; } QPushButton:focus { padding: 0 7px; }')
@@ -547,8 +581,9 @@ class FolderBatchDialog(QDialog):
 
     def set_busy(self, busy):
         for widget in (self.folder, self.browse, self.mode, self.execution_target, self.check,
-                       self.mesh_resolution, self.local_mesh_size, self.truba_destination_row):
+                       self.mesh_resolution, self.local_mesh_size, self.script):
             widget.setEnabled(not busy)
+        self.truba_group.setEnabled(not busy or self.running)
         local = self.execution_target.currentData() == 'local'
         self.solver.setEnabled(local and not busy)
         self.mesh_type.setEnabled(not busy)
@@ -608,9 +643,10 @@ class FolderBatchDialog(QDialog):
         self.select_all.setEnabled(not busy and bool(checkboxes))
         self.select_all.setCheckState(state)
         remote = self.execution_target.currentData() == 'truba'
+        navigating = remote and self.truba_browser.navigating
         self.send.setVisible(remote)
-        self.send.setEnabled(not busy and bool(checked))
-        self.run.setEnabled(not busy and (self.staged is not None if remote else bool(checked)))
+        self.send.setEnabled(not busy and not navigating and bool(checked))
+        self.run.setEnabled(not busy and not navigating and (self.staged is not None if remote else bool(checked)))
         self.stop.setVisible(self.running)
         self.close_button.setEnabled(self.preparing_target != 'truba')
 
@@ -620,27 +656,17 @@ class FolderBatchDialog(QDialog):
         if path:
             self.folder.setText(path)
 
-    def choose_truba_folder(self):
-        from truba_files import project_root
-        from truba_folder_picker import TrubaFolderPicker
+    def truba_auth(self):
+        return self.remote_controller.auth() if self.remote_controller is not None else None
 
-        auth = self.remote_controller.auth() if self.remote_controller is not None else None
-        if auth is None:
-            self.status.setText(translate('Connect using the main TRUBA button.'))
-            return
-        previous = self.remote_destination
-        initial = previous[1] if previous and previous[0] == auth.username else PurePosixPath()
-        picker = TrubaFolderPicker(self, auth, self.executor, initial)
-        try:
-            if picker.exec() and auth == self.remote_controller.auth():
-                selection = auth.username, picker.directory
-                if selection != previous:
-                    self.remote_destination = selection
-                    self.truba_path.setText(str(project_root(auth.username) / picker.directory))
-                    self.invalidate_transfer()
-                    self.status.setText(translate('TRUBA upload folder selected. Send the prepared specimens to this folder.'))
-        finally:
-            picker.deleteLater()
+    def update_truba_destination(self):
+        browser = self.truba_browser
+        destination = (browser.auth.username, browser.directory) if browser.loaded else None
+        if destination != self.remote_destination:
+            self.remote_destination = destination
+            self.invalidate_transfer()
+        else:
+            self.update_actions()
 
     def saved_faces(self, path, root=None):
         root = root or self.root or Path(path).parent
@@ -771,6 +797,9 @@ class FolderBatchDialog(QDialog):
             self.status.setText(f'{ready}/{len(self.items)} ' + translate('ready. Review the faces and select the specimens to analyze.'))
 
     def poll(self):
+        if self.truba_browser.isVisible():
+            self.truba_browser.sync_connection()
+            self.truba_browser.check_task()
         if self.running:
             self.refresh_run()
         if self.future is None or not self.future.done():
@@ -849,9 +878,10 @@ class FolderBatchDialog(QDialog):
             self.status.setText(str(error))
 
     def send_to_truba(self):
-        if self.busy or self.execution_target.currentData() != 'truba' or not self.selected_specimens():
+        if (self.busy or self.truba_browser.navigating
+                or self.execution_target.currentData() != 'truba' or not self.selected_specimens()):
             return
-        auth = self.remote_controller.auth() if self.remote_controller is not None else None
+        auth = self.truba_auth()
         if auth is None:
             self.status.setText(translate('TRUBA is disconnected. Connect using the TRUBA button, then send the prepared specimens.'))
             return
@@ -866,7 +896,7 @@ class FolderBatchDialog(QDialog):
             return
         if self.execution_target.currentData() == 'local':
             self.prepare_selected('local')
-        elif self.staged is not None:
+        elif self.staged is not None and not self.truba_browser.navigating:
             self.start_run(self.staged)
 
     def prepare_selected(self, target, auth=None, remote_directory=None):
@@ -884,8 +914,15 @@ class FolderBatchDialog(QDialog):
             self.status.setText(translate(str(error)))
         else:
             if target == 'truba':
-                self.staged = snapshots
-                self.status.setText(translate('Geometry and analysis settings uploaded to TRUBA. Select Run to start.'))
+                uploaded = snapshots[0][1]['staged_geometry']
+                selected = self.remote_destination
+                if selected is not None and (selected[0], selected[1].as_posix()) == (
+                        uploaded['username'], uploaded['directory']):
+                    self.staged = snapshots
+                    self.status.setText(translate('Geometry and analysis settings uploaded to TRUBA. Select Run to start.'))
+                    self.refresh_truba_files()
+                else:
+                    self.status.setText(translate('Selection or settings changed. Send the batch to TRUBA again.'))
             else:
                 self.start_run(snapshots)
         finally:
@@ -893,15 +930,22 @@ class FolderBatchDialog(QDialog):
 
     def start_run(self, snapshots):
         try:
+            execution = None
             if snapshots[0][1]['execution_target'] == 'truba':
+                partition = self.script.currentData()
                 for settings, metadata in snapshots:
-                    _, auth = self.remote_controller.require(settings.solver_backend, settings, allow_handover=True)
+                    if partition == 'auto':
+                        _, auth = self.remote_controller.require(settings.solver_backend, settings, allow_handover=True)
+                    else:
+                        execution = self.remote_controller.require_batch_queue(partition, settings)
+                        _, auth = execution
                     if auth is None or auth.username != metadata['staged_geometry']['username']:
                         raise ValueError('Use the TRUBA account that received the prepared specimens.')
             if self.runner is None:
                 self.runner = FolderBatchRunner(lambda: self.base, self.mesh_generator, self.solver_runner, self)
                 self.runner.hide()
                 self.runner.remote_controller = self.remote_controller
+            self.runner.batch_execution = execution
             self.runner.start(snapshots)
         except Exception as error:
             self.status.setText(translate(str(error)))
@@ -935,11 +979,16 @@ class FolderBatchDialog(QDialog):
             from truba_files import project_root
 
             staged = rows[0].folder_job['staged_geometry']
-            path = project_root(staged['username']) / staged['directory'] / 'Result'
+            path = project_root(staged['username']) / staged['directory'] / BATCH_RESULTS_DIRECTORY
             message += '\n' + translate('TRUBA results folder: {path}').format(path=path)
+            self.refresh_truba_files()
         if self.runner._persistence_error:
             message += '\n' + self.runner._persistence_error
         self.status.setText(message)
+
+    def refresh_truba_files(self):
+        if self.remote_destination is not None:
+            self.truba_browser.refresh_after_upload(self.truba_auth(), self.remote_destination[1])
 
     def stop_batch(self):
         if self.running:

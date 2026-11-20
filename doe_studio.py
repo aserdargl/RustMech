@@ -1608,8 +1608,8 @@ class DoEStudioWidget(TrubaParallelMixin, QWidget):
             if use_truba:
                 from truba_remote import run_remote_doe
                 s = self._truba_row_settings(row, s)
-                context,auth = self.remote_controller.require(
-                    "mesh" if self._active_mode=="check" else s.solver_backend, s, allow_handover=True)
+                context,auth = self._require_truba_row(
+                    "mesh" if self._active_mode=="check" else s.solver_backend, s)
                 if row.folder_job:
                     from folder_batch_results import run_remote_folder_doe
                     self._active_future = AnalysisProcess(run_remote_folder_doe, r_idx, s, context,

@@ -6,6 +6,7 @@ import json
 from hashlib import sha256
 import os
 from pathlib import Path, PurePosixPath
+from stat import S_IFDIR, S_IFREG
 import tempfile
 import time
 from types import SimpleNamespace
@@ -813,6 +814,76 @@ class FolderBatchTests(unittest.TestCase):
                     self.assertTrue((Path(destination) / 'job.json').exists())
                     self.assertTrue(dialog.run.isEnabled())
 
+    def test_batch_browser_restores_nested_folder_and_dispatches_to_selected_queue(self):
+        dialog = self.dialog()
+        upload = self.simulate_upload(dialog)
+        dialog.remote_destination = None
+        auth = dialog.truba_auth()
+        folder = PurePosixPath('project/batch')
+        directories = {
+            PurePosixPath(): [('project', S_IFDIR)],
+            folder.parent: [('batch', S_IFDIR)],
+            folder: [('prepared.vtp', S_IFREG)],
+        }
+
+        def listing(_, path):
+            return [SimpleNamespace(filename=name, st_mode=kind, st_size=1, st_mtime=None)
+                    for name, kind in directories[path]]
+
+        def finished_listing(window):
+            browser = window.truba_browser
+            browser.task[0].result(timeout=5)
+            window.poll()
+            self.assertTrue(browser.loaded)
+
+        with patch('truba_files.list_batch_directory', side_effect=listing):
+            dialog.show()
+            finished_listing(dialog)
+            browser = dialog.truba_browser
+            for _ in range(2):
+                browser.files.setCurrentItem(browser.files.topLevelItem(0))
+                browser.open_folder.click()
+                finished_listing(dialog)
+            self.assertEqual(dialog.remote_destination, (auth.username, folder))
+            self.assertEqual(browser.files.topLevelItem(0).text(0), 'prepared.vtp')
+            dialog.files_splitter.setSizes([325, 550])
+            sizes = dialog.files_splitter.sizes()
+            dialog.close()
+            dialog.dispose()
+
+            reopened = self.dialog()
+            reopened.remote_controller = dialog.remote_controller
+            reopened.show()
+            finished_listing(reopened)
+            self.assertEqual(reopened.remote_destination, (auth.username, folder))
+            self.assertEqual(reopened.files_splitter.sizes(), sizes)
+            self.assertEqual(reopened.script.currentData(), 'auto')
+            self.assertEqual(upload.call_count, 0)
+
+            reopened.root, reopened.base = self.root, self.base
+            reopened.items = [self.prepared()]
+            reopened.refresh_table()
+            reopened.table.item(0, RUN_COLUMN).setCheckState(Qt.CheckState.Checked)
+            reopened.send.click()
+            self.finish_preparation(reopened)
+            finished_listing(reopened)
+            self.assertEqual(upload.call_args.kwargs['relative'], folder)
+            context = RemoteContext(partition='smp', cores=4, parallel_jobs=2)
+            reopened.remote_controller.require_batch_queue = Mock(return_value=(context, auth))
+            reopened.script.setCurrentIndex(reopened.script.findData('smp'))
+            result = Future()
+            with patch('truba_parallel.AnalysisProcess', return_value=result) as process:
+                reopened.run.click()
+                self.assertEqual(process.call_args.args[3], replace(context, parallel_jobs=1))
+                self.assertEqual(process.call_args.args[6]['directory'], folder.as_posix())
+                reopened.remote_controller.require.assert_not_called()
+                self.assertEqual(reopened.remote_controller.require_batch_queue.call_args.args[0], 'smp')
+                result.set_result(dict(r_idx=0, status='Completed'))
+                reopened.runner._poll_worker()
+                reopened.poll()
+                self.assertIn('project/batch/results', reopened.status.text())
+                finished_listing(reopened)
+
     def test_local_run_uses_current_mesh_fields_and_ignores_remote_mode(self):
         queue = self.queue()
         existing = queue.add_snapshot(self.base)
@@ -855,7 +926,7 @@ class FolderBatchTests(unittest.TestCase):
             dialog.resize(width, 520)
             self.app.processEvents()
             self.assertEqual(dialog.send.size(), dialog.run.size())
-            self.assertLess(dialog.run.width(), dialog.table.width() // 3)
+            self.assertLess(dialog.run.width(), dialog.files_splitter.width() // 3)
             self.assertGreater(dialog.run.mapTo(dialog, dialog.run.rect().topLeft()).y(),
                                dialog.table.mapTo(dialog, dialog.table.rect().bottomRight()).y())
 

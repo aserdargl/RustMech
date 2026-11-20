@@ -769,6 +769,12 @@ class RemoteController(QObject):
         self.status.setText("Cancelling the remote check/setup job…")
 
     def require(self,capability,settings=None, *, allow_handover=False):
+        return self._require(capability, settings, allow_handover=allow_handover)
+
+    def require_batch_queue(self, partition, settings):
+        return self._require(settings.solver_backend, settings, partition=partition)
+
+    def _require(self, capability, settings, *, allow_handover=False, partition=None):
         if self.closing: raise RuntimeError('RustMech is closing.')
         can_renew = (allow_handover and self.session and self.session.get('state') == 'ended'
                      and self.session.get('context', {}).get('auto_renew', True)
@@ -786,6 +792,21 @@ class RemoteController(QObject):
         if settings is not None and capability in ("mesh","kratos") and settings.mesh_type not in self.capabilities.get("mesh_types",[]):
             raise RuntimeError(f"The remote runtime does not support {settings.mesh_type} meshing.")
         context = self.context()
+        if partition is not None:
+            from truba_remote import request_resources
+
+            baseline = BASELINES[partition]
+            live_limits = self.queue_catalog.get(partition, baseline)
+            minimum_cores = max(settings.cores, baseline.min_cpus, live_limits.min_cpus)
+            maximum_cores = min(baseline.max_cpus, live_limits.max_cpus)
+            _, memory = request_resources(context, 'doe_solve')
+            memory = max(memory, live_limits.min_memory_mb or 1)
+            cores = next((count for count in range(minimum_cores, maximum_cores + 1)
+                          if memory <= min(baseline.memory_ceiling(count), live_limits.memory_ceiling(count))),
+                         minimum_cores)
+            candidates(partition, cores, memory, context.walltime)
+            candidates(partition, cores, memory, context.walltime, self.queue_catalog)
+            context = replace(context, partition=partition, cores=cores, memory_mb=memory, gpus=0, session_id='')
         if settings is not None and capability=="kratos":
             if settings.cores > context.cores:
                 raise RuntimeError("Solver CPU count exceeds the TRUBA allocation. Increase remote CPU cores or reduce solver cores.")

@@ -129,6 +129,29 @@ class RemoteProtocolTests(unittest.TestCase):
         self.assertEqual(result["request_id"], second["request_id"])
         self.assertTrue(all(transport.submissions == 0 and not transport.put_names for transport in FakeTransport.instances[2:]))
 
+    def test_batch_creates_results_in_selected_folder_before_submission(self):
+        commands = []
+        command = FakeTransport.command
+
+        def capture(transport, script):
+            commands.append(script)
+            return command(transport, script)
+
+        context = RemoteContext(partition='smp', cores=4)
+        request = dict(operation='doe_solve', settings=dict(solver_backend='kratos'),
+                       staged_geometry=dict(username='tester', sha256='a' * 64, directory='study/first batch'))
+        directory = self.root / 'batch-job'
+        with patch.object(FakeTransport, 'command', capture):
+            run_remote_job(request, context, directory=directory)
+
+        self.assertIn('realpath -e -- "$project"/\'study/first batch\'', commands[0])
+        self.assertIn('results="$batch/results"', commands[0])
+        self.assertIn('sbatch --parsable run.slurm', commands[1])
+        script = (directory / 'run.slurm').read_text()
+        self.assertIn('#SBATCH --partition=smp', script)
+        self.assertIn('results="$batch/results"', script)
+        self.assertIn('RUSTMECH_BATCH_OUTPUT="$results/${PWD##*/}"', script)
+
     def test_mismatched_request_or_transfer_never_becomes_downloaded(self):
         for key in ("corrupt_hash","wrong_request"):
             setattr(FakeTransport,key,True)

@@ -170,10 +170,11 @@ def _shell_path(path):
     return '"$HOME"/'+shlex.quote(path[2:]) if path.startswith("~/") else shlex.quote(path)
 
 
-def _batch_output_setup(staged):
+def _batch_results_setup(staged):
+    from remote_operations import BATCH_RESULTS_DIRECTORY
+
     if staged is None or 'directory' not in staged:
-        return """mkdir -p output
-trap 'tar -czf result.tar.gz output' EXIT"""
+        return ''
     relative = staged['directory']
     path = PurePosixPath(relative)
     if (path.is_absolute() or '..' in path.parts or '\\' in relative
@@ -186,9 +187,18 @@ case "$batch" in
     *) printf '%s\\n' 'Batch folder is outside the RustMech project.' >&2; exit 1 ;;
 esac
 export RUSTMECH_BATCH_INPUTS="$batch"
-results="$batch/Result"
+results="$batch/{BATCH_RESULTS_DIRECTORY}"
 test ! -L "$results"
 mkdir -p -- "$results"
+"""
+
+
+def _batch_output_setup(staged):
+    setup = _batch_results_setup(staged)
+    if not setup:
+        return """mkdir -p output
+trap 'tar -czf result.tar.gz output' EXIT"""
+    return f"""{setup}
 export RUSTMECH_BATCH_OUTPUT="$results/${{PWD##*/}}"
 mkdir -- "$RUSTMECH_BATCH_OUTPUT"
 trap 'tar -czf result.tar.gz --transform="s|^\\.$|output|;s|^\\./|output/|" -C "$RUSTMECH_BATCH_OUTPUT" .' EXIT"""
@@ -373,7 +383,12 @@ def run_remote_job(request,context,auth=None,marker=None,*,directory=None,resume
         if not poll_once and (not resume_record or not record.get("job_id")):
             if resume_record: request = json.loads((directory/"request.json").read_text())
             (directory/"run.slurm").write_text(slurm_script(context,transport.username,request),encoding="utf-8",newline="\n")
-            transport.command("mkdir -p -- "+shlex.quote(remote))
+            remote_path = shlex.quote(remote)
+            setup = _batch_results_setup(request.get('staged_geometry'))
+            command = "mkdir -p -- " + remote_path
+            if setup:
+                command = f"set -e\n{command}\ncd {remote_path}\n{setup}"
+            transport.command(command)
             for name in ("engine.tar.gz","request.json","run.slurm"): transport.put(directory/name,remote+"/"+name)
         if is_cancelled():
             if poll_once:
