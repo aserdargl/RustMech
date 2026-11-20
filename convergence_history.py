@@ -24,6 +24,12 @@ def mesh_job_finished(record):
     return mesh_job_state(record) in FINISHED_MESH_STATES
 
 
+def mesh_job_needs_results(record):
+    accounting = record.get("slurm_status") or record.get("step_status")
+    return (accounting == "COMPLETED|0:0"
+            and record.get("state") in ("downloading", "interrupted; resume using this job record"))
+
+
 @dataclass
 class SavedMeshJob:
     path: Path
@@ -39,7 +45,7 @@ class SavedMeshJob:
 
     @property
     def active(self):
-        return not mesh_job_finished(self.record)
+        return not mesh_job_finished(self.record) or mesh_job_needs_results(self.record)
 
     def cached_results(self):
         directory = Path(self.record["local_directory"])

@@ -587,7 +587,7 @@ if [ -s job.id ]; then printf 'RUSTMECH_JOB_ID=%s\n' "$(cat job.id)"; fi
                     for index, _ in enumerate(record.get('level_resources', ()), 1):
                         path = shlex.quote(f'{remote}/output/level-{index}/progress.txt')
                         queue_command += f"\nprintf '\\nRUSTMECH_LEVEL_{index}='; head -c 500 {path} 2>/dev/null || true"
-                reply = transport.command(QUEUE_FUNCTION + queue_command)
+                reply = transport.command("set -e\n" + QUEUE_FUNCTION + queue_command)
             state = re.search(r"^RUSTMECH_QUEUE=(.*)$",reply,re.MULTILINE)
             if state is None: raise RuntimeError("Could not read the SLURM queue state; resume the job record.")
             value = state.group(1).strip()
@@ -613,6 +613,9 @@ if [ -s job.id ]; then printf 'RUSTMECH_JOB_ID=%s\n' "$(cat job.id)"; fi
                 level_stage = dict(re.findall(r'^RUSTMECH_LEVEL_(\d+)=(.*)$', reply, re.MULTILINE))
                 record['level_progress'] = [level_stage.get(str(i), '').strip()
                                             for i in range(1, len(record['level_resources']) + 1)]
+            if record.get('operation') == 'convergence_level':
+                record['last_queue_state'] = value
+                record.pop('tracking_error', None)
             if value != record['state'] or record.get('level_progress') != previous_progress:
                 update(value)
             if poll_once:
@@ -683,6 +686,7 @@ if [ -s job.id ]; then printf 'RUSTMECH_JOB_ID=%s\n' "$(cat job.id)"; fi
             raise RuntimeError(f"SLURM did not confirm successful completion ({accounting or 'unknown'}). See {directory/'slurm.err'}")
         if result.get("error"): raise RuntimeError(result["error"])
         result = _rebase_paths(directory,result)
+        record.pop("tracking_error", None)
         update("downloaded")
         return result,directory
     except SlurmOutOfMemory:
@@ -694,6 +698,8 @@ if [ -s job.id ]; then printf 'RUSTMECH_JOB_ID=%s\n' "$(cat job.id)"; fi
         if saved.get("state") != "cancelled":
             if staging_phase is not None and isinstance(error, Exception):
                 record["staging_error"] = f"{staging_phase}: {str(error)[-1500:]}"
+            elif record.get("operation") == "convergence_level" and record.get("job_id") and isinstance(error, Exception):
+                record["tracking_error"] = str(error)[-1500:]
             update("interrupted; resume using this job record")
         raise
 

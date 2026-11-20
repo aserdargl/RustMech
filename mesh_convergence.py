@@ -187,6 +187,7 @@ class MeshConvergenceWidget(QWidget):
         self.remote_study_base = None
         self.saved_geometry_source = None
         self.saved_jobs = {}
+        self.retried_tracking = set()
         self.restored_rows = set()
         self.saved_study_key = None
         self.history_only = False
@@ -202,6 +203,8 @@ class MeshConvergenceWidget(QWidget):
         self.manual_pending = []
         self.timer = QTimer(self, interval=100)
         self.timer.timeout.connect(self._poll)
+        self.tracking_retry = QTimer(self, interval=5000, singleShot=True)
+        self.tracking_retry.timeout.connect(self._attach_saved_jobs)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(4)
@@ -945,6 +948,7 @@ class MeshConvergenceWidget(QWidget):
         self.saved_geometry_source = None
         self.saved_study_key = None
         self.study_plan = {}
+        self.retried_tracking.clear()
         if self.run_on_truba.isChecked():
             self.remote_study_base = first
             self.study_plan = self._study_snapshot(first)
@@ -1130,6 +1134,9 @@ class MeshConvergenceWidget(QWidget):
 
     def _restore_saved_study(self, index, studies=None):
         key = self.history_combo.itemData(index)
+        if self.saved_jobs and key and (key == self.saved_study_key or key[1] == self.study_plan.get("id")):
+            self._attach_saved_jobs()
+            return
         if self.future is not None:
             if key == self.saved_study_key:
                 return
@@ -1144,10 +1151,12 @@ class MeshConvergenceWidget(QWidget):
         self.remote_jobs.clear()
         self.future = None
         self.timer.stop()
+        self.tracking_retry.stop()
         self.history_combo.setCurrentIndex(self.history_combo.findData(key))
         self.saved_study_key = key
         self.history_only = True
         self.saved_jobs.clear()
+        self.retried_tracking.clear()
         self.restored_rows.clear()
         self.remote_outcomes.clear()
         self.remote_records.clear()
@@ -1222,7 +1231,7 @@ class MeshConvergenceWidget(QWidget):
                 self.remote_records[row].setdefault("solver_cores", self.rows[row].settings.cores)
             self.restored_rows.update(group)
             if job.active:
-                self.saved_jobs[group] = job
+                self.saved_jobs[group] = job.path
             else:
                 # Keep attempted levels and their results for the study's refinement and limits.
                 cached = job.cached_results()
@@ -1245,13 +1254,15 @@ class MeshConvergenceWidget(QWidget):
         if not _connected or not self.saved_jobs or self.remote_controller.closing:
             return
         auth = self.remote_controller.auth()
-        if auth is None or auth.username != self.saved_study_key[0]:
+        if auth is None:
             return
         from truba_remote import resume_convergence_levels
 
-        for group, job in list(self.saved_jobs.items()):
+        for group, path in list(self.saved_jobs.items()):
+            if auth.username != self.remote_records[group[0]].get("username"):
+                continue
             try:
-                self.remote_jobs[group] = AnalysisProcess(resume_convergence_levels, job.path, remote_auth=auth)
+                self.remote_jobs[group] = AnalysisProcess(resume_convergence_levels, path, remote_auth=auth)
             except (ValueError, OSError, RuntimeError) as error:
                 self._set_status(f"Failed to track saved TRUBA jobs: {error}")
                 continue
@@ -1511,6 +1522,8 @@ class MeshConvergenceWidget(QWidget):
             tooltips[7] = f"{level.status}\nRequested RAM: {memory_mb / 1024:.1f} GiB"
             if directory := record.get("local_directory"):
                 tooltips[7] += f"\n{Path(directory) / 'slurm.err'}"
+        elif record.get("state", "").startswith("interrupted;") and (error := record.get("tracking_error")):
+            tooltips[7] = f"{level.status}\n{error}"
         for col, value in enumerate(values):
             item = QTableWidgetItem(value)
             detail = f"{level.kind}\n{level.status}\n{level.folder}"
@@ -1558,8 +1571,11 @@ class MeshConvergenceWidget(QWidget):
 
     @staticmethod
     def _remote_values(record):
+        saved_state = record.get("state") or ""
+        if saved_state.startswith("interrupted;"):
+            saved_state = record.get("last_queue_state") or saved_state
         state = ("OUT_OF_MEMORY" if record.get("failure_kind") == "out_of_memory" else
-                 record.get("slurm_status") or record.get("step_status") or record.get("state", ""))
+                 record.get("slurm_status") or record.get("step_status") or saved_state)
         context = record.get('context', {})
         allocated = record.get('level_memory_mb', context.get('memory_mb'))
         peak = record.get('peak_ram_mib')
@@ -1570,7 +1586,7 @@ class MeshConvergenceWidget(QWidget):
                 record.get('partition') or context.get('partition', ''))
 
     def _poll_remote_batch(self):
-        from convergence_history import mesh_job_finished
+        from convergence_history import mesh_job_finished, mesh_job_needs_results
 
         for group, job in list(self.remote_jobs.items()):
             done = job.done()
@@ -1580,6 +1596,21 @@ class MeshConvergenceWidget(QWidget):
                     self.results.setRowHidden(index, True)
             if done:
                 results = self._job_result(job)
+                record = self.remote_records.get(group[0], {})
+                if (isinstance(results, Exception) and not isinstance(results, CancelledError)
+                        and record.get("job_id") and record.get("local_directory")
+                        and record.get("state", "").startswith("interrupted;")
+                        and (not mesh_job_finished(record) or mesh_job_needs_results(record))):
+                    self.saved_jobs[group] = Path(record["local_directory"]) / "remote_job.json"
+                    if group not in self.retried_tracking:
+                        self.retried_tracking.add(group)
+                        self.tracking_retry.start()
+                    for index in group:
+                        self.rows[index].status = "TRUBA tracking paused"
+                        self.results.setRowHidden(index, False)
+                        self._render(index)
+                    del self.remote_jobs[group]
+                    continue
                 if len(group) == 1 or results is None or isinstance(results, Exception):
                     results = [results] * len(group)
                 for index, result in zip(group, results, strict=True):
@@ -1601,8 +1632,13 @@ class MeshConvergenceWidget(QWidget):
             return
         if self.saved_jobs:
             self.timer.stop()
+            self.stop_button.setEnabled(False)
+            self.force_stop_button.setEnabled(False)
+            self._refresh_saved_studies()
+            self.history_combo.setEnabled(True)
             self._refresh_script_controls()
             self._refresh_append_button()
+            self._set_status("TRUBA tracking paused · select the saved study or reconnect to resume")
             return
         if self.planned_scripts and not self.stop_requested.is_set():
             self.awaiting_script_run = True
@@ -1803,6 +1839,7 @@ class MeshConvergenceWidget(QWidget):
 
     def dispose(self):
         self.timer.stop()
+        self.tracking_retry.stop()
         self.stop_requested.set()
         self.force_stop()
         if self.future is None:

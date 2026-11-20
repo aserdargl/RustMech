@@ -92,6 +92,7 @@ def save_job(connection, context, settings, job_id, sizes, state, plan=None):
     path = connection.state_dir / "jobs" / f"{job_id}.json"
     write_record(directory / "request.json", request)
     write_record(path, record)
+    write_record(directory / "remote_job.json", record)
     if state == "downloaded":
         result = dict(request_id=job_id, source_sha256="hash", slurm_job_id=job_id,
                       levels=[dict(level=asdict(Level(level, elements=500, metrics=[1, 2, 3],
@@ -149,6 +150,9 @@ def test_previously_running_pair_disappears_when_slurm_reports_completion(study)
     worker.remote_status.return_value = record
     widget._poll_remote_batch()
     assert all(widget.results.isRowHidden(row) for row in range(2))
+    record = dict(record, state="downloaded")
+    write_record(path, record)
+    worker.remote_status.return_value = record
     worker.result.return_value = [Level(level.settings, status="completed") for level in widget.rows]
     worker.done.return_value = True
     widget._poll_remote_batch()
@@ -167,6 +171,42 @@ def test_reopen_with_only_finished_studies_keeps_the_table_empty(study):
     assert widget.results.rowCount() == 0
     assert widget.history_combo.count() == 0
     launch.assert_not_called()
+
+
+@pytest.mark.parametrize("accounting", [None, "COMPLETED|0:0"])
+def test_interrupted_tracking_resumes_the_same_job_without_marking_the_mesh_failed(study, accounting):
+    open_study, controller, connection, launch, auth, context, settings = study
+    path = save_job(connection, context, settings, "100", [.2, .15], "RUNNING")
+    record = json.loads(path.read_text())
+    local_path = connection.state_dir / "100" / "remote_job.json"
+    worker = MagicMock()
+    worker.done.return_value = False
+    launch.side_effect = None
+    launch.return_value = worker
+    controller.auth.return_value = auth
+    widget = open_study()
+    record.update(state="interrupted; resume using this job record", last_queue_state="RUNNING",
+                  slurm_status=accounting)
+    write_record(path, record)
+    write_record(local_path, record)
+    worker.remote_status.return_value = record
+    worker.done.return_value = True
+    worker.result.side_effect = ConnectionError("SSH closed")
+    widget._poll_remote_batch()
+    assert widget.future is None
+    assert widget.history_combo.count() == 1
+    assert widget.tracking_retry.isActive()
+    assert not widget.remote_outcomes
+    assert all(row.status == "TRUBA tracking paused" for row in widget.rows)
+    assert not any(widget.results.isRowHidden(row) for row in range(2))
+    assert widget.results.item(0, 8).text() == "100"
+    assert widget.results.item(0, 10).text() == (accounting or "RUNNING")
+    next_worker = MagicMock()
+    next_worker.done.return_value = False
+    launch.return_value = next_worker
+    connection.connection_changed.emit(True)
+    launch.assert_called_with(resume_convergence_levels, local_path, remote_auth=auth)
+    assert widget.future is next_worker
 
 
 def test_switch_between_previously_submitted_active_studies(study):
