@@ -244,10 +244,6 @@ class TrubaConnectionDialog(QDialog):
         self.job_list = TrubaJobList(self)
         self.active_jobs = TrubaActiveJobs(self)
         self.queue_status = TrubaQueueStatus(self)
-        self.queue_status_page = QWidget()
-        queue_page_layout = QVBoxLayout(self.queue_status_page)
-        queue_page_layout.setContentsMargins(0, 0, 0, 0)
-        self.tabs.addTab(self.queue_status_page, 'Queue status')
         self.tabs.addTab(self.active_jobs, 'Active jobs')
 
         self.job_tables_splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -262,7 +258,7 @@ class TrubaConnectionDialog(QDialog):
         self.job_tables_splitter.addWidget(self.queue_status_group)
         self.jobs_splitter.addWidget(self.job_tables_splitter)
         self.job_tables_splitter.setSizes([360, 540])
-        self.tabs.currentChanged.connect(self._place_queue_status)
+        self.tabs.currentChanged.connect(self._update_queue_status_visibility)
         self.jobs_splitter.setStretchFactor(0, 1)
         self.jobs_splitter.setStretchFactor(1, 1)
         # Initial proportions only; WindowStateStore restores the named splitter.
@@ -271,16 +267,8 @@ class TrubaConnectionDialog(QDialog):
         self.operation_progress = OperationProgress(self, provider=self._operation_state)
         layout.addWidget(self.operation_progress)
 
-    def _place_queue_status(self, _index):
-        # Both views share the same table, refresh timer and in-flight query.
-        page = self.tabs.currentWidget()
-        in_connection = page is self.settings_scroll
-        if in_connection or page is self.queue_status_page:
-            host = self.queue_status_group if in_connection else self.queue_status_page
-            if self.queue_status.parentWidget() is not host:
-                host.layout().addWidget(self.queue_status)
-                self.queue_status.show()
-        self.queue_status_group.setVisible(in_connection)
+    def _update_queue_status_visibility(self, _index):
+        self.queue_status_group.setVisible(self.tabs.currentWidget() is self.settings_scroll)
 
     def _operation_state(self):
         controller = getattr(self.parent(), "remote_controller", None)

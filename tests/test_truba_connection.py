@@ -99,7 +99,7 @@ class TrubaTests(unittest.TestCase):
         dialog.forget_password()
         self.assertEqual(dialog.password.text(), "")
 
-    def test_queue_status_is_shared_between_connection_and_queue_tabs(self):
+    def test_queue_status_is_embedded_in_connection_tab(self):
         dialog = self.dialog()
         tab = dialog.queue_status
         auth = RemoteAuth('tester', 'test')
@@ -116,6 +116,7 @@ class TrubaTests(unittest.TestCase):
             self.assertIs(tables.widget(0), dialog.job_list)
             self.assertIs(tables.widget(1), dialog.queue_status_group)
             self.assertIs(tab.parentWidget(), dialog.queue_status_group)
+            self.assertEqual(dialog.tabs.count(), 2)
             self.assertTrue(tab.isVisible())
             self.assertFalse(tab.refresh_button.isEnabled())
             transport.assert_not_called()
@@ -126,14 +127,9 @@ class TrubaTests(unittest.TestCase):
             self.app.processEvents()
             transport.assert_not_called()
             self.assertFalse(tab.timer.isActive())
-            dialog.tabs.setCurrentWidget(dialog.settings_scroll)
-            self.assertTrue(tab.timer.isActive())
-            worker = tab.worker
-            dialog.tabs.setCurrentWidget(dialog.queue_status_page)
-            self.assertIs(tab.parentWidget(), dialog.queue_status_page)
-            self.assertTrue(tab.isVisible())
             self.assertFalse(dialog.queue_status_group.isVisible())
-            self.assertIs(tab.worker, worker)
+            dialog.tabs.setCurrentWidget(dialog.settings_scroll)
+            self.assertTrue(tab.isVisible())
             self.assertTrue(tab.timer.isActive())
             self.assertTrue(tab.worker.wait(5000))
             self.app.processEvents()
@@ -342,7 +338,7 @@ class TrubaTests(unittest.TestCase):
             QTest.mouseRelease(handle, Qt.MouseButton.LeftButton, pos=center)
             expected_widths = tables.sizes()
             self.assertGreater(expected_widths[0], before_width)
-            first.tabs.setCurrentWidget(first.queue_status_page)
+            first.tabs.setCurrentWidget(first.active_jobs)
             first.hide()
             second = self.dialog()
             second.show()

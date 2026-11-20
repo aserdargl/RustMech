@@ -745,7 +745,7 @@ class RemoteModeUiTests(unittest.TestCase):
             'Credentials and password storage',
             'CPU, RAM and resource session', 'Advanced · remote runtime'])
         self.assertEqual([panel.tabs.tabText(i) for i in range(panel.tabs.count())],
-                         ['Connection', 'Queue status', 'Active jobs'])
+                         ['Connection', 'Active jobs'])
         self.assertIs(panel.tabs.currentWidget(), panel.settings_scroll)
         self.assertEqual(len({group.y() for group in groups}), 1)
         self.assertEqual(len({group.size().toTuple() for group in groups}), 1)
