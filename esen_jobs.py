@@ -6,6 +6,7 @@ from datetime import datetime
 from filecmp import cmp
 from functools import partial
 import hashlib
+from itertools import islice
 import json
 import ntpath
 import os
@@ -133,6 +134,85 @@ def read_slurm_script(path):
     return script
 
 
+def slurm_group_options(script):
+    """Return shareable Slurm directives, or None for an independent allocation."""
+    resources = {"-A", "-c", "-C", "-G", "-N", "-n", "-p", "-q", "-t",
+                 "--account", "--constraint", "--cpus-per-task", "--exclusive",
+                 "--gpus", "--gpus-per-node", "--gpus-per-task", "--gres", "--hint",
+                 "--mem", "--mem-per-cpu", "--mem-per-gpu", "--nodes", "--ntasks",
+                 "--ntasks-per-node", "--partition", "--qos", "--reservation", "--time"}
+    overridden = {"-D", "-e", "-J", "-o", "--chdir", "--error", "--job-name", "--output"}
+    options = []
+    for line in script.splitlines()[1:]:
+        line = line.strip()
+        if re.match(r"#SBATCH\s", line):
+            directive = line[7:].strip()
+            try:
+                parts = shlex.split(directive, comments=True)
+            except ValueError:
+                return None
+            if not parts or len(parts) > 2 or (len(parts) == 2 and parts[1].startswith("-")):
+                return None
+            flag = parts[0].split("=", 1)[0]
+            if flag in overridden:
+                continue
+            if flag not in resources:
+                return None
+            options.append(directive)
+        elif line and not line.startswith("#"):
+            break
+    return tuple(options)
+
+
+def folder_job_groups(source, names, maximum, *, slurm, restart=False):
+    """Keep compatible inputs in order and balance the number of cases per job."""
+    buckets = {}
+    for name in names:
+        if slurm and maximum > 1:
+            options = slurm_group_options(read_slurm_script(source / relative_file(name)))
+            key = options if options is not None else name
+        else:
+            key = name if restart else None
+        buckets.setdefault(key, []).append(name)
+    for entries in buckets.values():
+        count = (len(entries) + maximum - 1) // maximum
+        size, remainder = divmod(len(entries), count)
+        pending = iter(entries)
+        for index in range(count):
+            yield tuple(islice(pending, size + (index < remainder)))
+
+
+def group_case_paths(entries):
+    for index, entry in enumerate(entries, 1):
+        yield f"case-{index:04d}", relative_file(entry)
+
+
+def group_body(entries, *, launch=None):
+    lines = ['batch_root="$PWD"', "failed=0"]
+    for case, path in group_case_paths(entries):
+        command = launch(path.name) if launch else f'"$batch_root/{case}.sh"'
+        work = shlex.quote((Path("work") / case / path.parent).as_posix())
+        step = shlex.quote(f"ESEN_STEP={case} · {path.as_posix()}")
+        lines.extend((
+            f"printf '%s\\n' {step}",
+            "(",
+            f'    cd "$batch_root"/{work} || exit',
+            '    export SLURM_SUBMIT_DIR="$PWD"',
+            f"    exec {command}",
+            ') || { code=$?; printf "Case failed (exit %s)\\n" "$code" >&2; failed=1; }',
+        ))
+    return "\n".join((*lines, 'exit "$failed"', ""))
+
+
+def grouped_slurm_script(source, entries):
+    options = [slurm_group_options(read_slurm_script(source / relative_file(name))) for name in entries]
+    if options[0] is None or any(option != options[0] for option in options):
+        raise ValueError("The Slurm scripts no longer share the same resource settings.")
+    directives = "".join(f"#SBATCH {option}\n" for option in options[0])
+    return ("#!/bin/bash\n" + directives + "#SBATCH --output=stdout.log\n#SBATCH --error=stderr.log\n"
+            + group_body(entries))
+
+
 def scan_folder_files(root, *, include_results=False, directories=None):
     """List regular files as paths relative to the selected folder."""
     def walk_error(error):
@@ -177,7 +257,7 @@ def read_job(directory):
 
 
 def new_job(root, entry, target, ranks, *, parent, batch_folder=None, folder_upload=None, work_subdir=None,
-            truba_input_folder=None):
+            truba_input_folder=None, group_entries=()):
     directory = parent / uuid4().hex
     directory.mkdir(parents=True, exist_ok=False)
     record = dict(name=entry, target=target, ranks=ranks, state="Preparing",
@@ -186,6 +266,8 @@ def new_job(root, entry, target, ranks, *, parent, batch_folder=None, folder_upl
         record["truba_input_folder"] = truba_input_folder
     if batch_folder is not None:
         record["batch_folder"] = batch_folder
+    if group_entries:
+        record["group_entries"] = list(group_entries)
     if folder_upload is not None:
         upload = FolderUpload(*folder_upload)
         subdir = relative_file(entry).parent
@@ -319,7 +401,11 @@ def sync_slurm_folder(history, root, auth, selected, *, files=None, directory=""
         staging = Path(temporary)
         snapshot = snapshot_inputs(staging, root, None, files or (), files is None)
         for name in selected:
-            read_slurm_script(snapshot / relative_file(name))
+            path = snapshot / relative_file(name)
+            if is_slurm_script(name):
+                read_slurm_script(path)
+            elif not path.is_file():
+                raise ValueError(f"The selected input script is missing: {name}")
 
         manifest = {}
         for path in sorted(snapshot.rglob("*")):
@@ -480,7 +566,7 @@ def run_local(directory, record, files, command, stop, *, memory_mib=0):
 
 
 def remote_script(entry, ranks, partition, account, memory, walltime, module, executable, launcher,
-                  *, resume_input="", work_subdir=""):
+                  *, resume_input="", work_subdir="", group_entries=()):
     if partition not in CPU_QUEUES or not SAFE_NAME.fullmatch(account) or account in (".", ".."):
         raise ValueError("Select a CPU queue and enter a valid TRUBA account.")
     RemoteContext(partition=partition, account=account, walltime=walltime).validate()
@@ -496,10 +582,12 @@ def remote_script(entry, ranks, partition, account, memory, walltime, module, ex
     entry = relative_file(entry).as_posix()
     subdir = relative_file(work_subdir) if work_subdir else Path()
     work = (Path("work") / subdir).as_posix()
-    launch = f"{launcher} -n {ranks} {target} -nonbuf -in {shlex.quote(entry)}"
+    def launch(name):
+        return f"{launcher} -n {ranks} {target} -nonbuf -in {shlex.quote(name)}"
+
     modules = f"module purge\nmodule load {shlex.quote(module)}\n" if module else ""
     directives = ""
-    body = f"cd {shlex.quote(work)}\nexec {launch}\n"
+    body = group_body(group_entries, launch=launch) if group_entries else f"cd {shlex.quote(work)}\nexec {launch(entry)}\n"
     if resume_input:
         continuation = relative_file(resume_input).as_posix()
         hours, minutes, seconds = map(int, walltime.split(":"))
@@ -539,7 +627,10 @@ def full_node_resources(partition, catalog):
 def submit_full_node(directory, record, files, settings, auth):
     try:
         if record.get("folder_upload") and is_slurm_script(record["name"]):
-            script = read_slurm_script(job_inputs(directory, record) / relative_file(record["name"]))
+            source = job_inputs(directory, record)
+            entries = record.get("group_entries")
+            script = (grouped_slurm_script(source, entries) if entries else
+                      read_slurm_script(source / relative_file(record["name"])))
             submit_remote(directory, record, files, script, auth)
             return
         if "truba_input_folder" in record and is_slurm_script(record["name"]):
@@ -548,7 +639,7 @@ def submit_full_node(directory, record, files, settings, auth):
         catalog = fetch_catalog(RemoteContext(transport="ssh"), auth, live_node_capacity=True)
         ranks, memory, walltime = full_node_resources(settings["partition"], catalog)
         script = remote_script(files[1], ranks, memory=memory, walltime=walltime, **settings,
-                               work_subdir=record.get("work_subdir", ""))
+                               work_subdir=record.get("work_subdir", ""), group_entries=record.get("group_entries", ()))
         changes = dict(ranks=ranks, memory_mib=memory, partition=settings["partition"])
         if settings.get("resume_input"):
             changes["resume_input"] = settings["resume_input"]
@@ -649,12 +740,13 @@ def submit_remote(directory, record, files, script, auth):
         batch = directory / "run.slurm"
         work = shlex.quote(remote + "/work")
         work_subdir = record.get("work_subdir", "")
+        group_entries = record.get("group_entries")
         if truba_input is not None:
             stage_truba_inputs(transport, remote, auth.username, truba_input, files[1], record.get("resume_input"))
             if script is None:
                 transport.get(remote + "/work/" + relative_file(files[1]).as_posix(), batch)
                 script = read_slurm_script(batch)
-        else:
+        elif not group_entries:
             snapshot = job_inputs(directory, record) if upload_id else snapshot_inputs(directory, *files)
             input_dir = snapshot / relative_file(work_subdir) if work_subdir else snapshot
             if not (input_dir / relative_file(files[1])).is_file():
@@ -663,6 +755,20 @@ def submit_remote(directory, record, files, script, auth):
                 raise ValueError("Include the LAMMPS restart input in the job files.")
         batch.write_text(script, encoding="utf-8", newline="\n")
         if truba_input is not None:
+            transport.put(batch, remote + "/run.slurm")
+        elif group_entries:
+            source = _quoted_upload_inputs(record)
+            staging = ["set -e", "umask 077", f"mkdir -p -- {work}", f"cd -- {shlex.quote(remote)}"]
+            for case, path in group_case_paths(group_entries):
+                staging.append(f"cp -a --reflink=auto -- {source} work/{case}")
+                entry = shlex.quote((Path("work") / case / path).as_posix())
+                staging.append(f"test -f {entry}")
+                if is_slurm_script(record["name"]):
+                    staging.extend((
+                        f"sed '1s/^\\xEF\\xBB\\xBF//;s/\\r$//' {entry} > {case}.sh",
+                        f"chmod u+x -- {case}.sh",
+                    ))
+            transport.command("\n".join(staging), timeout=1800)
             transport.put(batch, remote + "/run.slurm")
         elif upload_id and not record.get("direct_upload"):
             source = _quoted_upload_inputs(record)
@@ -683,7 +789,7 @@ def submit_remote(directory, record, files, script, auth):
         save_job(directory, record, state="Submitting", username=auth.username)
         name = "ESEN-" + directory.name
         options = ""
-        if (upload_id or truba_input is not None) and is_slurm_script(record["name"]):
+        if not group_entries and (upload_id or truba_input is not None) and is_slurm_script(record["name"]):
             working = (remote + "/work/" + record.get("work_subdir", "")).rstrip("/")
             options = (f"--chdir={shlex.quote(working)} "
                        f"--output={shlex.quote(remote + '/stdout.log')} "
@@ -932,12 +1038,16 @@ def _quoted_upload_inputs(record):
 def remote_output_scan(record, *, archive=False):
     """List changed files from a Slurm work copy and all files for legacy jobs."""
     find = "find -P work -type f " + ("-print0" if archive else "-printf '%P\\0'")
-    if record.get("direct_upload") or not (record.get("folder_upload") and is_slurm_script(record["name"])):
+    grouped = record.get("group_entries")
+    if record.get("direct_upload") or not (
+        record.get("folder_upload") and (grouped or is_slurm_script(record["name"]))
+    ):
         return find
     source = _quoted_upload_inputs(record)
     output = "$file" if archive else "${file#work/}"
+    original = "${file#work/*/}" if grouped else "${file#work/}"
     return f"""find -P work -type f -print0 | while IFS= read -r -d '' file; do
-    original={source}/"${{file#work/}}"
+    original={source}/"{original}"
     if [ ! -f "$original" ] || ! cmp -s -- "$file" "$original"; then
         printf '%s\\0' "{output}"
     fi

@@ -417,7 +417,7 @@ def test_job_settings_sync_uses_selected_folders(remote, tmp_path, monkeypatch):
         transfer.assert_called_once_with(truba.auth, directory, local)
         assert "Uploaded: 1" in workspace.sync_status.text()
         assert "Downloaded: 2" in workspace.sync_status.text()
-        assert workspace.history.count() == 0
+        assert workspace.history.rowCount() == 0
     finally:
         workspace.dispose()
 
@@ -445,6 +445,7 @@ def test_run_uses_the_truba_selection_instead_of_checked_local_scripts(remote, t
         workspace._tick()
         local_item = workspace.inputs.items()[0]
         local_item.setCheckState(0, Qt.CheckState.Checked)
+        workspace.jobs_per_script.setValue(2)
         assert workspace.start.isEnabled()
         browser.files.setCurrentItem(browser.files.topLevelItem(0))
         assert not workspace.start.isEnabled()
@@ -452,7 +453,8 @@ def test_run_uses_the_truba_selection_instead_of_checked_local_scripts(remote, t
         assert workspace.start.isEnabled()
         browser.files.setCurrentItem(browser.files.topLevelItem(2))
         assert workspace.start.isEnabled()
-        assert workspace.history.count() == 0
+        assert workspace.jobs_per_script.isHidden()
+        assert workspace.history.rowCount() == 0
         assert "remote.slurm" in workspace.input_note.text()
         browser.refresh.click()
         browser.task[0].result(timeout=5)
@@ -469,6 +471,7 @@ def test_run_uses_the_truba_selection_instead_of_checked_local_scripts(remote, t
         assert files[1] == "remote.slurm"
         workspace.inputs.setCurrentItem(local_item)
         assert workspace.start.isEnabled()
+        assert workspace.jobs_per_script.isVisible()
         assert "remote.slurm" not in workspace.input_note.text()
     finally:
         workspace.dispose()

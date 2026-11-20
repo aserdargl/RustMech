@@ -1119,15 +1119,98 @@ class EsenTests(unittest.TestCase):
             )
             workspace.start.click()
             workspace.upload_task[0].result(timeout=5)
+            workspace._check_upload()
+            workspace.remote_task[1].result(timeout=5)
             workspace._tick()
-            if workspace.remote_task:
-                workspace.remote_task[1].result(timeout=5)
-                workspace._tick()
             sync.assert_called_with(self.history, self.source.resolve(), self.auth, ("run_second.slurm",), progress=ANY)
             launch.assert_called_once()
             self.assertEqual(workspace.history.rowCount(), 1)
             self.assertEqual(workspace.history.item(0, 4).text(), "run_second.slurm")
             self.assertEqual(workspace.history.item(0, 1).text(), "Submitted")
+
+    def test_folder_automatically_groups_unchecked_jobs_when_a_size_is_entered(self):
+        app = QApplication.instance() or QApplication([])
+        truba = FakeTruba()
+        truba.auth = self.auth
+        preferences = QSettings(str(self.root / "settings.ini"), QSettings.Format.IniFormat)
+        names = tuple(f"{index:02d}/in.run" for index in range(7))
+        for name in names:
+            path = self.source / name
+            path.parent.mkdir()
+            path.touch()
+        with patch("esen_workspace.QSettings", return_value=preferences):
+            workspace = EsenWorkspace(truba, history=self.history)
+        self.addCleanup(workspace.dispose)
+        workspace.show()
+        app.processEvents()
+        self.load_batch(workspace)
+        self.assertEqual(list(workspace._folder_jobs()), [])
+        workspace.jobs_per_script.setFocus()
+        field = workspace.jobs_per_script.field
+        field.selectAll()
+        QTest.keyClicks(field, "3")
+        QTest.keyClick(field, Qt.Key.Key_Return)
+        self.assertIsNone(workspace.upload_task)
+        self.assertEqual(workspace.jobs_per_script.value(), 3)
+        self.assertTrue(workspace.start.isEnabled())
+        self.assertIn("7 jobs found", workspace.input_note.text())
+        workspace.resume_input.setText("folder\\in.run")
+        self.assertEqual(workspace._automatic_jobs(), names)
+        workspace.resume_input.setText("00\\in.run")
+        self.assertEqual(workspace._automatic_jobs(), names[1:])
+        workspace.resume_input.clear()
+        upload_id = "b" * 32
+        snapshot = jobs.upload_snapshot(self.history, upload_id)
+        for name in names:
+            path = snapshot / name
+            path.parent.mkdir(parents=True)
+            path.touch()
+        with (patch("esen_jobs.sync_slurm_folder", return_value=upload_id) as sync,
+              patch("esen_jobs.submit_full_node") as launch):
+            workspace.start.click()
+            workspace.upload_task[0].result(timeout=5)
+            workspace._tick()
+            while workspace.remote_task:
+                workspace.remote_task[1].result(timeout=5)
+                workspace._tick()
+            sync.assert_called_once_with(self.history, self.source.resolve(), self.auth, names, progress=ANY)
+            actual = [call.args[1]["group_entries"] for call in launch.call_args_list]
+            self.assertEqual(actual, [list(names[:3]), list(names[3:5]), list(names[5:])])
+            self.assertEqual(workspace.history.rowCount(), 3)
+            self.assertIn("Group of 2 jobs", workspace.history.item(0, 4).text())
+
+    def test_grouped_slurm_copies_isolate_cases_and_use_one_submission(self):
+        upload = jobs.FolderUpload("b" * 32, self.auth.username)
+        snapshot = jobs.upload_snapshot(self.history, upload.upload_id)
+        available = {
+            "case a/run.slurm": "#SBATCH --ntasks=2\n#SBATCH --job-name=first\n",
+            "case 'b'/run.slurm": "#SBATCH --ntasks=2\n#SBATCH --job-name=second\n",
+            "other/run.slurm": "#SBATCH --ntasks=4\n",
+            "dependent/run.slurm": "#SBATCH --ntasks=2 --dependency=afterok:7\n",
+        }
+        for name, options in available.items():
+            path = snapshot / name
+            path.parent.mkdir(parents=True)
+            path.write_text(f"#!/bin/bash\n{options}pwd\n", encoding="utf-8")
+        grouped, other, dependent = list(jobs.folder_job_groups(snapshot, available, 3, slurm=True))
+        self.assertEqual(grouped, tuple(available)[:2])
+        self.assertEqual((other, dependent), (("other/run.slurm",), ("dependent/run.slurm",)))
+        directory, record = jobs.new_job(self.source, grouped[0], "remote", None, parent=self.history,
+                                         folder_upload=upload, group_entries=grouped)
+        with patch("esen_jobs.RemoteTransport") as factory:
+            transport = factory.return_value
+            transport.command.side_effect = ["", "JOB_ID=123\n"]
+            jobs.submit_full_node(directory, record, (None, "run.slurm", (), True), None, self.auth)
+        script = (directory / "run.slurm").read_text(encoding="utf-8")
+        self.assertIn("#SBATCH --ntasks=2\n", script)
+        self.assertNotIn("#SBATCH --job-name", script)
+        self.assertIn("work/case-0001/case a", script)
+        self.assertIn("work/case-0002/case ", script)
+        stage, submit = [call.args[0] for call in transport.command.call_args_list]
+        self.assertEqual(stage.count("cp -a --reflink=auto"), 2)
+        self.assertIn("sbatch --parsable", submit)
+        self.assertIn("${file#work/*/}", jobs.remote_output_scan(record))
+        self.assertEqual((record["state"], record["job_id"]), ("Submitted", "123"))
 
     def test_run_submits_an_uploaded_run_list_without_local_inputs(self):
         app = QApplication.instance() or QApplication([])
@@ -1324,7 +1407,7 @@ class EsenTests(unittest.TestCase):
             workspace.inputs.setCurrentItem(workspace.inputs.items()[0])
             workspace.start.click()
             run_upload_id = workspace.upload_task[0].result(timeout=5)
-            workspace._tick()
+            workspace._check_upload()
             workspace.remote_task[1].result(timeout=5)
             launch.assert_called_once()
             record = launch.call_args.args[1]

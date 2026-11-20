@@ -151,6 +151,16 @@ The ESEN run list is empty.|ESEN iş listesi boş.
 Run uploads the selected local inputs to TRUBA.|Çalıştır, seçili yerel girdileri TRUBA’ya aktarır.
 Add a folder or drop inputs here.|Klasör ekleyin veya girdileri buraya bırakın.
 {files} files · {scripts} scripts selected|{files} dosya · {scripts} betik seçili
+Jobs per script|Betik başına iş
+Manual|Elle
+Automatically include all runnable scripts in the folder.|Klasördeki çalıştırılabilir betikleri otomatik olarak dahil eder.
+No runnable scripts found.|Çalıştırılabilir betik bulunamadı.
+{count} jobs found · up to {maximum} per Slurm script|{count} iş bulundu · Slurm betiği başına en fazla {maximum} iş
+Grouped jobs run in sequence and share one Slurm time limit.|Bir gruptaki işler sırayla çalışır ve aynı Slurm süre sınırını paylaşır.
+Slurm scripts with different resource settings run in separate groups.|Farklı kaynak ayarları olan Slurm betikleri ayrı gruplarda çalışır.
+The Slurm scripts no longer share the same resource settings.|Slurm betiklerinin kaynak ayarları artık aynı değil.
+Jobs with a restart input run separately.|Devam girdisi olan işler ayrı çalışır.
+Group of {count} jobs|{count} işlik grup
 Scanning folder…|Klasör taranıyor…
 No LAMMPS input scripts named in.* or *.in were found.|in.* veya *.in adında LAMMPS girdi betiği bulunamadı.
 Waiting to run|Çalıştırma sırasını bekliyor

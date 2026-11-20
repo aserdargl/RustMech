@@ -127,6 +127,17 @@ TRUBA’ya aktarır ve her betiği kendi klasöründeki göreli yollarla ayrı b
 Slurm işi olarak gönderir. Aynı aktarım birden fazla işte kullanılır.
 Çalışan işlerin ayrı çalışma kopyaları vardır.
 
+İşleri tek tek işaretlemeden göndermek için **Betik başına iş** alanına bir
+sayı girin ve **Çalıştır**'a basın. ESEN klasörde bulduğu işleri dengeli
+gruplara böler. Örneğin 7 uyumlu iş için `3` girildiğinde gruplar 3, 2 ve
+2 iş alır. Her grup bir Slurm işi olarak gönderilir. Gruptaki işler kendi
+çalışma kopyalarında sırayla çalışır ve aynı Slurm süre sınırını paylaşır.
+Farklı kaynak isteyen veya ayrı Slurm gönderimi gerektiren hazır betikler
+kendi ayarlarıyla çalışır. **Elle** değeri işaretlediğiniz dosyaları kullanır.
+
+Bu ayar LAMMPS girdi klasörlerinde de kullanılabilir. Devam girdisi
+tanımlı LAMMPS işleri, bağımsız ara kayıt takibi için ayrı gönderilir.
+
 Dosya listesinde Ctrl ile tek tek, Shift ile aralık seçin. Boşluk tuşu
 seçili çalıştırılabilir betiklerin kutularını birlikte işaretler veya temizler.
 **İş ayarları** dosyaları kendi klasörlerinin altında gösterir. Ada veya uzantıya
