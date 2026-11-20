@@ -128,6 +128,32 @@ class RemoteProtocolTests(unittest.TestCase):
         self.assertEqual(record["solver_cores"], 16)
         self.assertEqual(record["job_id"], "321")
 
+    def test_convergence_classifies_slurm_memory_errors_before_retrieving_archive(self):
+        from truba_remote import SlurmOutOfMemory
+
+        for accounting, stderr in (("FAILED|1:0", "Detected 1 oom_kill event\nsrun: Out Of Memory"),
+                                   ("OUT_OF_MEMORY|0:125", "")):
+            with self.subTest(accounting=accounting):
+                class MemoryFailureTransport(FakeTransport):
+                    def command(self, script):
+                        if "RUSTMECH_ACCOUNTING" in script:
+                            return f"RUSTMECH_ACCOUNTING={accounting}\n"
+                        return super().command(script)
+
+                    def get(self, remote, local):
+                        if remote.endswith("result.tar.gz"):
+                            raise AssertionError("Must not download an unusable result archive")
+                        Path(local).write_text(stderr if remote.endswith("slurm.err") else "")
+
+                request = {"operation": "convergence_level", "settings": asdict(Settings(solver_backend="kratos"))}
+                folder = self.root / accounting.split("|")[0]
+                with patch("truba_remote.RemoteTransport", MemoryFailureTransport), self.assertRaises(SlurmOutOfMemory):
+                    run_remote_job(request, RemoteContext(memory_mb=68000, cores=20), directory=folder)
+                record = json.loads((folder / "remote_job.json").read_text())
+                self.assertEqual(record["state"], "OUT_OF_MEMORY")
+                self.assertEqual(record["slurm_status"], accounting)
+                self.assertEqual(record["failure_memory_mb"], 68000)
+
     def test_submission_download_checksum_and_resume_do_not_resubmit(self):
         result,directory = run_remote_job(dict(operation="probe"),RemoteContext(),directory=self.root/"job")
         self.assertTrue(result["capabilities"]["mesh"])

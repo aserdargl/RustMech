@@ -172,6 +172,7 @@ class MeshConvergenceWidget(QWidget):
         self.remote_jobs = {}
         self.remote_outcomes = {}
         self.remote_records = {}
+        self.single_remote_run = False
         self.rows = []
         self.time_units = {1: "s", 2: "s"}
         self.recommended = None
@@ -240,6 +241,10 @@ class MeshConvergenceWidget(QWidget):
         self.automatic = QCheckBox("Automatic mesh selection")
         self.automatic.setChecked(True)
         form.addRow(self.automatic)
+        self.single_truba_mesh = QCheckBox("Run only the starting mesh on TRUBA")
+        self.single_truba_mesh.setToolTip("Use the job's full RAM budget for one mesh without refining it.")
+        self.single_truba_mesh.hide()
+        form.addRow(self.single_truba_mesh)
         self.manual = QLineEdit()
         self.manual.setPlaceholderText("Coarse to fine, e.g. 0.3, 0.2, 0.15 (mm)")
         self.manual.setEnabled(False)
@@ -411,7 +416,8 @@ class MeshConvergenceWidget(QWidget):
 
     def _results_context_menu(self, position):
         column = self.results.columnAt(position.x())
-        self._show_time_menu(column, self.results.viewport().mapToGlobal(position), copy_actions=True)
+        row = self.results.rowAt(position.y())
+        self._show_time_menu(column, self.results.viewport().mapToGlobal(position), copy_actions=True, row=row)
 
     def _header_context_menu(self, position):
         header = self.results.horizontalHeader()
@@ -419,7 +425,7 @@ class MeshConvergenceWidget(QWidget):
         if column in self.time_units:
             self._show_time_menu(column, header.viewport().mapToGlobal(position))
 
-    def _show_time_menu(self, column, position, copy_actions=False):
+    def _show_time_menu(self, column, position, copy_actions=False, row=-1):
         menu = QMenu(self.results)
         menu.setObjectName("convergenceTimeUnitMenu")
         menu.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
@@ -434,6 +440,11 @@ class MeshConvergenceWidget(QWidget):
                 group.addAction(action)
                 action.triggered.connect(
                     lambda _checked=False, col=column, selected=unit: self._set_time_unit(col, selected))
+        if (self.future is None and self.run_on_truba.isChecked()
+                and self.remote_records.get(row, {}).get("failure_memory_mb")):
+            if not menu.isEmpty():
+                menu.addSeparator()
+            menu.addAction("Retry this mesh with more RAM", lambda: self._retry_memory_failure(row))
         if copy_actions:
             if not menu.isEmpty():
                 menu.addSeparator()
@@ -468,7 +479,7 @@ class MeshConvergenceWidget(QWidget):
         self.status.setText(message)
         self.status.setToolTip(message)
         tone = ("success" if message.startswith("Converged") else
-                "error" if "Failed" in message or "failed" in message else
+                "error" if "failed" in message.lower() or message.startswith("Insufficient RAM") else
                 "warning" if "not confirmed" in message else "")
         if self.status.property("tone") != tone:
             self.status.setProperty("tone", tone)
@@ -483,6 +494,7 @@ class MeshConvergenceWidget(QWidget):
     def _sync_execution_target(self):
         with QSignalBlocker(self.run_on_truba):
             self.run_on_truba.setChecked(self.remote_controller.requested)
+        self.single_truba_mesh.setVisible(self.run_on_truba.isChecked())
         remote = self.run_on_truba.isChecked()
         self.truba_cores_label.setVisible(remote)
         self.truba_cores.setVisible(remote)
@@ -598,6 +610,7 @@ class MeshConvergenceWidget(QWidget):
     def start(self):
         if self.future is not None:
             return
+        self.single_remote_run = self.run_on_truba.isChecked() and self.single_truba_mesh.isChecked()
         try:
             capabilities = get_solver_capabilities(self.solver_combo.currentData())
             if not capabilities.implemented:
@@ -609,7 +622,7 @@ class MeshConvergenceWidget(QWidget):
             if not self.selected:
                 raise ValueError("Select at least one response metric in Advanced.")
             self.manual_pending = []
-            if self.automatic.isChecked():
+            if self.automatic.isChecked() or self.single_remote_run:
                 first = self.level_settings(self.start_size.value())
             else:
                 sizes = [float(v.strip()) for v in self.manual.text().split(",")]
@@ -673,9 +686,7 @@ class MeshConvergenceWidget(QWidget):
         return len(self.rows) - 1
 
     def _launch_remote_batch(self, settings, kind):
-        from truba_remote import run_remote_level
-
-        limit = min(TRUBA_BATCH_SIZE, self.max_levels.value() - len(self.rows))
+        limit = 1 if self.single_remote_run else min(TRUBA_BATCH_SIZE, self.max_levels.value() - len(self.rows))
         if not self.automatic.isChecked():
             limit = min(limit, 1 + len(self.manual_pending))
         try:
@@ -704,6 +715,11 @@ class MeshConvergenceWidget(QWidget):
             while len(plan) < limit and self.manual_pending and self.manual_pending[0].mesh_resolution >= self.minimum.value():
                 plan.append((self.manual_pending.pop(0), "Manual"))
 
+        self._submit_remote_levels(plan, context, auth)
+
+    def _submit_remote_levels(self, plan, context, auth):
+        from truba_remote import run_remote_level
+
         context = replace(context, session_id="", parallel_jobs=1)
         indices = [self._add_level(settings, kind, "TRUBA · preparing submission")
                    for settings, kind in plan]
@@ -722,6 +738,28 @@ class MeshConvergenceWidget(QWidget):
             self._finish(self.rows[-1].status)
         else:
             self._set_status(f"TRUBA · {len(self.remote_jobs)} analyses active")
+
+    def _retry_memory_failure(self, row):
+        memory_mb = self.remote_records.get(row, {}).get("failure_memory_mb")
+        if self.future is not None or not self.run_on_truba.isChecked() or not memory_mb:
+            return
+        settings = replace(self.rows[row].settings, cores=self.truba_cores.value())
+        try:
+            context, auth = self.remote_controller.require_convergence(settings, max_jobs=1)
+            if context.memory_mb <= memory_mb:
+                raise ValueError(f"This mesh previously exceeded {memory_mb / 1024:.1f} GiB. "
+                                 "Increase the TRUBA RAM request or select a queue with more RAM.")
+        except (ValueError, RuntimeError, OSError) as exc:
+            self._set_status(f"Failed to retry mesh: {exc}")
+            return
+        self.single_remote_run = True
+        self.recommended = None
+        self.stop_requested.clear()
+        self.started = monotonic()
+        self._set_running(True)
+        self._submit_remote_levels([(settings, "RAM retry")], context, auth)
+        if self.future is not None:
+            self.timer.start()
 
     def request_stop(self):
         self.stop_requested.set()
@@ -820,6 +858,10 @@ class MeshConvergenceWidget(QWidget):
                   *[f"{float(v):.6g}" if self._numeric(v) else "—" for v in level.metrics],
                   delta, level.status, *(value or "—" for value in remote_values)]
         tooltips = {6: delta_hint, 8: values[8], 9: script_paths or values[9], 10: values[10]}
+        if memory_mb := record.get("failure_memory_mb"):
+            tooltips[7] = f"{level.status}\nRequested RAM: {memory_mb / 1024:.1f} GiB"
+            if directory := record.get("local_directory"):
+                tooltips[7] += f"\n{Path(directory) / 'slurm.err'}"
         for col, value in enumerate(values):
             item = QTableWidgetItem(value)
             detail = f"{level.kind}\n{level.status}\n{level.folder}"
@@ -867,8 +909,9 @@ class MeshConvergenceWidget(QWidget):
 
     @staticmethod
     def _remote_values(record):
-        return (str(record.get("job_id", "")), record.get("script_name", ""),
-                record.get("slurm_status") or record.get("step_status") or record.get("state", ""))
+        state = ("OUT_OF_MEMORY" if record.get("failure_kind") == "out_of_memory" else
+                 record.get("slurm_status") or record.get("step_status") or record.get("state", ""))
+        return (str(record.get("job_id", "")), record.get("script_name", ""), state)
 
     def _poll_remote_batch(self):
         for index, job in list(self.remote_jobs.items()):
@@ -895,6 +938,8 @@ class MeshConvergenceWidget(QWidget):
         self._after_levels(outcomes)
 
     def _collect_level(self, index, job, remote_record=None):
+        from truba_remote import SlurmOutOfMemory
+
         remote_record = remote_record or {}
         previous = self.rows[index]
         retry_allowed = True
@@ -908,7 +953,12 @@ class MeshConvergenceWidget(QWidget):
             retry_allowed = False
         except Exception as exc:
             level = replace(previous, status=f"Failed: {exc}")
-            if remote_record.get("submission_attempted") or remote_record.get("job_id"):
+            if isinstance(exc, SlurmOutOfMemory) or remote_record.get("failure_kind") == "out_of_memory":
+                memory_mb = exc.memory_mb if isinstance(exc, SlurmOutOfMemory) else remote_record.get("failure_memory_mb")
+                self.remote_records[index] = dict(remote_record, failure_kind="out_of_memory", failure_memory_mb=memory_mb)
+                level.status = "Insufficient RAM"
+                retry_allowed = False
+            elif remote_record.get("submission_attempted") or remote_record.get("job_id"):
                 from truba_jobs import SLURM_TERMINAL_STATES
                 accounting = remote_record.get("slurm_status") or remote_record.get("step_status", "")
                 state = accounting.partition("|")[0].partition(" ")[0].rstrip("+")
@@ -925,6 +975,14 @@ class MeshConvergenceWidget(QWidget):
             return
         if self.stop_requested.is_set():
             self._finish("Stopped; convergence not confirmed. Partial results can be exported.")
+            return
+        if any(self.remote_records.get(index, {}).get("failure_kind") == "out_of_memory" for index, _ in outcomes):
+            self._finish("Insufficient RAM. Further refinement stopped. Right-click the affected row to retry with more RAM.")
+            return
+        if self.single_remote_run:
+            level = self.rows[outcomes[-1][0]]
+            message = "Single mesh completed." if level.status == "completed" else level.status
+            self._finish(message)
             return
         for index, retry_allowed in outcomes:
             level = self.rows[index]

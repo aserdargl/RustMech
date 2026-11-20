@@ -281,6 +281,24 @@ def request_resources(context, operation):
     return max(1, context.cores // slots), max(1, context.memory_mb // slots)
 
 
+class SlurmOutOfMemory(RuntimeError):
+    def __init__(self, memory_mb, log_path):
+        self.memory_mb = memory_mb
+        super().__init__(f"Insufficient RAM ({memory_mb / 1024:g} GiB requested). See {log_path}")
+
+
+def convergence_memory_failure(record, accounting, log_path):
+    if record.get("operation") != "convergence_level" or accounting == "COMPLETED|0:0":
+        return False
+    if accounting.partition("|")[0].strip().partition(" ")[0].rstrip("+") == "OUT_OF_MEMORY":
+        return True
+    try:
+        with log_path.open(encoding="utf-8", errors="replace") as log:
+            return any(re.search(r"\boom[-_]kill(?:ed)?\b|\bout of memory\b", line, re.I) for line in log)
+    except OSError:
+        return False
+
+
 def analysis_code(record):
     request_id = str(record.get("request_id", ""))
     return "RM-" + request_id[:12].upper() if re.fullmatch(r"[a-f0-9]{32}", request_id) else ""
@@ -535,18 +553,23 @@ if [ -s job.id ]; then printf 'RUSTMECH_JOB_ID=%s\n' "$(cat job.id)"; fi
             terminal_state = accounting.partition("|")[0].split()
             if not terminal_state or terminal_state[0].rstrip("+") not in SLURM_TERMINAL_STATES:
                 return None
-            if accounting != "COMPLETED|0:0":
-                for name in ("slurm.out", "slurm.err"):
-                    try: transport.get(remote+"/"+name, directory/name)
-                    except (OSError, RuntimeError): pass
-                record["slurm_status"] = accounting
-                update(accounting)
-                return None
         record["slurm_status"] = accounting
-        update("downloading")
+        if not poll_once or accounting == "COMPLETED|0:0":
+            update("downloading")
         for name in ("slurm.out","slurm.err"):
             try: transport.get(remote+"/"+name,directory/name)
             except (OSError,RuntimeError): pass
+        log_path = directory / "slurm.err"
+        if convergence_memory_failure(record, accounting, log_path):
+            _, memory_mb = request_resources(context, "convergence_level")
+            record.update(failure_kind="out_of_memory", failure_memory_mb=memory_mb)
+            update("OUT_OF_MEMORY")
+            if poll_once:
+                return None
+            raise SlurmOutOfMemory(memory_mb, log_path)
+        if poll_once and accounting != "COMPLETED|0:0":
+            update(accounting)
+            return None
         try: transport.get(remote+"/result.tar.gz",directory/"result.tar.gz")
         except (OSError,RuntimeError) as error:
             raise RuntimeError(f"Remote results are unavailable ({accounting or 'SLURM accounting not confirmed'}). See {directory/'slurm.out'} and the saved job record.") from error
@@ -565,6 +588,8 @@ if [ -s job.id ]; then printf 'RUSTMECH_JOB_ID=%s\n' "$(cat job.id)"; fi
         result = _rebase_paths(directory,result)
         update("downloaded")
         return result,directory
+    except SlurmOutOfMemory:
+        raise
     except BaseException:
         saved = json.loads(paths[0].read_text()) if paths[0].exists() else {}
         if is_detaching() and record.get('submission_attempted') and not submit_only:

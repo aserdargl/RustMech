@@ -459,6 +459,12 @@ FE Elements|SE elemanları
 Nodes|Düğümler
 Tetra mesher|Tetra ağ oluşturucu
 Automatic mesh selection|Otomatik ağ seçimi
+Run only the starting mesh on TRUBA|TRUBA'da yalnızca başlangıç ağını çalıştır
+Use the job's full RAM budget for one mesh without refining it.|İşin tüm RAM bütçesini tek ağ seviyesi için kullanır.
+Retry this mesh with more RAM|Bu ağı daha fazla RAM ile yeniden dene
+Insufficient RAM|Yetersiz RAM
+Single mesh completed.|Tek ağ analizi tamamlandı.
+Insufficient RAM. Further refinement stopped. Right-click the affected row to retry with more RAM.|Yetersiz RAM. Ağ inceltme durduruldu. Daha fazla RAM ile yeniden denemek için ilgili satıra sağ tıklayın.
 Automatic|Otomatik
 Auto|Otomatik
 Auto (TPMS cells / Netgen)|Otomatik (TPMS hücreleri / Netgen)

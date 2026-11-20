@@ -545,6 +545,54 @@ class LiveConvergenceTests(unittest.TestCase):
         self.assertIn("after 3 failed retries", widget.status.text())
         self.assertIsNone(widget.future)
 
+    def test_truba_memory_failure_stops_refinement_and_retries_exact_mesh_only_with_more_ram(self):
+        from truba_remote import SlurmOutOfMemory
+
+        widget = self.truba_study(slots=2)
+        first, oom, retried = MagicMock(), MagicMock(), MagicMock()
+        first.result.return_value = completed(.2, 10, 100)
+        oom.result.side_effect = SlurmOutOfMemory(10000, self.folder / "slurm.err")
+        oom.remote_status.return_value = {"job_id": "412", "slurm_status": "FAILED|1:0"}
+        with patch("mesh_convergence.AnalysisProcess", side_effect=[first, oom, retried]) as submit:
+            widget.start()
+            widget._poll()
+            self.assertEqual(submit.call_count, 2)
+            self.assertEqual(widget.results.item(1, 7).text(), "Insufficient RAM")
+            self.assertEqual(widget.results.item(1, 10).text(), "OUT_OF_MEMORY")
+            self.assertIn("Further refinement stopped", widget.status.text())
+            widget._retry_memory_failure(1)
+            self.assertEqual(submit.call_count, 2)
+            self.assertIn("Increase the TRUBA RAM", widget.status.text())
+
+            widget.remote_controller.require_convergence.return_value = (
+                RemoteContext(cores=40, memory_mb=262144, parallel_jobs=1), object())
+            widget.truba_cores.setValue(40)
+            widget._retry_memory_failure(1)
+            self.assertEqual(submit.call_count, 3)
+            settings, context = submit.call_args.args[1:3]
+            self.assertEqual(settings.mesh_resolution, widget.rows[1].settings.mesh_resolution)
+            self.assertEqual(settings.cores, 40)
+            self.assertEqual(context.memory_mb, 262144)
+            widget.remote_controller.require_convergence.assert_called_with(settings, max_jobs=1)
+            retried.result.return_value = completed(settings.mesh_resolution, 15, 150)
+            widget._poll()
+            self.assertEqual(submit.call_count, 3)
+            self.assertIsNone(widget.future)
+            self.assertEqual(widget.status.text(), "Single mesh completed.")
+
+    def test_single_truba_mesh_uses_starting_size_and_stops_after_one_result(self):
+        widget = self.truba_study()
+        widget.single_truba_mesh.setChecked(True)
+        job = MagicMock()
+        job.result.return_value = completed(.2, 10, 100)
+        with patch("mesh_convergence.AnalysisProcess", return_value=job) as submit:
+            widget.start()
+            widget._poll()
+        submit.assert_called_once()
+        widget.remote_controller.require_convergence.assert_called_with(submit.call_args.args[1], max_jobs=1)
+        self.assertEqual(submit.call_args.args[1].mesh_resolution, .2)
+        self.assertIsNone(widget.future)
+
     def test_loading_and_contacts_are_frozen_for_every_level(self):
         received = []
         def solver(settings, mesh):
