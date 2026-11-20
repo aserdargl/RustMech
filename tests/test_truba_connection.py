@@ -13,7 +13,7 @@ from PySide6.QtCore import QItemSelectionModel, QPoint, QSettings, Qt
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QLineEdit, QMessageBox
 
-from truba_active_jobs import PENDING_REASON_COLUMN, QUEUE_SEPARATOR, display_start, query_active_jobs
+from truba_active_jobs import PENDING_REASON_COLUMN, QUEUE_SEPARATOR, RAM_COLUMN, display_start, query_active_jobs
 from truba_client import TrubaSession
 from truba_connection import TrubaConnectionDialog
 from truba_credentials import CredentialStore
@@ -22,8 +22,13 @@ from truba_ssh import ssh_connection
 from window_state import WindowStateStore
 
 
-def queue_output(*rows):
-    return '\n'.join(row.replace('|', QUEUE_SEPARATOR, 10) for row in rows)
+def queue_output(*rows, tres_by_id=None):
+    tres_by_id = tres_by_id or {}
+    lines = []
+    for row in rows:
+        *fields, command = row.split('|', 10)
+        lines.append(QUEUE_SEPARATOR.join((*fields, tres_by_id.get(fields[0], ''), command)))
+    return '\n'.join(lines)
 
 
 SELECT_ROW = QItemSelectionModel.SelectionFlag.ClearAndSelect | QItemSelectionModel.SelectionFlag.Rows
@@ -566,6 +571,8 @@ class TrubaTests(unittest.TestCase):
             '7|RUNNING|2026-11-18T04:15:00|25:40|8:00:00|20|1|short|None|bash|',
             f'8|RUNNING|2026-11-18T04:15:00|25:40|8:00:00|16|1|short|None|ESEN-{esen_id}|/scratch/run.slurm',
             '9|RUNNING|2026-11-18T04:15:00|25:40|8:00:00|8|1|short|None|RustMech-remote|preview.slurm',
+            tres_by_id={'1': 'cpu=64,mem=120G,node=2', '2': 'cpu=32,mem=23040M,node=1',
+                        '5_[1-16%4]': 'cpu=16,mem=1.5T,node=1'},
         )
         with (patch.object(dialog, 'analysis_auth', return_value=RemoteAuth('tester', 'test')),
               patch('truba_active_jobs.esen_jobs_directory', return_value=self.directory / 'ESEN' / 'jobs'),
@@ -583,13 +590,21 @@ class TrubaTests(unittest.TestCase):
             command = transport.return_value.command.call_args.args[0]
             self.assertIn('--user=tester', command)
             self.assertIn('--all', command.split())
-            self.assertIn(QUEUE_SEPARATOR.join(('%i', '%T', '%S', '%M', '%L', '%C', '%D', '%P', '%r', '%j', '%o')),
-                          command)
+            self.assertIn('--Format=', command)
+            self.assertIn(f'JobArrayId:0{QUEUE_SEPARATOR},State:0', command)
+            self.assertIn(f'tres-alloc:0{QUEUE_SEPARATOR},Command:0', command)
             self.assertEqual([tab.works.item(i, 0).text() for i in range(tab.works.rowCount())],
                              ['All jobs', 'A', 'Array job', 'B', 'bash', f'ESEN-{esen_id}', 'External job',
                               'RustMech-remote'])
             self.assertEqual(tab.works.currentRow(), 0)
             rows = [(table, i) for table in tab.sections.values() for i in range(table.rowCount())]
+            ram = {table.item(i, 0).text(): table.item(i, RAM_COLUMN).text() for table, i in rows}
+            self.assertEqual(ram['1'], '120')
+            self.assertEqual(ram['2'], '22.5')
+            self.assertEqual(ram['5_[1-16%4]'], '1536')
+            self.assertEqual(ram['3'], '—')
+            header = tab.jobs.horizontalHeader()
+            self.assertEqual(header.visualIndex(RAM_COLUMN), header.visualIndex(5) + 1)
             estimates = {table.item(i, 0).text(): table.item(i, 11).text() for table, i in rows}
             self.assertEqual(estimates['1'], '—')
             self.assertEqual(estimates['2'], display_start('2026-11-18T23:15:00'))

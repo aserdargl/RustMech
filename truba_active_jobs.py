@@ -24,7 +24,10 @@ from ui_language import translate
 
 # Job names and command paths may contain ordinary punctuation.
 QUEUE_SEPARATOR = '\x1f'
-QUEUE_FIELDS = ('%i', '%T', '%S', '%M', '%L', '%C', '%D', '%P', '%r', '%j', '%o')
+QUEUE_FIELDS = ('JobArrayId', 'State', 'StartTime', 'TimeUsed', 'TimeLeft', 'NumCPUs', 'NumNodes',
+                'Partition', 'Reason', 'Name', 'tres-alloc', 'Command')
+# A width of zero keeps the complete value and the suffix separates fields.
+QUEUE_FORMAT = f':0{QUEUE_SEPARATOR},'.join(QUEUE_FIELDS) + ':0'
 ARRAY_TASK_RANGE = r'[0-9]+(?:-[0-9]+(?::[0-9]+)?)?'
 CANCEL_JOB_ID = re.compile(
     rf'[0-9]+(?:_[0-9]+|_\[{ARRAY_TASK_RANGE}(?:,{ARRAY_TASK_RANGE})*(?:%[0-9]+)?\])?'
@@ -34,9 +37,10 @@ SLURM_JOB_HEADERS = (
     'Nodes', 'Partition', 'Started at', 'Elapsed time', 'Time left',
 )
 ACTIVE_JOB_HEADERS = (*SLURM_JOB_HEADERS[:2], 'Work', 'Job', 'Command',
-                      *SLURM_JOB_HEADERS[5:], 'Estimated start', 'Pending reason')
-PENDING_REASON_COLUMN = len(ACTIVE_JOB_HEADERS) - 1
-ACTIVE_JOB_COLUMN_WIDTHS = (76, 108, 88, 134, 128, 60, 66, 94, 158, 85, 80, 158, 218)
+                      *SLURM_JOB_HEADERS[5:], 'Estimated start', 'Pending reason', 'RAM / GiB')
+PENDING_REASON_COLUMN = len(SLURM_JOB_HEADERS) + 1
+RAM_COLUMN = len(ACTIVE_JOB_HEADERS) - 1
+ACTIVE_JOB_COLUMN_WIDTHS = (76, 108, 88, 134, 128, 60, 66, 94, 158, 85, 80, 158, 218, 90)
 ACTIVE_JOB_WIDTH_KEY = 'truba/activeJobs/columnWidths'
 PENDING_REASON_LABELS = {
     'Resources': 'Waiting for resources',
@@ -82,6 +86,7 @@ class ActiveJob:
     partition: str
     pending_reason: str
     category: str
+    ram_gib: float | None = None
 
 
 def esen_job_script(slurm_name, job_id, username):
@@ -107,6 +112,14 @@ def queue_rows(output):
                 yield row
 
 
+def allocation_ram_gib(tres):
+    match = re.search(r'(?:^|,)mem=([0-9]+(?:\.[0-9]+)?)([KMGTPE]?)(?:,|$)', tres, re.IGNORECASE)
+    if not match or not float(match[1]):
+        return None
+    unit = match[2].upper() or 'M'
+    return float(match[1]) * 1024 ** ('KMGTPE'.index(unit) - 2)
+
+
 def query_active_jobs(auth, state_dir):
     transport = RemoteTransport(RemoteContext(transport='ssh'), auth)
     # The login shell may define squeue filters for interactive use.
@@ -114,7 +127,7 @@ def query_active_jobs(auth, state_dir):
         "TZ=UTC SLURM_TIME_FORMAT='%Y-%m-%dT%H:%M:%S' env "
         "-u SQUEUE_ACCOUNT -u SQUEUE_NAMES -u SQUEUE_LICENSES -u SQUEUE_PARTITION -u SQUEUE_QOS "
         "squeue --noheader --all --array --states=all --user="
-        + shlex.quote(auth.username) + ' --format=' + shlex.quote(QUEUE_SEPARATOR.join(QUEUE_FIELDS))
+        + shlex.quote(auth.username) + ' --Format=' + shlex.quote(QUEUE_FORMAT)
     )
     rows = list(queue_rows(transport.command(queue_command)))
     records = defaultdict(list)
@@ -147,7 +160,7 @@ def query_active_jobs(auth, state_dir):
             rows.extend(row for row in queue_rows(output) if row[0] in missing_ids)
 
     groups = defaultdict(list)
-    for job_id, state, start, elapsed, remaining, cpus, nodes, partition, reason, slurm_name, command in rows:
+    for job_id, state, start, elapsed, remaining, cpus, nodes, partition, reason, slurm_name, tres, command in rows:
         state = state.rstrip('+')
         if state in SLURM_TERMINAL_STATES:
             continue
@@ -176,11 +189,12 @@ def query_active_jobs(auth, state_dir):
         if not purposes_by_work:
             purpose = f'LAMMPS · {esen_script}' if esen_script else slurm_name
             purposes_by_work[fallback_name] = [purpose or '—']
+        ram_gib = allocation_ram_gib(tres)
         for name, purposes in purposes_by_work.items():
             groups[name].append(ActiveJob(
                 job_id, state, start, elapsed, remaining, tuple(dict.fromkeys(purposes)),
                 script or '—', command, cpus or '—', nodes or '—', partition or '—',
-                reason if state == 'PENDING' else '', category,
+                reason if state == 'PENDING' else '', category, ram_gib,
             ))
     return dict(groups)
 
@@ -264,6 +278,7 @@ class ActiveJobTable(QTableWidget):
         header = self.horizontalHeader()
         header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         header.moveSection(header.visualIndex(PENDING_REASON_COLUMN), 2)
+        header.moveSection(header.visualIndex(RAM_COLUMN), header.visualIndex(5) + 1)
 
     def focusInEvent(self, event):
         super().focusInEvent(event)
@@ -573,6 +588,9 @@ class TrubaActiveJobs(QWidget):
                 if reason:
                     reason_item.setToolTip(f'<qt>{escape(reason)}</qt>')
                 table.setItem(index, PENDING_REASON_COLUMN, reason_item)
+                ram = QTableWidgetItem(f'{job.ram_gib:.6g}' if job.ram_gib is not None else '—')
+                ram.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+                table.setItem(index, RAM_COLUMN, ram)
                 if (name, job.job_id) in previous_selection:
                     selected_rows.append(index)
                 if (name, job.job_id) == previous_current:
