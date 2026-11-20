@@ -2,6 +2,34 @@
 from setup_help import GEOMETRY_HELP
 
 _TEXT = '''
+MD Preparation|MD Hazırlama
+BCC single crystal|BCC tek kristal
+Elements (at.%)|Elementler (atom %)
+Use equal shares with Hf, Nb or specify atom percentages with Hf:20, Nb:80.|Eşit oran için Hf, Nb veya atom yüzdesi için Hf:20, Nb:80 biçimini kullanın.
+Target atom count|Hedef atom sayısı
+Generated atom count|Üretilecek atom sayısı
+Lattice parameter|Kafes parametresi
+Temperature|Sıcaklık
+Random seed|Rastgele tohum
+TRUBA queue|TRUBA kuyruğu
+MEAM library|MEAM kütüphanesi
+MEAM parameters|MEAM parametreleri
+MEAM element order|MEAM element sırası
+Example: Hf Nb Ta Ti Zr|Örnek Hf Nb Ta Ti Zr
+Enter the element order used by indices in the MEAM parameter file.|MEAM parametre dosyasındaki indekslerin izlediği element sırasını yazın.
+Browse…|Gözat…
+MEAM files (*.meam);;All files (*)|MEAM dosyaları (*.meam);;Tüm dosyalar (*)
+Preview model|Modeli önizle
+Prepare and run on TRUBA|Hazırla ve TRUBA’da çalıştır
+BCC supercell|BCC süper hücresi
+The nearest nearly cubic BCC supercell is shown.|Hedefe en yakın, kenar tekrarları dengeli BCC hücresi gösteriliyor.
+Atomsk → Minimization → Equilibration → Tension and CNA|Atomsk → Minimizasyon → Dengeleme → Çekme ve CNA
+Choose the MEAM library and parameter files.|MEAM kütüphanesini ve parametre dosyasını seçin.
+Generating the structure with Atomsk…|Atomsk ile yapı üretiliyor…
+Model prepared. Waiting for ESEN to finish its current transfer…|Model hazır. ESEN’in mevcut aktarımının tamamlanması bekleniyor…
+TRUBA connection changed. Press Prepare and run on TRUBA to submit the prepared model.|TRUBA bağlantısı değişti. Hazır modeli göndermek için Hazırla ve TRUBA’da çalıştır düğmesine basın.
+ESEN is busy. Press Prepare and run on TRUBA again when it is ready.|ESEN meşgul. Hazır olduğunda Hazırla ve TRUBA’da çalıştır düğmesine tekrar basın.
+Follow submission, progress and results in ESEN job history.|Gönderimi, ilerlemeyi ve sonuçları ESEN iş geçmişinden izleyin.
 Choose TRUBA folder|TRUBA klasörü seç
 Select an upload folder on TRUBA|TRUBA’da yükleme klasörünü seçin
 TRUBA folders|TRUBA klasörleri

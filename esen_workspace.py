@@ -22,17 +22,18 @@ from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QCheckBox, QDialog, QFormLayout, QFrame, QHeaderView, QHBoxLayout, QLabel,
     QLineEdit, QListWidget, QListWidgetItem, QMessageBox, QPlainTextEdit, QProgressBar, QPushButton,
-    QScrollArea, QSizePolicy, QSplitter, QStyle, QTableView, QTableWidget, QTableWidgetItem,
-    QToolTip, QTreeWidget, QTreeWidgetItem, QVBoxLayout,
+    QScrollArea, QSizePolicy, QSplitter, QStyle, QTableView, QTableWidget, QTableWidgetItem, QTabWidget,
+    QToolTip, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
 )
 
 from datenburg_widgets import qss_asset_url
 from esen_ai_prompt import ESEN_AI_PROMPT
 import esen_jobs as jobs
+import esen_md as md
 from file_dialog import QFileDialog
 from studio_style import (
-    ActionFlowLayout, CompactComboBox, CompactSpinBox, CONTROL_HEIGHT,
-    STUDIO_STYLESHEET, SidebarGroupBox, configure_form, field_label,
+    ActionFlowLayout, CompactComboBox, CompactDoubleSpinBox, CompactSpinBox, CONTROL_HEIGHT,
+    STUDIO_STYLESHEET, SidebarGroupBox, configure_form, field_label, stepper_with_unit,
 )
 from truba_active_jobs import SLURM_JOB_HEADERS, configure_slurm_job_table, display_duration, display_start
 from truba_file_browser import TrubaFileBrowser, modified_date_text
@@ -325,6 +326,8 @@ class EsenWorkspace(QDialog):
         self.preferences = QSettings("RustMech", "RustMech")
         self.executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="esen")
         self.local_task = self.remote_task = None
+        self.md_task = None
+        self.md_prepared = None
         self.folder_root = None
         self.folder_scan = None
         self.folder_error = ""
@@ -360,14 +363,14 @@ class EsenWorkspace(QDialog):
         self._profile_partition = None
         self._disposed = False
         self._build()
-        self._command_buttons = self.findChildren(QPushButton)
         language = getattr(QApplication.instance(), "_rustmech_language", None)
         if language is not None:
-            for button in self._command_buttons:
+            for button in (*self._command_buttons, self.md_preview_button, self.md_run, *self.md_file_buttons):
                 language.localize(button)
-            language.changed.connect(self._size_command_buttons)
+            language.changed.connect(self._localize_md)
         self._size_command_buttons()
         self._load_profiles()
+        self._md_preview()
         self._preview()
         self._load_history()
         self._show_selected()
@@ -382,7 +385,14 @@ class EsenWorkspace(QDialog):
         self.truba.connection_changed.connect(self._connection_changed)
 
     def _build(self):
-        outer = QVBoxLayout(self)
+        shell = QVBoxLayout(self)
+        shell.setContentsMargins(0, 0, 0, 0)
+        self.tabs = QTabWidget()
+        self.tabs.setObjectName("esenWorkspaceTabs")
+        shell.addWidget(self.tabs)
+        esen_page = QWidget()
+        self.tabs.addTab(esen_page, "ESEN")
+        outer = QVBoxLayout(esen_page)
         outer.setContentsMargins(8, 8, 8, 8)
         outer.setSpacing(7)
         title = QLabel(WORKSPACE_TITLE)
@@ -686,6 +696,222 @@ class EsenWorkspace(QDialog):
         footer.addWidget(self.clear_reuse)
         footer.addWidget(self.start)
         outer.addLayout(footer)
+        self._command_buttons = esen_page.findChildren(QPushButton)
+        self.tabs.addTab(self._build_md(), "MD Preparation")
+
+    def _build_md(self):
+        page = QWidget()
+        outer = QVBoxLayout(page)
+        outer.setContentsMargins(8, 8, 8, 8)
+        outer.setSpacing(7)
+        split = QSplitter(Qt.Orientation.Horizontal)
+        split.setObjectName("esenMdSettingsAndPreview")
+        split.setChildrenCollapsible(False)
+        split.setHandleWidth(7)
+        outer.addWidget(split, 1)
+
+        inputs, layout = panel("BCC single crystal", scrollable=True)
+        self.md_form = QWidget()
+        form = QFormLayout(self.md_form)
+        form.setContentsMargins(0, 0, 0, 0)
+        configure_form(form)
+        layout.addWidget(self.md_form)
+        layout.addStretch()
+        split.addWidget(inputs)
+
+        self.md_elements = QLineEdit("Hf:20, Nb:20, Ta:20, Ti:20, Zr:20")
+        self.md_elements.setToolTip("Use equal shares with Hf, Nb or specify atom percentages with Hf:20, Nb:80.")
+        self.md_order = QLineEdit(str(self.preferences.value("esen/md/order", "")))
+        self.md_order.setPlaceholderText("Example: Hf Nb Ta Ti Zr")
+        self.md_order.setToolTip("Enter the element order used by indices in the MEAM parameter file.")
+        self._form_row(form, "Elements (at.%)", self.md_elements)
+        self.md_elements.setMaximumWidth(420)
+        self.md_atoms = CompactSpinBox()
+        self.md_atoms.setRange(2, md.MAX_ATOMS)
+        self.md_atoms.setValue(250_000)
+        self._form_row(form, "Target atom count", self.md_atoms)
+        self.md_atoms.setFixedWidth(123)
+        self.md_lattice = CompactDoubleSpinBox()
+        self.md_lattice.setDecimals(4)
+        self.md_lattice.setRange(0.0001, 100.0)
+        self.md_lattice.setValue(3.40)
+        self._form_row(form, "Lattice parameter", self.md_lattice,
+                       field_layout=stepper_with_unit(self.md_lattice, "Å"))
+        self.md_temperature = CompactSpinBox()
+        self.md_temperature.setRange(1, 10000)
+        self.md_temperature.setValue(300)
+        self._form_row(form, "Temperature", self.md_temperature,
+                       field_layout=stepper_with_unit(self.md_temperature, "K"))
+        self.md_seed = CompactSpinBox()
+        self.md_seed.setRange(1, 900_000_000)
+        self.md_seed.setValue(765896)
+        self._form_row(form, "Random seed", self.md_seed)
+        self.md_seed.setFixedWidth(123)
+        self.md_queue = compact_combo([(name, name) for name in jobs.MODULES])
+        queue_index = self.md_queue.findData(self.preferences.value("esen/md/queue", "hamsi"))
+        self.md_queue.setCurrentIndex(max(0, queue_index))
+        self._form_row(form, "TRUBA queue", self.md_queue)
+        self.md_file_buttons = []
+        for key, title in (("library", "MEAM library"), ("parameters", "MEAM parameters")):
+            field = QLineEdit()
+            field.setReadOnly(True)
+            field.setText(str(self.preferences.value(f"esen/md/{key}", "")))
+            field.setToolTip(field.text())
+            setattr(self, f"md_{key}", field)
+            pick = command("Browse…", lambda _checked=False, k=key, label=title: self._pick_md_meam(k, label))
+            self.md_file_buttons.append(pick)
+            row = QHBoxLayout()
+            row.setSpacing(4)
+            row.addWidget(field, 1)
+            row.addWidget(pick)
+            self._form_row(form, title, field, field_layout=row)
+        self._form_row(form, "MEAM element order", self.md_order)
+        self.md_elements.editingFinished.connect(self._md_preview)
+        for stepper in (self.md_atoms, self.md_lattice, self.md_temperature, self.md_seed):
+            stepper.editingFinished.connect(self._md_preview)
+        self.md_order.editingFinished.connect(self._save_md_order)
+
+        card, layout = panel("Model preview", paper=True)
+        split.addWidget(card)
+        split.setSizes([480, 700])
+        self.md_preview = code_view("Model preview")
+        self.md_preview.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
+        layout.addWidget(self.md_preview, 1)
+        self.md_note = QLabel()
+        self.md_note.setTextFormat(Qt.TextFormat.PlainText)
+        self.md_note.setWordWrap(True)
+        self.md_note.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        layout.addWidget(self.md_note)
+        self.md_preview_button = command("Preview model", self._md_preview)
+        self.md_run = command("Prepare and run on TRUBA", self._start_md, role="esenRun")
+        outer.addLayout(button_row(self.md_preview_button, self.md_run))
+        self.md_queue.currentIndexChanged.connect(self._md_preview)
+        return page
+
+    def _localize_md(self, *_):
+        self._size_command_buttons()
+        self._md_preview()
+
+    def _pick_md_meam(self, key, title):
+        field = getattr(self, f"md_{key}")
+        filename, _ = QFileDialog.getOpenFileName(self, translate(title), field.text(),
+                                                  translate("MEAM files (*.meam);;All files (*)"))
+        if filename:
+            self.md_prepared = None
+            field.setText(filename)
+            field.setToolTip(filename)
+            self.preferences.setValue(f"esen/md/{key}", filename)
+            self.md_order.clear()
+            try:
+                self.md_order.setText(md.documented_meam_order(Path(self.md_library.text()),
+                                                              Path(self.md_parameters.text())))
+                self.md_note.clear()
+            except OSError as error:
+                self.md_note.setText(str(error))
+            self._save_md_order()
+
+    def _save_md_order(self):
+        self.preferences.setValue("esen/md/order", self.md_order.text())
+
+    def _md_model(self):
+        for stepper in (self.md_atoms, self.md_lattice, self.md_temperature, self.md_seed):
+            stepper.interpretText()
+        return md.plan_model(self.md_elements.text(), self.md_atoms.value(), self.md_lattice.value(),
+                             self.md_temperature.value(), self.md_seed.value())
+
+    def _md_preview(self):
+        try:
+            model = self._md_model()
+        except ValueError as error:
+            self.md_preview.setPlainText(str(error))
+            return
+        cell = " × ".join(map(str, model.repeats))
+        lines = [
+            f"{translate('BCC supercell')}   {cell}",
+            f"{translate('Target atom count')}   {model.target_atoms:,}",
+            f"{translate('Generated atom count')}   {model.atoms:,}",
+            "",
+            *(f"{element:<3}  {count:>10,}    {100 * count / model.atoms:8.4f} %"
+              for element, count in zip(model.elements, model.counts)),
+            "",
+            translate("Atomsk → Minimization → Equilibration → Tension and CNA"),
+            f"TRUBA · {translate('Queue')}   {self.md_queue.currentText()}",
+        ]
+        if model.atoms != model.target_atoms:
+            lines.insert(3, translate("The nearest nearly cubic BCC supercell is shown."))
+        self.md_preview.setPlainText("\n".join(lines))
+
+    def _start_md(self):
+        if self.md_task is not None:
+            return
+        self._md_preview()
+        auth = self.truba.analysis_auth()
+        try:
+            if auth is None:
+                raise ValueError(translate("Connect using the main TRUBA button."))
+            model = self._md_model()
+            order = md.meam_order(self.md_order.text(), model.elements)
+            library, parameters = Path(self.md_library.text()), Path(self.md_parameters.text())
+            if not library.is_file() or not parameters.is_file():
+                raise ValueError(translate("Choose the MEAM library and parameter files."))
+            partition = self.md_queue.currentData()
+            settings = {**self._remote_settings(auth), "partition": partition, "resume_input": md.RESTART}
+            if partition != self.partition.currentData() or settings["module"] == jobs.DEFAULT_MODULE:
+                settings["module"] = jobs.MODULES[partition]
+            self._remote_command(md.ENTRY, settings)
+            self.preferences.setValue("esen/md/queue", partition)
+            request = (model, library, parameters, order)
+            if self.md_prepared is not None and self.md_prepared[0] == request:
+                self._submit_md(self.md_prepared[1], settings, auth)
+                return
+            executable = md.atomsk_executable()
+            folder = self.history_root.parent / "md-preparations"
+            future = self.executor.submit(md.prepare_job, folder, *request, executable)
+        except (OSError, ValueError) as error:
+            self.md_note.setText(str(error))
+            return
+        self.md_task = future, request, settings, auth
+        self.md_form.setEnabled(False)
+        self.md_run.setEnabled(False)
+        self.md_note.setText(translate("Generating the structure with Atomsk…"))
+
+    def _check_md(self):
+        if self.md_task is None or not self.md_task[0].done():
+            return
+        future, request, settings, auth = self.md_task
+        if self._md_submission_busy() and self.truba.analysis_auth() == auth and future.exception() is None:
+            self.md_note.setText(translate("Model prepared. Waiting for ESEN to finish its current transfer…"))
+            return
+        self.md_task = None
+        self.md_form.setEnabled(True)
+        self.md_run.setEnabled(True)
+        try:
+            folder = future.result()
+            self.md_prepared = request, folder
+            self._submit_md(folder, settings, auth)
+        except Exception as error:
+            folder = self.md_prepared[1] if self.md_prepared and self.md_prepared[0] == request else None
+            self.md_note.setText(f"{error}\n{folder}" if folder is not None else str(error))
+
+    def _md_submission_busy(self):
+        return bool(self.remote_task or self.upload_task or self.sync_task or self.run_list_task)
+
+    def _submit_md(self, folder, settings, auth):
+        if self.truba.analysis_auth() != auth:
+            raise ValueError(translate("TRUBA connection changed. Press Prepare and run on TRUBA to submit the prepared model."))
+        if self._md_submission_busy():
+            raise ValueError(translate("ESEN is busy. Press Prepare and run on TRUBA again when it is ready."))
+        directory, record = jobs.new_job(folder, md.ENTRY, "remote", None, parent=self.history_root,
+                                         batch_folder=folder.name)
+        self._save_profiles()
+        self._submit_remote(directory, record, (folder, md.ENTRY, (), True), settings, auth)
+        self.md_prepared = None
+        item = self._history_item(directory, record, prepend=True)
+        self.history.setCurrentItem(item, QItemSelectionModel.SelectionFlag.ClearAndSelect
+                                    | QItemSelectionModel.SelectionFlag.Rows)
+        self.md_note.setText(translate("Follow submission, progress and results in ESEN job history."))
+        self.tabs.setCurrentIndex(0)
+        self._buttons()
 
     @staticmethod
     def _configure_history_table(table):
@@ -703,10 +929,12 @@ class EsenWorkspace(QDialog):
         local_navigation = (self.input_back, self.input_forward, self.input_up)
         history_actions = (self.select_history, self.delete_job)
         history_commands = (self.use_inputs, self.refresh, self.resume, self.stop)
+        md_actions = (self.md_preview_button, self.md_run)
         other_buttons = [button for button in self._command_buttons
                          if button not in (*toolbar_labels, *self._compact_input_actions, *navigation, *local_navigation,
                                            *history_actions, *history_commands)]
-        for group in (other_buttons, toolbar_labels, navigation, history_actions, history_commands):
+        for group in (other_buttons, toolbar_labels, navigation, history_actions, history_commands,
+                      md_actions, self.md_file_buttons):
             width = max(button.sizeHint().width() for button in group) + 2
             for button in group:
                 button.setFixedWidth(width)
@@ -1962,6 +2190,7 @@ class EsenWorkspace(QDialog):
                         field == "remote_task" and directory not in self._active_truba_jobs
                     ):
                         self.job_error = str(error)
+        self._check_md()
         self._run_next_batch_job()
         self._refresh_next_history_job()
         if self.isVisible():

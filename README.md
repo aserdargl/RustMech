@@ -1,5 +1,19 @@
 # RustMech
 
+## MD Hazırlama
+
+**ESEN → MD Hazırlama** sekmesinde elementleri `Hf, Nb, Ta, Ti, Zr` biçiminde
+eşit oranla veya `Hf:20, Nb:80` biçiminde atom yüzdesiyle girin. Hedef atom
+sayısını belirleyin ve MEAM kütüphanesini ve parametre dosyasını seçin.
+Dosyalarda bir `pair_coeff` örneği varsa program MEAM element sırasını oradan
+alır. Boş kalırsa parametre dosyasındaki indekslerin izlediği sırayı girin.
+
+Önizleme, hedefe en yakın dengeli BCC hücresini ve gerçekleşecek bileşimi
+gösterir. TRUBA’ya bağlandıktan sonra **Hazırla ve TRUBA’da çalıştır** düğmesine
+basın. RustMech Atomsk’ı bu bilgisayarda çalıştırır ve E20 tek kristal şablonuyla
+minimizasyon, dengeleme, çekme ve CNA işini gönderir. İşi ve sonuçları **ESEN
+iş geçmişi** üzerinden izleyin.
+
 ## ESEN ile LAMMPS çalıştırma
 
 Üst çubuktan **ESEN**'i açın. LAMMPS betiğini ve kullandığı veri, potansiyel veya
