@@ -30,7 +30,15 @@ def write_record(path, value):
     temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
     try:
         temporary.write_text(json.dumps(value, indent=2)+"\n",encoding="utf-8")
-        temporary.replace(path)
+        # On Windows even a read-only handle can block atomic replacement.
+        for delay in (0.02, 0.04, 0.08, 0.16, 0.32, 0):
+            try:
+                temporary.replace(path)
+                break
+            except PermissionError as error:
+                if not delay or getattr(error, "winerror", None) not in (5, 32, 33):
+                    raise
+                time.sleep(delay)
     finally:
         temporary.unlink(missing_ok=True)
 

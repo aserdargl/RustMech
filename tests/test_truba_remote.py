@@ -1,4 +1,5 @@
 """Remote job protocol, archive/provenance checks, and actual isolated mesh worker."""
+from contextlib import ExitStack
 from dataclasses import asdict,replace
 import hashlib
 import io
@@ -191,6 +192,32 @@ class RemoteProtocolTests(unittest.TestCase):
         self.assertEqual(record["script_name"], name)
         self.assertEqual(record["solver_cores"], 16)
         self.assertEqual(record["job_id"], "321")
+
+    @unittest.skipUnless(os.name == "nt", "Windows denies replacement of an open job record")
+    def test_convergence_continues_when_a_status_reader_temporarily_blocks_the_marker(self):
+        marker = self.root / "worker" / "remote_job.json"
+        request = dict(operation="convergence_level", settings=dict(solver_backend="kratos"))
+        replace_file = Path.replace
+        reader = None
+
+        with ExitStack() as stack:
+            def replace_with_reader(source, target):
+                nonlocal reader
+                if target == marker and marker.exists() and reader is None:
+                    reader = stack.enter_context(marker.open(encoding="utf-8"))
+                    self.assertEqual(json.load(reader)["state"], "preparing")
+                return replace_file(source, target)
+
+            stack.enter_context(patch.object(Path, "replace", replace_with_reader))
+            retry = stack.enter_context(patch("truba_jobs.time.sleep", side_effect=lambda _: reader.close()))
+            _, directory = run_remote_job(request, RemoteContext(), marker=marker, directory=self.root / "level")
+
+        retry.assert_called_once()
+        self.assertEqual(FakeTransport.instances[-1].submissions, 1)
+        record = json.loads(marker.read_text(encoding="utf-8"))
+        self.assertEqual(record["state"], "downloaded")
+        self.assertEqual(record, json.loads((directory / "remote_job.json").read_text(encoding="utf-8")))
+        self.assertEqual(list(marker.parent.glob("*.tmp")), [])
 
     def test_convergence_classifies_slurm_memory_errors_before_retrieving_archive(self):
         from truba_remote import SlurmOutOfMemory
