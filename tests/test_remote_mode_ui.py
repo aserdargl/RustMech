@@ -1096,6 +1096,7 @@ class RemoteModeUiTests(unittest.TestCase):
         study.run_on_truba.click()
         self.app.processEvents()
         self.assertEqual(study.script_plan_panel.geometry(), local_geometry)
+        self.assertEqual(study.script_queue.currentData(), "barbun")
         self.assertTrue(study.truba_wall_field.isVisible())
         self.assertEqual(study.truba_wall_field.currentText(), "03:00")
         study.truba_wall_field.setCurrentIndex(study.truba_wall_field.findData(120))

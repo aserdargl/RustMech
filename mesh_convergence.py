@@ -545,7 +545,7 @@ class MeshConvergenceWidget(QWidget):
         current = self.script_queue.currentData()
         initial = current is None
         if initial:
-            current = self.remote_controller.controls['partition'].currentData()
+            current = 'barbun'
         with QSignalBlocker(self.script_queue):
             self.script_queue.clear()
             for name, baseline in BASELINES.items():
