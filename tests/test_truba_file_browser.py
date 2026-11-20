@@ -474,6 +474,7 @@ def test_run_uses_the_truba_selection_instead_of_checked_local_scripts(remote, t
         workspace._tick()
         local_item = workspace.inputs.items()[0]
         local_item.setCheckState(0, Qt.CheckState.Checked)
+        assert workspace.jobs_per_script.text() == workspace.jobs_per_script.specialValueText()
         workspace.jobs_per_script.setValue(2)
         assert workspace.start.isEnabled()
         browser.files.setCurrentItem(browser.files.topLevelItem(0))
@@ -483,6 +484,7 @@ def test_run_uses_the_truba_selection_instead_of_checked_local_scripts(remote, t
         browser.files.setCurrentItem(browser.files.topLevelItem(2))
         assert workspace.start.isEnabled()
         assert workspace.jobs_per_script.isHidden()
+        assert workspace.jobs_per_script_label.isHidden()
         assert workspace.history.rowCount() == 0
         assert "remote.slurm" in workspace.input_note.text()
         browser.refresh.click()
@@ -501,6 +503,12 @@ def test_run_uses_the_truba_selection_instead_of_checked_local_scripts(remote, t
         workspace.inputs.setCurrentItem(local_item)
         assert workspace.start.isEnabled()
         assert workspace.jobs_per_script.isVisible()
+        assert workspace.start.parentWidget() is browser.parentWidget()
+        assert workspace.jobs_per_script.parentWidget() is browser.parentWidget()
+        browser.parentWidget().layout().activate()
+        assert workspace.jobs_per_script_label.isVisible()
+        assert workspace.jobs_per_script.y() == workspace.start.y()
+        assert workspace.jobs_per_script.geometry().right() < workspace.start.x()
         assert "remote.slurm" not in workspace.input_note.text()
     finally:
         workspace.dispose()

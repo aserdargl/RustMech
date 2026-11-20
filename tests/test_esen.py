@@ -571,7 +571,7 @@ class EsenTests(unittest.TestCase):
             self.assertEqual(record["state"], "Cancelled")
             self.assertEqual(transport.command.call_args_list[0].args[0], "scancel 456")
 
-    def test_job_settings_commands_fit_on_one_row_in_both_languages(self):
+    def test_input_commands_are_aligned_by_task_in_both_languages(self):
         app = QApplication.instance() or QApplication([])
         preferences = QSettings(str(self.root / "settings.ini"), QSettings.Format.IniFormat)
         preferences.setValue(LANGUAGE_KEY, "tr")
@@ -584,8 +584,7 @@ class EsenTests(unittest.TestCase):
             workspace.show()
             for locale in ("tr", "en"):
                 with self.subTest(locale=locale):
-                    if locale != language.language:
-                        language.set_language(locale)
+                    language.set_language(locale)
                     app.processEvents()
                     self.assertFalse(workspace.batch_folder.text())
                     self.assertFalse(workspace.batch_folder.icon().isNull())
@@ -596,16 +595,23 @@ class EsenTests(unittest.TestCase):
                     self.assertEqual(menu.actions(), [workspace.scan_folder_action, workspace.job_folder_action])
                     self.assertEqual(workspace.upload.text(), "Send Truba")
                     self.assertEqual(workspace.sync.text(), "Eşitle" if locale == "tr" else "Sync")
-                    toolbar = (*workspace._compact_input_actions, workspace.input_filter, workspace.input_sort)
-                    self.assertEqual(len({control.y() for control in toolbar if control.isVisible()}), 1)
+                    editing = (*workspace._input_edits, workspace.upload, workspace.sync)
+                    browsing = (workspace.input_back, workspace.input_forward, workspace.input_up,
+                                workspace.input_path)
+                    filtering = (workspace.input_filter, workspace.input_sort, workspace.copy_ai)
+                    for row in (editing, browsing, filtering):
+                        self.assertEqual(len({control.y() for control in row if control.isVisible()}), 1)
+                    self.assertLess(workspace.batch_folder.y(), workspace.input_path.y())
+                    self.assertLess(workspace.input_path.y(), workspace.input_filter.y())
                     self.assertLess(workspace.input_filter.x(), workspace.input_sort.x())
+                    self.assertFalse(any(label.text() in {"Job settings", "İş ayarları"}
+                                         for label in workspace.findChildren(QLabel)))
                     self.assertEqual(workspace.sync.width(), workspace.upload.width())
                     self.assertEqual({button.width() for button in workspace._compact_input_actions}, {25})
-                    target, whole_folder = workspace.target, workspace.whole_folder
+                    target = workspace.target
                     label = next(label for label in workspace.findChildren(QLabel) if label.buddy() is target)
-                    self.assertEqual(target.x() - (label.x() + label.width()), 2)
-                    self.assertEqual(whole_folder.x() - (target.x() + target.width()), 2)
-                    self.assertLessEqual(abs(whole_folder.geometry().center().y() - target.geometry().center().y()), 1)
+                    self.assertEqual(target.x(), workspace.partition.x())
+                    self.assertLessEqual(abs(label.geometry().center().y() - target.geometry().center().y()), 1)
                     browser = workspace.truba_browser
                     date_header = "Değiştirilme tarihi" if locale == "tr" else "Date modified"
                     self.assertEqual(workspace.inputs.headerItem().text(2), date_header)
@@ -622,13 +628,11 @@ class EsenTests(unittest.TestCase):
                     self.assertEqual(len({button.y() for button in history_actions}), 1)
                     self.assertEqual(len({button.width() for button in history_actions}), 1)
                     self.assertEqual(len({button.width() for button in history_commands}), 1)
-                    buttons = [button for button in workspace._command_buttons
-                               if button not in (*toolbar, workspace.upload, workspace.sync, *navigation,
-                                                 browser.select_files, browser.delete_files,
-                                                 *history_actions, *history_commands)]
-                    width = max(button.sizeHint().width() for button in buttons) + 2
-                    self.assertEqual({button.maximumWidth() for button in buttons}, {width})
-                    self.assertEqual({button.width() for button in buttons if button.isVisible()}, {width})
+                    results = (workspace.open_file, workspace.download,
+                               workspace.open_folder, workspace.open_results_folder)
+                    for group in (results, (browser.upload, browser.download)):
+                        width = max(button.sizeHint().width() for button in group) + 2
+                        self.assertEqual({button.width() for button in group}, {width})
 
     def test_input_filter_and_sort_preserve_checks_and_manual_slurm_order(self):
         app = QApplication.instance() or QApplication([])

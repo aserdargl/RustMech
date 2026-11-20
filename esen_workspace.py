@@ -21,7 +21,7 @@ from PySide6.QtCore import (
 )
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
-    QAbstractItemView, QApplication, QCheckBox, QDialog, QFormLayout, QFrame, QHeaderView, QHBoxLayout, QLabel,
+    QAbstractItemView, QApplication, QCheckBox, QDialog, QFormLayout, QFrame, QGridLayout, QHeaderView, QHBoxLayout, QLabel,
     QLineEdit, QListWidget, QListWidgetItem, QMenu, QMessageBox, QPlainTextEdit, QProgressBar, QPushButton,
     QScrollArea, QSizePolicy, QSplitter, QStyle, QTabBar, QTableView, QTableWidget, QTableWidgetItem, QTabWidget,
     QToolTip, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
@@ -65,8 +65,6 @@ def job_duration(record, state):
 
 ESEN_STYLE = """
 QDialog#esenWorkspace { background: #F5F5F3; }
-#esenTitle { background: #BFDBFE; border: 1px solid #2563EB; border-radius: 6px;
-             color: #0F172A; font-size: 14px; padding-left: 6px; }
 QFrame[esenCard="true"] { background: #FCFCFB; border: 1px solid #D5DBE2; border-radius: 7px; }
 QFrame[esenCard="paper"] { background: #FFFFFF; border: 1px solid #D5DBE2; border-radius: 7px; }
 #esenSection { background: #E5ECF4; border: 1px solid #D5DBE2; border-radius: 5px;
@@ -105,23 +103,24 @@ QFrame[esenCard="paper"] { background: #FFFFFF; border: 1px solid #D5DBE2; borde
 """.replace("@ESEN_CHECK@", qss_asset_url("checkbox-check-blue.svg"))
 
 
-def panel(title, *, paper=False, scrollable=False, actions=()):
+def panel(title="", *, paper=False, scrollable=False, header_action=None):
     card = QFrame()
     card.setProperty("esenCard", "paper" if paper else "true")
     layout = QVBoxLayout(card)
     layout.setContentsMargins(PANEL_PADDING, PANEL_PADDING, PANEL_PADDING, PANEL_PADDING)
     layout.setSpacing(5)
-    header = QLabel(title)
-    header.setObjectName("esenSection")
-    header.setFixedHeight(CONTROL_HEIGHT)
-    if actions:
-        toolbar = ActionFlowLayout()
-        toolbar.addWidget(header)
-        for button in actions:
-            toolbar.addWidget(button)
-        layout.addLayout(toolbar)
-    else:
-        layout.addWidget(header)
+    if title:
+        header = QLabel(title)
+        header.setObjectName("esenSection")
+        header.setFixedHeight(CONTROL_HEIGHT)
+        if header_action is None:
+            layout.addWidget(header)
+        else:
+            header_row = QHBoxLayout()
+            header_row.setSpacing(4)
+            header_row.addWidget(header, 1)
+            header_row.addWidget(header_action)
+            layout.addLayout(header_row)
     if scrollable:
         scroll = QScrollArea()
         scroll.setFrameShape(QFrame.Shape.NoFrame)
@@ -390,8 +389,10 @@ class EsenWorkspace(QDialog):
                            self.md_apply_lattice, *self.md_file_buttons, *self.md_plan_buttons):
                 language.localize(button)
             language.changed.connect(self._localize_md)
+            language.changed.connect(self._localize_batch_size)
             language.changed.connect(self._preview)
         self._size_command_buttons()
+        self._localize_batch_size()
         self._load_profiles()
         self._md_preview()
         self._preview()
@@ -417,15 +418,11 @@ class EsenWorkspace(QDialog):
         self.tabs.setTabBar(tab_bar)
         shell.addWidget(self.tabs)
         esen_page = QWidget()
-        self.tabs.addTab(esen_page, "ESEN")
+        esen_index = self.tabs.addTab(esen_page, "ESEN")
+        self.tabs.setTabToolTip(esen_index, "Thanks to Prof. Dr. Ismail Esen")
         outer = QVBoxLayout(esen_page)
         outer.setContentsMargins(8, 8, 8, 8)
         outer.setSpacing(7)
-        title = QLabel(WORKSPACE_TITLE)
-        title.setToolTip("Thanks to Prof. Dr. Ismail Esen")
-        title.setObjectName("esenTitle")
-        title.setFixedHeight(30)
-        outer.addWidget(title)
         split = QSplitter(Qt.Orientation.Horizontal)
         split.setObjectName("esenThreeColumns")
         split.setChildrenCollapsible(False)
@@ -474,32 +471,39 @@ class EsenWorkspace(QDialog):
         for button, icon in icons:
             button.setIcon(self.style().standardIcon(icon))
             button.setIconSize(QSize(14, 14))
-        self._compact_input_actions = (*(button for button, _ in icons), self.move_up, self.move_down)
+        self._input_edits = (self.batch_folder, self.load_files, self.pick_script, self.use_as_script,
+                             self.remove_inputs, self.move_up, self.move_down)
+        input_navigation = (self.input_back, self.input_forward, self.input_up)
+        self._compact_input_actions = (*self._input_edits, *input_navigation)
         for button in self._compact_input_actions:
             button.setProperty("compactInputAction", True)
             button.setAccessibleName(button.toolTip())
             button.setFixedWidth(CONTROL_HEIGHT)
-        settings, layout = panel("Job settings", scrollable=True)
+        settings, layout = panel(scrollable=True)
         left.addWidget(settings)
+        actions = QHBoxLayout()
+        actions.setSpacing(INPUT_TOOL_SPACING)
+        for button in self._input_edits:
+            actions.addWidget(button)
+        actions.addStretch()
+        actions.addWidget(self.upload)
+        actions.addWidget(self.sync)
+        layout.addLayout(actions)
+
         location = QHBoxLayout()
         location.setSpacing(INPUT_TOOL_SPACING)
+        for button in input_navigation:
+            location.addWidget(button)
         self.input_path = QLineEdit()
         self.input_path.setReadOnly(True)
         self.input_path.setFixedHeight(CONTROL_HEIGHT)
         self.input_path.setAccessibleName("Job folder path")
         self.input_path.textChanged.connect(self.input_path.setToolTip)
         location.addWidget(self.input_path, 1)
-        location.addWidget(self.upload)
-        location.addWidget(self.sync)
         layout.addLayout(location)
 
-        actions = QHBoxLayout()
-        actions.setSpacing(INPUT_TOOL_SPACING)
-        for button in (self.batch_folder, self.load_files, self.pick_script, self.use_as_script,
-                       self.remove_inputs, self.move_up, self.move_down,
-                       self.input_back, self.input_forward, self.input_up):
-            actions.addWidget(button)
-
+        filters = QHBoxLayout()
+        filters.setSpacing(4)
         self.input_filter = QLineEdit()
         self.input_filter.setObjectName("esenFileFilter")
         self.input_filter.setFixedHeight(CONTROL_HEIGHT)
@@ -514,9 +518,11 @@ class EsenWorkspace(QDialog):
         self.input_sort.setAccessibleName("Sort input files")
         self.input_sort.setToolTip("For manual Slurm ordering, select Job order and clear the filter.")
         self.input_sort.currentIndexChanged.connect(self._sort_inputs)
-        actions.addWidget(self.input_filter, 1)
-        actions.addWidget(self.input_sort)
-        layout.addLayout(actions)
+        self.copy_ai = command("Copy AI", self._copy_ai, hint="Copy ESEN file preparation instructions for AI")
+        filters.addWidget(self.input_filter, 1)
+        filters.addWidget(self.input_sort)
+        filters.addWidget(self.copy_ai)
+        layout.addLayout(filters)
         self.inputs = InputFileTree()
         self.inputs.setAcceptDrops(True)
         self.inputs.viewport().setAcceptDrops(True)
@@ -542,6 +548,7 @@ class EsenWorkspace(QDialog):
         layout.addWidget(self.sync_status)
         self.whole_folder = QCheckBox("Include entire job folder")
         self.whole_folder.toggled.connect(self._preview)
+        layout.addWidget(self.whole_folder, alignment=Qt.AlignmentFlag.AlignLeft)
         self.target = compact_combo((("TRUBA", "remote"), ("This computer", "local")))
         self.ranks = CompactSpinBox()
         self.ranks.setRange(1, getattr(os, "process_cpu_count", os.cpu_count)() or 1)
@@ -557,25 +564,17 @@ class EsenWorkspace(QDialog):
         self.truba_badge.setObjectName("trubaConnectionBadge")
         self.truba_badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.truba_badge.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
-        target_label = QLabel("Run on")
-        target_label.setObjectName("esenFieldLabel")
-        target_label.setBuddy(self.target)
         target_row = QHBoxLayout()
-        target_row.setSpacing(INPUT_TOOL_SPACING)
-        target_row.addWidget(target_label)
+        target_row.setSpacing(4)
         target_row.addWidget(self.target)
-        target_row.addWidget(self.whole_folder)
         target_row.addWidget(self.truba_badge)
         target_row.addStretch()
-        layout.addLayout(target_row)
 
         self.job_form = form = QFormLayout()
         configure_form(form)
         layout.addLayout(form)
-        self.jobs_per_script = CompactSpinBox()
-        self.jobs_per_script.setRange(0, 9999)
-        self.jobs_per_script.valueChanged.connect(self._preview)
-        self._form_row(form, "Jobs per script", self.jobs_per_script)
+        self._form_row(form, "Run on", self.target, field_layout=target_row)
+        form.labelForField(target_row).setFixedHeight(CONTROL_HEIGHT)
         self._form_row(form, "Local CPU cores", self.ranks)
         self._form_row(form, "Local RAM limit (MiB)", self.local_memory)
         self._form_row(form, "LAMMPS executable", self.local_exe)
@@ -628,8 +627,9 @@ class EsenWorkspace(QDialog):
         self.active_history_only.toggled.connect(self._filter_history)
         self.select_history = command("Select all", self.history.selectAll)
         history, layout = panel("Job history", paper=True, scrollable=True,
-                                actions=(self.select_history, self.delete_job, self.active_history_only))
+                                header_action=self.active_history_only)
         left.addWidget(history)
+        layout.addLayout(button_row(self.select_history, self.delete_job))
         self.history.currentItemChanged.connect(self._select_job)
         self.history.itemSelectionChanged.connect(self._select_job)
         layout.addWidget(self.history, 1)
@@ -648,9 +648,10 @@ class EsenWorkspace(QDialog):
         attachment.addWidget(self.remote_folder, 1)
         attachment.addWidget(self.attach)
         layout.addLayout(attachment)
-        left.setSizes([470, 230])
+        left.setSizes([420, 270])
 
-        preview, layout = panel("Command preview", paper=True)
+        preview, layout = panel("Command preview", paper=True, scrollable=True)
+        preview.setMinimumHeight(130)
         right.addWidget(preview)
         self.preview = code_view("Command preview")
         self.preview.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
@@ -660,6 +661,7 @@ class EsenWorkspace(QDialog):
         self.input_note.setObjectName("mutedHintLabel")
         self.input_note.setTextFormat(Qt.TextFormat.PlainText)
         self.input_note.setWordWrap(True)
+        self.input_note.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         layout.addWidget(self.input_note)
 
         result, layout = panel("Logs and files", paper=True, scrollable=True)
@@ -698,7 +700,14 @@ class EsenWorkspace(QDialog):
         self.open_folder = command("Job Folder", self._open_directory, hint="Open job folder")
         self.open_results_folder = command("Results", self._open_results_directory, hint="Open result folder")
         self.download = command("Download", self._download, hint="Download file")
-        layout.addLayout(button_row(self.open_file, self.download, self.open_folder, self.open_results_folder))
+        result_actions = QGridLayout()
+        result_actions.setSpacing(4)
+        result_actions.setColumnStretch(2, 1)
+        result_actions.addWidget(self.open_file, 0, 0)
+        result_actions.addWidget(self.download, 0, 1)
+        result_actions.addWidget(self.open_folder, 1, 0)
+        result_actions.addWidget(self.open_results_folder, 1, 1)
+        layout.addLayout(result_actions)
         active_jobs, layout = panel("Queued and running jobs", paper=True)
         self.queue_model = EsenQueueModel(self)
         self.queue_model.setSourceModel(self.history.model())
@@ -720,20 +729,26 @@ class EsenWorkspace(QDialog):
         self.truba_browser.files.itemClicked.connect(self._select_truba_input)
         self.truba_browser.state_changed.connect(self._buttons)
         truba_layout.addWidget(self.truba_browser, 1)
-        split.addWidget(truba_card)
-        split.setStretchFactor(2, 1)
-        split.setSizes([385, 570, 315])
-
+        self.jobs_per_script = CompactSpinBox()
+        self.jobs_per_script.setRange(0, 9999)
+        self.jobs_per_script.valueChanged.connect(self._preview)
+        self.jobs_per_script_label = QLabel("Jobs per script")
+        self.jobs_per_script_label.setObjectName("esenFieldLabel")
+        self.jobs_per_script_label.setBuddy(self.jobs_per_script)
         self.start = command("Run", self._start, role="esenRun", hint="Run LAMMPS")
         self.clear_reuse = command("Clear reuse", self._clear_reuse)
         self.clear_reuse.hide()
-        self.copy_ai = command("Copy AI", self._copy_ai, hint="Copy ESEN file preparation instructions for AI")
-        footer = QHBoxLayout()
-        footer.addWidget(self.copy_ai)
-        footer.addStretch()
-        footer.addWidget(self.clear_reuse)
-        footer.addWidget(self.start)
-        outer.addLayout(footer)
+        run_toolbar = QHBoxLayout()
+        run_toolbar.setSpacing(4)
+        run_toolbar.addStretch()
+        run_toolbar.addWidget(self.jobs_per_script_label)
+        run_toolbar.addWidget(self.jobs_per_script)
+        run_toolbar.addWidget(self.clear_reuse)
+        run_toolbar.addWidget(self.start)
+        truba_layout.addLayout(run_toolbar)
+        split.addWidget(truba_card)
+        split.setStretchFactor(2, 1)
+        split.setSizes([360, 570, 340])
         self._command_buttons = esen_page.findChildren(QPushButton)
         self.tabs.addTab(self._build_md(), "MD Preparation")
 
@@ -756,8 +771,12 @@ class EsenWorkspace(QDialog):
         defaults = [(element, 20) for element in ("Hf", "Nb", "Ta", "Ti", "Zr")]
         self.md_elements = AlloyElements(defaults)
         fields.addWidget(self.md_elements)
-        settings, settings_layout = panel("Job settings")
+        settings, settings_layout = panel()
         fields.addWidget(settings)
+        self.md_preview_button = command("Preview model", self._md_preview)
+        self.md_prepare = command("Prepare package", lambda: self._start_md(submit=False))
+        self.md_run = command("Prepare and run on TRUBA", self._start_md, role="esenRun")
+        settings_layout.addLayout(button_row(self.md_prepare, self.md_run))
         form = QFormLayout()
         form.setContentsMargins(0, 0, 0, 0)
         configure_form(form)
@@ -828,7 +847,7 @@ class EsenWorkspace(QDialog):
         preview_split.setHandleWidth(7)
         split.addWidget(preview_split)
         split.setSizes([480, 700])
-        card, layout = panel("Model preview", paper=True, scrollable=True)
+        card, layout = panel("Model preview", paper=True, scrollable=True, header_action=self.md_preview_button)
         preview_split.addWidget(card)
         self.md_preview = code_view("Model preview")
         self.md_preview.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
@@ -842,10 +861,6 @@ class EsenWorkspace(QDialog):
         self._build_md_help(layout)
         preview_split.addWidget(self._build_md_plans())
         preview_split.setSizes([390, 310])
-        self.md_preview_button = command("Preview model", self._md_preview)
-        self.md_prepare = command("Prepare package", lambda: self._start_md(submit=False))
-        self.md_run = command("Prepare and run on TRUBA", self._start_md, role="esenRun")
-        outer.addLayout(button_row(self.md_preview_button, self.md_prepare, self.md_run))
         self.md_queue.currentIndexChanged.connect(self._md_preview)
         self.md_crystal.currentIndexChanged.connect(self._md_preview)
         self.tabs.currentChanged.connect(lambda index: self._refresh_md_plans()
@@ -1016,6 +1031,14 @@ class EsenWorkspace(QDialog):
         self.md_elements.update_total()
         self._md_preview()
         self._refresh_md_plans()
+
+    def _localize_batch_size(self, *_):
+        label = translate("Jobs per script")
+        self.jobs_per_script_label.setText(label)
+        self.jobs_per_script.setAccessibleName(label)
+        self.jobs_per_script.setToolTip(translate("Automatically include all runnable scripts in the folder."))
+        self.jobs_per_script.setSpecialValueText(translate("Manual"))
+        self.jobs_per_script.setValue(self.jobs_per_script.value())
 
     def _md_lattice_result(self):
         spacing = self.md_xrd_spacing.value()
@@ -1191,21 +1214,21 @@ class EsenWorkspace(QDialog):
         file_actions = self.truba_browser.select_files, self.truba_browser.delete_files
         history_actions = (self.select_history, self.delete_job)
         history_commands = (self.use_inputs, self.refresh, self.resume, self.stop)
-        md_actions = (self.md_preview_button, self.md_prepare, self.md_run)
-        other_buttons = [button for button in self._command_buttons
-                         if button not in (*transfer_buttons, *self._compact_input_actions, *navigation, *file_actions,
-                                           *history_actions, *history_commands)]
-        for group in (other_buttons, transfer_buttons, navigation, file_actions, history_actions, history_commands,
-                      md_actions, self.md_file_buttons, self.md_plan_buttons):
+        md_actions = (self.md_prepare, self.md_run)
+        result_actions = (self.open_file, self.download, self.open_folder, self.open_results_folder)
+        browser_transfers = (self.truba_browser.upload, self.truba_browser.download)
+        for group in (transfer_buttons, navigation, file_actions, history_actions, history_commands,
+                      result_actions, browser_transfers, md_actions, self.md_file_buttons, self.md_plan_buttons):
             width = max(button.sizeHint().width() for button in group) + 2
             for button in group:
                 button.setFixedWidth(width)
         # The two order arrows replace Use As Script in Slurm mode.
-        icon_count = len(self._compact_input_actions) - 1
+        icon_count = len(self._input_edits) - 1
         gaps = (icon_count + 1) * INPUT_TOOL_SPACING
-        toolbar_width = icon_count * CONTROL_HEIGHT + gaps + self.input_filter.minimumWidth() + self.input_sort.width()
+        edit_width = icon_count * CONTROL_HEIGHT + gaps + self.upload.width() + self.sync.width()
         scrollbar = self.style().pixelMetric(QStyle.PixelMetric.PM_ScrollBarExtent)
-        self._settings_column.setMinimumWidth(max(305, toolbar_width + 2 * PANEL_PADDING + scrollbar))
+        history_width = sum(button.width() for button in history_commands) + 12
+        self._settings_column.setMinimumWidth(max(edit_width, history_width) + 2 * PANEL_PADDING + scrollbar)
 
     def _copy_ai(self):
         QApplication.clipboard().setText(ESEN_AI_PROMPT)
@@ -1794,12 +1817,8 @@ class EsenWorkspace(QDialog):
         folder_mode = self.folder_root is not None
         can_group = self._automatic_folder()
         automatic = can_group and self.jobs_per_script.value() > 0
-        self.job_form.setRowVisible(self.jobs_per_script, can_group)
-        self.jobs_per_script.setSpecialValueText(translate("Manual"))
-        label = self.job_form.labelForField(self.jobs_per_script)
-        label.setText(translate("Jobs per script"))
-        self.jobs_per_script.setAccessibleName(label.text())
-        self.jobs_per_script.setToolTip(translate("Automatically include all runnable scripts in the folder."))
+        self.jobs_per_script_label.setVisible(can_group)
+        self.jobs_per_script.setVisible(can_group)
         self.use_as_script.setVisible(not folder_mode and not slurm)
         self.remove_inputs.setVisible(not folder_mode)
         self.whole_folder.setVisible(not folder_mode)
