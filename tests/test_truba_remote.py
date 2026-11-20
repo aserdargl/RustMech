@@ -431,10 +431,10 @@ class RemoteProtocolTests(unittest.TestCase):
         commands=transport.delegate.execute.call_args.args[0]
         self.assertEqual(len(commands),1)
         self.assertNotIn("\n",commands[0])
-        self.assertIn("base64 -d",commands[0])
-        self.assertTrue(commands[0].startswith("call env TERM=dumb bash -lc "))
+        self.assertIn("base64 -d | bash -s",commands[0])
+        self.assertTrue(commands[0].startswith("call env -u BASH_ENV TERM=dumb bash --noprofile --norc -c "))
 
-    def test_ssh_sets_term_before_login_startup(self):
+    def test_ssh_skips_shell_startup_and_reports_command_failure(self):
         from unittest.mock import MagicMock
         from truba_jobs import SSHJobs
         import shlex
@@ -449,7 +449,11 @@ class RemoteProtocolTests(unittest.TestCase):
         script = "printf '%s' 'hello world'"
         self.assertEqual(transport.command(script), 'ok')
         client.exec_command.assert_called_once_with(
-            'env TERM=dumb bash -lc ' + shlex.quote(script), timeout=60)
+            'env -u BASH_ENV TERM=dumb bash --noprofile --norc -c ' + shlex.quote(script), timeout=60)
+        out.read.return_value = b''
+        out.channel.recv_exit_status.return_value = 7
+        with self.assertRaisesRegex(RuntimeError, r'TRUBA command failed \(exit 7\)$'):
+            transport.command('exit 7')
 
     def test_bundle_excludes_results_settings_and_binary_windows_kernels(self):
         path = self.root/"source.tar.gz"

@@ -24,6 +24,9 @@ from truba_credentials import state_directory
 
 _convergence_followers = {}
 
+# Controller commands use the SSH environment without interactive startup files.
+_COMMAND_SHELL = "env -u BASH_ENV TERM=dumb bash --noprofile --norc"
+
 
 def _convergence_poll_lock(record):
     with job_record_lock:
@@ -147,17 +150,21 @@ class RemoteTransport:
     def command(self,script,*,timeout=60):
         if isinstance(self.delegate,SSHJobs):
             with self.delegate.connect() as client:
-                _,out,err = client.exec_command("env TERM=dumb bash -lc "+shlex.quote(script),timeout=timeout)
+                _,out,err = client.exec_command(f"{_COMMAND_SHELL} -c "+shlex.quote(script),timeout=timeout)
                 data = out.read().decode(errors="replace")
-                error = err.read().decode(errors="replace")
-                if out.channel.recv_exit_status(): raise RuntimeError("TRUBA command failed: "+error[-1500:])
+                error = err.read().decode(errors="replace").strip()
+                status = out.channel.recv_exit_status()
+                if status:
+                    detail = error or data.strip()
+                    suffix = f": {detail[-1500:]}" if detail else ""
+                    raise RuntimeError(f"TRUBA command failed (exit {status}){suffix}")
                 return data
         lines = []
         # WinSCP's batch parser is line-oriented; never place a multi-line bash
         # program directly in its command file.
         encoded = base64.b64encode(script.encode("utf-8")).decode("ascii")
-        command = "printf %s "+shlex.quote(encoded)+" | base64 -d | bash -l"
-        self.delegate.execute(["call env TERM=dumb bash -lc "+shlex.quote(command)],on_line=lines.append)
+        command = "printf %s "+shlex.quote(encoded)+" | base64 -d | bash -s"
+        self.delegate.execute([f"call {_COMMAND_SHELL} -c "+shlex.quote(command)],on_line=lines.append)
         return "\n".join(lines)
 
     def put(self,local,remote,*,callback=None):
