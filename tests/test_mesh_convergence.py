@@ -507,7 +507,9 @@ class LiveConvergenceTests(unittest.TestCase):
             self.assertIs(label.buddy(), control)
             self.assertTrue(control.isVisible())
         self.assertEqual(fields.itemAt(0).widget().x(), fields.contentsMargins().left())
-        self.assertTrue(fields.itemAt(6).spacerItem())
+        self.assertEqual(widget.mesh_settings.width(), widget.mesh_settings.sizeHint().width())
+        self.assertEqual(widget.mesh_settings.y() - widget.results_panel.geometry().bottom() - 1,
+                         layout.spacing())
         buttons = (widget.export_button, widget.apply_button, widget.stop_button,
                    widget.force_stop_button, widget.run_button)
         self.assertEqual(len({(button.width(), button.height()) for button in buttons}), 1)

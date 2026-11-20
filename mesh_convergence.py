@@ -316,12 +316,15 @@ class MeshConvergenceWidget(QWidget):
             self.future is not None,
             (self.status.text() + " · " + self.rows[-1].status) if self.rows else self.status.text(),
         ))
+        progress_policy = self.operation_progress.sizePolicy()
+        progress_policy.setRetainSizeWhenHidden(False)
+        self.operation_progress.setSizePolicy(progress_policy)
         layout.addWidget(self.operation_progress)
 
         self.mesh_settings = QWidget()
         mesh_fields = QHBoxLayout(self.mesh_settings)
-        mesh_fields.setContentsMargins(5, 0, 5, 0)
-        mesh_fields.setSpacing(4)
+        mesh_fields.setContentsMargins(5, 0, 0, 0)
+        mesh_fields.setSpacing(2)
         self.mesh_type_combo = CompactComboBox()
         for mesh_type in MESH_TYPES:
             self.mesh_type_combo.addItem(mesh_type, mesh_type)
@@ -339,8 +342,7 @@ class MeshConvergenceWidget(QWidget):
             label.setBuddy(control)
             mesh_fields.addWidget(label)
             mesh_fields.addWidget(stepper_with_unit(control, "mm"))
-        mesh_fields.addStretch(1)
-        layout.addWidget(self.mesh_settings)
+        layout.addWidget(self.mesh_settings, alignment=Qt.AlignmentFlag.AlignLeft)
 
         self.solver_combo.currentIndexChanged.connect(self._solver_changed)
         self.mesh_type_combo.currentIndexChanged.connect(self._mesh_type_changed)
