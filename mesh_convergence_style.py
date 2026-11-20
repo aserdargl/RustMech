@@ -53,6 +53,22 @@ QWidget#meshConvergenceStudy QWidget#convergenceResultsHeader {
 }
 QPushButton#convergenceAppendButton { padding: 0 2px; }
 QPushButton#convergenceAppendButton:focus { border: 1px solid #3978BE; }
+QPushButton#convergenceScriptAdd {
+    color: white; background: #285EA6; border: 1px solid #1E4D8D; border-radius: 4px;
+}
+QPushButton#convergenceScriptAdd:hover { background: #24558F; }
+QPushButton#convergenceScriptAdd:pressed { background: #1B467D; }
+QPushButton#convergenceScriptDelete {
+    color: white; background: #B91C1C; border: 1px solid #991B1B; border-radius: 4px;
+}
+QPushButton#convergenceScriptDelete:hover { background: #A61B1B; }
+QPushButton#convergenceScriptDelete:pressed { background: #7F1D1D; }
+QPushButton#convergenceScriptAdd:focus, QPushButton#convergenceScriptDelete:focus {
+    border: 2px solid #BFDBFE;
+}
+QPushButton#convergenceScriptAdd:disabled, QPushButton#convergenceScriptDelete:disabled {
+    color: #64748B; background: #E9EDF2; border: 1px solid #CBD5E1;
+}
 QWidget#meshConvergenceStudy QLabel#convergenceResultsTitle {
     color: #0F172A; font-size: 13px; font-weight: 400;
 }

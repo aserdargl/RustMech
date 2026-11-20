@@ -1030,12 +1030,26 @@ class RemoteModeUiTests(unittest.TestCase):
 
     def test_convergence_script_preview_drives_exact_submission(self):
         from truba_remote import run_remote_level_group
+        from PySide6.QtWidgets import QMenu
 
         self.window.open_mesh_convergence()
         dialog = self.window._mesh_convergence_dialog
         study = dialog.study
+        dialog.resize(650, 480)
+        self.app.processEvents()
+        self.assertTrue(study.script_plan_panel.isVisible())
+        self.assertFalse(study.script_add.isEnabled())
+        local_geometry = study.script_plan_panel.geometry()
         study.start_size.setValue(.2)
         study.run_on_truba.click()
+        self.app.processEvents()
+        self.assertEqual(study.script_plan_panel.geometry(), local_geometry)
+        toolbar = study.script_plan_scroll
+        self.assertGreaterEqual(toolbar.viewport().height(), study.script_plan_toolbar.sizeHint().height())
+        self.assertGreater(study.script_preview.y(), toolbar.geometry().bottom())
+        self.assertGreater(study.script_add.x(), study.script_ram.parentWidget().geometry().right())
+        self.assertGreater(study.script_delete.x(), study.script_add.geometry().right())
+        self.assertEqual(study.script_add.size(), study.script_delete.size())
         study.script_queue.setCurrentIndex(study.script_queue.findData("hamsi"))
         self.assertIn("CPU 56 · GPU 0", study.script_queue.currentText())
         study.script_ram.setValue(120)
@@ -1047,6 +1061,11 @@ class RemoteModeUiTests(unittest.TestCase):
             study.script_add.click()
             self.assertEqual(study.script_preview.rowCount(), 2)
             self.assertEqual(study.script_preview.item(0, 4).text(), "60.00")
+            study.run_on_truba.click()
+            self.assertTrue(study.script_plan_panel.isVisible())
+            self.assertEqual(study.script_preview.rowCount(), 2)
+            self.assertFalse(study.script_add.isEnabled())
+            study.run_on_truba.click()
             self.assertNotEqual(study.script_preview.item(0, 3).background().color(),
                                 study.script_preview.item(0, 0).background().color())
             self.app.processEvents()
@@ -1060,8 +1079,17 @@ class RemoteModeUiTests(unittest.TestCase):
             study.script_add.click()
             study.script_add.click()
             self.assertEqual(study.script_preview.rowCount(), 3)  # Hamsi cannot fit four 16-CPU levels.
-            selection = study.script_preview.item(2, 0).data(Qt.ItemDataRole.UserRole)
-            study._remove_planned_levels([selection])
+            study.script_preview.selectRow(2)
+            self.assertTrue(study.script_delete.isEnabled())
+            study.script_delete.click()
+            self.assertEqual(study.script_preview.rowCount(), 2)
+            self.assertFalse(study.script_delete.isEnabled())
+            study.script_add.click()
+            study._script_plan_menu(study.script_preview.visualItemRect(study.script_preview.item(2, 0)).center())
+            menu = study.script_preview.findChild(QMenu)
+            self.assertEqual([action.text() for action in menu.actions()], ["Delete"])
+            menu.actions()[0].trigger()
+            menu.close()
             self.assertEqual(study.script_preview.rowCount(), 2)
             study.script_add.click()
             self.assertEqual(study.script_preview.item(0, 4).text(), "40.00")

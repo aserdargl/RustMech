@@ -488,20 +488,27 @@ class MeshConvergenceWidget(QWidget):
         self.script_plan_panel = QWidget()
         self.script_plan_panel.setObjectName("convergenceScriptPlan")
         panel = QVBoxLayout(self.script_plan_panel)
-        panel.setContentsMargins(6, 5, 6, 5)
-        panel.setSpacing(4)
-        toolbar = QWidget()
-        controls = QHBoxLayout(toolbar)
-        controls.setContentsMargins(0, 0, 0, 0)
-        controls.addWidget(QLabel("Slurm script plan"))
+        panel.setContentsMargins(8, 6, 8, 7)
+        panel.setSpacing(7)
+        self.script_plan_toolbar = QWidget()
+        toolbar = QVBoxLayout(self.script_plan_toolbar)
+        toolbar.setContentsMargins(4, 3, 4, 5)
+        toolbar.setSpacing(5)
+        queue_controls = QHBoxLayout()
+        queue_controls.setSpacing(5)
+        queue_controls.addWidget(QLabel("Slurm script plan"))
         self.script_choice = CompactComboBox()
         self.script_choice.setFixedWidth(110)
         self.script_choice.addItem("New script", None)
-        controls.addWidget(self.script_choice)
+        queue_controls.addWidget(self.script_choice)
         self.script_queue = CompactComboBox()
         self.script_queue.setFixedWidth(290)
         self.script_queue.setAccessibleName("Slurm queue and resource limits")
-        controls.addWidget(self.script_queue)
+        queue_controls.addWidget(self.script_queue)
+        queue_controls.addStretch()
+        toolbar.addLayout(queue_controls)
+        controls = QHBoxLayout()
+        controls.setSpacing(5)
         controls.addWidget(QLabel("Levels"))
         self.script_count = CompactSpinBox()
         self.script_count.setRange(1, 100)
@@ -512,8 +519,16 @@ class MeshConvergenceWidget(QWidget):
         self.script_ram.setFixedSize(NUMERIC_FIELD_WIDTH, CONTROL_HEIGHT)
         controls.addWidget(stepper_with_unit(self.script_ram, "GiB"))
         self.script_add = self._button(controls, "Add", self._add_planned_script)
+        self.script_add.setObjectName("convergenceScriptAdd")
+        self.script_delete = self._button(controls, "Delete", self._delete_selected_planned_levels)
+        self.script_delete.setObjectName("convergenceScriptDelete")
+        for button in (self.script_add, self.script_delete):
+            button.setFixedSize(96, CONTROL_HEIGHT)
+        self.script_delete.setEnabled(False)
         controls.addStretch()
-        panel.addWidget(ConvergenceToolbarScroll(toolbar))
+        toolbar.addLayout(controls)
+        self.script_plan_scroll = ConvergenceToolbarScroll(self.script_plan_toolbar)
+        panel.addWidget(self.script_plan_scroll)
         self.script_preview = QTableWidget(0, 5)
         self.script_preview.setObjectName("convergenceScriptPreview")
         self.script_preview.setToolTip("Add levels before running. Right-click a planned row to remove it.")
@@ -521,8 +536,7 @@ class MeshConvergenceWidget(QWidget):
             ["Slurm script", "Queue", "Mesh (mm)", "Solver CPUs", "RAM per mesh (GiB)"])
         self.script_preview.verticalHeader().hide()
         self.script_preview.verticalHeader().setDefaultSectionSize(24)
-        self.script_preview.setMaximumHeight(146)
-        self.script_preview.setMinimumHeight(80)
+        self.script_preview.setFixedHeight(112)
         self.script_preview.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.script_preview.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.script_preview.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
@@ -530,9 +544,10 @@ class MeshConvergenceWidget(QWidget):
             self.script_preview.setItemDelegateForColumn(column, ScriptResourceDelegate(self.script_preview))
         self.script_preview.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.script_preview.customContextMenuRequested.connect(self._script_plan_menu)
+        self.script_preview.selectionModel().selectionChanged.connect(self._sync_script_delete)
         panel.addWidget(self.script_preview)
         layout.addWidget(self.script_plan_panel)
-        self.script_plan_panel.hide()
+        self.script_plan_toolbar.setEnabled(False)
         self.script_choice.currentIndexChanged.connect(self._select_planned_script)
         self.script_queue.currentIndexChanged.connect(self._apply_script_queue_limit)
 
@@ -646,16 +661,23 @@ class MeshConvergenceWidget(QWidget):
 
     def _script_plan_menu(self, position):
         row = self.script_preview.rowAt(position.y())
-        if row < 0 or self.future is not None:
+        if row < 0 or not self.script_plan_toolbar.isEnabled():
             return
         if not self.script_preview.item(row, 0).isSelected():
             self.script_preview.selectRow(row)
-        selected = [self.script_preview.item(index.row(), 0).data(Qt.ItemDataRole.UserRole)
-                    for index in self.script_preview.selectionModel().selectedRows()]
         menu = QMenu(self.script_preview)
         menu.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
-        menu.addAction("Remove selected mesh levels", lambda: self._remove_planned_levels(selected))
+        menu.addAction("Delete", self._delete_selected_planned_levels)
         menu.popup(self.script_preview.viewport().mapToGlobal(position))
+
+    def _sync_script_delete(self):
+        self.script_delete.setEnabled(bool(self.script_preview.selectionModel().selectedRows()))
+
+    def _delete_selected_planned_levels(self):
+        if self.script_plan_toolbar.isEnabled():
+            selected = [self.script_preview.item(index.row(), 0).data(Qt.ItemDataRole.UserRole)
+                        for index in self.script_preview.selectionModel().selectedRows()]
+            self._remove_planned_levels(selected)
 
     def _remove_planned_levels(self, selection):
         for number, size in selection:
@@ -665,6 +687,8 @@ class MeshConvergenceWidget(QWidget):
                 del self.planned_scripts[number]
                 self.script_choice.removeItem(self.script_choice.findData(number))
         self._render_script_preview()
+        self.script_preview.clearSelection()
+        self._sync_script_delete()
 
     def _results_context_menu(self, position):
         column = self.results.columnAt(position.x())
@@ -750,8 +774,8 @@ class MeshConvergenceWidget(QWidget):
         self.single_truba_mesh.setVisible(self.run_on_truba.isChecked())
         remote = self.run_on_truba.isChecked()
         self.truba_resource_info.setVisible(remote)
-        self.script_plan_panel.setVisible(remote)
-        if remote:
+        self.script_plan_toolbar.setEnabled(remote and self.future is None and not self.saved_jobs)
+        if remote or not self.script_queue.count():
             self._refresh_script_queues()
         self.advanced.layout().setRowVisible(self.time_budget_field, not remote)
         self.advanced.layout().setRowVisible(self.truba_wall_field, remote)
@@ -951,9 +975,9 @@ class MeshConvergenceWidget(QWidget):
             self.timer.start()
 
     def _set_running(self, running):
-        for control in (self.mesh_settings, self.tolerance, self.advanced, self.solver_combo,
-                        self.run_on_truba, self.script_plan_panel):
+        for control in (self.mesh_settings, self.tolerance, self.advanced, self.solver_combo, self.run_on_truba):
             control.setEnabled(not running)
+        self.script_plan_toolbar.setEnabled(not running and self.run_on_truba.isChecked())
         if running:
             self.run_button.setEnabled(False)
         else:
@@ -1110,7 +1134,7 @@ class MeshConvergenceWidget(QWidget):
         self.single_truba_mesh.setChecked(self.single_remote_run)
         self.single_truba_mesh.show()
         self.truba_resource_info.show()
-        self.script_plan_panel.show()
+        self.script_plan_toolbar.setEnabled(True)
         self._refresh_script_queues()
         self.advanced.layout().setRowVisible(self.time_budget_field, False)
         self.advanced.layout().setRowVisible(self.truba_wall_field, True)
