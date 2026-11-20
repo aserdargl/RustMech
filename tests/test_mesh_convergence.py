@@ -523,18 +523,20 @@ class LiveConvergenceTests(unittest.TestCase):
         widget = self.truba_study()
         self.assertFalse(widget.truba_resource_info.isHidden())
         self.assertEqual(widget.level_settings(.2).cores, 16)
-        self.assertEqual(widget.truba_wall_minutes.value(), 30)
+        self.assertEqual(widget.truba_wall_field.currentText(), "03:00")
+        self.assertFalse(widget.truba_wall_field.isEditable())
+        self.assertEqual([widget.truba_wall_field.itemData(i) for i in range(4)], [30, 60, 90, 120])
         QSettings(str(self.folder / "window.ini"), QSettings.Format.IniFormat).setValue(
             "meshConvergence/trubaCoresPerAnalysis", 8)
-        widget.truba_wall_minutes.setValue(75)
+        widget.truba_wall_field.setCurrentIndex(widget.truba_wall_field.findData(90))
         reopened = self.truba_study()
-        self.assertEqual(reopened.truba_wall_minutes.value(), 75)
+        self.assertEqual(reopened.truba_wall_field.currentText(), "01:30")
         self.assertEqual(reopened.level_settings(.2).cores, 16)
         self.assertFalse(reopened.level_settings(.2).automatic_cores)
         settings = reopened.level_settings(.2)
         reopened._require_remote_submission(settings, 1)
         reopened.remote_controller.require_convergence.assert_called_once_with(
-            settings, max_jobs=1, walltime="01:15:00")
+            settings, max_jobs=1, walltime="01:30:00")
         reopened.remote_controller.requested = False
         reopened._solver_changed()
         self.assertTrue(reopened.truba_resource_info.isHidden())
@@ -606,7 +608,7 @@ class LiveConvergenceTests(unittest.TestCase):
             self.assertEqual(settings.cores, 40)
             self.assertEqual(context.memory_mb, 262144)
             widget.remote_controller.require_convergence.assert_called_with(
-                replace(settings, cores=16), max_jobs=1, walltime="00:30:00")
+                replace(settings, cores=16), max_jobs=1, walltime="03:00:00")
             retried.result.return_value = completed(settings.mesh_resolution, 15, 150)
             widget._poll()
             self.assertEqual(submit.call_count, 3)
@@ -623,7 +625,7 @@ class LiveConvergenceTests(unittest.TestCase):
             widget._poll()
         submit.assert_called_once()
         widget.remote_controller.require_convergence.assert_called_with(
-            replace(submit.call_args.args[1], cores=16), max_jobs=1, walltime="00:30:00")
+            replace(submit.call_args.args[1], cores=16), max_jobs=1, walltime="03:00:00")
         self.assertEqual(submit.call_args.args[1].cores, 20)
         self.assertEqual(submit.call_args.args[1].mesh_resolution, .2)
         self.assertIsNone(widget.future)

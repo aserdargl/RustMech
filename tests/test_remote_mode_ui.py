@@ -1094,6 +1094,9 @@ class RemoteModeUiTests(unittest.TestCase):
         study.run_on_truba.click()
         self.app.processEvents()
         self.assertEqual(study.script_plan_panel.geometry(), local_geometry)
+        self.assertTrue(study.truba_wall_field.isVisible())
+        self.assertEqual(study.truba_wall_field.currentText(), "03:00")
+        study.truba_wall_field.setCurrentIndex(study.truba_wall_field.findData(120))
         toolbar = study.script_plan_scroll
         self.assertGreaterEqual(toolbar.viewport().height(), study.script_plan_toolbar.sizeHint().height())
         self.assertGreater(study.script_preview.y(), toolbar.geometry().bottom())
@@ -1159,6 +1162,7 @@ class RemoteModeUiTests(unittest.TestCase):
         self.assertIs(target, run_remote_level_group)
         self.assertEqual((len(levels), context.partition, context.cores, context.memory_mb),
                          (3, "hamsi", 56, 120 * 1024))
+        self.assertEqual(context.walltime, "02:00:00")
         self.assertEqual(study.results.rowCount(), 3)
         study.force_stop()
         dialog.reject()

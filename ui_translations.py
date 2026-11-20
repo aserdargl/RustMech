@@ -1338,6 +1338,7 @@ Slurm plan ready|Slurm planı hazır
 Planned levels finished; convergence not confirmed.|Planlanan seviyeler bitti. Yakınsama doğrulanmadı.
 Slurm state|Slurm durumu
 Wall time per analysis|Analiz başına süre sınırı
+Slurm time limit for each mesh analysis (hours:minutes).|Her ağ analizi için Slurm süre sınırı (saat:dakika).
 Slurm time limit for each mesh analysis, in minutes.|Her ağ analizi için dakika cinsinden Slurm süre sınırı.
 Automatic CPU and RAM sharing|Otomatik CPU ve RAM paylaşımı
 Two levels share one Slurm allocation when each can use at least 16 CPUs. A single level uses the full allocation.|Her birine en az 16 CPU düşüyorsa iki seviye tek Slurm tahsisini paylaşır. Tek seviye tahsisin tamamını kullanır.

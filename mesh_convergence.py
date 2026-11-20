@@ -39,6 +39,9 @@ RESULT_HEADERS = ("Mesh / elements", "Mesh (s)", "Solve (s)", "Force (N)",
 MAX_FAILURE_RETRIES = 3
 TRUBA_BATCH_SIZE = 5
 MIN_TRUBA_LEVEL_CPUS = 16
+DEFAULT_TRUBA_WALL_MINUTES = 180
+TRUBA_WALL_STEP_MINUTES = 30
+MAX_TRUBA_WALL_MINUTES = 72 * 60
 TIME_UNITS = (
     ("cs", "Centiseconds (cs)", 0.01),
     ("s", "Seconds (s)", 1.0),
@@ -309,16 +312,6 @@ class MeshConvergenceWidget(QWidget):
         self.max_minutes.setToolTip("Budget checked between stages/levels; the active solver finishes its current level.")
         self.time_budget_field = stepper_with_unit(self.max_minutes, "min")
         form.addRow("Study time budget", self.time_budget_field)
-        self.truba_wall_minutes = CompactSpinBox()
-        self.truba_wall_minutes.setRange(1, 999 * 60 + 59)
-        self.truba_wall_minutes.setFixedHeight(CONTROL_HEIGHT)
-        self.truba_wall_minutes.setFixedWidth(NUMERIC_FIELD_WIDTH)
-        self.truba_wall_minutes.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.truba_wall_minutes.setKeyboardTracking(False)
-        self.truba_wall_minutes.setToolTip("Slurm time limit for each mesh analysis, in minutes.")
-        self.truba_wall_field = stepper_with_unit(self.truba_wall_minutes, "min")
-        form.addRow("Wall time per analysis", self.truba_wall_field)
-        form.setRowVisible(self.truba_wall_field, False)
         self.metric_checks, self.absolute = [], []
         for label, _ in METRICS:
             check = QCheckBox(label)
@@ -448,8 +441,9 @@ class MeshConvergenceWidget(QWidget):
             "A single level uses the full allocation.")
         remote_preferences = self.remote_controller.preferences if self.remote_controller is not None else preferences
         walltime_key = "meshConvergence/trubaWallMinutes"
-        self.truba_wall_minutes.setValue(remote_preferences.value(walltime_key, 30, type=int))
-        self.truba_wall_minutes.valueChanged.connect(lambda value: remote_preferences.setValue(walltime_key, value))
+        self._select_wall_minutes(remote_preferences.value(walltime_key, DEFAULT_TRUBA_WALL_MINUTES, type=int))
+        self.truba_wall_field.currentIndexChanged.connect(
+            lambda: remote_preferences.setValue(walltime_key, self.truba_wall_field.currentData()))
         mesh_fields.addWidget(self.truba_resource_info)
         self.truba_resource_info.hide()
         from operation_progress import OperationProgress
@@ -501,6 +495,17 @@ class MeshConvergenceWidget(QWidget):
         self.script_choice.setFixedWidth(110)
         self.script_choice.addItem("New script", None)
         controls.addWidget(self.script_choice)
+        self.truba_wall_label = QLabel("Wall time per analysis")
+        self.truba_wall_field = CompactComboBox()
+        self.truba_wall_field.setFixedSize(82, CONTROL_HEIGHT)
+        self.truba_wall_field.setToolTip("Slurm time limit for each mesh analysis (hours:minutes).")
+        for duration in range(TRUBA_WALL_STEP_MINUTES, MAX_TRUBA_WALL_MINUTES + 1, TRUBA_WALL_STEP_MINUTES):
+            hours, minutes = divmod(duration, 60)
+            self.truba_wall_field.addItem(f"{hours:02d}:{minutes:02d}", duration)
+        self.truba_wall_label.setBuddy(self.truba_wall_field)
+        for control in (self.truba_wall_label, self.truba_wall_field):
+            controls.addWidget(control)
+            control.hide()
         self.script_queue = CompactComboBox()
         self.script_queue.setFixedWidth(290)
         self.script_queue.setAccessibleName("Slurm queue and resource limits")
@@ -790,7 +795,8 @@ class MeshConvergenceWidget(QWidget):
         if remote or not self.script_queue.count():
             self._refresh_script_queues()
         self.advanced.layout().setRowVisible(self.time_budget_field, not remote)
-        self.advanced.layout().setRowVisible(self.truba_wall_field, remote)
+        self.truba_wall_label.setVisible(remote)
+        self.truba_wall_field.setVisible(remote)
         self._show_remote_columns(remote or bool(self.remote_records))
         self._refresh_append_button()
 
@@ -1059,7 +1065,7 @@ class MeshConvergenceWidget(QWidget):
         return dict(id=uuid4().hex, automatic=self.automatic.isChecked(),
                     factor=self.factor.value(), minimum=self.minimum.value(),
                     max_levels=self.max_levels.value(), max_elements=self.max_elements.value(),
-                    wall_minutes=self.truba_wall_minutes.value(), tolerance=self.tolerance.value(),
+                    wall_minutes=self.truba_wall_field.currentData(), tolerance=self.tolerance.value(),
                     selected=self.selected, absolute=[control.value() for control in self.absolute],
                     manual_sizes=[first.mesh_resolution, *(level.mesh_resolution for level in self.manual_pending)],
                     single=self.single_remote_run, explicit_scripts=self.explicit_script_run)
@@ -1177,12 +1183,15 @@ class MeshConvergenceWidget(QWidget):
         self.selected = selection
         self.single_remote_run = bool(saved.get("single"))
         self.explicit_script_run = bool(saved.get("explicit_scripts"))
-        original_wall = jobs[0].record.get("context", {}).get("walltime", "00:30:00")
+        from truba_resources import seconds
+
+        original_wall = jobs[0].record.get("context", {}).get("walltime", "03:00:00")
         try:
-            hours, minutes, _seconds = map(int, original_wall.split(":"))
-            wall_minutes = hours * 60 + minutes
+            wall_minutes = math.ceil(seconds(original_wall) / 60)
         except ValueError:
-            wall_minutes = 30
+            wall_minutes = DEFAULT_TRUBA_WALL_MINUTES
+        with QSignalBlocker(self.truba_wall_field):
+            self._select_wall_minutes(saved.get("wall_minutes", wall_minutes))
         second = jobs[0].levels[1] if len(jobs[0].levels) > 1 else None
         factor = base.mesh_resolution / second.mesh_resolution if second else 1.3
         self.automatic.setChecked(saved.get("automatic", True))
@@ -1192,7 +1201,6 @@ class MeshConvergenceWidget(QWidget):
             ("tolerance", 2), ("factor", factor), ("minimum", base.mesh_resolution / 10),
             ("max_levels", max(12, sum(len(job.levels) for job in jobs))),
             ("max_elements", jobs[0].request.get("max_elements", self.max_elements.value())),
-            ("truba_wall_minutes", saved.get("wall_minutes", wall_minutes)),
         ):
             control = getattr(self, name)
             with QSignalBlocker(control):
@@ -1217,7 +1225,8 @@ class MeshConvergenceWidget(QWidget):
         self.script_plan_toolbar.setEnabled(True)
         self._refresh_script_queues()
         self.advanced.layout().setRowVisible(self.time_budget_field, False)
-        self.advanced.layout().setRowVisible(self.truba_wall_field, True)
+        self.truba_wall_label.show()
+        self.truba_wall_field.show()
         self._configure_metrics(base)
         self._show_remote_columns(True)
         for job in jobs:
@@ -1298,8 +1307,12 @@ class MeshConvergenceWidget(QWidget):
         self._set_status(f"{kind}: {settings.mesh_resolution:.6g} mm")
         return len(self.rows) - 1
 
+    def _select_wall_minutes(self, minutes):
+        steps = math.ceil(minutes / TRUBA_WALL_STEP_MINUTES)
+        self.truba_wall_field.setCurrentIndex(min(max(1, steps), self.truba_wall_field.count()) - 1)
+
     def _script_walltime(self):
-        hours, minutes = divmod(self.truba_wall_minutes.value(), 60)
+        hours, minutes = divmod(self.truba_wall_field.currentData(), 60)
         return f"{hours:02d}:{minutes:02d}:00"
 
     def _require_remote_submission(self, settings, max_jobs):

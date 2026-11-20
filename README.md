@@ -1482,9 +1482,9 @@ işlerinden çalışanlar ve kuyrukta bekleyenler görünür. Durumlarını
 güncellemek için aynı TRUBA hesabıyla bağlanın.
 Sonuç tablosu ve CSV her seviyenin betiğini, iş kimliğini, çözüm CPU sayısını
 ve ayrılan RAM'i gösterir. Slurm iş adımı için MaxRSS sağlarsa tepe RAM de
-görünür. **Advanced → Wall time per analysis** her
-seviyenin Slurm süresini belirler. Varsayılan 30 dakikadır. Süreyi seçili
-kuyruğun sınırları içinde değiştirebilirsiniz.
+görünür. **Slurm script plan** satırındaki **Wall time per analysis** açılır
+listesi yeni betiğin Slurm süresini belirler. Varsayılan **03:00**'tır.
+Süreyi seçili kuyruğun sınırları içinde 30 dakikalık adımlarla seçebilirsiniz.
 **Study time budget** yalnızca yerel mesh convergence çalışmasına uygulanır.
 Tahsis öncesinde **Parallel analyses** ile DoE ve analiz kuyruğunda aynı anda
 çalışabilecek analiz sayısını seçin (varsayılan `1`). CPU ve RAM işlere
