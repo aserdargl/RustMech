@@ -221,8 +221,13 @@ class RustMechDialog(QDialog):
             install_copy_support(app_inst)
             from ui_input import install_settings_wheel_guard
             install_settings_wheel_guard(app_inst)
+
+        # QApplication.setStyle/setPalette repolish every live widget, so
+        # reapplying them for each new dialog grows with the open windows.
+        if app_inst is not None and not app_inst.property("rustmechStyleApplied"):
             from PySide6.QtGui import QColor, QPalette
 
+            app_inst.setProperty("rustmechStyleApplied", True)
             app_inst.setStyle("Fusion")
             pal = QPalette()
             pal.setColor(QPalette.ColorRole.Window, QColor("#f3f3f3"))

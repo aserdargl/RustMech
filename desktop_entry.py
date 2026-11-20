@@ -27,75 +27,89 @@ def smoke_test(studio):
     def inspect():
         nonlocal ticks
         ticks += 1
-        if dialog.preview is not None:
-            mesh = dialog.preview.mesh
-            result.update(
-                passed=True,
-                elements=mesh.grid.n_cells,
-                nodes=mesh.grid.n_points,
-                removed_elements=mesh.removed_grid.n_cells,
-                cores=dialog.collect().cores,
-                geometry_apply=dialog.geometry_apply_button.text(),
-                solver_backend=dialog.collect().solver_backend,
-                bottom_platen_friction_coeff=dialog.collect().bottom_platen_friction_coeff,
-                top_platen_friction_coeff=dialog.collect().top_platen_friction_coeff,
-                self_contact_mode=dialog.collect().self_contact_mode,
-                self_friction_coeff=dialog.collect().self_friction_coeff,
-                contact_formulation=dialog.collect().contact_formulation,
-                platens_visible=dialog.show_platens_cb.isChecked(),
-                available_solvers=[
-                    dialog.solver_combo.itemData(i)
-                    for i in range(dialog.solver_combo.count())
-                ],
-            )
-            dialog.main_splitter.setSizes([550, 740])
-            app.processEvents()
-            w_wide = dialog.main_splitter.sizes()[0]
-            dialog.main_splitter.setSizes([240, 1060])
-            app.processEvents()
-            w_narrow = dialog.main_splitter.sizes()[0]
-            dialog.main_splitter.setSizes([350, 990])
-            sidebar_sizes = dialog.main_splitter.sizes()
-            # The toolbar button selects a method and opens a modal menu now.
-            # Exercise the splitter directly instead of blocking on that menu.
-            dialog.main_splitter.toggle_sidebar()
-            sidebar_hidden = dialog.main_splitter.sizes()[0] == 0
-            dialog.main_splitter.toggle_sidebar()
-            result["sidebar_collapse_verified"] = bool(
-                sidebar_hidden
-                and dialog.main_splitter.sizes() == sidebar_sizes
-                and dialog.main_splitter.sizes()[0] > 0
-            )
-            preview_height = sum(dialog.preview_splitter.sizes())
-            short_height = preview_height // 2
-            details_height = preview_height // 5
-            dialog.preview_splitter.setSizes(
-                [preview_height - details_height, details_height]
-            )
-            app.processEvents()
-            h_tall = dialog.preview_splitter.sizes()[0]
-            dialog.preview_splitter.setSizes(
-                [short_height, preview_height - short_height]
-            )
-            app.processEvents()
-            h_short = dialog.preview_splitter.sizes()[0]
-            dialog.preview_splitter.setSizes([580, 150])
-            result.update(
-                splitter_resize_verified=bool(
-                    w_wide - w_narrow >= 100 and h_tall - h_short >= 50
-                ),
-                main_splitter_range=[w_narrow, w_wide],
-                preview_splitter_range=[h_short, h_tall],
-            )
-            dialog.apply_geometry()
-            dialog.plotter.screenshot(str(studio.ROOT / "exe_preview.png"))
-        elif ticks < 300 and dialog.failed_key is None:
-            return
-        else:
-            result["error"] = dialog.status.text()
+        try:
+            preview = dialog.preview
+            if preview is not None and preview.mesh is None and not dialog._mesh_requested:
+                # The preview builds geometry first and meshes only on request.
+                # Ask for the FE mesh the same way the FE mesh view does.
+                result["geometry_preview_ready"] = True
+                dialog.mode.setCurrentIndex(1)
+                return
+            if preview is not None and preview.mesh is not None:
+                measure(preview.mesh)
+                result["passed"] = True
+            elif ticks < 300 and dialog.failed_key is None:
+                return
+            else:
+                result["error"] = dialog.status.text() or "Timed out waiting for the FE mesh preview."
+        except Exception:
+            # Finish with a report instead of retrying the same failure forever.
+            result["passed"] = False
+            result["error"] = traceback.format_exc()
         timer.stop()
         studio.write_json(studio.ROOT / "exe_smoke_test.json", result)
         dialog.reject()
+
+    def measure(mesh):
+        result.update(
+            elements=mesh.grid.n_cells,
+            nodes=mesh.grid.n_points,
+            removed_elements=mesh.removed_grid.n_cells,
+            cores=dialog.collect().cores,
+            geometry_apply=dialog.geometry_apply_button.text(),
+            solver_backend=dialog.collect().solver_backend,
+            bottom_platen_friction_coeff=dialog.collect().bottom_platen_friction_coeff,
+            top_platen_friction_coeff=dialog.collect().top_platen_friction_coeff,
+            self_contact_mode=dialog.collect().self_contact_mode,
+            self_friction_coeff=dialog.collect().self_friction_coeff,
+            contact_formulation=dialog.collect().contact_formulation,
+            platens_visible=dialog.show_platens_cb.isChecked(),
+            available_solvers=[
+                dialog.solver_combo.itemData(i)
+                for i in range(dialog.solver_combo.count())
+            ],
+        )
+        dialog.main_splitter.setSizes([550, 740])
+        app.processEvents()
+        w_wide = dialog.main_splitter.sizes()[0]
+        dialog.main_splitter.setSizes([240, 1060])
+        app.processEvents()
+        w_narrow = dialog.main_splitter.sizes()[0]
+        dialog.main_splitter.setSizes([350, 990])
+        sidebar_sizes = dialog.main_splitter.sizes()
+        # The toolbar button selects a method and opens a modal menu now.
+        # Exercise the splitter directly instead of blocking on that menu.
+        dialog.main_splitter.toggle_sidebar()
+        sidebar_hidden = dialog.main_splitter.sizes()[0] == 0
+        dialog.main_splitter.toggle_sidebar()
+        result["sidebar_collapse_verified"] = bool(
+            sidebar_hidden
+            and dialog.main_splitter.sizes() == sidebar_sizes
+            and dialog.main_splitter.sizes()[0] > 0
+        )
+        preview_height = sum(dialog.preview_splitter.sizes())
+        short_height = preview_height // 2
+        details_height = preview_height // 5
+        dialog.preview_splitter.setSizes(
+            [preview_height - details_height, details_height]
+        )
+        app.processEvents()
+        h_tall = dialog.preview_splitter.sizes()[0]
+        dialog.preview_splitter.setSizes(
+            [short_height, preview_height - short_height]
+        )
+        app.processEvents()
+        h_short = dialog.preview_splitter.sizes()[0]
+        dialog.preview_splitter.setSizes([580, 150])
+        result.update(
+            splitter_resize_verified=bool(
+                w_wide - w_narrow >= 100 and h_tall - h_short >= 50
+            ),
+            main_splitter_range=[w_narrow, w_wide],
+            preview_splitter_range=[h_short, h_tall],
+        )
+        dialog.apply_geometry()
+        dialog.plotter.screenshot(str(studio.ROOT / "exe_preview.png"))
 
     timer = QTimer()
     timer.timeout.connect(inspect)
