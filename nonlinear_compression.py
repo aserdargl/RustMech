@@ -1245,8 +1245,12 @@ class RustMechDialog(QDialog):
         self.result_button = QPushButton("Result")
         self.result_button.setObjectName("resultBtn")
         self.result_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.result_button.setToolTip("View latest results")
+        self.result_button.setToolTip("View latest results. Right-click to open the result folder.")
         self.result_button.clicked.connect(self.show_latest_result)
+        self.result_button.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.result_button.customContextMenuRequested.connect(
+            lambda _: self.show_latest_result(open_folder=True)
+        )
 
         self.force_stop_button = QPushButton("Forced Stop")
         self.force_stop_button.setObjectName("forcedStopBtn")
@@ -3513,30 +3517,28 @@ class RustMechDialog(QDialog):
                 return folder
         return None
 
-    def show_latest_result(self) -> None:
+    def show_latest_result(self, *, open_folder=False) -> None:
         from ui_language import translate
 
-        if self.setup_tabs.currentIndex() == self._fft_method_index:
-            folder = self.fft_result_folder
-            if folder is not None and folder.is_dir():
-                self._open_fft_results()
-                return
-        else:
-            folder = self._latest_mechanical_result()
-            if folder is not None:
-                if self._result_preview_folder != folder / "03_Results":
-                    self._show_completed_analysis(folder, announce=False)
-                if self._latest_kratos_results == str(folder) and self.show_kratos_results(warn=False):
-                    return
-                self.workspace_tabs.setCurrentIndex(0)
-                field = self.result_preview_field
-                with QSignalBlocker(field):
-                    field.setCurrentIndex(field.findData("Von_Mises_MPa"))
-                self.render_preview()
-                if field.currentData() is None:
-                    QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder)))
-                return
-        QMessageBox.information(self, translate("Result"), translate("No completed analysis results found."))
+        fft_selected = self.setup_tabs.currentIndex() == self._fft_method_index
+        folder = self.fft_result_folder if fft_selected else self._latest_mechanical_result()
+        if folder is None or not folder.is_dir():
+            QMessageBox.information(self, translate("Result"), translate("No completed analysis results found."))
+            return
+        if open_folder or fft_selected:
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder)))
+            return
+        if self._result_preview_folder != folder / "03_Results":
+            self._show_completed_analysis(folder, announce=False)
+        if self._latest_kratos_results == str(folder) and self.show_kratos_results(warn=False):
+            return
+        self.workspace_tabs.setCurrentIndex(0)
+        field = self.result_preview_field
+        with QSignalBlocker(field):
+            field.setCurrentIndex(field.findData("Von_Mises_MPa"))
+        self.render_preview()
+        if field.currentData() is None:
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder)))
 
     def show_kratos_results(self, *, warn=True) -> bool:
         folder = Path(self._latest_kratos_results)
