@@ -1,5 +1,58 @@
 # RustMech
 
+RustMech, TPMS yapıları ve deney numuneleri için geometri önizleme, sonlu eleman
+ağı üretimi ve analiz araçları sunan bir masaüstü uygulamasıdır. Mekanik analiz,
+OpenFOAM ile akış (CFD) ve eşlenik ısı transferi (CHT) çalışma alanları aynı
+proje dosyasında bir araya gelir. Desteklenen hesaplar TRUBA'ya gönderilebilir
+ve Slurm işleri uygulamadan izlenebilir.
+
+## Windows kurulumu
+
+[RustMech Releases](https://github.com/aserdargl/RustMech-Releases/releases)
+sayfasından istediğiniz sürümün `RustMech-<sürüm>-Setup.exe` dosyasını indirin
+ve çalıştırın.
+
+## Kaynak koddan çalıştırma
+
+Depoda kayıtlı geliştirme ortamı Python 3.14.10 kullanır. Proje klasöründe temel
+bağımlılıkları yükleyip `desktop_entry.py` giriş noktasını çalıştırın.
+
+```powershell
+python -m pip install -r requirements-base.txt
+python desktop_entry.py
+```
+
+TRUBA bağlantısı, TET4/TET10 ağ üretimi ve ANSYS MAPDL için sırasıyla
+`requirements-truba.txt`, `requirements-tet10.txt` ve `requirements-mapdl.txt`
+dosyalarını `python -m pip install -r` ile yükleyin.
+
+## Windows kurulum dosyasını derleme
+
+Derleme ortamında PyInstaller ile temel, TET4/TET10, TRUBA ve MAPDL
+bağımlılıkları bulunmalıdır. Proje klasöründe önce `dist\RustMech` paketini
+oluşturun, ardından Inno Setup derleyicisiyle kurulum EXE'sini üretin.
+
+```powershell
+.\Build-Exe.ps1
+ISCC.exe "/DAppVersion=<sürüm>" "/DOutputDir=<çıktı-klasörü>" packaging\RustMech.iss
+```
+
+`<sürüm>` yerine sayısal yayımlama sürümünü, `<çıktı-klasörü>` yerine kurulum
+EXE'sinin yazılacağı klasörün tam yolunu yazın.
+
+## Testleri çalıştırma
+
+Aynı Python ortamına `pytest` yükleyin. `core` ekran gerektirmeyen testleri,
+`gui` masaüstü oturumu gerektiren testleri, `all` ise iki grubu da çalıştırır.
+
+```powershell
+python tools\run_tests.py core
+python tools\run_tests.py gui
+python tools\run_tests.py all
+```
+
+RustMech, GPL-3.0-or-later ile lisanslanır. [License](#license) bölümüne ve [LICENSE](LICENSE) dosyasına bakın.
+
 ## MD Hazırlama
 
 **ESEN → MD Hazırlama** sekmesinde periyodik tablodaki elemente sağ tıklayıp
