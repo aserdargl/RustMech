@@ -114,6 +114,9 @@ class LiveConvergenceTests(unittest.TestCase):
         self.temp = TemporaryDirectory()
         self.folder = Path(self.temp.name)
         window_settings = QSettings(str(self.folder / "window.ini"), QSettings.Format.IniFormat)
+        preferences_patch = patch("mesh_convergence.QSettings", return_value=window_settings)
+        preferences_patch.start()
+        self.addCleanup(preferences_patch.stop)
         from window_state import WindowStateStore
         self.window_store = WindowStateStore(self.app, window_settings)
         graphs = self.folder / "04_Graphs"
@@ -501,7 +504,7 @@ class LiveConvergenceTests(unittest.TestCase):
         fields = widget.mesh_settings.layout()
         for index, (text, control) in enumerate((
                 ("Element", widget.mesh_type_combo), ("Mesh Size", widget.start_size),
-                ("Local Size", widget.local_size))):
+                ("Local Size", widget.local_size), ("Decimal", widget.mesh_precision))):
             label = fields.itemAt(2 * index).widget()
             self.assertEqual(label.text(), text)
             self.assertIs(label.buddy(), control)
@@ -514,11 +517,25 @@ class LiveConvergenceTests(unittest.TestCase):
                    widget.force_stop_button, widget.run_button)
         self.assertEqual(len({(button.width(), button.height()) for button in buttons}), 1)
         self.assertFalse(hasattr(widget, "advanced_button"))
-        self.assertEqual(widget.start_size.width(), NUMERIC_FIELD_WIDTH - 2)
+        self.assertEqual(widget.start_size.width(), NUMERIC_FIELD_WIDTH)
         self.assertEqual(widget.tolerance.width(), NUMERIC_FIELD_WIDTH - 2)
         self.assertEqual(widget.solver_combo.width(), 138)
         self.assertGreater(widget.run_button.x(), widget.stop_button.x())
         self.assertGreater(widget.run_button.x(), widget.apply_button.x())
+
+    def test_mesh_display_decimals_are_shared_and_preserve_level_values(self):
+        settings = replace(SETTINGS, mesh_type="TET4", mesh_resolution=.234567, local_mesh_size=.034567)
+        widget = self.widget(settings=settings)
+        self.assertEqual(widget.mesh_precision.value(), 3)
+        self.assertEqual(widget.start_size.text().replace(",", "."), "0.235")
+        self.assertEqual(widget.local_size.text().replace(",", "."), "0.035")
+        widget.mesh_precision.setValue(6)
+        self.assertEqual(widget.start_size.text().replace(",", "."), "0.234567")
+        self.assertEqual(widget.local_size.text().replace(",", "."), "0.034567")
+        level = widget.level_settings(widget.start_size.value())
+        self.assertEqual(level.mesh_resolution, settings.mesh_resolution)
+        self.assertEqual(level.local_mesh_size, settings.local_mesh_size)
+        self.assertEqual(self.widget(settings=settings).mesh_precision.value(), 6)
 
     def test_results_stay_single_line_with_full_comparison_in_tooltip(self):
         widget = self.widget()

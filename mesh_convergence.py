@@ -8,7 +8,7 @@ from multiprocessing import get_context
 from time import monotonic
 
 from studio_style import CompactSpinBox, CompactComboBox
-from PySide6.QtCore import QTimer, Qt
+from PySide6.QtCore import QSettings, QTimer, Qt
 from PySide6.QtGui import QActionGroup
 from PySide6.QtWidgets import (
     QAbstractItemView, QCheckBox, QComboBox, QDialog, QFormLayout, QFrame,
@@ -27,7 +27,7 @@ from solver_api import SOLVER_REGISTRY, get_solver_capabilities
 from standard_tests import kind
 from mesh_convergence_style import CONVERGENCE_STYLESHEET
 from studio_style import (CONTROL_HEIGHT, NUMERIC_FIELD_WIDTH, STUDIO_STYLESHEET, CompactDoubleSpinBox,
-                          configure_form, stepper_with_unit)
+                          configure_form, mesh_precision_stepper, stepper_with_unit)
 
 RESULT_HEADERS = ("Mesh / elements", "Mesh (s)", "Solve (s)", "Force (N)",
                   "Modulus (MPa)", "SEA (J/g)", "Max Δ / ref.", "Status")
@@ -337,11 +337,19 @@ class MeshConvergenceWidget(QWidget):
         self.local_size = self._number(settings.local_mesh_size, 1e-9, 1e6)
         self.local_size.setToolTip("Starting local size; scales with global size at every level.")
         for text, control in (("Mesh Size", self.start_size), ("Local Size", self.local_size)):
-            control.setFixedWidth(NUMERIC_FIELD_WIDTH - 2)
             label = QLabel(text)
             label.setBuddy(control)
             mesh_fields.addWidget(label)
             mesh_fields.addWidget(stepper_with_unit(control, "mm"))
+        self.mesh_precision = mesh_precision_stepper(
+            QSettings("RustMech", "RustMech"), "meshConvergence/meshDisplayDecimals",
+            self.start_size, self.local_size,
+        )
+        self.mesh_precision.setFixedWidth(36)
+        precision_label = QLabel("Decimal")
+        precision_label.setBuddy(self.mesh_precision)
+        mesh_fields.addWidget(precision_label)
+        mesh_fields.addWidget(self.mesh_precision)
         layout.addWidget(self.mesh_settings, alignment=Qt.AlignmentFlag.AlignLeft)
 
         self.solver_combo.currentIndexChanged.connect(self._solver_changed)
