@@ -4,7 +4,7 @@ import ctypes
 from ctypes import wintypes
 
 from PySide6.QtCore import QAbstractNativeEventFilter, QEvent, QMargins, QObject, QPoint, QPointF, QRect, Qt, QTimer
-from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPen, QRegion
+from PySide6.QtGui import QColor, QCursor, QFont, QPainter, QPainterPath, QPen, QRegion
 from PySide6.QtWidgets import QAbstractButton, QDialog, QHBoxLayout, QMainWindow, QWidget
 
 
@@ -177,7 +177,8 @@ class WindowsCaptionFrame(QAbstractNativeEventFilter):
         if window.isMinimized():
             return False, 0
         if native.message == WM_NCLBUTTONDBLCLK:
-            return native.wParam == HTCAPTION and caption.maximize is None, 0
+            can_maximize = window.windowFlags() & Qt.WindowType.WindowMaximizeButtonHint
+            return native.wParam == HTCAPTION and not can_maximize, 0
         origin = wintypes.POINT()
         if not self._client_to_screen(native.hWnd, ctypes.byref(origin)):
             return False, 0
@@ -207,11 +208,12 @@ class CaptionButton(QAbstractButton):
         self.setToolTip(label)
         self.setFixedSize(CAPTION_HEIGHT, CAPTION_HEIGHT)
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.setAttribute(Qt.WidgetAttribute.WA_Hover)
+        self.setMouseTracking(True)
 
     def paintEvent(self, event):
         painter = QPainter(self)
-        hovered = self.underMouse()
+        # A native move or restore can shift the caption without a Qt Leave event.
+        hovered = self.isVisible() and self.rect().contains(self.mapFromGlobal(QCursor.pos()))
         selected = self.isChecked()
         if hovered and self.isDown():
             painter.fillRect(self.rect(), QColor(0, 0, 0, 16))
@@ -222,7 +224,15 @@ class CaptionButton(QAbstractButton):
         pen.setCapStyle(Qt.PenCapStyle.FlatCap)
         painter.setPen(pen)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.translate(12.5, 12.5)
+        if self.action == "close":
+            ratio = painter.device().devicePixelRatioF()
+            center = QPointF(round(self.width() * ratio) / (2 * ratio),
+                             round(self.height() * ratio) / (2 * ratio))
+            for direction in (-1, 1):
+                offset = QPointF(4.5, direction * 4.5)
+                painter.drawLine(center - offset, center + offset)
+            return
+        painter.translate(self.width() / 2, self.height() / 2)
         if self.action == "pin":
             if not selected:
                 painter.rotate(-35)
@@ -233,9 +243,6 @@ class CaptionButton(QAbstractButton):
             outline.closeSubpath()
             painter.drawPath(outline)
             painter.drawLine(QPointF(0, 1.5), QPointF(0, 5.5))
-        elif self.action == "close":
-            painter.drawLine(QPointF(-4.5, -4.5), QPointF(4.5, 4.5))
-            painter.drawLine(QPointF(-4.5, 4.5), QPointF(4.5, -4.5))
         else:
             painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
             if self.action == "minimize":
@@ -247,6 +254,10 @@ class CaptionButton(QAbstractButton):
                 painter.drawRect(-4, -3, 7, 7)
             else:
                 painter.drawRect(-4, -5, 9, 9)
+
+    def mouseMoveEvent(self, event):
+        super().mouseMoveEvent(event)
+        self.update()
 
     def enterEvent(self, event):
         super().enterEvent(event)
@@ -293,20 +304,31 @@ class WindowCaption(QWidget):
         self.pin.setChecked(bool(flags & Qt.WindowType.WindowStaysOnTopHint))
         self.pin.clicked.connect(self.set_pinned)
         controls.addWidget(self.pin)
-        self.maximize = None
-        for action, hint in ACTION_HINTS:
-            if not flags & hint:
-                continue
-            label, callback = {
-                "minimize": (self.tr("Minimize"), window.showMinimized),
-                "maximize": (self.tr("Maximize"), self.toggle_maximized),
-                "close": (self.tr("Close"), window.close),
-            }[action]
+        self.actions = {}
+        for action, label, callback in (
+            ("minimize", self.tr("Minimize"), window.showMinimized),
+            ("maximize", self.tr("Maximize"), self.toggle_maximized),
+            ("close", self.tr("Close"), window.close),
+        ):
             button = CaptionButton(action, label, self)
             button.clicked.connect(callback)
             controls.addWidget(button)
-            if action == "maximize":
-                self.maximize = button
+            self.actions[action] = button
+        self.maximize = self.actions["maximize"]
+
+    def sync_actions(self):
+        flags = self.window().windowFlags()
+        for action, hint in ACTION_HINTS:
+            self.actions[action].setVisible(bool(flags & hint))
+        label = self.tr("Restore") if self.window().isMaximized() else self.tr("Maximize")
+        self.maximize.setAccessibleName(label)
+        self.maximize.setToolTip(label)
+        self.layout().activate()
+
+    def repaint_actions(self):
+        self.pin.update()
+        for button in self.actions.values():
+            button.update()
 
     def set_pinned(self, enabled):
         handle = self.window().windowHandle()
@@ -320,6 +342,8 @@ class WindowCaption(QWidget):
 
     def toggle_maximized(self):
         window = self.window()
+        if not window.windowFlags() & Qt.WindowType.WindowMaximizeButtonHint:
+            return
         if window.isMaximized():
             window.showNormal()
         else:
@@ -350,7 +374,7 @@ class WindowCaption(QWidget):
             super().mousePressEvent(event)
 
     def mouseDoubleClickEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton and self.maximize is not None:
+        if event.button() == Qt.MouseButton.LeftButton and self.maximize.isVisible():
             self.toggle_maximized()
             event.accept()
         else:
@@ -387,19 +411,15 @@ class WindowCaptionService(QObject):
             window.setContentsMargins(target_margins)
         caption.setGeometry(grip, grip, max(0, window.width() - 2 * grip), CAPTION_HEIGHT)
         caption.setVisible(not fullscreen)
+        caption.sync_actions()
         caption.raise_()
         if caption.outline is not None:
             caption.outline.setGeometry(window.rect())
             caption.outline.setVisible(bool(grip))
             caption.outline.raise_()
             caption.outline.update()
-        if caption.maximize is not None:
-            label = self.tr("Restore") if window.isMaximized() else self.tr("Maximize")
-            caption.maximize.setAccessibleName(label)
-            caption.maximize.setToolTip(label)
         caption.update()
-        for button in caption.findChildren(CaptionButton):
-            button.update()
+        caption.repaint_actions()
 
     def eventFilter(self, watched, event):
         kind = event.type()
@@ -412,7 +432,7 @@ class WindowCaptionService(QObject):
             if kind in (QEvent.Type.Resize, QEvent.Type.WindowStateChange, QEvent.Type.Show,
                         QEvent.Type.WindowTitleChange, QEvent.Type.WindowIconChange,
                         QEvent.Type.WindowActivate, QEvent.Type.WindowDeactivate, QEvent.Type.PaletteChange,
-                        QEvent.Type.WinIdChange):
+                        QEvent.Type.WinIdChange, QEvent.Type.DevicePixelRatioChange):
                 self._update_layout(watched, caption)
                 if kind in (QEvent.Type.WinIdChange, QEvent.Type.Show) and watched.internalWinId():
                     if self._native_frame is not None:
@@ -423,6 +443,8 @@ class WindowCaptionService(QObject):
                             handle.setFlag(Qt.WindowType.FramelessWindowHint)
                     if caption.pin.isChecked():
                         caption.set_pinned(True)
+            elif kind == QEvent.Type.Move:
+                caption.repaint_actions()
             elif (self._native_frame is None and kind == QEvent.Type.MouseButtonPress
                   and event.button() == Qt.MouseButton.LeftButton):
                 if not watched.isMaximized() and not watched.isFullScreen():

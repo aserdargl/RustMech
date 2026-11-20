@@ -272,7 +272,7 @@ class WindowStateTests(unittest.TestCase):
         self.app.processEvents()
         assert_integrated_frame(dialog)
         dialog_caption = dialog.property(CAPTION_PROPERTY)
-        dialog_buttons = dialog_caption.findChildren(CaptionButton)
+        dialog_buttons = [button for button in dialog_caption.findChildren(CaptionButton) if button.isVisible()]
         self.assertEqual([button.action for button in dialog_buttons], ["pin", "close"])
         assert_frame_decoration(main)
         assert_frame_decoration(dialog)
@@ -285,6 +285,8 @@ class WindowStateTests(unittest.TestCase):
 
         modeless = QDialog(main)
         modeless.setObjectName("modeless")
+        # A style or a child widget can polish the window before its final flags are set.
+        modeless.ensurePolished()
         modeless.setWindowFlag(Qt.WindowType.WindowMinimizeButtonHint)
         modeless.resize(400, 300)
         self.windows.append(modeless)
@@ -292,6 +294,9 @@ class WindowStateTests(unittest.TestCase):
         self.app.processEvents()
         modeless_normal = modeless.geometry()
         assert_integrated_frame(modeless)
+        modeless_caption = modeless.property(CAPTION_PROPERTY)
+        self.assertEqual([button.action for button in modeless_caption.findChildren(CaptionButton)
+                          if button.isVisible()], ["pin", "minimize", "close"])
         minimize = modeless.findChild(CaptionButton, "WindowCaptionMinimize")
         minimize.click()
         self.app.processEvents()
@@ -308,6 +313,17 @@ class WindowStateTests(unittest.TestCase):
         assert_integrated_frame(modeless)
         self.assertEqual(modeless.geometry(), modeless_normal)
         self.assertEqual(modeless.windowHandle().transientParent(), main.windowHandle())
+        modeless.hide()
+        modeless.setWindowFlag(Qt.WindowType.WindowMaximizeButtonHint)
+        modeless.setWindowFlag(Qt.WindowType.WindowCloseButtonHint, False)
+        modeless.show()
+        self.app.processEvents()
+        assert_integrated_frame(modeless)
+        self.assertIs(modeless.property(CAPTION_PROPERTY), modeless_caption)
+        visible = [button for button in modeless_caption.findChildren(CaptionButton) if button.isVisible()]
+        self.assertEqual([button.action for button in visible], ["pin", "minimize", "maximize"])
+        self.assertEqual([button.x() for button in visible],
+                         list(range(modeless_caption.width() - 75, modeless_caption.width(), 25)))
         modeless.close()
 
         caption.maximize.click()
