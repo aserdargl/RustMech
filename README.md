@@ -666,6 +666,10 @@ seçeneği, ağır sayısal işleri SLURM hesaplama düğümlerine yönlendirir.
 yalnız ayarları, iş durumunu ve indirilen VTK/CSV verilerinin yerel görüntüsünü
 yönetir. Bu seçenek **her uygulama açılışında kapalıdır**. Paneli açmak veya
 SSH bağlantısını kurmak hesaplama modunu ya da bir analizi kendiliğinden başlatmaz.
+Mesh Convergence ekranındaki **Run on TRUBA** kutusu aynı hesaplama modunu
+değiştirir. TRUBA'da çalıştırmak için kaynak oturumunun hazır olması gerekir.
+TRUBA için çözücü değişirse yakınsama çalışması ana ekrandaki o çözücünün
+profilini kullanır ve başlangıçtaki yükleme hedefi ile adım ayarlarını korur.
 
 1. `.\Run-RustMech.ps1` ile kaynak sürümünü açın. **TRUBA** düğmesinden kendi
    hesabınızla Connect yapın; mevcut kayıtlı WinSCP TRUBA oturumu da kullanılabilir.

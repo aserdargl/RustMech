@@ -858,18 +858,49 @@ class RemoteModeUiTests(unittest.TestCase):
                 workspace.cancel()
                 local_cancel.assert_not_called()
 
+    def test_convergence_execution_toggle_stays_in_sync(self):
+        from mesh_convergence import MeshConvergenceDialog
+
+        dialog = MeshConvergenceDialog(self.window.collect(), MagicMock(), MagicMock(), self.window)
+        study = dialog.study
+        self.assertFalse(study.run_on_truba.isChecked())
+        self.assertTrue(study.run_button.isEnabled())
+        with patch.object(self.window.truba_dialog, "start_connection") as connect:
+            study.run_on_truba.click()
+        connect.assert_not_called()
+        self.assertTrue(self.controller.toggle.isChecked())
+        self.assertEqual(self.window.execution_target.currentData(), "truba")
+        self.assertFalse(study.run_button.isEnabled())
+
+        with patch.object(self.controller, "_physics_busy", return_value=True):
+            study.run_on_truba.click()
+        self.assertTrue(study.run_on_truba.isChecked())
+        self.assertTrue(self.controller.requested)
+
+        self.window.execution_target.setCurrentIndex(self.window.execution_target.findData("local"))
+        self.assertFalse(study.run_on_truba.isChecked())
+        self.assertTrue(study.run_button.isEnabled())
+
     def test_convergence_and_doe_do_not_call_local_mesh_generator(self):
-        self.enable()
         from mesh_convergence import MeshConvergenceDialog
         local=MagicMock()
         dialog=MeshConvergenceDialog(self.window.collect(),local,local,self.window)
         study=dialog.study
-        study.selected=[0,1,2]
+        study.run_on_truba.click()
+        self.enable()
+        study.start_size.setValue(.2)
         with patch("mesh_convergence.AnalysisProcess") as start:
-            study._launch(study.level_settings(.2),"test")
+            study.start()
+            self.assertIsNotNone(start.call_args, study.status.text())
             self.assertIs(start.call_args.args[0],run_remote_level)
+            submitted = start.call_args.args[1]
+            self.assertEqual(submitted.solver_backend, "kratos")
+            self.assertEqual(submitted.self_contact_mode, self.window.collect().self_contact_mode)
+            self.assertEqual(submitted.compression, study.settings.compression)
+            self.assertFalse(study.run_on_truba.isEnabled())
             local.assert_not_called()
             study.force_stop()
+            self.assertTrue(study.run_on_truba.isEnabled())
         study.dispose()
         dialog.deleteLater()
         doe=self.window.doe_studio

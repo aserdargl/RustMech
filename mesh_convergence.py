@@ -8,7 +8,7 @@ from multiprocessing import get_context
 from time import monotonic
 
 from studio_style import CompactSpinBox, CompactComboBox
-from PySide6.QtCore import QSettings, QTimer, Qt
+from PySide6.QtCore import QSettings, QSignalBlocker, QTimer, Qt
 from PySide6.QtGui import QActionGroup
 from PySide6.QtWidgets import (
     QAbstractItemView, QCheckBox, QComboBox, QDialog, QFormLayout, QFrame,
@@ -146,6 +146,8 @@ class MeshConvergenceWidget(QWidget):
         from PySide6.QtWidgets import QApplication
         install_copy_support(QApplication.instance())
         self.settings, self.mesh_generator, self.solver = settings, mesh_generator, solver
+        self.level_base_settings = settings
+        self.local_solver_before_truba = None
         self.remote_controller = getattr(parent,"remote_controller",None)
         self.stop_requested = get_context("spawn").Event()
         self.updates = None
@@ -180,6 +182,12 @@ class MeshConvergenceWidget(QWidget):
         self.tolerance.setFixedWidth(NUMERIC_FIELD_WIDTH - 2)
         controls.addWidget(QLabel("Tolerance"))
         controls.addWidget(stepper_with_unit(self.tolerance, "%"))
+        self.run_on_truba = QCheckBox("Run on TRUBA")
+        self.run_on_truba.setToolTip(
+            "Shared execution mode. TRUBA requires a ready resource session in the TRUBA panel. "
+            "If the solver changes for TRUBA, the study uses that solver's main workspace profile.")
+        controls.addWidget(self.run_on_truba)
+        self.run_on_truba.setVisible(self.remote_controller is not None)
         controls.addStretch(1)
         self.export_button = self._button(controls, "Export CSV", self.export)
         self.apply_button = self._button(controls, "Use this mesh", self.apply_mesh)
@@ -355,9 +363,11 @@ class MeshConvergenceWidget(QWidget):
         self.solver_combo.currentIndexChanged.connect(self._solver_changed)
         self.mesh_type_combo.currentIndexChanged.connect(self._mesh_type_changed)
         self.start_size.valueChanged.connect(self._sync_local_size_limit)
-        if self.remote_controller is not None: self.remote_controller.changed.connect(self._solver_changed)
-        self._solver_changed()
+        if self.remote_controller is not None:
+            self.run_on_truba.toggled.connect(self._select_execution_target)
+            self.remote_controller.changed.connect(self._solver_changed)
         self._configure_metrics()
+        self._solver_changed()
 
     def _results_context_menu(self, position):
         column = self.results.columnAt(position.x())
@@ -413,7 +423,6 @@ class MeshConvergenceWidget(QWidget):
                 self.results.horizontalHeaderItem(column).setText(label)
         for check, (label, _) in zip(self.metric_checks, metrics):
             check.setText(label)
-        self.status.setText("Ready · uses loading and contact conditions from the main setup")
 
     def _set_status(self, message):
         self.status.setText(message)
@@ -426,10 +435,38 @@ class MeshConvergenceWidget(QWidget):
             self.status.style().unpolish(self.status)
             self.status.style().polish(self.status)
 
+    def _select_execution_target(self, enabled):
+        self.remote_controller.toggle.setChecked(enabled)
+        # The shared controller can reject mode changes while another job is active.
+        self._sync_execution_target()
+
+    def _sync_execution_target(self):
+        with QSignalBlocker(self.run_on_truba):
+            self.run_on_truba.setChecked(self.remote_controller.requested)
+
     def _solver_changed(self):
         if not self.solver_combo.isEnabled():
             return
-        if self.remote_controller is not None: self.remote_controller.apply_solver_combo(self.solver_combo)
+        remote = self.remote_controller
+        self.level_base_settings = self.settings
+        if remote is not None:
+            if remote.requested and not self.local_solver_before_truba:
+                self.local_solver_before_truba = self.solver_combo.currentData()
+            self._sync_execution_target()
+            remote.apply_solver_combo(self.solver_combo)
+            if not remote.requested and self.local_solver_before_truba:
+                previous_solver = self.local_solver_before_truba
+                self.local_solver_before_truba = None
+                self.solver_combo.setCurrentIndex(self.solver_combo.findData(previous_solver))
+            if remote.requested and self.solver_combo.currentData() != self.settings.solver_backend:
+                active = remote.window.collect()
+                if active.solver_backend == self.solver_combo.currentData():
+                    self.level_base_settings = replace(
+                        active, loading_mode=self.settings.loading_mode,
+                        compression=self.settings.compression, applied_force=self.settings.applied_force,
+                        substeps=self.settings.substeps, minimum_substeps=self.settings.minimum_substeps,
+                        maximum_substeps=self.settings.maximum_substeps,
+                    )
         capabilities = get_solver_capabilities(self.solver_combo.currentData())
         self.solver_combo.setToolTip(capabilities.display_name if capabilities.implemented else
                                     capabilities.unavailable_reason)
@@ -438,7 +475,6 @@ class MeshConvergenceWidget(QWidget):
             mesh_types.intersection_update(TETRAHEDRAL_MESH_TYPES)
         if capabilities.identifier == "kratos" and kind(self.settings) == "flexure":
             mesh_types.intersection_update(("HEX8",))
-        remote = self.remote_controller
         if remote is not None and remote.requested and remote.ready:
             mesh_types.intersection_update(remote.capabilities.get("mesh_types", ()))
         for index in range(self.mesh_type_combo.count()):
@@ -448,8 +484,16 @@ class MeshConvergenceWidget(QWidget):
             self.mesh_type_combo.setCurrentIndex(next(
                 (i for i, mesh_type in enumerate(MESH_TYPES) if mesh_type in mesh_types), -1))
         self._mesh_type_changed()
-        self.run_button.setToolTip("Run mesh convergence" if capabilities.implemented else
-                                   capabilities.unavailable_reason)
+        if self.run_on_truba.isChecked() and not remote.ready:
+            hint = "Prepare the resource session in the TRUBA panel before running."
+            if not self.rows:
+                self._set_status(f"TRUBA · {hint}")
+            self.run_button.setToolTip(hint)
+        else:
+            if not self.rows:
+                self._set_status("Ready · uses loading and contact conditions from the main setup")
+            self.run_button.setToolTip("Run mesh convergence" if capabilities.implemented else
+                                       capabilities.unavailable_reason)
 
     def _mesh_type_changed(self):
         self._sync_local_size_limit()
@@ -466,7 +510,7 @@ class MeshConvergenceWidget(QWidget):
         return index >= 0 and self.mesh_type_combo.model().item(index).isEnabled()
 
     def _execution_available(self):
-        if self.remote_controller is not None and self.remote_controller.requested:
+        if self.run_on_truba.isChecked():
             return self.remote_controller.solver_enabled(self.solver_combo.currentData())
         return get_solver_capabilities(self.solver_combo.currentData()).implemented
 
@@ -487,10 +531,10 @@ class MeshConvergenceWidget(QWidget):
 
     def level_settings(self, size):
         capabilities = get_solver_capabilities(self.solver_combo.currentData())
-        level = replace(self.settings, mesh_resolution=size,
+        level = replace(self.level_base_settings, mesh_resolution=size,
                         mesh_type=self.mesh_type_combo.currentData(),
                         solver_backend=capabilities.identifier,
-                        cores=min(self.settings.cores, capabilities.max_cores))
+                        cores=min(self.level_base_settings.cores, capabilities.max_cores))
         if level.mesh_type in TETRAHEDRAL_MESH_TYPES:
             local_ratio = self.local_size.value() / self.start_size.value()
             level = replace(level, local_mesh_size=size * local_ratio)
@@ -537,7 +581,7 @@ class MeshConvergenceWidget(QWidget):
             self.timer.start()
 
     def _set_running(self, running):
-        for control in (self.mesh_settings, self.tolerance, self.advanced, self.solver_combo):
+        for control in (self.mesh_settings, self.tolerance, self.advanced, self.solver_combo, self.run_on_truba):
             control.setEnabled(not running)
         if running:
             self.run_button.setEnabled(False)
@@ -558,7 +602,7 @@ class MeshConvergenceWidget(QWidget):
         self.updates = get_context("spawn").Queue()
         try:
             controller = self.remote_controller
-            if controller is not None and controller.requested:
+            if self.run_on_truba.isChecked():
                 from truba_remote import run_remote_level
                 context,auth = controller.require(settings.solver_backend,settings)
                 self.future = AnalysisProcess(run_remote_level,settings,context,self.max_elements.value(),self.selected,remote_auth=auth)
@@ -657,7 +701,7 @@ class MeshConvergenceWidget(QWidget):
     def _poll(self):
         if self.future is None:
             return
-        if self.remote_controller is not None and self.remote_controller.requested and not self.future.done():
+        if self.run_on_truba.isChecked() and not self.future.done():
             record = self.future.remote_status()
             if record: self._set_status(f"TRUBA job {record.get('job_id','pending')} · {record.get('state','preparing')}")
         if monotonic() - self.started >= 60 * self.max_minutes.value():
