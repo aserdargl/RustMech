@@ -1047,6 +1047,15 @@ class RemoteModeUiTests(unittest.TestCase):
         toolbar = study.script_plan_scroll
         self.assertGreaterEqual(toolbar.viewport().height(), study.script_plan_toolbar.sizeHint().height())
         self.assertGreater(study.script_preview.y(), toolbar.geometry().bottom())
+        line = study.script_plan_toolbar.layout()
+        widgets = [line.itemAt(index).widget() for index in range(line.count() - 1)]
+        self.assertEqual(widgets[0].text(), "Slurm script plan")
+        for control in widgets[1:]:
+            self.assertLessEqual(abs(control.geometry().center().y() - widgets[0].geometry().center().y()), 1)
+        self.assertGreater(toolbar.horizontalScrollBar().maximum(), 0)
+        toolbar.ensureWidgetVisible(study.script_delete, 4, 0)
+        delete_position = study.script_delete.mapTo(toolbar.viewport(), study.script_delete.rect().bottomRight())
+        self.assertTrue(toolbar.viewport().rect().contains(delete_position))
         self.assertGreater(study.script_add.x(), study.script_ram.parentWidget().geometry().right())
         self.assertGreater(study.script_delete.x(), study.script_add.geometry().right())
         self.assertEqual(study.script_add.size(), study.script_delete.size())
