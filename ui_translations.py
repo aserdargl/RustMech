@@ -910,8 +910,20 @@ Smooth geometry · Ready|Pürüzsüz geometri · Hazır
 Ready · uses loading and contact conditions from the main setup|Hazır · Ana ayarlardaki yükleme ve temas koşullarını kullanır
 Geometry or mesh settings have changed. Click Apply to update the preview.|Geometri veya ağ ayarları değişti. Önizlemeyi güncellemek için Uygula'ya tıklayın.
 Export to ANSYS|ANSYS'e Aktar
-Save the generated FE mesh as an ANSYS CDB file (mm).|Oluşturulan sonlu eleman ağını ANSYS CDB dosyası (mm) olarak kaydet.
+Save the generated FE mesh in an ANSYS-compatible format.|Oluşturulan sonlu eleman ağını ANSYS uyumlu bir biçimde kaydet.
 ANSYS mesh (*.cdb)|ANSYS ağı (*.cdb)
+Abaqus input (*.inp)|Abaqus girdi dosyası (*.inp)
+Nastran bulk data (*.bdf)|Nastran veri dosyası (*.bdf)
+Nastran bulk data (*.dat)|Nastran veri dosyası (*.dat)
+Nastran bulk data (*.nas)|Nastran veri dosyası (*.nas)
+Fluent mesh (*.msh)|Fluent ağı (*.msh)
+Fluent case (*.cas)|Fluent vaka dosyası (*.cas)
+Workbench mesh (*.acmo)|Workbench ağı (*.acmo)
+ICEM CFD mesh (*.uns)|ICEM CFD ağı (*.uns)
+LS-DYNA keyword (*.k)|LS-DYNA girdi dosyası (*.k)
+LS-DYNA keyword (*.key)|LS-DYNA girdi dosyası (*.key)
+Voxel-derived solid elements for mesh export.|Dışa aktarma için vokselden türetilen katı elemanlar.
+Mixed hex and pyramid cells for mesh export.|Dışa aktarma için karma altıyüzlü ve piramit elemanlar.
 Exporting mesh to ANSYS…|Ağ ANSYS'e aktarılıyor…
 ANSYS mesh export failed|ANSYS ağı dışa aktarılamadı
 ANSYS mesh saved to|ANSYS ağı kaydedildi

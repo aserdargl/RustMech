@@ -92,6 +92,19 @@ class SurfacePreviewUITests(unittest.TestCase):
         window.controls["mesh_resolution"].setValue(self.settings.mesh_resolution * 2)
         self.assertFalse(button.isEnabled())
 
+    def test_mixed_mesh_can_be_built_and_exported_from_the_mesh_group(self):
+        window = self.window
+        index = window.mesh_type_combo.findData("HYBRID8")
+        self.assertTrue(window.mesh_type_combo.model().item(index).isEnabled())
+        window.mesh_type_combo.setCurrentIndex(index)
+        window.mesh_apply_button.click()
+        window.preview = build_preview(window.collect(), window.preview, include_mesh=True)
+        window.refresh_validity()
+
+        self.assertEqual(set(window.preview.mesh.grid.celltypes), {pv.CellType.HEXAHEDRON, pv.CellType.PYRAMID})
+        self.assertTrue(window.mesh_export_button.isEnabled())
+        self.assertFalse(window.apply_button.isEnabled())
+
     def test_geometry_button_hides_excluded_mesh_fragments(self):
         preview = build_preview(self.settings, self.window.preview, include_mesh=True)
         fragment = preview.mesh.grid.extract_cells([0])

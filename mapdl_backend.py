@@ -27,6 +27,16 @@ _SOLID_ELEMENTS = {
     pv.CellType.TETRA: (285, 4),
     pv.CellType.QUADRATIC_TETRA: (187, 10),
 }
+_CDB_DEGENERATIONS = {
+    pv.CellType.WEDGE: (185, (0, 2, 1, 1, 3, 5, 4, 4)),
+    pv.CellType.PYRAMID: (185, (0, 1, 2, 3, 4, 4, 4, 4)),
+    pv.CellType.QUADRATIC_WEDGE: (
+        186, (0, 2, 1, 1, 3, 5, 4, 4, 8, 7, 1, 6, 11, 10, 4, 9, 12, 14, 13, 13),
+    ),
+    pv.CellType.QUADRATIC_PYRAMID: (
+        186, (0, 1, 2, 3, 4, 4, 4, 4, 5, 6, 7, 8, 4, 4, 4, 4, 9, 10, 11, 12),
+    ),
+}
 _APDL_NODES_PER_COMMAND = 8
 _QUADRATIC_EDGES = {
     pv.CellType.QUADRATIC_HEXAHEDRON: (8, HEX_EDGES),
@@ -44,15 +54,28 @@ def write_apdl_mesh(mesh: FEMesh, path: Path) -> None:
 def write_cdb_mesh(mesh: FEMesh, path: Path) -> Path:
     """Export the specimen mesh in the blocked Mechanical APDL archive format."""
     grid = mesh.grid
-    element_type, connectivity = _solid_connectivity(grid)
     points = grid.points
     node_ids = grid.point_data["ansys_node_num"]
     element_ids = grid.cell_data["ansys_elem_num"]
+    if not grid.n_cells:
+        raise ValueError("The FE mesh is empty.")
     max_node, max_element = int(node_ids.max()), int(element_ids.max())
     if min(node_ids.min(), element_ids.min()) < 1 or max(max_node, max_element) > 999_999_999:
         raise ValueError("Mesh IDs do not fit the CDB integer fields.")
+    connectivity = grid.cell_connectivity
     if not np.isfinite(points).all() or connectivity.min() < 0 or connectivity.max() >= len(node_ids):
         raise ValueError("Non-finite mesh point or invalid mesh connectivity.")
+    blocks = []
+    for cell_type, cells in grid.cells_dict.items():
+        if cell_type in _CDB_DEGENERATIONS:
+            element_type, order = _CDB_DEGENERATIONS[cell_type]
+            cells = cells[:, order]
+        else:
+            element_type, _ = _SOLID_ELEMENTS.get(cell_type, (None, None))
+            if element_type is None:
+                raise ValueError(f"CDB export does not support VTK cell type {cell_type}.")
+        blocks.append((element_type, cells, element_ids[grid.celltypes == cell_type]))
+    type_numbers = {code: i for i, code in enumerate(sorted({block[0] for block in blocks}), 1)}
 
     # Stage beside the destination so failures leave an existing archive intact.
     with TemporaryDirectory(prefix=".rustmech-cdb-", dir=path.parent) as folder:
@@ -60,9 +83,11 @@ def write_cdb_mesh(mesh: FEMesh, path: Path) -> Path:
         with staged.open("w", encoding="ascii", newline="\n", buffering=1024 * 1024) as stream:
             # Workbench's blocked archive check looks for this comment prefix.
             stream.write("/COM,ANSYS RELEASE - RustMech blocked mesh archive\n")
-            stream.write(f"/PREP7\n/UNITS,MPA\nET,1,{element_type}\n")
-            if element_type == 186:
-                stream.write("KEYOPT,1,2,1\n")
+            stream.write("/PREP7\n/UNITS,MPA\n")
+            for code, number in type_numbers.items():
+                stream.write(f"ET,{number},{code}\n")
+                if code == 186:
+                    stream.write(f"KEYOPT,{number},2,1\n")
             stream.write(f"NBLOCK,6,SOLID,{max_node:9d},{len(node_ids):9d}\n(3i9,6e21.13)\n")
             for node_id, (x, y, z) in zip(node_ids, points, strict=True):
                 stream.write(f"{node_id:9d}{0:9d}{0:9d}{x:21.13E}{y:21.13E}{z:21.13E}\n")
@@ -70,14 +95,15 @@ def write_cdb_mesh(mesh: FEMesh, path: Path) -> Path:
 
             stream.write(f"EBLOCK,19,SOLID,{max_element:9d},{len(element_ids):9d}\n(19i9)\n")
             # The first record has 11 attribute fields followed by up to eight node IDs.
-            attributes = (1, 1, 1, 1, 0, 0, 0, 0, connectivity.shape[1], 0)
-            prefix = "".join(f"{value:9d}" for value in attributes)
-            for element_id, cell in zip(element_ids, connectivity, strict=True):
-                nodes = node_ids[cell]
-                first_nodes = "".join(f"{node:9d}" for node in nodes[:8])
-                stream.write(f"{prefix}{element_id:9d}{first_nodes}\n")
-                if len(nodes) > 8:
-                    stream.write("".join(f"{node:9d}" for node in nodes[8:]) + "\n")
+            for code, cells, ids in blocks:
+                attributes = (1, type_numbers[code], 1, 1, 0, 0, 0, 0, cells.shape[1], 0)
+                prefix = "".join(f"{value:9d}" for value in attributes)
+                for element_id, cell in zip(ids, cells, strict=True):
+                    nodes = node_ids[cell]
+                    first_nodes = "".join(f"{node:9d}" for node in nodes[:8])
+                    stream.write(f"{prefix}{element_id:9d}{first_nodes}\n")
+                    if len(nodes) > 8:
+                        stream.write("".join(f"{node:9d}" for node in nodes[8:]) + "\n")
             stream.write(f"{-1:9d}\nFINISH\n")
         staged.replace(path)
     return path

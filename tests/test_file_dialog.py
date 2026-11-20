@@ -133,6 +133,23 @@ def test_picker_remembers_each_actions_directory_on_cancel(picker_app, tmp_path)
                       (tmp_path, "other.csv"), (tmp_path, "fallback.csv")]
 
 
+def test_picker_appends_extension_from_selected_export_format(picker_app, tmp_path):
+    def choose_format():
+        dialog = picker_app.activeModalWidget()
+        dropdown = dialog.findChild(QComboBox, "fileTypeCombo")
+        dropdown.setFocus()
+        QTest.keyClick(dropdown, Qt.Key.Key_End)
+        dialog.accept()
+
+    QTimer.singleShot(0, choose_format)
+    path, selected = QFileDialog.getSaveFileName(
+        None, "Export mesh", str(tmp_path / "mesh"), "ANSYS (*.cdb);;Abaqus (*.inp)",
+        default_suffix="cdb",
+    )
+    assert Path(path) == tmp_path / "mesh.inp"
+    assert selected == "Abaqus (*.inp)"
+
+
 @pytest.mark.parametrize("input_kind", ["mouse", "browser_keys", "win32_mouse", "win32_caption", "win32_command"])
 def test_picker_side_button_navigation(picker_app, tmp_path, input_kind):
     if input_kind.startswith("win32_") and picker_app.platformName() != "windows":

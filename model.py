@@ -26,6 +26,7 @@ DEFAULT_CORES = 4
 MIN_MESH_INPUT_MM = 0.001
 TETRAHEDRAL_MESH_TYPES = ("TET10", "TET4")
 MESH_TYPES = ("HEX8", "HEX20", *TETRAHEDRAL_MESH_TYPES)
+DERIVED_SOLID_MESH_TYPES = ("PRISM6", "PRISM15", "PYRAMID5", "PYRAMID13", "HYBRID8", "HYBRID20")
 # VTK ordering of midside nodes, expressed as corner pairs.
 HEX_EDGES = (
     (0, 1), (1, 2), (2, 3), (3, 0), (4, 5), (5, 6), (6, 7), (7, 4),
@@ -261,7 +262,7 @@ def validate_geometry(settings: Settings, *, include_mesh: bool = True) -> list[
         errors.append("Unsupported structure morphology.")
     if isinstance(settings.random_seed, bool) or not isinstance(settings.random_seed, int):
         errors.append("random_seed must be an integer.")
-    if include_mesh and settings.mesh_type not in MESH_TYPES:
+    if include_mesh and settings.mesh_type not in (*MESH_TYPES, *DERIVED_SOLID_MESH_TYPES):
         errors.append("Unsupported FE mesh type.")
     if include_mesh and settings.tetra_strategy not in ("auto", "netgen", "periodic"):
         errors.append("Unsupported tetrahedral mesh strategy.")

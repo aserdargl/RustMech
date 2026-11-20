@@ -82,6 +82,7 @@ from model import (
     PLATEN_CONTACT_MODES,
     GEOMETRY_FIELDS,
     MATERIAL_FIELDS,
+    DERIVED_SOLID_MESH_TYPES,
     MESH_TYPES,
     MIN_MESH_INPUT_MM,
     ROOT,
@@ -568,7 +569,7 @@ class RustMechDialog(QDialog):
         self.controls['size'].setEnabled(not bool(self.imported_geometry_path))
         self._sync_import_controls()
         self.mesh_type_combo = NoWheelComboBox()
-        for mesh_type in MESH_TYPES:
+        for mesh_type in (*MESH_TYPES, *DERIVED_SOLID_MESH_TYPES):
             self.mesh_type_combo.addItem(mesh_type, mesh_type)
             self.mesh_type_combo.setItemData(
                 self.mesh_type_combo.count() - 1,
@@ -601,7 +602,7 @@ class RustMechDialog(QDialog):
         self.mesh_export_button.setDefault(False)
         self.mesh_export_button.setEnabled(False)
         self.mesh_export_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.mesh_export_button.setToolTip("Save the generated FE mesh as an ANSYS CDB file (mm).")
+        self.mesh_export_button.setToolTip("Save the generated FE mesh in an ANSYS-compatible format.")
         self.mesh_export_button.clicked.connect(self.export_mesh_to_ansys)
         self.mesh_export_button.ensurePolished()
         mesh_action_width = max(
@@ -2209,6 +2210,13 @@ class RustMechDialog(QDialog):
                 tooltip = "Kratos three-point flexure requires HEX8 with aligned support/loading lines."
             elif kratos and mesh_type in KRATOS_QUADRATIC_MESH_TYPES and self.test_profile_combo.currentData() != 'astm_e8_subsize':
                 tooltip = "Kratos HEX20/TET10 compression uses displacement control and penalty mortar with self-contact disabled."
+            if mesh_type in DERIVED_SOLID_MESH_TYPES:
+                available = not (remote is not None and remote.requested) or (
+                    remote.ready and mesh_type in remote.capabilities.get("mesh_types", [])
+                )
+                tooltip = ("Mixed hex and pyramid cells for mesh export."
+                           if mesh_type.startswith("HYBRID") else
+                           "Voxel-derived solid elements for mesh export.")
             self.mesh_type_combo.setItemData(index, tooltip, Qt.ItemDataRole.ToolTipRole)
             self.mesh_type_combo.model().item(index).setEnabled(available)
         for combo in self.platen_contact_combos.values():
@@ -2592,19 +2600,20 @@ class RustMechDialog(QDialog):
         if not self.mesh_export_button.isEnabled():
             return
         from file_dialog import QFileDialog
-        from mapdl_backend import write_cdb_mesh
+        from ansys_mesh_export import ansys_export_filters, write_ansys_mesh
         from ui_language import translate
 
         preview = self.preview
         filename, _ = QFileDialog.getSaveFileName(
-            self, "Export to ANSYS", "rustmech_mesh.cdb", translate("ANSYS mesh (*.cdb)"),
+            self, "Export to ANSYS", "rustmech_mesh",
+            ";;".join(map(translate, ansys_export_filters(preview.mesh))),
             default_suffix="cdb",
         )
         if not filename or self.disposed:
             return
         if self.preview is not preview or preview.key != preview_key(self.collect()):
             return
-        self._mesh_export_future = self.executor.submit(write_cdb_mesh, preview.mesh, Path(filename))
+        self._mesh_export_future = self.executor.submit(write_ansys_mesh, preview.mesh, Path(filename))
         self.mesh_export_button.setEnabled(False)
         self.status.setText("Exporting mesh to ANSYS…")
 

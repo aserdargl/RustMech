@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from contextlib import contextmanager
 from contextvars import ContextVar
 from functools import lru_cache
@@ -12,7 +12,7 @@ import numpy as np
 import pyvista as pv
 from skimage.measure import marching_cubes
 
-from model import FEMesh, Settings, TETRAHEDRAL_MESH_TYPES, require_geometry
+from model import DERIVED_SOLID_MESH_TYPES, FEMesh, Settings, TETRAHEDRAL_MESH_TYPES, require_geometry
 from rust_mesh import build_hex_grid, largest_triangle_surface, select_voxels
 from structure_library import evaluate_priority_field
 from periodic_sampling import sample_priority_grid
@@ -255,6 +255,13 @@ def generate_volume_mesh(
     settings: Settings, surface: pv.PolyData | None = None, *, on_progress=None
 ) -> FEMesh:
     require_geometry(settings)
+    if settings.mesh_type in DERIVED_SOLID_MESH_TYPES:
+        from derived_solid_mesh import derive_solid_mesh
+
+        base = generate_volume_mesh(replace(settings, mesh_type="HEX8"), surface, on_progress=on_progress)
+        if on_progress:
+            on_progress(f"Assembling {settings.mesh_type} elements…")
+        return derive_solid_mesh(base, settings.mesh_type)
     if settings.test_profile != 'custom':
         from standard_tests import make_standard_mesh
         return make_standard_mesh(settings, surface, on_progress)

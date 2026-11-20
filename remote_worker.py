@@ -68,7 +68,8 @@ def probe(request,missing=False):
         if not stamp.exists() or json.loads(stamp.read_text()).get("native_sha256")!=request["native_sha256"]:
             raise RuntimeError("Remote native kernel is missing or outdated; prepare the runtime again.")
         capabilities["mesh"] = True
-        capabilities["mesh_types"] = ["HEX8","HEX20"]
+        from model import DERIVED_SOLID_MESH_TYPES
+        capabilities["mesh_types"] = ["HEX8", "HEX20", *DERIVED_SOLID_MESH_TYPES]
         for package in ("numpy","scipy","pyvista","vtk","netgen-mesher","KratosMultiphysics"):
             try: capabilities["packages"][package] = importlib.metadata.version(package)
             except importlib.metadata.PackageNotFoundError: pass

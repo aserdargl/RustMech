@@ -1,6 +1,7 @@
 """Datenburg-style pickers and standard Qt dialog buttons."""
 
 import os
+import re
 import sys
 from ctypes import wintypes
 
@@ -270,6 +271,12 @@ class QFileDialog(QtFileDialog):
         if filters:
             # Directory mode resets the filter selector to "Directories".
             dialog.setNameFilter(filters)
+            if default_suffix and ";;" in filters:
+                def apply_filter_suffix(selected):
+                    extension = re.search(r"\*\.([a-zA-Z0-9]+)", selected)
+                    dialog.setDefaultSuffix(extension[1] if extension else default_suffix)
+
+                dialog.filterSelected.connect(apply_filter_suffix)
         address = dialog.findChild(QComboBox, "lookInCombo")
         dialog._file_controls = FileDialogControls(dialog, address)
         try:
