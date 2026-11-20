@@ -62,15 +62,21 @@ class KratosIntegrityTests(unittest.TestCase):
             execution = LocalKratosBackend().solve(AnalysisRequest(settings, self.mesh, self.root))
         log = (self.root / "kratos.log").read_text(encoding="utf-8")
         self.assertLess(log.index("RUSTMECH_SOLVING_LOAD="), log.index("RUSTMECH_STEP="))
-        messages = [call.args[0] for call in progress.call_args_list]
-        self.assertEqual(messages[0], "Kratos · initializing model…")
-        self.assertTrue(messages[1].startswith("Kratos · solving load "))
-        self.assertTrue(messages[2].startswith("Kratos · increment 1 · load "))
+        updates = [call.args for call in progress.call_args_list]
+        self.assertEqual(updates[0], ("Kratos · initializing model…",))
+        self.assertEqual(updates[1], ("Kratos · solving increment 1/9 · load 0.111111111…", 0, 9))
+        self.assertEqual(updates[-1], ("Kratos · increment 9/9 · load 1", 9, 9))
         self.assertIn("SPLITTING TIME STEP", log)
         self.assertFalse(execution.error, execution.error)
         result = execution.results
         self.assertTrue(result.manifest["complete"])
         self.assertAlmostEqual(result.time_values[-1], 1.)
+        completed = [update for update in updates[2:] if update[0].startswith("Kratos · increment ")]
+        self.assertEqual(len(completed), result.nsets)
+        self.assertGreater(len(completed), settings.substeps)
+        for update, load in zip(completed, result.time_values, strict=True):
+            reached = np.count_nonzero(np.linspace(0., 1., settings.substeps + 1)[1:] <= load + 1e-8)
+            self.assertEqual(update[1:], (reached, settings.substeps))
         for target in np.linspace(0., 1., settings.substeps + 1)[1:]:
             self.assertTrue(np.isclose(result.time_values, target, rtol=0, atol=1e-8).any())
         for index, load in enumerate(result.time_values):

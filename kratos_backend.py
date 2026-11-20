@@ -1,5 +1,6 @@
 """Exact-mesh Kratos execution on Windows or TRUBA and lazy result access."""
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -117,6 +118,8 @@ class LocalKratosBackend:
 
         raw = request.run_directory
         export_kratos(request.mesh, request.settings, raw)
+        total_increments = request.settings.substeps
+        completed_increments = 0
         log_path = raw / "kratos.log"
         environment = os.environ.copy()
         environment.pop("SLURM_JOB_ID", None)
@@ -133,10 +136,21 @@ class LocalKratosBackend:
                     log.write(line)
                     target = re.fullmatch(r"RUSTMECH_SOLVING_LOAD=(\S+)\s*", line)
                     if target:
-                        report_analysis_step(f"Kratos · solving load {target[1]}…")
+                        target_increment = round(float(target[1]) * total_increments)
+                        report_analysis_step(
+                            f"Kratos · solving increment {target_increment}/{total_increments} · load {target[1]}…",
+                            completed_increments, total_increments,
+                        )
                     increment = re.fullmatch(r"RUSTMECH_STEP=(\d+) LOAD=(\S+)\s*", line)
                     if increment:
-                        report_analysis_step(f"Kratos · increment {increment[1]} · load {increment[2]}")
+                        load = increment[2]
+                        # Contact splits can save extra steps between planned load targets.
+                        # Count the targets reached, allowing for solver and log rounding.
+                        completed_increments = min(total_increments, math.floor((float(load) + 1e-8) * total_increments))
+                        report_analysis_step(
+                            f"Kratos · increment {completed_increments}/{total_increments} · load {load}",
+                            completed_increments, total_increments,
+                        )
                 exit_code = process.wait()
 
             reader = KratosResults(raw / "results", request.mesh, request.settings)
