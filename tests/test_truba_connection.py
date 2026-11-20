@@ -96,8 +96,7 @@ class TrubaTests(unittest.TestCase):
         self.assertIsNone(dialog.worker)
         dialog.remember.setChecked(False)
         self.assertIsNone(self.credentials.load())
-        dialog.forget_password()
-        self.assertEqual(dialog.password.text(), "")
+        self.assertEqual(dialog.password.text(), "own-password")
 
     def test_queue_status_is_embedded_in_connection_tab(self):
         dialog = self.dialog()
@@ -792,7 +791,7 @@ class TrubaTests(unittest.TestCase):
         dialog.show()
         self.app.processEvents()
         controls = (dialog.username, dialog.password, dialog.show_password,
-                    dialog.remember, dialog.forget_button, dialog.status,
+                    dialog.remember, dialog.status,
                     dialog.connect_button, dialog.disconnect_button)
 
         def positions():

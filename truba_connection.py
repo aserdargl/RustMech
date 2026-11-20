@@ -194,8 +194,6 @@ class TrubaConnectionDialog(QDialog):
         hint.setObjectName("mutedHintLabel")
         hint.setWordWrap(True)
         account_layout.addWidget(hint)
-        self.forget_button = QPushButton("Forget saved password")
-        account_layout.addWidget(self.forget_button, alignment=Qt.AlignmentFlag.AlignLeft)
         self.status = QLabel("Disconnected")
         self.status.setWordWrap(True)
         self.status.setTextFormat(Qt.TextFormat.PlainText)
@@ -208,10 +206,9 @@ class TrubaConnectionDialog(QDialog):
         self.connect_button.setObjectName("primaryLaunchBtn")
         self.disconnect_button = QPushButton("Disconnect")
         self.disconnect_button.setObjectName("cancelBtn")
-        for button in (self.connect_button, self.disconnect_button, self.forget_button):
+        for button in (self.connect_button, self.disconnect_button):
             button.setAutoDefault(False)
             button.setDefault(False)
-        for button in (self.connect_button, self.disconnect_button):
             buttons.addWidget(button)
         buttons.addStretch()
         account_layout.addLayout(buttons)
@@ -227,7 +224,6 @@ class TrubaConnectionDialog(QDialog):
         self.resize(940, 590)
         self.connect_button.clicked.connect(self.start_connection)
         self.disconnect_button.clicked.connect(self.stop_connection)
-        self.forget_button.clicked.connect(self.forget_password)
         try:
             saved = self.credentials.load()
             if saved:
@@ -309,7 +305,6 @@ class TrubaConnectionDialog(QDialog):
         button_width = max(132, *(button.fontMetrics().horizontalAdvance(button.text()) + 28 for button in buttons))
         for button in buttons:
             button.setFixedSize(button_width, CONTROL_HEIGHT)
-        self.forget_button.setFixedSize(self.forget_button.fontMetrics().horizontalAdvance(self.forget_button.text()) + 24, CONTROL_HEIGHT)
         sections = (self.credentials_group, *self._remote_sections)
         for section in sections:
             section.ensurePolished()
@@ -347,11 +342,6 @@ class TrubaConnectionDialog(QDialog):
     def hideEvent(self, event):
         self.show_password.setChecked(False)
         super().hideEvent(event)
-
-    def forget_password(self):
-        self._remember_changed(False)
-        self.remember.setChecked(False)
-        self.password.clear()
 
     def start_connection(self):
         if self.worker is not None:
@@ -432,7 +422,7 @@ class TrubaConnectionDialog(QDialog):
         self.connect_button.style().unpolish(self.connect_button)
         self.connect_button.style().polish(self.connect_button)
         self.disconnect_button.setEnabled(running and not self.stopping)
-        for field in (self.username, self.password, self.remember, self.forget_button):
+        for field in (self.username, self.password, self.remember):
             field.setEnabled(not running)
 
     def stop_connection(self):

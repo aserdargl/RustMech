@@ -21,8 +21,7 @@ Başka bir Windows kullanıcısı kopyalanan dosyayı çözemez. Aynı Windows h
 kullanan kişiler kayıtlı girişi kullanabilir; ortak bilgisayarda ayrı Windows
 hesapları kullanın veya şifre hatırlamayı kapatın.
 
-Kutucuğu kapatmak kaydı siler. **Forget saved password** hem kaydı hem alandaki
-şifreyi temizler. Sunucu anahtarları aynı kullanıcı dizinindeki `known_hosts`
+Kutucuğu kapatmak kaydı siler. Sunucu anahtarları aynı kullanıcı dizinindeki `known_hosts`
 dosyasında saklanır. Pencere boyutu ve konumu mevcut kullanıcı tercihlerine tabidir.
 
 Arayüz Paramiko kullanır (`requirements-truba.txt`); yerel SSH anahtarlarını

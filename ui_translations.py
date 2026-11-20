@@ -785,7 +785,6 @@ TRUBA username|TRUBA kullanıcı adı
 Password|Parola
 Show password|Parolayı göster
 Remember password for this Windows user|Bu Windows kullanıcısı için parolayı hatırla
-Forget saved password|Kayıtlı parolayı unut
 Connect|Bağlan
 Connected|Bağlı
 Working|Çalışıyor
