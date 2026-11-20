@@ -11,11 +11,12 @@ from uuid import uuid4
 
 from studio_style import CompactSpinBox, CompactComboBox
 from PySide6.QtCore import QSettings, QSignalBlocker, QTimer, Qt
-from PySide6.QtGui import QActionGroup
+from PySide6.QtGui import QActionGroup, QColor
 from PySide6.QtWidgets import (
     QAbstractItemView, QCheckBox, QComboBox, QDialog, QFormLayout, QFrame,
     QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMenu, QMessageBox, QPushButton,
-    QScrollArea, QSizePolicy, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
+    QScrollArea, QSizePolicy, QStyle, QStyledItemDelegate, QStyleOptionViewItem,
+    QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
 from analysis_process import AnalysisProcess
@@ -160,6 +161,23 @@ class MeshConvergenceDialog(QDialog):
         super().done(result)
 
 
+class ScriptResourceDelegate(QStyledItemDelegate):
+    def paint(self, painter, option, index):
+        # The table stylesheet owns the selection background. Paint the resource
+        # color inside it so selected rows retain both the highlight and their color.
+        base = QStyleOptionViewItem(option)
+        self.initStyleOption(base, index)
+        base.text = ""
+        base.widget.style().drawControl(QStyle.ControlElement.CE_ItemViewItem, base, painter, base.widget)
+        painter.save()
+        chip = option.rect.adjusted(4, 3, -4, -3)
+        painter.fillRect(chip, index.data(Qt.ItemDataRole.BackgroundRole))
+        painter.setFont(option.font)
+        painter.setPen(QColor("#0F172A"))
+        painter.drawText(chip, Qt.AlignmentFlag.AlignCenter, str(index.data()))
+        painter.restore()
+
+
 class MeshConvergenceWidget(QWidget):
     def __init__(self, settings, mesh_generator, solver, parent=None):
         super().__init__(parent)
@@ -185,6 +203,9 @@ class MeshConvergenceWidget(QWidget):
         self.saved_study_key = None
         self.history_only = False
         self.single_remote_run = False
+        self.planned_scripts = {}
+        self.next_script_number = 1
+        self.explicit_script_run = False
         self.rows = []
         self.time_units = {1: "s", 2: "s"}
         self.recommended = None
@@ -217,7 +238,8 @@ class MeshConvergenceWidget(QWidget):
         controls.addWidget(stepper_with_unit(self.tolerance, "%"))
         self.run_on_truba = QCheckBox("Run on TRUBA")
         self.run_on_truba.setToolTip(
-            f"Submits up to {TRUBA_BATCH_SIZE} mesh levels per batch, sharing a Slurm job in pairs when resources allow. "
+            f"Automatic mode submits up to {TRUBA_BATCH_SIZE} levels per batch. "
+            "Add scripts in the preview to choose which levels and resources to submit. "
             "A resource session is optional. "
             "If the solver changes for TRUBA, the study uses that solver's main workspace profile.")
         controls.addWidget(self.run_on_truba)
@@ -310,6 +332,7 @@ class MeshConvergenceWidget(QWidget):
             self.absolute.append(absolute)
         self.advanced.hide()
         layout.addWidget(self.advanced)
+        self._build_script_plan(layout)
 
         self.results = QTableWidget(0, len(RESULT_HEADERS))
         self.results.setHorizontalHeaderLabels(RESULT_HEADERS)
@@ -461,6 +484,188 @@ class MeshConvergenceWidget(QWidget):
         if studies:
             self._restore_saved_study(0, studies)
 
+    def _build_script_plan(self, layout):
+        self.script_plan_panel = QWidget()
+        self.script_plan_panel.setObjectName("convergenceScriptPlan")
+        panel = QVBoxLayout(self.script_plan_panel)
+        panel.setContentsMargins(6, 5, 6, 5)
+        panel.setSpacing(4)
+        toolbar = QWidget()
+        controls = QHBoxLayout(toolbar)
+        controls.setContentsMargins(0, 0, 0, 0)
+        controls.addWidget(QLabel("Slurm script plan"))
+        self.script_choice = CompactComboBox()
+        self.script_choice.setFixedWidth(110)
+        self.script_choice.addItem("New script", None)
+        controls.addWidget(self.script_choice)
+        self.script_queue = CompactComboBox()
+        self.script_queue.setFixedWidth(290)
+        self.script_queue.setAccessibleName("Slurm queue and resource limits")
+        controls.addWidget(self.script_queue)
+        controls.addWidget(QLabel("Levels"))
+        self.script_count = CompactSpinBox()
+        self.script_count.setRange(1, 100)
+        self.script_count.setFixedSize(48, CONTROL_HEIGHT)
+        controls.addWidget(self.script_count)
+        controls.addWidget(QLabel("Script RAM"))
+        self.script_ram = self._number(1, 1 / 1024, 4096)
+        self.script_ram.setFixedSize(NUMERIC_FIELD_WIDTH, CONTROL_HEIGHT)
+        controls.addWidget(stepper_with_unit(self.script_ram, "GiB"))
+        self.script_add = self._button(controls, "Add", self._add_planned_script)
+        controls.addStretch()
+        panel.addWidget(ConvergenceToolbarScroll(toolbar))
+        self.script_preview = QTableWidget(0, 5)
+        self.script_preview.setObjectName("convergenceScriptPreview")
+        self.script_preview.setToolTip("Add levels before running. Right-click a planned row to remove it.")
+        self.script_preview.setHorizontalHeaderLabels(
+            ["Slurm script", "Queue", "Mesh (mm)", "Solver CPUs", "RAM per mesh (GiB)"])
+        self.script_preview.verticalHeader().hide()
+        self.script_preview.verticalHeader().setDefaultSectionSize(24)
+        self.script_preview.setMaximumHeight(146)
+        self.script_preview.setMinimumHeight(80)
+        self.script_preview.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.script_preview.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.script_preview.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        for column in (3, 4):
+            self.script_preview.setItemDelegateForColumn(column, ScriptResourceDelegate(self.script_preview))
+        self.script_preview.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.script_preview.customContextMenuRequested.connect(self._script_plan_menu)
+        panel.addWidget(self.script_preview)
+        layout.addWidget(self.script_plan_panel)
+        self.script_plan_panel.hide()
+        self.script_choice.currentIndexChanged.connect(self._select_planned_script)
+        self.script_queue.currentIndexChanged.connect(self._apply_script_queue_limit)
+
+    def _refresh_script_queues(self):
+        catalog = getattr(self.remote_controller, "queue_catalog", None)
+        if not isinstance(catalog, dict):
+            return
+        from truba_resources import BASELINES
+
+        current = self.script_queue.currentData()
+        initial = current is None
+        if initial:
+            current = self.remote_controller.controls['partition'].currentData()
+        with QSignalBlocker(self.script_queue):
+            self.script_queue.clear()
+            for name, baseline in BASELINES.items():
+                limit = catalog.get(name)
+                if limit is None or not limit.available:
+                    continue
+                cores = min(baseline.max_cpus, limit.max_cpus)
+                memory = min(baseline.memory_ceiling(cores), limit.memory_ceiling(cores))
+                gpus = min(baseline.max_gpus, limit.max_gpus)
+                label = f"{name} · Max CPU {cores} · GPU {gpus} · RAM {memory / 1024:.1f} GiB"
+                self.script_queue.addItem(label, name)
+                item = self.script_queue.model().item(self.script_queue.count() - 1)
+                item.setEnabled(not limit.min_gpus and not baseline.min_gpus)
+                item.setToolTip(label if item.isEnabled() else f"{label}\nMesh convergence uses CPU queues.")
+            index = self.script_queue.findData(current)
+            if index < 0 or not self.script_queue.model().item(index).isEnabled():
+                index = next((i for i in range(self.script_queue.count())
+                              if self.script_queue.model().item(i).isEnabled()), -1)
+            self.script_queue.setCurrentIndex(index)
+        self._apply_script_queue_limit(reset=initial or current != self.script_queue.currentData())
+
+    def _apply_script_queue_limit(self, _index=None, *, reset=True):
+        name = self.script_queue.currentData()
+        self.script_add.setEnabled(name is not None)
+        if name is None:
+            return
+        from truba_resources import BASELINES
+
+        baseline = BASELINES[name]
+        limit = self.remote_controller.queue_catalog[name]
+        cores = min(baseline.max_cpus, limit.max_cpus)
+        memory = min(baseline.memory_ceiling(cores), limit.memory_ceiling(cores))
+        self.script_ram.setMaximum(memory / 1024)
+        if reset:
+            requested = self.remote_controller.controls['memory_mb'].value()
+            self.script_ram.setValue(min(requested, memory / 1024))
+
+    def _select_planned_script(self):
+        script = self.planned_scripts.get(self.script_choice.currentData())
+        if script is not None:
+            context, _ = script
+            self.script_queue.setCurrentIndex(self.script_queue.findData(context.partition))
+            self.script_ram.setValue(context.memory_mb / 1024)
+
+    def _available_planned_sizes(self):
+        if self.automatic.isChecked():
+            sizes = [self.start_size.value() / self.factor.value() ** i for i in range(self.max_levels.value())]
+        else:
+            sizes = [float(part.strip()) for part in self.manual.text().split(",")]
+            if any(not math.isfinite(size) for size in sizes) or any(a <= b for a, b in zip(sizes, sizes[1:])):
+                raise ValueError("Enter strictly decreasing global mesh sizes.")
+            sizes = sizes[:self.max_levels.value()]
+        return [size for size in sizes if size >= self.minimum.value()]
+
+    def _add_planned_script(self):
+        number = self.script_choice.currentData()
+        previous, existing = self.planned_scripts.get(number, (None, []))
+        try:
+            used = [size for _, sizes in self.planned_scripts.values() for size in sizes]
+            available = [size for size in self._available_planned_sizes()
+                         if not any(math.isclose(size, value) for value in used)]
+            count = self.script_count.value()
+            if count > len(available) or len(used) + count > self.max_levels.value():
+                raise ValueError("There are not enough mesh sizes within the study limits.")
+            sizes = sorted([*existing, *available[:count]], reverse=True)
+            settings = [self.level_settings(size) for size in sizes]
+            walltime = previous.walltime if previous is not None else self._script_walltime()
+            context = self.remote_controller.plan_convergence_script(
+                settings[0], self.script_queue.currentData(), len(sizes),
+                round(self.script_ram.value() * 1024), walltime)
+        except (ValueError, RuntimeError, KeyError) as error:
+            self._set_status(f"Unable to add Slurm script: {error}")
+            return
+        if number is None:
+            number = self.next_script_number
+            self.next_script_number += 1
+            self.script_choice.addItem(f"Script {number}", number)
+        self.planned_scripts[number] = context, sizes
+        self._render_script_preview()
+        self._set_status("Slurm plan ready")
+
+    def _render_script_preview(self):
+        from truba_remote import convergence_level_resources
+
+        self.script_preview.setRowCount(sum(len(sizes) for _, sizes in self.planned_scripts.values()))
+        row = 0
+        for number, (context, sizes) in self.planned_scripts.items():
+            for size, resources in zip(sizes, convergence_level_resources(context, len(sizes)), strict=True):
+                values = (f"Script {number}", context.partition, f"{size:.8g}",
+                          str(resources['cores']), f"{resources['memory_mb'] / 1024:.2f}")
+                for column, value in enumerate(values):
+                    item = QTableWidgetItem(value)
+                    item.setData(Qt.ItemDataRole.UserRole, (number, size))
+                    item.setBackground(QColor(("#E5E7EB", "#E5E7EB", "#E5E7EB", "#BFDBFE", "#BBF7D0")[column]))
+                    item.setToolTip(f"{context.cores} CPU · {context.memory_mb / 1024:.2f} GiB · {context.walltime}")
+                    self.script_preview.setItem(row, column, item)
+                row += 1
+
+    def _script_plan_menu(self, position):
+        row = self.script_preview.rowAt(position.y())
+        if row < 0 or self.future is not None:
+            return
+        if not self.script_preview.item(row, 0).isSelected():
+            self.script_preview.selectRow(row)
+        selected = [self.script_preview.item(index.row(), 0).data(Qt.ItemDataRole.UserRole)
+                    for index in self.script_preview.selectionModel().selectedRows()]
+        menu = QMenu(self.script_preview)
+        menu.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        menu.addAction("Remove selected mesh levels", lambda: self._remove_planned_levels(selected))
+        menu.popup(self.script_preview.viewport().mapToGlobal(position))
+
+    def _remove_planned_levels(self, selection):
+        for number, size in selection:
+            context, sizes = self.planned_scripts[number]
+            sizes.remove(size)
+            if not sizes:
+                del self.planned_scripts[number]
+                self.script_choice.removeItem(self.script_choice.findData(number))
+        self._render_script_preview()
+
     def _results_context_menu(self, position):
         column = self.results.columnAt(position.x())
         row = self.results.rowAt(position.y())
@@ -545,6 +750,9 @@ class MeshConvergenceWidget(QWidget):
         self.single_truba_mesh.setVisible(self.run_on_truba.isChecked())
         remote = self.run_on_truba.isChecked()
         self.truba_resource_info.setVisible(remote)
+        self.script_plan_panel.setVisible(remote)
+        if remote:
+            self._refresh_script_queues()
         self.advanced.layout().setRowVisible(self.time_budget_field, not remote)
         self.advanced.layout().setRowVisible(self.truba_wall_field, remote)
         self._show_remote_columns(remote or bool(self.remote_records))
@@ -672,7 +880,9 @@ class MeshConvergenceWidget(QWidget):
             return
         previous_base = self.remote_study_base
         self.remote_study_base = None
-        self.single_remote_run = self.run_on_truba.isChecked() and self.single_truba_mesh.isChecked()
+        explicit = self.run_on_truba.isChecked() and bool(self.planned_scripts)
+        self.single_remote_run = self.run_on_truba.isChecked() and self.single_truba_mesh.isChecked() and not explicit
+        submissions = []
         try:
             capabilities = get_solver_capabilities(self.solver_combo.currentData())
             if not capabilities.implemented:
@@ -684,7 +894,19 @@ class MeshConvergenceWidget(QWidget):
             if not self.selected:
                 raise ValueError("Select at least one response metric in Advanced.")
             self.manual_pending = []
-            if self.automatic.isChecked() or self.single_remote_run:
+            if explicit:
+                all_sizes = [size for _, sizes in self.planned_scripts.values() for size in sizes]
+                if len(all_sizes) > self.max_levels.value() or min(all_sizes) < self.minimum.value():
+                    raise ValueError("The preview exceeds the current study limits.")
+                for number, (context, sizes) in self.planned_scripts.items():
+                    settings = [self.level_settings(size) for size in sizes]
+                    verified = self.remote_controller.plan_convergence_script(
+                        settings[0], context.partition, len(settings), context.memory_mb, context.walltime)
+                    if (verified.cores, verified.memory_mb) != (context.cores, context.memory_mb):
+                        raise ValueError("The queue limits changed. Review and add the script again.")
+                    submissions.append(([(level, f"Script {number}") for level in settings], verified))
+                first = max((plan[0][0] for plan, _ in submissions), key=lambda level: level.mesh_resolution)
+            elif self.automatic.isChecked() or self.single_remote_run:
                 first = self.level_settings(self.start_size.value())
             else:
                 sizes = [float(v.strip()) for v in self.manual.text().split(",")]
@@ -694,11 +916,12 @@ class MeshConvergenceWidget(QWidget):
                 first = self.manual_pending.pop(0)
             if first.mesh_resolution < self.minimum.value():
                 raise ValueError("Starting size is below the minimum global size.")
-        except ValueError as exc:
+        except (ValueError, RuntimeError, KeyError) as exc:
             self.remote_study_base = previous_base
             QMessageBox.warning(self, "Invalid convergence plan", str(exc))
             return
         self.history_only = False
+        self.explicit_script_run = explicit
         self.saved_geometry_source = None
         self.saved_study_key = None
         self.study_plan = {}
@@ -715,12 +938,21 @@ class MeshConvergenceWidget(QWidget):
         self.stop_requested.clear()
         self.started = monotonic()
         self._set_running(True)
-        self._launch(first, "Starting mesh")
+        if explicit:
+            auth = self.remote_controller.auth()
+            for plan, context in submissions:
+                self._submit_remote_levels(plan, context, auth, exact_group=True)
+            if self.future is None:
+                self.remote_outcomes.clear()
+                self._finish(self.rows[-1].status)
+        else:
+            self._launch(first, "Starting mesh")
         if self.future is not None:
             self.timer.start()
 
     def _set_running(self, running):
-        for control in (self.mesh_settings, self.tolerance, self.advanced, self.solver_combo, self.run_on_truba):
+        for control in (self.mesh_settings, self.tolerance, self.advanced, self.solver_combo,
+                        self.run_on_truba, self.script_plan_panel):
             control.setEnabled(not running)
         if running:
             self.run_button.setEnabled(False)
@@ -740,7 +972,7 @@ class MeshConvergenceWidget(QWidget):
                     wall_minutes=self.truba_wall_minutes.value(), tolerance=self.tolerance.value(),
                     selected=self.selected, absolute=[control.value() for control in self.absolute],
                     manual_sizes=[first.mesh_resolution, *(level.mesh_resolution for level in self.manual_pending)],
-                    single=self.single_remote_run)
+                    single=self.single_remote_run, explicit_scripts=self.explicit_script_run)
 
     def _next_append_sizes(self):
         limit = min(2, self.max_levels.value() - len(self.rows))
@@ -757,6 +989,7 @@ class MeshConvergenceWidget(QWidget):
         self.append_button.setVisible(self.remote_controller is not None and
                                       (self.run_on_truba.isChecked() or bool(self.remote_records)))
         self.append_button.setEnabled(bool(self.remote_jobs or self.saved_jobs)
+                                      and not self.explicit_script_run
                                       and not self.stop_requested.is_set()
                                       and bool(self._next_append_sizes()))
 
@@ -839,6 +1072,7 @@ class MeshConvergenceWidget(QWidget):
         selection = saved.get("selected", jobs[0].request.get("selected")) or list(range(len(METRICS)))
         self.selected = selection
         self.single_remote_run = bool(saved.get("single"))
+        self.explicit_script_run = bool(saved.get("explicit_scripts"))
         original_wall = jobs[0].record.get("context", {}).get("walltime", "00:30:00")
         try:
             hours, minutes, _seconds = map(int, original_wall.split(":"))
@@ -876,6 +1110,8 @@ class MeshConvergenceWidget(QWidget):
         self.single_truba_mesh.setChecked(self.single_remote_run)
         self.single_truba_mesh.show()
         self.truba_resource_info.show()
+        self.script_plan_panel.show()
+        self._refresh_script_queues()
         self.advanced.layout().setRowVisible(self.time_budget_field, False)
         self.advanced.layout().setRowVisible(self.truba_wall_field, True)
         self._configure_metrics(base)
@@ -954,10 +1190,13 @@ class MeshConvergenceWidget(QWidget):
         self._set_status(f"{kind}: {settings.mesh_resolution:.6g} mm")
         return len(self.rows) - 1
 
-    def _require_remote_submission(self, settings, max_jobs):
+    def _script_walltime(self):
         hours, minutes = divmod(self.truba_wall_minutes.value(), 60)
+        return f"{hours:02d}:{minutes:02d}:00"
+
+    def _require_remote_submission(self, settings, max_jobs):
         return self.remote_controller.require_convergence(
-            settings, max_jobs=max_jobs, walltime=f"{hours:02d}:{minutes:02d}:00")
+            settings, max_jobs=max_jobs, walltime=self._script_walltime())
 
     def _launch_remote_batch(self, settings, kind):
         limit = 1 if self.single_remote_run else min(TRUBA_BATCH_SIZE, self.max_levels.value() - len(self.rows))
@@ -991,18 +1230,23 @@ class MeshConvergenceWidget(QWidget):
 
         self._submit_remote_levels(plan, context, auth)
 
-    def _submit_remote_levels(self, plan, context, auth):
-        from truba_remote import convergence_level_resources, run_remote_level, run_remote_level_pair
+    def _submit_remote_levels(self, plan, context, auth, *, exact_group=False):
+        from truba_remote import (convergence_level_resources, run_remote_level, run_remote_level_group,
+                                  run_remote_level_pair)
 
         context = replace(context, session_id="", parallel_jobs=1)
         indices = [self._add_level(settings, kind, "TRUBA · preparing submission")
                    for settings, kind in plan]
-        group_size = 2 if context.cores >= 2 * plan[0][0].cores and context.memory_mb >= 2 else 1
+        group_size = len(plan) if exact_group else (
+            2 if context.cores >= 2 * plan[0][0].cores and context.memory_mb >= 2 else 1)
         for offset in range(0, len(indices), group_size):
             group = tuple(indices[offset:offset + group_size])
             levels = [self.rows[index].settings for index in group]
-            target, settings = ((run_remote_level_pair, levels) if len(group) == 2 else
-                                (run_remote_level, replace(levels[0], cores=context.cores)))
+            if len(group) == 1:
+                target, settings = run_remote_level, replace(levels[0], cores=context.cores)
+            else:
+                target = run_remote_level_pair if len(group) == 2 else run_remote_level_group
+                settings = levels
             for index, share in zip(group, convergence_level_resources(context, len(group)), strict=True):
                 self.remote_records[index] = dict(solver_cores=share['cores'], level_memory_mb=share['memory_mb'])
                 self._render(index)
@@ -1019,10 +1263,10 @@ class MeshConvergenceWidget(QWidget):
                     self._render(index)
         self.future = next(iter(self.remote_jobs.values()), None)
         self._refresh_append_button()
-        if self.future is None:
+        if self.future is None and not exact_group:
             self.remote_outcomes.clear()
             self._finish(self.rows[-1].status)
-        else:
+        elif self.future is not None:
             self._set_status(f"TRUBA · {sum(map(len, self.remote_jobs))} analyses active")
 
     def _retry_memory_failure(self, row):
@@ -1341,6 +1585,9 @@ class MeshConvergenceWidget(QWidget):
             self.results.selectRow(index)
             self._finish(f"Converged · use #{index + 1}, {self.recommended.settings.mesh_resolution:.6g} mm. "
                          "Two consecutive comparisons meet tolerance.")
+            return
+        if self.explicit_script_run:
+            self._finish("Planned levels finished; convergence not confirmed.")
             return
         if len(self.rows) >= self.max_levels.value():
             self._finish("Attempt limit reached; convergence not confirmed.")

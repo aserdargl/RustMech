@@ -1322,6 +1322,16 @@ Resource session|Kaynak oturumu
 Mesh convergence|Ağ yakınsaması
 Slurm job ID|Slurm iş kimliği
 Slurm script|Slurm betiği
+Slurm script plan|Slurm betik planı
+Slurm queue and resource limits|Slurm kuyruğu ve kaynak sınırları
+New script|Yeni betik
+Script RAM|Betik RAM’i
+RAM per mesh (GiB)|Ağ başına RAM (GiB)
+Mesh (mm)|Ağ (mm)
+Remove selected mesh levels|Seçili ağ seviyelerini sil
+Add levels before running. Right-click a planned row to remove it.|Çalıştırmadan önce seviye ekleyin. Bir satırı silmek için sağ tıklayın.
+Slurm plan ready|Slurm planı hazır
+Planned levels finished; convergence not confirmed.|Planlanan seviyeler bitti. Yakınsama doğrulanmadı.
 Slurm state|Slurm durumu
 Wall time per analysis|Analiz başına süre sınırı
 Slurm time limit for each mesh analysis, in minutes.|Her ağ analizi için dakika cinsinden Slurm süre sınırı.

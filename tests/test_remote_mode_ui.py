@@ -1028,6 +1028,54 @@ class RemoteModeUiTests(unittest.TestCase):
         job.force_stop.assert_called_once()
         dialog.reject()
 
+    def test_convergence_script_preview_drives_exact_submission(self):
+        from truba_remote import run_remote_level_group
+
+        self.window.open_mesh_convergence()
+        dialog = self.window._mesh_convergence_dialog
+        study = dialog.study
+        study.start_size.setValue(.2)
+        study.run_on_truba.click()
+        study.script_queue.setCurrentIndex(study.script_queue.findData("hamsi"))
+        self.assertIn("CPU 56 · GPU 0", study.script_queue.currentText())
+        study.script_ram.setValue(120)
+        study.script_count.setValue(2)
+        job = MagicMock()
+        job.done.return_value = False
+        job.remote_status.return_value = {}
+        with patch("mesh_convergence.AnalysisProcess", return_value=job) as submit:
+            study.script_add.click()
+            self.assertEqual(study.script_preview.rowCount(), 2)
+            self.assertEqual(study.script_preview.item(0, 4).text(), "60.00")
+            self.assertNotEqual(study.script_preview.item(0, 3).background().color(),
+                                study.script_preview.item(0, 0).background().color())
+            self.app.processEvents()
+            preview = study.script_preview.viewport().grab().toImage()
+            for column in (3, 4):
+                cell = study.script_preview.item(0, column)
+                rect = study.script_preview.visualItemRect(cell)
+                self.assertEqual(preview.pixelColor(rect.x() + 6, rect.y() + 5), cell.background().color())
+            study.script_choice.setCurrentIndex(study.script_choice.findData(1))
+            study.script_count.setValue(1)
+            study.script_add.click()
+            study.script_add.click()
+            self.assertEqual(study.script_preview.rowCount(), 3)  # Hamsi cannot fit four 16-CPU levels.
+            selection = study.script_preview.item(2, 0).data(Qt.ItemDataRole.UserRole)
+            study._remove_planned_levels([selection])
+            self.assertEqual(study.script_preview.rowCount(), 2)
+            study.script_add.click()
+            self.assertEqual(study.script_preview.item(0, 4).text(), "40.00")
+            submit.assert_not_called()
+            study.run_button.click()
+        submit.assert_called_once()
+        target, levels, context, *_ = submit.call_args.args
+        self.assertIs(target, run_remote_level_group)
+        self.assertEqual((len(levels), context.partition, context.cores, context.memory_mb),
+                         (3, "hamsi", 56, 120 * 1024))
+        self.assertEqual(study.results.rowCount(), 3)
+        study.force_stop()
+        dialog.reject()
+
     def test_convergence_and_doe_do_not_call_local_mesh_generator(self):
         from mesh_convergence import MeshConvergenceDialog
         local=MagicMock()

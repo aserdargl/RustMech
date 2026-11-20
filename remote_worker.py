@@ -309,16 +309,16 @@ def _run_operation(request,output):
     raise ValueError("Unsupported remote operation.")
 
 
-def _run_convergence_pair(request, output):
+def _run_convergence_group(request, output):
     steps = request['convergence_steps']
     allocation = request['remote_context']
-    if (request['operation'] != 'convergence_level' or len(steps) != 2
+    if (request['operation'] != 'convergence_level' or not 2 <= len(steps) <= 100
             or sum(step['settings']['cores'] for step in steps) > allocation['cores']
             or sum(step['memory_mb'] for step in steps) > allocation['memory_mb']
             or any(step['settings']['cores'] < 1 or step['memory_mb'] < 1 for step in steps)):
-        raise ValueError('Invalid resources for the convergence pair.')
+        raise ValueError('Invalid resources for the convergence group.')
     common = {key: value for key, value in request.items() if key != 'convergence_steps'}
-    _stage('Running two mesh levels in parallel')
+    _stage(f'Running {len(steps)} mesh levels in parallel')
     pending = []
     with ExitStack() as stack:
         for index, step in enumerate(steps, 1):
@@ -380,7 +380,7 @@ def main():
             if request["operation"]!="probe": raise RuntimeError("Remote runtime is missing. Prepare it before submitting computations.")
             result["capabilities"] = probe(request,missing=True)
         elif request.get('convergence_steps'):
-            result.update(_run_convergence_pair(request, output))
+            result.update(_run_convergence_group(request, output))
         else: result.update(run_operation(request,output))
     except Exception as error:
         result["error"] = str(error)

@@ -813,6 +813,16 @@ class RemoteController(QObject):
         study_name = self.window.truba_dialog.active_jobs.study_name.text().strip()
         return replace(context, study_name=study_name), self.auth()
 
+    def plan_convergence_script(self, settings, partition, level_count, memory_mb, walltime):
+        from truba_resources import planned_convergence_context
+
+        context = planned_convergence_context(
+            replace(self.context(use_session=False), walltime=walltime),
+            self.queue_catalog, partition, settings.cores, level_count, memory_mb)
+        self._validate_kratos_request(settings, context)
+        study_name = self.window.truba_dialog.active_jobs.study_name.text().strip()
+        return replace(context, study_name=study_name)
+
     def require_batch_queue(self, partition, settings):
         return self._require(settings.solver_backend, settings, partition=partition)
 

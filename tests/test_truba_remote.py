@@ -96,8 +96,8 @@ class RemoteProtocolTests(unittest.TestCase):
         import remote_worker
 
         output = self.root / 'output'
-        request = dict(operation='convergence_level', remote_context={'cores': 56, 'memory_mb': 120000},
-                       convergence_steps=[{'settings': {'cores': 28}, 'memory_mb': 60000}] * 2)
+        request = dict(operation='convergence_level', remote_context={'cores': 84, 'memory_mb': 180000},
+                       convergence_steps=[{'settings': {'cores': 28}, 'memory_mb': 60000}] * 3)
         processes = []
 
         def launch(args, *, cwd, env, stdout, stderr):
@@ -116,16 +116,17 @@ class RemoteProtocolTests(unittest.TestCase):
             process = MagicMock()
             process.__enter__.return_value = process
             def wait():
-                self.assertEqual(len(processes), 2)
+                self.assertEqual(len(processes), 3)
                 return 1 if i else 0
             process.wait.side_effect = wait
             processes.append(process)
             return process
 
         with patch('remote_worker.subprocess.Popen', side_effect=launch), patch('remote_worker._stage'):
-            result = remote_worker._run_convergence_pair(request, output)
+            result = remote_worker._run_convergence_group(request, output)
         self.assertEqual(result['levels'][0], {'level': {'status': 'completed'}})
         self.assertTrue(result['levels'][1]['out_of_memory'])
+        self.assertTrue(result['levels'][2]['out_of_memory'])
 
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()

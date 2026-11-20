@@ -10,7 +10,8 @@ QDialog#meshConvergenceDialog, QWidget#meshConvergenceStudy {
     background: #F5F5F3;
 }
 QWidget#meshConvergenceStudy QWidget#convergenceToolbar,
-QWidget#meshConvergenceStudy QWidget#convergenceAdvanced {
+QWidget#meshConvergenceStudy QWidget#convergenceAdvanced,
+QWidget#meshConvergenceStudy QWidget#convergenceScriptPlan {
     background: #FCFCFB; border: 1px solid #D5DBE2; border-radius: 7px;
 }
 QWidget#meshConvergenceStudy QScrollArea { background: transparent; }
@@ -40,6 +41,10 @@ QWidget#meshConvergenceStudy QAbstractSpinBox QLineEdit {
 QWidget#meshConvergenceStudy QComboBox:disabled,
 QWidget#meshConvergenceStudy QAbstractSpinBox:disabled,
 QWidget#meshConvergenceStudy QLineEdit:disabled { color: #94A3B8; background: #F1F5F9; }
+QWidget#convergenceScriptPlan QAbstractSpinBox { background: #E5E7EB; border-color: #9CA3AF; }
+QWidget#convergenceScriptPlan QAbstractSpinBox:hover { background: #ECEFF1; border-color: #6B7280; }
+QWidget#convergenceScriptPlan QAbstractSpinBox:focus { background: #F8FAFC; border-color: #2563EB; }
+QWidget#convergenceScriptPlan QAbstractSpinBox:disabled { background: #F1F5F9; border-color: #CBD5E1; }
 QWidget#meshConvergenceStudy QFrame#convergenceResultsPanel {
     background: #F4FBFF; border: 1px solid #B7D4E8; border-radius: 5px;
 }
@@ -64,6 +69,7 @@ QWidget#meshConvergenceStudy QTableWidget {
 }
 QWidget#meshConvergenceStudy QTableWidget::item { padding: 1px; border: none; }
 QWidget#meshConvergenceStudy QTableWidget::item:selected { background: #DCEEFF; color: #0F172A; }
+QWidget#meshConvergenceStudy QTableWidget#convergenceScriptPreview { background: #F1F5F9; }
 QWidget#meshConvergenceStudy QHeaderView { background: #F1F0EC; }
 QWidget#meshConvergenceStudy QHeaderView::section,
 QWidget#meshConvergenceStudy QHeaderView::section:checked {

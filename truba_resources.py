@@ -224,6 +224,22 @@ def convergence_context(context, catalog, solver_cpus, max_jobs):
                    parallel_jobs=min(max_jobs, slots * job_levels), session_id='')
 
 
+def planned_convergence_context(context, catalog, partition, level_cpus, level_count, memory_mb):
+    baseline = BASELINES[partition]
+    limit = catalog[partition]
+    minimum = max(baseline.min_cpus, limit.min_cpus, level_cpus * level_count,
+                  56 if partition == 'hamsi' else 1)
+    maximum = min(baseline.max_cpus, limit.max_cpus)
+    cores = next((count for count in range(minimum, maximum + 1)
+                  if memory_mb <= min(baseline.memory_ceiling(count), limit.memory_ceiling(count))), None)
+    if cores is None or memory_mb < level_count:
+        raise ValueError('The selected queue cannot fit this mesh count and RAM in one Slurm script.')
+    candidates(partition, cores, memory_mb, context.walltime, catalog)
+    candidates(partition, cores, memory_mb, context.walltime)
+    return replace(context, partition=partition, cores=cores, memory_mb=memory_mb, gpus=0,
+                   parallel_jobs=1, session_id='')
+
+
 def test_submission(context, auth=None):
     """Ask Slurm (including job-submit plugins) to validate; never allocate."""
     import shlex

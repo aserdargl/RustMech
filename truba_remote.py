@@ -782,12 +782,16 @@ def convergence_level_resources(context, count):
 
 
 def run_remote_level_pair(settings, context, max_elements, selected, remote_auth=None, job_marker=None, *, study=None):
-    first, second = settings
-    if first.imported_geometry_path != second.imported_geometry_path:
-        raise ValueError('Paired convergence levels require the same specimen.')
-    resources = convergence_level_resources(context, 2)
-    if resources[0]['cores'] < max(first.cores, second.cores) or not resources[0]['memory_mb']:
-        raise ValueError('The Slurm request cannot fit both mesh levels.')
+    return run_remote_level_group(settings, context, max_elements, selected, remote_auth, job_marker, study=study)
+run_remote_level_pair.remote_job_target = True
+
+
+def run_remote_level_group(settings, context, max_elements, selected, remote_auth=None, job_marker=None, *, study=None):
+    if len({level.imported_geometry_path for level in settings}) != 1:
+        raise ValueError('Grouped convergence levels require the same specimen.')
+    resources = convergence_level_resources(context, len(settings))
+    if resources[0]['cores'] < max(level.cores for level in settings) or not resources[0]['memory_mb']:
+        raise ValueError('The Slurm request cannot fit these mesh levels.')
     steps = [dict(settings=asdict(replace(level, cores=share['cores'], automatic_cores=False)),
                   memory_mb=share['memory_mb']) for level, share in zip(settings, resources, strict=True)]
     request = dict(operation='convergence_level', settings=steps[0]['settings'], convergence_steps=steps,
@@ -796,7 +800,7 @@ def run_remote_level_pair(settings, context, max_elements, selected, remote_auth
         request['convergence_study'] = study
     result, directory = run_remote_job(request, context, remote_auth, job_marker)
     return decode_convergence_results(result, directory, steps)
-run_remote_level_pair.remote_job_target = True
+run_remote_level_group.remote_job_target = True
 
 
 def decode_convergence_results(result, directory, steps):
@@ -806,7 +810,7 @@ def decode_convergence_results(result, directory, steps):
         return _decode_level(result['level'])
     levels = result['levels']
     if len(levels) != len(steps):
-        raise RuntimeError('TRUBA returned an incomplete convergence pair.')
+        raise RuntimeError('TRUBA returned an incomplete convergence group.')
     outcomes = []
     for index, entry in enumerate(levels):
         if entry.get('out_of_memory'):
