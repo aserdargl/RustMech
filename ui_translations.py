@@ -183,6 +183,7 @@ Use Ctrl or Shift to select files. Press Space to check or uncheck selected scri
 Use As Script|Betik Olarak Seç
 Run LAMMPS|LAMMPS'i çalıştır
 Job history|İş geçmişi
+Show only active jobs|Sadece aktif işleri göster
 ESEN job history|ESEN iş geçmişi
 Remove job from history|İşi geçmişten sil
 Remove the selected job from history? Job files and results will be kept.|Seçili iş geçmişten silinsin mi? İş dosyaları ve sonuçlar korunacak.

@@ -617,6 +617,8 @@ class EsenTests(unittest.TestCase):
                     self.assertEqual(len({button.width() for button in navigation}), 1)
                     history_actions = (workspace.select_history, workspace.delete_job)
                     history_commands = (workspace.use_inputs, workspace.refresh, workspace.resume, workspace.stop)
+                    self.assertEqual(workspace.active_history_only.text(),
+                                     "Sadece aktif işleri göster" if locale == "tr" else "Show only active jobs")
                     self.assertEqual(len({button.y() for button in history_actions}), 1)
                     self.assertEqual(len({button.width() for button in history_actions}), 1)
                     self.assertEqual(len({button.width() for button in history_commands}), 1)
@@ -1476,6 +1478,45 @@ class EsenTests(unittest.TestCase):
             sync.assert_not_called()
         self.assertEqual(workspace.history.rowCount(), 3)
         self.assertEqual(jobs.read_job(accepted)["job_id"], "7019602")
+
+    def test_history_filter_tracks_job_states_and_limits_selection(self):
+        app = QApplication.instance() or QApplication([])
+        preferences = QSettings(str(self.root / "settings.ini"), QSettings.Format.IniFormat)
+        records = {state: self.new_job() for state in ("Running", "Queued", "Completed", "Cancelled", "Failed")}
+        for state, job in records.items():
+            jobs.save_job(*job, state=state)
+        with patch("esen_workspace.QSettings", return_value=preferences):
+            workspace = EsenWorkspace(FakeTruba(), history=self.history)
+        self.addCleanup(workspace.dispose)
+        workspace.show()
+        app.processEvents()
+        history = workspace.history
+        rows = {history.item(row, 1).text(): row for row in range(history.rowCount())}
+
+        self.assertFalse(workspace.active_history_only.isChecked())
+        history.setCurrentCell(rows["Completed"], 0)
+        workspace.active_history_only.click()
+        self.assertIsNone(workspace._selected_directory())
+        self.assertIsNone(workspace.record)
+        self.assertEqual({state for state, row in rows.items() if not history.isRowHidden(row)}, {"Running", "Queued"})
+        self.assertEqual(workspace.queue_model.rowCount(), 2)
+
+        workspace.select_history.click()
+        self.assertEqual({workspace._history_directory(item) for item in workspace._history_selection()},
+                         {records["Running"][0], records["Queued"][0]})
+        self.assertFalse(workspace.select_history.isEnabled())
+        workspace.active_history_only.click()
+        self.assertTrue(all(not history.isRowHidden(row) for row in rows.values()))
+        self.assertEqual(len(workspace._history_selection()), 2)
+
+        workspace.active_history_only.click()
+        history.setCurrentCell(rows["Running"], 0)
+        jobs.save_job(*records["Running"], state="Cancelled")
+        workspace._show_selected()
+        self.assertTrue(history.isRowHidden(rows["Running"]))
+        self.assertIsNone(workspace.record)
+        self.assertEqual(workspace.queue_model.rowCount(), 1)
+        self.assertEqual(jobs.read_job(records["Running"][0])["state"], "Cancelled")
 
     def test_select_all_removes_only_inactive_history_entries(self):
         app = QApplication.instance() or QApplication([])

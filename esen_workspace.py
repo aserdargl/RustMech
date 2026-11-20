@@ -45,6 +45,7 @@ from ui_language import translate
 
 WORKSPACE_TITLE = "Esen"
 ACTIVE_TRUBA_STATES = frozenset({"Submitting", "Submitted", "Queued", "Running", "Cancellation requested"})
+ACTIVE_HISTORY_STATES = ACTIVE_TRUBA_STATES | {"Preparing", "Waiting to run"}
 PANEL_PADDING = 7
 INPUT_TOOL_SPACING = 2
 HISTORY_REMOTE_ACTIVE_ROLE = Qt.ItemDataRole.UserRole + 1
@@ -384,7 +385,8 @@ class EsenWorkspace(QDialog):
         self._build()
         language = getattr(QApplication.instance(), "_rustmech_language", None)
         if language is not None:
-            for button in (*self._command_buttons, self.md_preview_button, self.md_prepare, self.md_run,
+            for button in (*self._command_buttons, self.active_history_only,
+                           self.md_preview_button, self.md_prepare, self.md_run,
                            self.md_apply_lattice, *self.md_file_buttons, *self.md_plan_buttons):
                 language.localize(button)
             language.changed.connect(self._localize_md)
@@ -619,9 +621,13 @@ class EsenWorkspace(QDialog):
         self._configure_history_table(self.history)
         self.history.setAccessibleName("ESEN job history")
         self.history.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        self.active_history_only = QCheckBox("Show only active jobs")
+        self.active_history_only.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        self.active_history_only.setFixedHeight(CONTROL_HEIGHT)
+        self.active_history_only.toggled.connect(self._filter_history)
         self.select_history = command("Select all", self.history.selectAll)
         history, layout = panel("Job history", paper=True, scrollable=True,
-                                actions=(self.select_history, self.delete_job))
+                                actions=(self.select_history, self.delete_job, self.active_history_only))
         left.addWidget(history)
         self.history.currentItemChanged.connect(self._select_job)
         self.history.itemSelectionChanged.connect(self._select_job)
@@ -1937,7 +1943,7 @@ class EsenWorkspace(QDialog):
         item.setData(Qt.ItemDataRole.UserRole, str(directory))
         self.history.setItem(row, 0, item)
         self._update_history_item(item, directory, record)
-        if prepend and len(self._history_selection()) <= 1:
+        if prepend and not self.history.isRowHidden(row) and len(self._history_selection()) <= 1:
             self.history.setCurrentItem(item, QItemSelectionModel.SelectionFlag.ClearAndSelect
                                         | QItemSelectionModel.SelectionFlag.Rows)
         return item
@@ -1989,6 +1995,27 @@ class EsenWorkspace(QDialog):
                 script += "<br>" + escape(source)
             self.history.item(row, 4).setToolTip(f"<qt>{script}</qt>")
         item.setData(HISTORY_QUEUE_ROLE, state in {"Queued", "Running"})
+        with QSignalBlocker(self.history):
+            selection_changed = self._filter_history_row(row)
+        if selection_changed:
+            self._select_job()
+
+    def _filter_history_row(self, row):
+        hidden = self.active_history_only.isChecked() and self.history.item(row, 1).text() not in ACTIVE_HISTORY_STATES
+        # Qt's Select All can include hidden rows. Discard those selections before revealing them.
+        selection_changed = (hidden or self.history.isRowHidden(row)) and self.history.item(row, 0).isSelected()
+        if selection_changed:
+            self.history.selectionModel().select(self.history.model().index(row, 0),
+                                                QItemSelectionModel.SelectionFlag.Deselect
+                                                | QItemSelectionModel.SelectionFlag.Rows)
+        self.history.setRowHidden(row, hidden)
+        return selection_changed
+
+    def _filter_history(self):
+        with QSignalBlocker(self.history):
+            for row in range(self.history.rowCount()):
+                self._filter_history_row(row)
+        self._select_job()
 
     def _state(self, directory, record):
         if record["state"] == "Preparing" and directory in self.batch_queue:
@@ -2004,7 +2031,7 @@ class EsenWorkspace(QDialog):
 
     def _history_focus(self):
         current = self.history.item(self.history.currentRow(), 0)
-        if current is not None and current.isSelected():
+        if current is not None and current.isSelected() and not self.history.isRowHidden(current.row()):
             return current
         return next(iter(self._history_selection()), None)
 
@@ -2017,7 +2044,8 @@ class EsenWorkspace(QDialog):
 
     def _history_selection(self):
         rows = self.history.selectionModel().selectedRows()
-        return [self.history.item(row, 0) for row in sorted(index.row() for index in rows)]
+        return [self.history.item(row, 0) for row in sorted(index.row() for index in rows)
+                if not self.history.isRowHidden(row)]
 
     def _select_active_job(self, index):
         row = self.queue_model.mapToSource(index).row()
@@ -2299,10 +2327,13 @@ class EsenWorkspace(QDialog):
             self.status.setText(str(error))
             self._buttons()
             return
+        item = self._history_focus()
+        self._update_history_item(item, directory, record)
+        if self.history.isRowHidden(item.row()):
+            return
         if record.get("folder_upload") and not record.get("direct_upload") and jobs.is_slurm_script(record["name"]):
             upload = jobs.FolderUpload(record["folder_upload"], record["username"], record.get("upload_directory", ""))
             self.truba_browser.set_slurm_directory(upload.username, upload.path())
-        self._update_history_item(self._history_focus(), directory, record)
         state = self._state(directory, record)
         details = [record.get("job_id", ""), record.get("created", ""),
                    self.job_error or translate(record.get("detail", ""))]
@@ -2436,7 +2467,8 @@ class EsenWorkspace(QDialog):
         self.move_down.setEnabled(not uploading and self._script_neighbor(1) is not None)
         selection = self._history_selection()
         multiple = len(selection) > 1
-        self.select_history.setEnabled(self.history.rowCount() > len(selection))
+        visible_rows = self.history.rowCount() - self.history.verticalHeader().hiddenSectionCount()
+        self.select_history.setEnabled(visible_rows > len(selection))
         self.delete_job.setEnabled(any(
             self._can_delete_job(self._history_directory(item), item.data(HISTORY_REMOTE_ACTIVE_ROLE))
             for item in selection
@@ -2519,6 +2551,14 @@ class EsenWorkspace(QDialog):
             if item.data(Qt.ItemDataRole.UserRole) == str(directory):
                 if self._history_focus() == item:
                     self._refresh_remote(manual=True)
+                elif self.history.isRowHidden(index):
+                    try:
+                        record = jobs.read_job(directory)
+                    except (OSError, ValueError) as error:
+                        self.job_error = str(error)
+                        self._show_selected()
+                    else:
+                        self._refresh_remote(manual=True, job=(directory, record))
                 else:
                     self.history.setCurrentCell(index, 0)
                 return
