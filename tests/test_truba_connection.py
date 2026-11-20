@@ -408,7 +408,7 @@ class TrubaTests(unittest.TestCase):
         self.assertFalse(tab.cancel_button.isEnabled())
         queue = queue_output(
             '11|RUNNING|N/A|4:00|8:00:00|8|1|short|None|First job|run.slurm',
-            '23|PENDING|N/A|0:00|8:00:00|4|1|short|Resources|Second job|run.slurm',
+            '23_5|PENDING|N/A|0:00|8:00:00|4|1|short|Resources|Second job|run.slurm',
             '42_5|PENDING|N/A|0:00|8:00:00|8|1|short|None|Array task|run.slurm',
         )
         with (patch.object(dialog, 'analysis_auth', return_value=RemoteAuth('tester', 'test')),
@@ -422,10 +422,10 @@ class TrubaTests(unittest.TestCase):
             tab.timer.stop()
 
             tab.jobs.setCurrentCell(2, 0, SELECT_ROW)
-            self.assertFalse(tab.cancel_button.isEnabled())
+            self.assertTrue(tab.cancel_button.isEnabled())
             tab.jobs.selectionModel().select(tab.jobs.model().index(0, 0),
                                              QItemSelectionModel.SelectionFlag.Select | QItemSelectionModel.SelectionFlag.Rows)
-            self.assertFalse(tab.cancel_button.isEnabled())
+            self.assertTrue(tab.cancel_button.isEnabled())
             tab.jobs.setCurrentCell(1, 0, SELECT_ROW)
             self.assertTrue(tab.cancel_button.isEnabled())
             tab.study_name.setFocus()
@@ -434,7 +434,7 @@ class TrubaTests(unittest.TestCase):
             question.return_value = QMessageBox.StandardButton.No
             tab.cancel_button.click()
             command.assert_called_once()
-            self.assertIn('23', question.call_args.args[2])
+            self.assertIn('23_5', question.call_args.args[2])
             self.assertEqual(question.call_args.args[-1], QMessageBox.StandardButton.No)
 
             def confirm(*_):
@@ -449,10 +449,10 @@ class TrubaTests(unittest.TestCase):
             self.app.processEvents()
             self.assertTrue(tab.worker.wait(5000))
             self.app.processEvents()
-            self.assertEqual(command.call_args_list[1].args[0], 'scancel --user=tester 23')
+            self.assertEqual(command.call_args_list[1].args[0], 'scancel --user=tester 23_5')
             self.assertTrue(command.call_args_list[2].args[0].startswith('TZ=UTC'))
             self.assertEqual(tab.jobs.rowCount(), 1)
-            self.assertEqual(tab.cancel_notice.text(), 'Cancellation requested for Slurm job 23.')
+            self.assertEqual(tab.cancel_notice.text(), 'Cancellation requested for Slurm job 23_5.')
 
             command.side_effect = [RuntimeError('Rejected'), queue.splitlines()[0]]
             tab.cancel_button.click()
@@ -475,7 +475,7 @@ class TrubaTests(unittest.TestCase):
         queue = queue_output(
             '11|RUNNING|N/A|4:00|8:00:00|8|1|short|None|First job|run.slurm',
             '23|PENDING|N/A|0:00|8:00:00|4|1|short|Resources|Second job|run.slurm',
-            '31|RUNNING|N/A|4:00|8:00:00|8|1|short|None|Third job|run.slurm',
+            '31_[5-8%2]|PENDING|N/A|0:00|8:00:00|8|1|short|None|Third job|run.slurm',
         ).splitlines()
         with (patch.object(dialog, 'analysis_auth', return_value=RemoteAuth('tester', 'test')),
               patch('truba_active_jobs.RemoteTransport') as transport,
@@ -490,15 +490,15 @@ class TrubaTests(unittest.TestCase):
             third_job = tab.jobs.visualItemRect(tab.jobs.item(2, 0)).center()
             QTest.mouseClick(tab.jobs.viewport(), Qt.MouseButton.LeftButton,
                              Qt.KeyboardModifier.ShiftModifier, third_job)
-            self.assertEqual(tab.selected_job_ids(), ('11', '23', '31'))
+            self.assertEqual(tab.selected_job_ids(), ('11', '23', '31_[5-8%2]'))
             tab.jobs.setCurrentCell(0, 0, SELECT_ROW)
             QTest.mouseClick(tab.jobs.viewport(), Qt.MouseButton.LeftButton,
                              Qt.KeyboardModifier.ControlModifier, third_job)
-            self.assertEqual(tab.selected_job_ids(), ('11', '31'))
+            self.assertEqual(tab.selected_job_ids(), ('11', '31_[5-8%2]'))
 
             original_groups = tab.groups
             tab.show_groups(dict(reversed(tuple(original_groups.items()))))
-            self.assertEqual(tab.selected_job_ids(), ('31', '11'))
+            self.assertEqual(tab.selected_job_ids(), ('31_[5-8%2]', '11'))
 
             question.return_value = QMessageBox.StandardButton.No
             tab.cancel_button.click()
@@ -522,7 +522,7 @@ class TrubaTests(unittest.TestCase):
             third_job = tab.jobs.visualItemRect(tab.jobs.item(2, 0)).center()
             QTest.mouseClick(tab.jobs.viewport(), Qt.MouseButton.LeftButton,
                              Qt.KeyboardModifier.ControlModifier, third_job)
-            self.assertEqual(tab.selected_job_ids(), ('11', '31'))
+            self.assertEqual(tab.selected_job_ids(), ('11', '31_[5-8%2]'))
 
             def confirm(*_):
                 tab.jobs.setCurrentCell(1, 0, SELECT_ROW)
@@ -536,7 +536,7 @@ class TrubaTests(unittest.TestCase):
             self.app.processEvents()
             self.assertTrue(tab.worker.wait(5000))
             self.app.processEvents()
-            self.assertEqual(command.call_args_list[1].args[0], 'scancel --user=tester 11 31')
+            self.assertEqual(command.call_args_list[1].args[0], "scancel --user=tester 11 '31_[5-8]'")
             self.assertEqual(tab.selected_job_ids(), ('23',))
             self.assertEqual(tab.cancel_notice.text(), 'Cancellation requested for 2 Slurm jobs.')
 
@@ -623,6 +623,8 @@ class TrubaTests(unittest.TestCase):
             tab.show_groups(tab.groups)
             self.assertEqual(tab.jobs.item(tab.jobs.currentRow(), 2).text(), 'B')
             tab.works.setCurrentCell(1, 0)
+            self.assertEqual(tab.selected_job_ids(), ('1',))
+            self.assertTrue(tab.cancel_button.isEnabled())
             self.assertTrue(tab.jobs.isColumnHidden(2))
             self.assertFalse(tab.jobs.isColumnHidden(3))
             self.assertEqual([tab.jobs.item(i, 0).text() for i in range(tab.jobs.rowCount())], ['1', '2', '6'])
@@ -647,6 +649,9 @@ class TrubaTests(unittest.TestCase):
             self.assertEqual(scrollbar.value(), scroll_position)
             self.assertEqual(tab.jobs.item(1, 5).text(), '32')
             self.assertEqual([tab.jobs.item(1, column).text() for column in range(8, 11)], ['—'] * 3)
+            tab.works.setCurrentCell(2, 0)
+            self.assertEqual(tab.selected_job_ids(), ('5_[1-16%4]',))
+            self.assertTrue(tab.cancel_button.isEnabled())
             tab.works.setCurrentCell(5, 0)
             self.assertEqual(tab.jobs.item(0, 4).text(), 'run_material.slurm')
             tab.works.setCurrentCell(6, 0)

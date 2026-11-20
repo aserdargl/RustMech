@@ -24,6 +24,10 @@ from ui_language import translate
 # Job names and command paths may contain ordinary punctuation.
 QUEUE_SEPARATOR = '\x1f'
 QUEUE_FIELDS = ('%i', '%T', '%S', '%M', '%L', '%C', '%D', '%P', '%r', '%j', '%o')
+ARRAY_TASK_RANGE = r'[0-9]+(?:-[0-9]+(?::[0-9]+)?)?'
+CANCEL_JOB_ID = re.compile(
+    rf'[0-9]+(?:_[0-9]+|_\[{ARRAY_TASK_RANGE}(?:,{ARRAY_TASK_RANGE})*(?:%[0-9]+)?\])?'
+)
 SLURM_JOB_HEADERS = (
     'Slurm ID', 'Status', 'Work name', 'Job description', 'Script / command', 'CPUs',
     'Nodes', 'Partition', 'Started at', 'Elapsed time', 'Time left',
@@ -155,6 +159,13 @@ def display_duration(value):
     return f'{total_hours:02d}:{int(minutes):02d}:{seconds}'
 
 
+def slurm_cancel_target(job_id):
+    if CANCEL_JOB_ID.fullmatch(job_id):
+        # squeue includes the concurrency limit in grouped array IDs.
+        return re.sub(r'%[0-9]+\]$', ']', job_id)
+    return None
+
+
 class ActiveJobsWorker(QThread):
     def __init__(self, auth, state_dir, parent):
         super().__init__(parent)
@@ -183,10 +194,12 @@ class CancelSlurmJobWorker(QThread):
 
     def run(self):
         try:
-            if not self.job_ids or any(not re.fullmatch(r'[0-9]+', job_id) for job_id in self.job_ids):
-                raise ValueError('Expected Slurm allocation IDs')
+            targets = [slurm_cancel_target(job_id) for job_id in self.job_ids]
+            if not targets or any(target is None for target in targets):
+                raise ValueError('Expected Slurm allocation or array task IDs')
             transport = RemoteTransport(RemoteContext(transport='ssh'), self.auth)
-            transport.command(f'scancel --user={shlex.quote(self.auth.username)} {" ".join(self.job_ids)}')
+            arguments = ' '.join(shlex.quote(target) for target in targets)
+            transport.command(f'scancel --user={shlex.quote(self.auth.username)} {arguments}')
         except Exception:
             self.failed = True
         finally:
@@ -263,7 +276,7 @@ class TrubaActiveJobs(QWidget):
             width = self.column_settings.value(f'{ACTIVE_JOB_WIDTH_KEY}/{column}', default_width, type=int)
             self.jobs.setColumnWidth(column, width if width > 0 else default_width)
         header.sectionResized.connect(self.save_column_width)
-        self.works.currentCellChanged.connect(self.select_work)
+        self.works.currentCellChanged.connect(lambda *_: self.select_work(select_first=True))
         self.jobs.itemSelectionChanged.connect(self.update_cancel_button)
 
         self.notice = QLabel('Connect to TRUBA to see active jobs.')
@@ -378,7 +391,7 @@ class TrubaActiveJobs(QWidget):
             self.works.setCurrentCell(row, 0)
         self.select_work()
 
-    def select_work(self, *_):
+    def select_work(self, *, select_first=False):
         selected = self.works.currentItem()
         selection_model = self.jobs.selectionModel()
         previous_rows = [(name, job.job_id) for name, job in self.job_rows]
@@ -433,7 +446,7 @@ class TrubaActiveJobs(QWidget):
                     selected_rows.append(index)
                 if (name, job.job_id) == previous_current:
                     current_row = index
-            if not previous_rows and self.job_rows:
+            if not selected_rows and self.job_rows and (select_first or not previous_rows):
                 selected_rows.append(0)
             if current_row == -1 and selected_rows:
                 current_row = selected_rows[0]
@@ -453,8 +466,11 @@ class TrubaActiveJobs(QWidget):
 
     def update_cancel_button(self, *_):
         job_ids = self.selected_job_ids()
-        unsupported = any(not re.fullmatch(r'[0-9]+', job_id) for job_id in job_ids)
-        self.cancel_button.setEnabled(bool(job_ids) and not unsupported and self.cancel_worker is None)
+        unsupported = any(slurm_cancel_target(job_id) is None for job_id in job_ids)
+        self.cancel_button.setEnabled(
+            bool(job_ids) and not unsupported and self.cancel_worker is None
+            and not self.shutting_down and self.dialog.analysis_auth() is not None
+        )
         self.cancel_button.setToolTip(translate(
             'Only individual Slurm allocations can be cancelled here.'
         ) if unsupported else '')
@@ -464,7 +480,7 @@ class TrubaActiveJobs(QWidget):
         job_ids = self.selected_job_ids()
         if self.shutting_down or auth is None or not job_ids or self.cancel_worker is not None:
             return
-        if any(not re.fullmatch(r'[0-9]+', job_id) for job_id in job_ids):
+        if any(slurm_cancel_target(job_id) is None for job_id in job_ids):
             return
         if len(job_ids) == 1:
             message = (f'Cancel Slurm job {job_ids[0]}? This stops the entire allocation '
