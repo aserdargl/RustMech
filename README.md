@@ -1455,11 +1455,13 @@ indirilip yerel ekranda çizilir. FE Mesh isteği ayrıca hacim ağını üretir
 Ağ önizleme ve DoE ağ kontrolü kaynak oturumunda `srun` adımı olarak yürütülür.
 Mekanik, FFT, CFD, CHT, DoE ve analiz kuyruğundaki çözümler kendi adlandırılmış
 betikleri ve Slurm iş kimlikleriyle ayrı `sbatch` işleri olarak gönderilir.
-**Mesh Convergence** her seviyeyi ayrı bir iş olarak gönderir. **Allocate**
-gerekmez. **CPUs per analysis** varsayılanı 16'dır ve
-kullanıcı bunu değiştirebilir. Slurm betiği, gerekirse kuyruk alt sınırı kadar
-CPU ister. Aynı grupta gönderilen seviye sayısı, bağlantı panelindeki CPU ve RAM
-bütçesine göre belirlenir ve beşi geçmez. Sonuç tablosu ve CSV iş kimliğini,
+**Mesh Convergence**, kaynaklar elverdiğinde iki seviyeyi bir Slurm betiğine
+koyar ve ayrı iş adımlarında paralel çalıştırır. CPU ve RAM iki adıma bölünür.
+Örneğin Hamsi'de 56 CPU, seviye başına 28 CPU olarak kullanılır. **Allocate**
+gerekmez. **CPUs per analysis**, seviye başına talep edilen asgari CPU sayısıdır
+ve varsayılanı 16'dır. İki seviye sığmazsa veya tek seviye kalırsa, o seviye
+tahsisin tüm kaynaklarını kullanır. Bir seferde en çok beş seviye gönderilir.
+Sonuç tablosu ve CSV iş kimliğini,
 betiği ve durumu gösterir. Betik hücresinde ayrıca Slurm'dan istenen CPU ve
 Kratos'un çalışma ayarı görünür. **Advanced → Wall time per analysis** her
 seviyenin Slurm süresini belirler. Varsayılan 30 dakikadır. Süreyi seçili

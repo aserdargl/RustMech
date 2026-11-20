@@ -74,11 +74,11 @@ class QueuePolicyTests(unittest.TestCase):
 
     def test_convergence_sizes_each_script_and_batch_within_queue_limits(self):
         context = RemoteContext(partition='barbun', cores=40, memory_mb=128 * 1024)
-        for solver_cpus, cpus, slots in ((8, 20, 2), (16, 20, 2), (32, 32, 1)):
+        for solver_cpus, cpus, slots in ((8, 40, 2), (16, 40, 2), (32, 32, 1)):
             with self.subTest(solver_cpus=solver_cpus):
                 plan = convergence_context(context, BASELINES, solver_cpus, max_jobs=5)
                 self.assertEqual((plan.cores, plan.parallel_jobs, plan.memory_mb),
-                                 (cpus, slots, context.memory_mb // slots))
+                                 (cpus, slots, context.memory_mb))
                 script = slurm_script(plan, 'tester', dict(operation='convergence_level',
                                       settings={'cores': solver_cpus}, source_sha256='0' * 64))
                 self.assertIn(f'#SBATCH --cpus-per-task={cpus}\n', script)
@@ -107,7 +107,7 @@ class QueuePolicyTests(unittest.TestCase):
             with self.subTest(partition=partition):
                 context = RemoteContext(partition=partition, cores=28, memory_mb=95200)
                 plan = convergence_context(context, catalog, solver_cpus=16, max_jobs=5)
-                self.assertEqual((plan.partition, plan.cores, plan.parallel_jobs), ('hamsi', 56, 1))
+                self.assertEqual((plan.partition, plan.cores, plan.parallel_jobs), ('hamsi', 56, 2))
                 script = slurm_script(plan, 'tester', dict(operation='convergence_level',
                                       settings={'cores': 16}, source_sha256='0' * 64))
                 self.assertIn('#SBATCH --cpus-per-task=56\n', script)

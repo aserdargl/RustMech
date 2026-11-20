@@ -556,6 +556,24 @@ class LiveConvergenceTests(unittest.TestCase):
         self.assertIn("after 3 failed retries", widget.status.text())
         self.assertIsNone(widget.future)
 
+    def test_truba_pair_collects_each_level_once_and_preserves_success_after_oom(self):
+        from truba_remote import SlurmOutOfMemory, run_remote_level_pair
+
+        widget = self.truba_study(cores=56, slots=2)
+        job = MagicMock()
+        job.remote_status.return_value = {'job_id': '321', 'level_resources': [
+            {'cores': 28, 'memory_mb': 5000}, {'cores': 28, 'memory_mb': 5000}]}
+        job.result.return_value = [completed(.2, 10, 100), SlurmOutOfMemory(5000, 'step.err')]
+        with patch('mesh_convergence.AnalysisProcess', return_value=job) as submit:
+            widget.start()
+            self.assertIs(submit.call_args.args[0], run_remote_level_pair)
+            widget._poll()
+        submit.assert_called_once()
+        job.result.assert_called_once()
+        self.assertEqual([row.status for row in widget.rows], ['completed', 'Insufficient RAM'])
+        self.assertEqual(widget.remote_records[1]['failure_memory_mb'], 5000)
+        self.assertTrue(all(widget.results.item(i, 8).text() == '321' for i in range(2)))
+
     def test_truba_memory_failure_stops_refinement_and_retries_exact_mesh_only_with_more_ram(self):
         from truba_remote import SlurmOutOfMemory
 
@@ -601,7 +619,8 @@ class LiveConvergenceTests(unittest.TestCase):
             widget._poll()
         submit.assert_called_once()
         widget.remote_controller.require_convergence.assert_called_with(
-            submit.call_args.args[1], max_jobs=1, walltime="00:30:00")
+            replace(submit.call_args.args[1], cores=16), max_jobs=1, walltime="00:30:00")
+        self.assertEqual(submit.call_args.args[1].cores, 20)
         self.assertEqual(submit.call_args.args[1].mesh_resolution, .2)
         self.assertIsNone(widget.future)
 

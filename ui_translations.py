@@ -1295,7 +1295,7 @@ Slurm state|Slurm durumu
 Wall time per analysis|Analiz başına süre sınırı
 Slurm time limit for each mesh analysis, in minutes.|Her ağ analizi için dakika cinsinden Slurm süre sınırı.
 CPUs per analysis|Analiz başına CPU
-Kratos threads per TRUBA analysis. The Slurm queue may require reserving more CPUs.|TRUBA'da analiz başına Kratos çekirdeği. Slurm kuyruğu daha fazla CPU ayrılmasını gerektirebilir.
+Minimum CPUs per TRUBA analysis. Paired levels share all reserved CPUs.|TRUBA'da analiz başına asgari CPU sayısı. Eşleşen seviyeler ayrılan CPU'ların tamamını paylaşır.
 DOE mesh generation|DoE ağı üretimi
 DOE analysis|DoE analizi
 Flow export|Akış dışa aktarımı

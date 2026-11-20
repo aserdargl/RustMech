@@ -14,7 +14,7 @@ from nonlinear_compression import RustMechDialog
 from solver_profiles import SolverProfileStore
 from window_state import WindowStateStore
 from truba_remote import (run_remote_operation,run_remote_mechanics,run_remote_preview,
-                          run_remote_level,run_remote_doe,submit_remote_analysis)
+                          run_remote_level,run_remote_level_pair,run_remote_doe,submit_remote_analysis)
 
 
 class RemoteModeUiTests(unittest.TestCase):
@@ -988,36 +988,40 @@ class RemoteModeUiTests(unittest.TestCase):
         queue = self.controller.controls['partition']
         queue.setCurrentIndex(queue.findData('barbun'))
         self.controller.controls['cores'].setValue(40)
-        jobs = [MagicMock() for _ in range(2)]
-        for index, job in enumerate(jobs):
-            job.done.return_value = False
-            job.remote_status.return_value = {"job_id": str(470 + index), "state": "PENDING|Resources",
-                                              "script_name": f"RM-{index}.slurm", "remote_directory": f"/scratch/{index}"}
-        with patch("mesh_convergence.AnalysisProcess", side_effect=jobs) as submit, \
+        job = MagicMock()
+        job.done.return_value = False
+        job.remote_status.return_value = {"job_id": "470", "state": "PENDING|Resources",
+                                          "script_name": "RM-pair.slurm", "remote_directory": "/scratch/pair",
+                                          "level_resources": [{"cores": 20, "memory_mb": 1024}] * 2}
+        with patch("mesh_convergence.AnalysisProcess", return_value=job) as submit, \
                 patch("remote_controller.create_session") as allocate:
             study.run_button.click()
             allocate.assert_not_called()
-        self.assertEqual(submit.call_count, 2)
-        self.assertTrue(all(call.args[0] is run_remote_level and not call.args[2].session_id
-                            for call in submit.call_args_list))
-        self.assertTrue(all((call.args[1].cores, call.args[2].cores) == (16, 20)
-                            for call in submit.call_args_list))
+        submit.assert_called_once()
+        target, levels, context, *_ = submit.call_args.args
+        self.assertIs(target, run_remote_level_pair)
+        self.assertFalse(context.session_id)
+        self.assertEqual(([level.cores for level in levels], context.cores), ([16, 16], 40))
         self.assertFalse(study.truba_cores.isEnabled())
         self.assertEqual(study.results.rowCount(), 2)
         self.assertIn("preparing submission", study.results.item(0, 7).text())
         study._poll()
         for index in range(2):
-            self.assertEqual(study.results.item(index, 8).text(), str(470 + index))
-            self.assertEqual(study.results.item(index, 9).text(), f"RM-{index}.slurm")
-            self.assertIn(f"/scratch/{index}/RM-{index}.slurm", study.results.item(index, 9).toolTip())
+            self.assertEqual(study.results.item(index, 8).text(), "470")
+            self.assertEqual(study.results.item(index, 9).text(), "RM-pair.slurm")
+            self.assertIn("/scratch/pair/RM-pair.slurm", study.results.item(index, 9).toolTip())
             self.assertEqual(study.results.item(index, 10).text(), "PENDING|Resources")
-        jobs[1].remote_status.return_value["state"] = "RUNNING"
+        job.remote_status.return_value["state"] = "RUNNING"
+        job.remote_status.return_value["level_progress"] = ["Meshing specimen", "Solving · 42 elements"]
         study._poll()
         self.assertEqual(study.results.item(1, 10).text(), "RUNNING")
+        self.assertEqual(study.results.item(0, 7).text(), "TRUBA · Meshing specimen")
+        self.assertEqual(study.results.item(1, 7).text(), "TRUBA · Solving · 42 elements")
         study.force_stop()
         self.assertTrue(study.truba_cores.isEnabled())
         self.assertEqual(study.results.item(1, 7).text(), "Cancelled (Forced Stop)")
-        self.assertEqual(study.results.item(1, 8).text(), "471")
+        self.assertEqual(study.results.item(1, 8).text(), "470")
+        job.force_stop.assert_called_once()
         dialog.reject()
 
     def test_convergence_and_doe_do_not_call_local_mesh_generator(self):
@@ -1028,6 +1032,7 @@ class RemoteModeUiTests(unittest.TestCase):
         study.run_on_truba.click()
         self.enable()
         study.start_size.setValue(.2)
+        study.single_truba_mesh.setChecked(True)
         with patch("mesh_convergence.AnalysisProcess") as start:
             study.start()
             self.assertIsNotNone(start.call_args, study.status.text())

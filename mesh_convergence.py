@@ -205,7 +205,7 @@ class MeshConvergenceWidget(QWidget):
         controls.addWidget(stepper_with_unit(self.tolerance, "%"))
         self.run_on_truba = QCheckBox("Run on TRUBA")
         self.run_on_truba.setToolTip(
-            f"Submits up to {TRUBA_BATCH_SIZE} mesh levels per batch as separate Slurm jobs. "
+            f"Submits up to {TRUBA_BATCH_SIZE} mesh levels per batch, sharing a Slurm job in pairs when resources allow. "
             "A resource session is optional. "
             "If the solver changes for TRUBA, the study uses that solver's main workspace profile.")
         controls.addWidget(self.run_on_truba)
@@ -404,7 +404,7 @@ class MeshConvergenceWidget(QWidget):
         self.truba_cores.setFixedHeight(CONTROL_HEIGHT)
         self.truba_cores.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.truba_cores.setKeyboardTracking(False)
-        self.truba_cores.setToolTip("Kratos threads per TRUBA analysis. The Slurm queue may require reserving more CPUs.")
+        self.truba_cores.setToolTip("Minimum CPUs per TRUBA analysis. Paired levels share all reserved CPUs.")
         cpu_preferences = self.remote_controller.preferences if self.remote_controller is not None else preferences
         cpu_key = "meshConvergence/trubaCoresPerAnalysis"
         self.truba_cores.setValue(cpu_preferences.value(cpu_key, DEFAULT_TRUBA_CORES, type=int))
@@ -739,26 +739,32 @@ class MeshConvergenceWidget(QWidget):
         self._submit_remote_levels(plan, context, auth)
 
     def _submit_remote_levels(self, plan, context, auth):
-        from truba_remote import run_remote_level
+        from truba_remote import run_remote_level, run_remote_level_pair
 
         context = replace(context, session_id="", parallel_jobs=1)
         indices = [self._add_level(settings, kind, "TRUBA · preparing submission")
                    for settings, kind in plan]
-        for index in indices:
+        group_size = 2 if context.cores >= 2 * plan[0][0].cores and context.memory_mb >= 2 else 1
+        for offset in range(0, len(indices), group_size):
+            group = tuple(indices[offset:offset + group_size])
+            levels = [self.rows[index].settings for index in group]
+            target, settings = ((run_remote_level_pair, levels) if len(group) == 2 else
+                                (run_remote_level, replace(levels[0], cores=context.cores)))
             try:
-                self.remote_jobs[index] = AnalysisProcess(
-                    run_remote_level, self.rows[index].settings, context, self.max_elements.value(), self.selected,
+                self.remote_jobs[group] = AnalysisProcess(
+                    target, settings, context, self.max_elements.value(), self.selected,
                     remote_auth=auth)
             except Exception as exc:
-                self.rows[index].status = f"Failed to start convergence: {exc}"
-                self.remote_outcomes[index] = False
-                self._render(index)
+                for index in group:
+                    self.rows[index].status = f"Failed to start convergence: {exc}"
+                    self.remote_outcomes[index] = False
+                    self._render(index)
         self.future = next(iter(self.remote_jobs.values()), None)
         if self.future is None:
             self.remote_outcomes.clear()
             self._finish(self.rows[-1].status)
         else:
-            self._set_status(f"TRUBA · {len(self.remote_jobs)} analyses active")
+            self._set_status(f"TRUBA · {sum(map(len, self.remote_jobs))} analyses active")
 
     def _retry_memory_failure(self, row):
         memory_mb = self.remote_records.get(row, {}).get("failure_memory_mb")
@@ -798,17 +804,17 @@ class MeshConvergenceWidget(QWidget):
         self.stop_requested.set()
         if self.remote_jobs:
             errors = []
-            for index, job in list(self.remote_jobs.items()):
+            for group, job in list(self.remote_jobs.items()):
                 record = job.remote_status()
-                if isinstance(record, dict) and record:
-                    self.remote_records[index] = dict(record)
+                self._update_remote_records(group, record)
                 try:
                     job.force_stop()
                 except Exception as exc:
                     errors.append(str(exc))
                     continue
-                del self.remote_jobs[index]
-                self.rows[index].status = "Cancelled (Forced Stop)"
+                del self.remote_jobs[group]
+                for index in group:
+                    self.rows[index].status = "Cancelled (Forced Stop)"
             self.future = next(iter(self.remote_jobs.values()), None)
             self._refresh_differences()
             if errors:
@@ -875,6 +881,8 @@ class MeshConvergenceWidget(QWidget):
             script_paths += (f"\nRequested CPUs: {resources['cores']} · Solver CPUs: {record.get('solver_cores') or '—'}"
                              f"\nRAM: {resources['memory_mb'] / 1024:g} GiB · Time: {resources['walltime']}"
                              f"\nQueue request: {resources['partition']}")
+            if record.get('level_memory_mb'):
+                script_paths += f"\nRAM for this level: {record['level_memory_mb'] / 1024:g} GiB"
         values = [mesh, self._format_time(mesh_time, 1), self._format_time(solve_time, 2),
                   *[f"{float(v):.6g}" if self._numeric(v) else "—" for v in level.metrics],
                   delta, level.status, *(value or "—" for value in remote_values)]
@@ -922,7 +930,7 @@ class MeshConvergenceWidget(QWidget):
                     self._set_status(f"Level {len(self.rows)} · {stage}")
             return
         index = len(self.rows) - 1
-        retry_allowed = self._collect_level(index, self.future)
+        retry_allowed = self._collect_level(index, self._job_result(self.future))
         self.future = None
         # The worker can finish just after queue draining.
         self._close_updates()
@@ -935,37 +943,64 @@ class MeshConvergenceWidget(QWidget):
         return (str(record.get("job_id", "")), record.get("script_name", ""), state)
 
     def _poll_remote_batch(self):
-        for index, job in list(self.remote_jobs.items()):
-            previous = self.remote_records.get(index, {})
-            snapshot = job.remote_status()
-            record = dict(snapshot) if isinstance(snapshot, dict) and snapshot else previous
-            self.remote_records[index] = record
+        for group, job in list(self.remote_jobs.items()):
+            changed = self._update_remote_records(group, job.remote_status())
             if job.done():
-                self.remote_outcomes[index] = self._collect_level(index, job, record)
-                del self.remote_jobs[index]
-                self._render(index)
-            elif record:
-                status = f"TRUBA · {record.get('state', 'preparing submission')}"
-                if self.rows[index].status != status or record != previous:
-                    self.rows[index].status = status
+                results = self._job_result(job)
+                if len(group) == 1 or results is None or isinstance(results, Exception):
+                    results = [results] * len(group)
+                for index, result in zip(group, results, strict=True):
+                    self.remote_outcomes[index] = self._collect_level(index, result, self.remote_records.get(index))
+                    self._render(index)
+                del self.remote_jobs[group]
+            else:
+                for index in changed:
+                    record = self.remote_records[index]
+                    stage = record.get('level_stage') or record.get('state', 'preparing submission')
+                    self.rows[index].status = f"TRUBA · {stage}"
                     self._render(index)
         self.future = next(iter(self.remote_jobs.values()), None)
         if self.future is not None:
             if not self.stop_requested.is_set():
-                self._set_status(f"TRUBA · {len(self.remote_jobs)} analyses active")
+                self._set_status(f"TRUBA · {sum(map(len, self.remote_jobs))} analyses active")
             return
         outcomes = sorted(self.remote_outcomes.items())
         self.remote_outcomes.clear()
         self._after_levels(outcomes)
 
-    def _collect_level(self, index, job, remote_record=None):
+    def _update_remote_records(self, group, snapshot):
+        changed = []
+        if isinstance(snapshot, dict) and snapshot:
+            shares = snapshot.get('level_resources')
+            progress = snapshot.get('level_progress', ())
+            for offset, index in enumerate(group):
+                record = dict(snapshot)
+                if shares and len(shares) == len(group):
+                    record.update(solver_cores=shares[offset]['cores'], level_memory_mb=shares[offset]['memory_mb'])
+                if offset < len(progress) and str(record.get('state', '')).startswith('RUNNING'):
+                    record['level_stage'] = progress[offset]
+                if record != self.remote_records.get(index):
+                    self.remote_records[index] = record
+                    changed.append(index)
+        return changed
+
+    @staticmethod
+    def _job_result(job):
+        try:
+            return job.result()
+        except Exception as error:
+            return error
+
+    def _collect_level(self, index, result, remote_record=None):
         from truba_remote import SlurmOutOfMemory
 
         remote_record = remote_record or {}
         previous = self.rows[index]
         retry_allowed = True
         try:
-            level = job.result()
+            if isinstance(result, Exception):
+                raise result
+            level = result
             if level is None:
                 level = replace(previous, status="TRUBA job detached")
                 retry_allowed = False
@@ -976,6 +1011,7 @@ class MeshConvergenceWidget(QWidget):
             level = replace(previous, status=f"Failed: {exc}")
             if isinstance(exc, SlurmOutOfMemory) or remote_record.get("failure_kind") == "out_of_memory":
                 memory_mb = exc.memory_mb if isinstance(exc, SlurmOutOfMemory) else remote_record.get("failure_memory_mb")
+                memory_mb = remote_record.get('level_memory_mb', memory_mb)
                 self.remote_records[index] = dict(remote_record, failure_kind="out_of_memory", failure_memory_mb=memory_mb)
                 level.status = "Insufficient RAM"
                 retry_allowed = False

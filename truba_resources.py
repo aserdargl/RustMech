@@ -192,7 +192,7 @@ def automatic_context(context, catalog, *, min_cpus=1):
 
 
 def convergence_context(context, catalog, solver_cpus, max_jobs):
-    """Size independent convergence jobs from the configured CPU and RAM budget."""
+    """Size Slurm allocations and count the mesh levels they can carry."""
     if context.gpus:
         raise ValueError('Mesh convergence requires a CPU queue on TRUBA.')
     if 'hamsi' in catalog:
@@ -209,12 +209,19 @@ def convergence_context(context, catalog, solver_cpus, max_jobs):
         raise ValueError('Mesh convergence requires an available CPU queue on TRUBA.')
     cpus = max(solver_cpus, limit.min_cpus, baseline.min_cpus)
     minimum_memory = max(limit.min_memory_mb or 1, baseline.min_memory_mb or 1)
-    slots = max(1, min(max_jobs, context.cores // cpus, context.memory_mb // minimum_memory))
+    job_levels = 1
+    paired_cpus = min(2 * cpus, limit.max_cpus, baseline.max_cpus)
+    if max_jobs >= 2 and paired_cpus >= 2 * solver_cpus and context.memory_mb >= 2:
+        paired_memory = min(context.memory_mb, limit.memory_ceiling(paired_cpus), baseline.memory_ceiling(paired_cpus))
+        if paired_memory >= max(2, minimum_memory):
+            cpus, job_levels = paired_cpus, 2
+    slots = max(1, min((max_jobs + job_levels - 1) // job_levels, context.cores // cpus,
+                       context.memory_mb // max(minimum_memory, job_levels)))
     memory = min(context.memory_mb // slots, limit.memory_ceiling(cpus), baseline.memory_ceiling(cpus))
     candidates(partition, cpus, memory, context.walltime, catalog)
     candidates(partition, cpus, memory, context.walltime)
     return replace(context, partition=partition, cores=cpus, memory_mb=memory,
-                   parallel_jobs=slots, session_id='')
+                   parallel_jobs=min(max_jobs, slots * job_levels), session_id='')
 
 
 def test_submission(context, auth=None):

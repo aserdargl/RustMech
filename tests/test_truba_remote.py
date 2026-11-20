@@ -11,10 +11,10 @@ import sys
 import tarfile
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from model import ROOT,Settings
-from truba_remote import (RemoteContext,analysis_code,make_source_bundle,run_remote_job,run_remote_level,safe_extract,sync_background_analysis,
+from truba_remote import (RemoteContext,analysis_code,make_source_bundle,run_remote_job,run_remote_level,run_remote_level_pair,safe_extract,sync_background_analysis,
                           slurm_script,load_remote_preview,RemoteTransport)
 
 
@@ -65,6 +65,58 @@ class FakeTransport:
 
 
 class RemoteProtocolTests(unittest.TestCase):
+    def test_convergence_pair_shares_resources_and_keeps_a_successful_sibling(self):
+        from convergence_execution import Level
+        from truba_remote import SlurmOutOfMemory
+
+        first = Settings(solver_backend='kratos', cores=16, mesh_resolution=.2)
+        second = replace(first, mesh_resolution=.15)
+        context = RemoteContext(partition='hamsi', cores=56, memory_mb=160001)
+        result = {'levels': [{'level': asdict(Level(first, status='completed'))}, {'out_of_memory': True}]}
+        with patch('truba_remote.run_remote_job', return_value=(result, self.root)) as execute:
+            levels = run_remote_level_pair([first, second], context, 1000, [0])
+        steps = execute.call_args.args[0]['convergence_steps']
+        self.assertEqual([(step['settings']['cores'], step['memory_mb']) for step in steps],
+                         [(28, 80000), (28, 80001)])
+        self.assertEqual(levels[0].status, 'completed')
+        self.assertIsInstance(levels[1], SlurmOutOfMemory)
+        self.assertEqual(levels[1].memory_mb, 80001)
+
+    def test_convergence_worker_launches_both_slurm_steps_before_waiting(self):
+        import remote_worker
+
+        output = self.root / 'output'
+        request = dict(operation='convergence_level', remote_context={'cores': 56, 'memory_mb': 120000},
+                       convergence_steps=[{'settings': {'cores': 28}, 'memory_mb': 60000}] * 2)
+        processes = []
+
+        def launch(args, *, cwd, env, stdout, stderr):
+            i = len(processes)
+            self.assertIn('--exact', args)
+            self.assertIn('--cpus-per-task=28', args)
+            self.assertIn('--mem=60000M', args)
+            self.assertEqual(env['OMP_NUM_THREADS'], '28')
+            child = json.loads((cwd / 'request.json').read_text())
+            self.assertNotIn('convergence_steps', child)
+            self.assertEqual(child['remote_context']['memory_mb'], 60000)
+            if i:
+                stderr.write('srun: error: task 0: Out Of Memory\n')
+            else:
+                remote_worker._write(cwd / 'output' / 'result.json', {'level': {'status': 'completed'}})
+            process = MagicMock()
+            process.__enter__.return_value = process
+            def wait():
+                self.assertEqual(len(processes), 2)
+                return 1 if i else 0
+            process.wait.side_effect = wait
+            processes.append(process)
+            return process
+
+        with patch('remote_worker.subprocess.Popen', side_effect=launch), patch('remote_worker._stage'):
+            result = remote_worker._run_convergence_pair(request, output)
+        self.assertEqual(result['levels'][0], {'level': {'status': 'completed'}})
+        self.assertTrue(result['levels'][1]['out_of_memory'])
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)

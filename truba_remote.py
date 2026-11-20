@@ -430,6 +430,10 @@ def run_remote_job(request,context,auth=None,marker=None,*,directory=None,resume
             if record.get('operation') in ANALYSIS_OPERATIONS:
                 record['script_name'] = script_name
                 record['solver_cores'] = request.get('settings', {}).get('cores')
+                if request.get('convergence_steps'):
+                    record['level_resources'] = [
+                        dict(cores=step['settings']['cores'], memory_mb=step['memory_mb'])
+                        for step in request['convergence_steps']]
                 _write_paths(paths, record)
             remote_path = shlex.quote(remote)
             setup = _batch_results_setup(request.get('staged_geometry'))
@@ -531,6 +535,9 @@ if [ -s job.id ]; then printf 'RUSTMECH_JOB_ID=%s\n' "$(cat job.id)"; fi
                 if record.get('operation') == 'convergence_level':
                     queue_command += ("\nprintf '\\nRUSTMECH_PROGRESS='; head -c 500 "
                                       + shlex.quote(remote + '/progress.txt') + ' 2>/dev/null || true')
+                    for index, _ in enumerate(record.get('level_resources', ()), 1):
+                        path = shlex.quote(f'{remote}/output/level-{index}/progress.txt')
+                        queue_command += f"\nprintf '\\nRUSTMECH_LEVEL_{index}='; head -c 500 {path} 2>/dev/null || true"
                 reply = transport.command(QUEUE_FUNCTION + queue_command)
             state = re.search(r"^RUSTMECH_QUEUE=(.*)$",reply,re.MULTILINE)
             if state is None: raise RuntimeError("Could not read the SLURM queue state; resume the job record.")
@@ -552,7 +559,13 @@ if [ -s job.id ]; then printf 'RUSTMECH_JOB_ID=%s\n' "$(cat job.id)"; fi
                 progress = re.search(r'^RUSTMECH_PROGRESS=(.*)$', reply, re.MULTILINE)
                 if progress and progress[1].strip():
                     value = f"{value} · {progress[1].strip()}"
-            if value!=record["state"]: update(value)
+            previous_progress = record.get('level_progress')
+            if record.get('level_resources') and queue_state == 'RUNNING':
+                level_stage = dict(re.findall(r'^RUSTMECH_LEVEL_(\d+)=(.*)$', reply, re.MULTILINE))
+                record['level_progress'] = [level_stage.get(str(i), '').strip()
+                                            for i in range(1, len(record['level_resources']) + 1)]
+            if value != record['state'] or record.get('level_progress') != previous_progress:
+                update(value)
             if poll_once:
                 return None
             if cancelled is not None: cancelled.wait(2)
@@ -576,18 +589,25 @@ if [ -s job.id ]; then printf 'RUSTMECH_JOB_ID=%s\n' "$(cat job.id)"; fi
             try: transport.get(remote+"/"+name,directory/name)
             except (OSError,RuntimeError): pass
         log_path = directory / "slurm.err"
-        if convergence_memory_failure(record, accounting, log_path):
+        oom = convergence_memory_failure(record, accounting, log_path)
+        paired_oom = oom and record.get('level_resources')
+        if oom and not paired_oom:
             _, memory_mb = request_resources(context, "convergence_level")
             record.update(failure_kind="out_of_memory", failure_memory_mb=memory_mb)
             update("OUT_OF_MEMORY")
             if poll_once:
                 return None
             raise SlurmOutOfMemory(memory_mb, log_path)
-        if poll_once and accounting != "COMPLETED|0:0":
+        if poll_once and accounting != "COMPLETED|0:0" and not paired_oom:
             update(accounting)
             return None
         try: transport.get(remote+"/result.tar.gz",directory/"result.tar.gz")
         except (OSError,RuntimeError) as error:
+            if paired_oom:
+                memory_mb = max(step['memory_mb'] for step in paired_oom)
+                record.update(failure_kind="out_of_memory", failure_memory_mb=memory_mb)
+                update("OUT_OF_MEMORY")
+                raise SlurmOutOfMemory(memory_mb, log_path) from error
             raise RuntimeError(f"Remote results are unavailable ({accounting or 'SLURM accounting not confirmed'}). See {directory/'slurm.out'} and the saved job record.") from error
         reply = transport.command("printf 'RUSTMECH_RESULT_SHA='; sha256sum "+shlex.quote(remote+"/result.tar.gz"))
         match = re.search(r"RUSTMECH_RESULT_SHA=([a-f0-9]{64})",reply)
@@ -599,7 +619,8 @@ if [ -s job.id ]; then printf 'RUSTMECH_JOB_ID=%s\n' "$(cat job.id)"; fi
         result = json.loads((directory/"output/result.json").read_text())
         if result.get("request_id")!=record["request_id"] or result.get("source_sha256")!=record["source_sha256"] or str(result.get("slurm_job_id"))!=record["job_id"]:
             raise RuntimeError("Remote results do not match this request, source version or SLURM job.")
-        if accounting!="COMPLETED|0:0": raise RuntimeError(f"SLURM did not confirm successful completion ({accounting or 'unknown'}). See {directory/'slurm.err'}")
+        if accounting!="COMPLETED|0:0" and not (paired_oom and result.get('levels')):
+            raise RuntimeError(f"SLURM did not confirm successful completion ({accounting or 'unknown'}). See {directory/'slurm.err'}")
         if result.get("error"): raise RuntimeError(result["error"])
         result = _rebase_paths(directory,result)
         update("downloaded")
@@ -684,12 +705,46 @@ def run_remote_level(settings,context,max_elements,selected,remote_auth=None,job
     result,_ = run_remote_job(dict(operation="convergence_level",settings=asdict(settings),max_elements=max_elements,selected=selected),context,remote_auth,job_marker)
     if result is None:
         return None
+    return _decode_level(result['level'])
+run_remote_level.remote_job_target = True
+
+
+def _decode_level(value):
     from convergence_execution import Level
     from model import settings_from_dict
-    value = result["level"]
-    value["settings"] = settings_from_dict(value["settings"])
-    return Level(**value)
-run_remote_level.remote_job_target = True
+
+    return Level(**{**value, 'settings': settings_from_dict(value['settings'])})
+
+
+def run_remote_level_pair(settings, context, max_elements, selected, remote_auth=None, job_marker=None):
+    first, second = settings
+    if first.imported_geometry_path != second.imported_geometry_path:
+        raise ValueError('Paired convergence levels require the same specimen.')
+    cpu_share, extra_cpu = divmod(context.cores, 2)
+    ram_share, extra_ram = divmod(context.memory_mb, 2)
+    if cpu_share < max(first.cores, second.cores) or not ram_share:
+        raise ValueError('The Slurm request cannot fit both mesh levels.')
+    steps = [dict(settings=asdict(replace(level, cores=cpu_share + i * extra_cpu, automatic_cores=False)),
+                  memory_mb=ram_share + i * extra_ram) for i, level in enumerate(settings)]
+    request = dict(operation='convergence_level', settings=steps[0]['settings'], convergence_steps=steps,
+                   max_elements=max_elements, selected=selected)
+    result, directory = run_remote_job(request, context, remote_auth, job_marker)
+    if result is None:
+        return None
+    levels = result['levels']
+    if len(levels) != len(steps):
+        raise RuntimeError('TRUBA returned an incomplete convergence pair.')
+    outcomes = []
+    for index, entry in enumerate(levels):
+        if entry.get('out_of_memory'):
+            outcomes.append(SlurmOutOfMemory(steps[index]['memory_mb'],
+                                             directory / 'output' / f'level-{index + 1}' / 'step.err'))
+        elif 'error' in entry:
+            outcomes.append(RuntimeError(entry['error']))
+        else:
+            outcomes.append(_decode_level(entry['level']))
+    return outcomes
+run_remote_level_pair.remote_job_target = True
 
 
 def run_remote_doe(index,settings,context,solve,remote_auth=None,job_marker=None,*,staged_geometry=None):

@@ -3,6 +3,7 @@
 The module itself uses only the standard library so a missing runtime can be
 reported by the cluster's bootstrap Python without importing the application.
 """
+from contextlib import ExitStack
 from dataclasses import asdict,replace
 from functools import partial
 import hashlib
@@ -308,6 +309,53 @@ def _run_operation(request,output):
     raise ValueError("Unsupported remote operation.")
 
 
+def _run_convergence_pair(request, output):
+    steps = request['convergence_steps']
+    allocation = request['remote_context']
+    if (request['operation'] != 'convergence_level' or len(steps) != 2
+            or sum(step['settings']['cores'] for step in steps) > allocation['cores']
+            or sum(step['memory_mb'] for step in steps) > allocation['memory_mb']
+            or any(step['settings']['cores'] < 1 or step['memory_mb'] < 1 for step in steps)):
+        raise ValueError('Invalid resources for the convergence pair.')
+    common = {key: value for key, value in request.items() if key != 'convergence_steps'}
+    _stage('Running two mesh levels in parallel')
+    pending = []
+    with ExitStack() as stack:
+        for index, step in enumerate(steps, 1):
+            directory = output / f'level-{index}'
+            cores, memory = step['settings']['cores'], step['memory_mb']
+            child = dict(common, settings=step['settings'], convergence_step=True,
+                         remote_context=dict(allocation, cores=cores, memory_mb=memory))
+            _write(directory / 'request.json', child)
+            env = dict(os.environ, OMP_NUM_THREADS=str(cores), RUSTMECH_THREADS=str(cores))
+            env.pop('SLURM_MEM_PER_CPU', None)
+            env.pop('SLURM_MEM_PER_GPU', None)
+            args = ['srun', '--exact', '--nodes=1', '--ntasks=1', '--cpu-bind=cores',
+                    f'--cpus-per-task={cores}', f'--mem={memory}M', f'--job-name=mesh-{index}',
+                    sys.executable, str(Path(__file__).resolve()), 'request.json']
+            with (directory / 'step.out').open('w') as stdout, (directory / 'step.err').open('w') as stderr:
+                process = stack.enter_context(subprocess.Popen(args, cwd=directory, env=env,
+                                                               stdout=stdout, stderr=stderr))
+            pending.append((process, directory))
+
+        results = []
+        for process, directory in pending:
+            code = process.wait()
+            manifest = directory / 'output' / 'result.json'
+            try:
+                result = json.loads(manifest.read_text(encoding='utf-8'))
+            except (OSError, ValueError):
+                result = {}
+            if code == 0 and 'level' in result:
+                results.append({'level': result['level']})
+                continue
+            with (directory / 'step.err').open(encoding='utf-8', errors='replace') as stderr:
+                oom = any(re.search(r'\boom[-_]kill(?:ed)?\b|\bout of memory\b', line, re.I) for line in stderr)
+            results.append(dict(error=result.get('error') or f'TRUBA mesh step failed ({code}). See {directory / "step.err"}.',
+                                out_of_memory=oom))
+    return {'levels': results}
+
+
 def main():
     if "--netgen-smoke" in sys.argv:
         from mesh_engine import build_preview
@@ -331,6 +379,8 @@ def main():
         if "--missing-runtime" in sys.argv:
             if request["operation"]!="probe": raise RuntimeError("Remote runtime is missing. Prepare it before submitting computations.")
             result["capabilities"] = probe(request,missing=True)
+        elif request.get('convergence_steps'):
+            result.update(_run_convergence_pair(request, output))
         else: result.update(run_operation(request,output))
     except Exception as error:
         result["error"] = str(error)
@@ -338,6 +388,8 @@ def main():
         traceback.print_exc()
         status = 1
     _write(output/"result.json",result)
+    if request.get('convergence_step'):
+        _stage(result.get('level', {}).get('status', 'Failed' if status else 'Finished'))
     return status
 
 
