@@ -164,6 +164,7 @@ class TrubaConnectionDialog(QDialog):
         account_layout = QVBoxLayout(account)
         account_layout.setContentsMargins(8, 4, 8, 6)
         account_layout.setSpacing(4)
+        account_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
         fields = QFormLayout()
         fields.setContentsMargins(0, 0, 0, 0)
         fields.setHorizontalSpacing(8)
@@ -194,6 +195,7 @@ class TrubaConnectionDialog(QDialog):
         hint.setWordWrap(True)
         account_layout.addWidget(hint)
         self.forget_button = QPushButton("Forget saved password")
+        account_layout.addWidget(self.forget_button, alignment=Qt.AlignmentFlag.AlignLeft)
         self.status = QLabel("Disconnected")
         self.status.setWordWrap(True)
         self.status.setTextFormat(Qt.TextFormat.PlainText)
@@ -211,7 +213,6 @@ class TrubaConnectionDialog(QDialog):
             button.setDefault(False)
         for button in (self.connect_button, self.disconnect_button):
             buttons.addWidget(button)
-        buttons.addWidget(self.forget_button)
         buttons.addStretch()
         account_layout.addLayout(buttons)
         account_layout.addWidget(self.status)
@@ -321,14 +322,20 @@ class TrubaConnectionDialog(QDialog):
         for button in buttons:
             button.setFixedSize(button_width, CONTROL_HEIGHT)
         self.forget_button.setFixedSize(self.forget_button.fontMetrics().horizontalAdvance(self.forget_button.text()) + 24, CONTROL_HEIGHT)
-        for section in (self.credentials_group, *self._remote_sections):
+        sections = (self.credentials_group, *self._remote_sections)
+        for section in sections:
             section.ensurePolished()
             for layout in section.findChildren(QLayout):
                 layout.invalidate()
-            width = max(460, section.minimumSizeHint().width())
+        width = max(460, *(section.minimumSizeHint().width() for section in sections))
+        heights = []
+        for section in sections:
             section.setFixedWidth(width)
             height = section.heightForWidth(width)
-            section.setFixedHeight(height if height >= 0 else section.sizeHint().height())
+            heights.append(height if height >= 0 else section.sizeHint().height())
+        height = max(heights)
+        for section in sections:
+            section.setFixedHeight(height)
         self.settings_columns.invalidate()
         self.settings_layout.invalidate()
         self.settings_content.setFixedSize(self.settings_layout.sizeHint())

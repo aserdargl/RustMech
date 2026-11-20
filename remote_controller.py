@@ -127,6 +127,7 @@ class RemoteController(QObject):
         advanced_layout = QVBoxLayout(advanced)
         advanced_layout.setContentsMargins(6, 5, 6, 5)
         advanced_layout.setSpacing(3)
+        advanced_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
         advanced_form = QFormLayout()
         configure_form(advanced_form)
         advanced_form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.DontWrapRows)
@@ -157,7 +158,7 @@ class RemoteController(QObject):
                 control.currentIndexChanged.connect(self.configuration_changed)
             else:
                 control = QLineEdit(str(getattr(defaults,name)))
-                control.setFixedWidth(120 if name == 'walltime' else 360 if name == 'runtime_python' else 240)
+                control.setFixedWidth(120 if name == 'walltime' else 280 if name == 'runtime_python' else 240)
                 control.editingFinished.connect(self.configuration_changed)
             self.controls[name] = control
             if name == 'parallel_jobs':
@@ -246,14 +247,14 @@ class RemoteController(QObject):
         self.prepare.clicked.connect(lambda:self.refresh(True))
         self.recover.clicked.connect(window.retrieve_truba_job)
         self.stop.clicked.connect(self.cancelled_check)
-        layout.insertLayout(1, buttons)
+        advanced_layout.addLayout(buttons)
         self.status = QLabel("Local mode. Connecting alone does not move computations to TRUBA.")
         self.status.setWordWrap(True)
         self.status.setTextFormat(Qt.TextFormat.PlainText)
         self.status.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         self.status.setFixedHeight(64)
         self.status.setAlignment(Qt.AlignmentFlag.AlignTop)
-        layout.insertWidget(2, self.status)
+        advanced_layout.addWidget(self.status)
         self.scroll = panel
         panel.setObjectName("trubaRemoteControls")
         self.resource_panel = panel
@@ -269,7 +270,7 @@ class RemoteController(QObject):
         self.session_next_refresh = 0
         self.apply_queue_limits()
         self.update_session_controls()
-        self.queue_hint.setFixedHeight(44)
+        self.queue_hint.setFixedHeight(self.queue_hint.fontMetrics().lineSpacing() * 4)
         self.queue_hint.setAlignment(Qt.AlignmentFlag.AlignTop)
         self.session_status.setFixedHeight(36)
         self.session_status.setAlignment(Qt.AlignmentFlag.AlignTop)

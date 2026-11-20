@@ -748,11 +748,15 @@ class RemoteModeUiTests(unittest.TestCase):
                          ['Connection', 'Queue status', 'Active jobs'])
         self.assertIs(panel.tabs.currentWidget(), panel.settings_scroll)
         self.assertEqual(len({group.y() for group in groups}), 1)
+        self.assertEqual(len({group.size().toTuple() for group in groups}), 1)
         for left, right in zip(groups, groups[1:]):
             self.assertLess(left.geometry().right(), right.x())
         self.assertIs(panel.connect_button.parentWidget(), panel.username.parentWidget())
         self.assertIs(self.controller.controls['cores'].parentWidget(), self.controller.resource_panel)
         self.assertIs(self.controller.controls['runtime_python'].parentWidget(), self.controller.advanced_panel)
+        self.assertIs(self.controller.check.parentWidget(), self.controller.advanced_panel)
+        self.assertIs(self.controller.status.parentWidget(), self.controller.advanced_panel)
+        self.assertIs(self.controller.allocate.parentWidget(), self.controller.resource_panel)
         widgets = [panel.username, panel.connect_button, *self.controller.controls.values(),
                    self.controller.allocate, self.controller.check]
 
