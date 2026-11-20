@@ -690,6 +690,7 @@ def test_workspace_browses_creates_and_restores_three_columns(remote, tmp_path, 
         truba.connection_changed.emit(True)
         finish_request()
         assert browser.address.text() == str(root)
+        assert browser.address.isVisible()
         assert browser.files.topLevelItem(0).text(0) == "results"
         assert browser.files.topLevelItem(1).text(0) == "readme.txt"
         browser.group_files.setChecked(True)
@@ -712,11 +713,15 @@ def test_workspace_browses_creates_and_restores_three_columns(remote, tmp_path, 
         finish_request()
         assert browser.address.text() == str(root / "results")
 
+        assert browser.folder_name.isHidden()
+        browser.create.click()
+        assert browser.folder_name.isVisible()
         browser.folder_name.setText("Yeni klasör")
         QTest.keyClick(browser.folder_name, Qt.Key.Key_Return)
         finish_request()
         finish_request()
         sftp.mkdir.assert_called_once_with(str(root / "results" / "Yeni klasör"))
+        assert browser.folder_name.isHidden()
         assert workspace.isVisible()
         assert not workspace.local_task and not workspace.remote_task
 

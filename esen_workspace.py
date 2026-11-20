@@ -1215,15 +1215,12 @@ class EsenWorkspace(QDialog):
     def _size_command_buttons(self):
         # Reserve space for the shared focus border on both sides.
         transfer_buttons = (self.upload, self.sync)
-        navigation = self.truba_browser.navigation_buttons
-        file_actions = self.truba_browser.select_files, self.truba_browser.delete_files
         history_actions = (self.select_history, self.delete_job)
         history_commands = (self.use_inputs, self.refresh, self.resume, self.stop)
         md_actions = (self.md_prepare, self.md_run)
         result_actions = (self.open_file, self.download, self.open_folder, self.open_results_folder)
-        browser_transfers = (self.truba_browser.upload, self.truba_browser.download)
-        for group in (transfer_buttons, navigation, file_actions, history_actions, history_commands,
-                      result_actions, browser_transfers, md_actions, self.md_file_buttons, self.md_plan_buttons):
+        for group in (transfer_buttons, history_actions, history_commands,
+                      result_actions, md_actions, self.md_file_buttons, self.md_plan_buttons):
             width = max(button.sizeHint().width() for button in group) + 2
             for button in group:
                 button.setFixedWidth(width)

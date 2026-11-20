@@ -5,7 +5,7 @@ from pathlib import Path, PurePosixPath
 import re
 from stat import S_ISDIR, S_ISLNK, S_ISREG
 
-from PySide6.QtCore import QDateTime, QItemSelectionModel, QLocale, QSignalBlocker, Qt, Signal
+from PySide6.QtCore import QDateTime, QItemSelectionModel, QLocale, QSignalBlocker, QSize, Qt, Signal
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QCheckBox, QHeaderView, QHBoxLayout, QLabel, QLineEdit, QMessageBox, QStyle,
@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (
 
 from file_dialog import QFileDialog
 from esen_jobs import RUN_LIST, is_input_script, is_slurm_script
-from studio_style import ActionFlowLayout, CONTROL_HEIGHT
+from studio_style import CONTROL_HEIGHT
 import truba_files
 from ui_language import translate
 
@@ -66,34 +66,32 @@ class TrubaFileBrowser(QWidget):
         self.address.setReadOnly(True)
         self.address.setFixedHeight(CONTROL_HEIGHT)
         self.address.setAccessibleName("TRUBA folder path")
-        layout.addWidget(self.address)
 
         self.up = command("Up", self._up)
         self.open_folder = command("Open", self._open_selected_folder, hint="Open selected TRUBA folder")
         self.refresh = command("Refresh", self._refresh)
         self.slurm_inputs = command("Slurm inputs", self._open_slurm_inputs, hint="Open synchronized Slurm inputs on TRUBA")
-        self.navigation_buttons = self.up, self.open_folder, self.refresh, self.slurm_inputs
         actions = QHBoxLayout()
-        actions.setSpacing(4)
-        for button in self.navigation_buttons:
-            actions.addWidget(button)
-        actions.addStretch()
-        layout.addLayout(actions)
+        if self._batch:
+            layout.addWidget(self.address)
+            actions.setSpacing(4)
+            for button in (self.up, self.open_folder, self.refresh):
+                actions.addWidget(button)
+            actions.addStretch()
+            layout.addLayout(actions)
 
-        filters = QHBoxLayout()
         self.filter = QLineEdit()
         self.filter.setObjectName("esenFileFilter")
         self.filter.setFixedHeight(CONTROL_HEIGHT)
         self.filter.setClearButtonEnabled(True)
-        self.filter.setPlaceholderText("Filter by name or extension")
+        self.filter.setMinimumWidth(70)
+        self.filter.setPlaceholderText("Filter")
+        self.filter.setToolTip("Filter by name or extension")
         self.filter.setAccessibleName("Filter TRUBA files")
         self.filter.textChanged.connect(self._filter_entries)
-        filters.addWidget(self.filter, 1)
-        self.group_files = QCheckBox("Group by type")
+        self.group_files = QCheckBox("Group by type") if self._batch else command("Group by type")
+        self.group_files.setCheckable(True)
         self.group_files.toggled.connect(self._render_entries)
-        filters.addWidget(self.group_files)
-        if not self._batch:
-            layout.addLayout(filters)
 
         self.files = QTreeWidget()
         self.files.setAccessibleName("TRUBA files")
@@ -115,25 +113,14 @@ class TrubaFileBrowser(QWidget):
                                         hint="Select visible TRUBA files (Ctrl+A)")
             self.delete_files = command("Delete", self._delete_files, role="destructiveActionBtn",
                                         hint="Delete selected TRUBA files (Delete)")
-            file_actions = ActionFlowLayout(equal_width=True)
-            file_actions.addWidget(self.select_files)
-            file_actions.addWidget(self.delete_files)
-            layout.addLayout(file_actions)
             self.select_shortcut = QShortcut(QKeySequence.StandardKey.SelectAll, self.files)
             self.select_shortcut.setContext(Qt.ShortcutContext.WidgetShortcut)
             self.select_shortcut.activated.connect(self._select_visible_files)
             self.delete_shortcut = QShortcut(QKeySequence(Qt.Key.Key_Delete), self.files)
             self.delete_shortcut.setContext(Qt.ShortcutContext.WidgetShortcut)
             self.delete_shortcut.activated.connect(self._delete_files)
-        layout.addWidget(self.files, 1)
-
         self.upload = command("Upload", self._upload_file, hint="Upload file to the open TRUBA folder")
         self.download = command("Download", self._download_file, hint="Download selected TRUBA file")
-        transfers = ActionFlowLayout(equal_width=True)
-        transfers.addWidget(self.upload)
-        transfers.addWidget(self.download)
-        if not self._batch:
-            layout.addLayout(transfers)
 
         self.folder_name = QLineEdit()
         self.folder_name.setFixedHeight(CONTROL_HEIGHT)
@@ -141,13 +128,38 @@ class TrubaFileBrowser(QWidget):
         self.folder_name.setAccessibleName("Folder name")
         if not self._batch:
             self.folder_name.returnPressed.connect(self._create_folder)
-        self.folder_name.textChanged.connect(self._update_controls)
-        self.create = command("New folder", self._create_folder)
-        row = QHBoxLayout()
-        row.addWidget(self.folder_name, 1)
-        row.addWidget(self.create)
+        self.create = command("New folder", self._begin_folder_creation)
         if not self._batch:
-            layout.addLayout(row)
+            actions.setSpacing(2)
+            icons = (
+                (self.up, QStyle.StandardPixmap.SP_FileDialogToParent),
+                (self.open_folder, QStyle.StandardPixmap.SP_DirOpenIcon),
+                (self.refresh, QStyle.StandardPixmap.SP_BrowserReload),
+                (self.slurm_inputs, QStyle.StandardPixmap.SP_FileDialogDetailedView),
+                (self.create, QStyle.StandardPixmap.SP_FileDialogNewFolder),
+                (self.upload, QStyle.StandardPixmap.SP_ArrowUp),
+                (self.download, QStyle.StandardPixmap.SP_ArrowDown),
+                (self.select_files, QStyle.StandardPixmap.SP_DialogApplyButton),
+                (self.delete_files, QStyle.StandardPixmap.SP_TrashIcon),
+                (self.group_files, QStyle.StandardPixmap.SP_FileDialogListView),
+            )
+            for button, icon in icons:
+                hint = button.toolTip() or button.text()
+                button.setAccessibleName(hint)
+                button.setToolTip(hint)
+                button.setText("")
+                button.setIcon(self.style().standardIcon(icon))
+                button.setIconSize(QSize(14, 14))
+                button.setProperty("compactInputAction", True)
+                button.setFixedWidth(CONTROL_HEIGHT)
+                actions.addWidget(button)
+            actions.addWidget(self.filter, 1)
+            layout.addLayout(actions)
+            layout.addWidget(self.address)
+            layout.addWidget(self.folder_name)
+            self.address.hide()
+            self.folder_name.hide()
+        layout.addWidget(self.files, 1)
 
         self.status = QLabel("Connect using the main TRUBA button.")
         self.status.setObjectName("mutedHintLabel")
@@ -200,6 +212,7 @@ class TrubaFileBrowser(QWidget):
         self._show_entries([])
         self.filter.clear()
         self.folder_name.clear()
+        self.folder_name.hide()
         self._update_address()
         self.status.setToolTip("")
         self.status.setText("Connect using the main TRUBA button." if auth is None else "")
@@ -216,6 +229,8 @@ class TrubaFileBrowser(QWidget):
         self.address.setText(path)
         self.address.setToolTip(path)
         self.address.setCursorPosition(0)
+        if not self._batch:
+            self.address.setVisible(bool(path))
 
     def _directory_key(self):
         account = self.auth.username.encode("utf-8").hex()
@@ -240,8 +255,7 @@ class TrubaFileBrowser(QWidget):
             self._update_controls()
 
     def _update_controls(self, *_):
-        if self._batch:
-            self.status.setVisible(bool(self.status.text()))
+        self.status.setVisible(bool(self.status.text()))
         ready = self.auth is not None and self.task is None
         can_change = ready and self.loaded
         can_write = can_change and not self.is_slurm_snapshot_open()
@@ -251,7 +265,7 @@ class TrubaFileBrowser(QWidget):
         self.slurm_inputs.setEnabled(ready and self._slurm_directory is not None
                                      and self._slurm_directory[0] == self.auth.username)
         self.folder_name.setEnabled(can_write)
-        self.create.setEnabled(can_write and bool(self.folder_name.text().strip()))
+        self.create.setEnabled(can_write)
         self.upload.setEnabled(can_write)
         self.download.setEnabled(can_change and self._selected_item(S_ISREG) is not None)
         if not self._batch:
@@ -320,14 +334,24 @@ class TrubaFileBrowser(QWidget):
         if self.slurm_inputs.isEnabled():
             self._submit("list", truba_files.list_directory, self._slurm_directory[1])
 
+    def _begin_folder_creation(self):
+        if self.folder_name.isVisible() and self.folder_name.text().strip():
+            self._create_folder()
+        else:
+            self.folder_name.show()
+            self.folder_name.setFocus()
+
     def _create_folder(self):
         if not self.create.isEnabled():
             return
         name = self.folder_name.text().strip()
+        if not name:
+            return
         try:
             truba_files.validate_folder_name(name)
         except ValueError as error:
             self.status.setText(str(error))
+            self._update_controls()
             return
         self._submit("mkdir", truba_files.create_directory, self.directory, name)
 
@@ -441,6 +465,7 @@ class TrubaFileBrowser(QWidget):
         else:
             if kind == "mkdir":
                 self.folder_name.clear()
+                self.folder_name.hide()
                 self._uploaded_directory = None
                 self._refresh()
                 return

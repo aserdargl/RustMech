@@ -624,11 +624,19 @@ class EsenTests(unittest.TestCase):
                     date_header = "Değiştirilme tarihi" if locale == "tr" else "Date modified"
                     self.assertEqual(workspace.inputs.headerItem().text(2), date_header)
                     self.assertEqual(browser.files.headerItem().text(2), date_header)
-                    navigation = browser.up, browser.open_folder, browser.refresh, browser.slurm_inputs
-                    self.assertEqual(len({button.y() for button in navigation}), 1)
-                    self.assertEqual([button.x() for button in navigation],
-                                     sorted({button.x() for button in navigation}))
-                    self.assertEqual(len({button.width() for button in navigation}), 1)
+                    file_commands = (browser.up, browser.open_folder, browser.refresh, browser.slurm_inputs,
+                                     browser.create, browser.upload, browser.download, browser.select_files,
+                                     browser.delete_files, browser.group_files)
+                    tools = (*file_commands, browser.filter)
+                    self.assertEqual(len({control.y() for control in tools}), 1)
+                    self.assertEqual([control.x() for control in tools], sorted({control.x() for control in tools}))
+                    self.assertEqual({button.width() for button in file_commands}, {25})
+                    for button in file_commands:
+                        self.assertFalse(button.text())
+                        self.assertFalse(button.icon().isNull())
+                        self.assertTrue(button.accessibleName())
+                    self.assertTrue(browser.address.isHidden())
+                    self.assertTrue(browser.folder_name.isHidden())
                     history_actions = (workspace.select_history, workspace.delete_job)
                     history_commands = (workspace.use_inputs, workspace.refresh, workspace.resume, workspace.stop)
                     self.assertEqual(workspace.active_history_only.text(),
@@ -638,9 +646,8 @@ class EsenTests(unittest.TestCase):
                     self.assertEqual(len({button.width() for button in history_commands}), 1)
                     results = (workspace.open_file, workspace.download,
                                workspace.open_folder, workspace.open_results_folder)
-                    for group in (results, (browser.upload, browser.download)):
-                        width = max(button.sizeHint().width() for button in group) + 2
-                        self.assertEqual({button.width() for button in group}, {width})
+                    width = max(button.sizeHint().width() for button in results) + 2
+                    self.assertEqual({button.width() for button in results}, {width})
 
     def test_input_filter_and_sort_preserve_checks_and_manual_slurm_order(self):
         app = QApplication.instance() or QApplication([])
