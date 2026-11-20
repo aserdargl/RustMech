@@ -2,6 +2,7 @@
 
 ENTRY = "in.md-bcc"
 RESTART = "devam.in"
+CNA_CUTOFF = 3.9
 
 INITIAL = """include kosu.inc
 print "ESEN_STEP=Model yukleniyor" screen yes
@@ -30,8 +31,8 @@ variable srate1 equal v_srate/1.0e12
 
 pair_style meam
 pair_coeff * * meam_kutuphane.meam @MEAM_ORDER@ meam_parametreler.meam @ATOM_TYPES@
-# 5.0 A MEAM cutoff + 3.0 A skin covers the 3.9 A CNA ghost neighborhood.
-neighbor 3.0 bin
+# The preparation validates the MEAM cutoff and sets a sufficient neighbor skin.
+neighbor @NEIGHBOR_SKIN@ bin
 neigh_modify delay 20
 timestep 0.001
 thermo 100
@@ -67,7 +68,7 @@ fix cekme_npt all npt temp ${T} ${T} 0.5 y 0 0 1 z 0 0 1 drag 1
 fix cekme_deform all deform 1 x erate ${srate1} units box remap x
 
 compute csym all centro/atom bcc
-compute cna all cna/atom 3.9
+compute cna all cna/atom @CNA_CUTOFF@
 compute peratom all pe/atom
 variable strain equal (lx-v_L0)/v_L0
 variable sx equal -pxx/10000
@@ -89,4 +90,4 @@ unfix csv
 label tamamlandi
 print "ESEN_STEP=Tamamlandi" screen yes
 print "All done" screen yes
-"""
+""".replace("@CNA_CUTOFF@", str(CNA_CUTOFF))

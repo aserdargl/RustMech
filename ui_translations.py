@@ -3,6 +3,20 @@ from setup_help import GEOMETRY_HELP
 
 _TEXT = '''
 MD Preparation|MD Hazırlama
+Saved MD plans|Kayıtlı MD planları
+Add package…|Paket ekle…
+Open folder|Klasörü aç
+Model details|Model ayrıntıları
+MD package file|MD paket dosyası
+atoms|atom
+Prepared atom count|Hazırlanan atom sayısı
+Prepared composition|Hazırlanan bileşim
+Protocol|Protokol
+Prepare a package or add an existing MD package folder.|Bir paket hazırlayın veya mevcut bir MD paket klasörünü ekleyin.
+Choose a complete MD package folder.|Tüm gerekli dosyaları içeren bir MD paket klasörü seçin.
+Could not open the package folder.|Paket klasörü açılamadı.
+Open the folder to read the full file.|Dosyanın tamamını okumak için klasörü açın.
+Preparation checks the structure and MEAM mapping. Confirm scientific suitability with a small LAMMPS run and compare against reference data for your alloy.|Hazırlama sırasında yapı ve MEAM eşlemesi kontrol edilir. Bilimsel uygunluğu değerlendirmek için küçük bir LAMMPS koşusu yapın ve sonucu alaşımınızın referans verileriyle karşılaştırın.
 BCC single crystal|BCC tek kristal
 BCC polycrystal|BCC polikristal
 Crystal type|Kristal tipi

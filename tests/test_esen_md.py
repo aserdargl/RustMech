@@ -17,6 +17,7 @@ import esen_md as md
 from esen_elements import AlloyElements
 from esen_workspace import EsenWorkspace
 from ui_language import LANGUAGE_KEY, LanguageManager
+from window_state import WindowStateStore
 
 
 @pytest.fixture
@@ -45,7 +46,9 @@ def test_model_matches_e20_and_rounds_close_to_a_bcc_cell():
         md.plan_model("Hf, Hf", 16, 3.4, 300, 42)
 
 
-def test_package_distinguishes_meam_indices_from_atom_types(tmp_path, potentials):
+@pytest.mark.parametrize(("cutoff", "skin"), ((5.0, 3.0), (4.0, 3.9)))
+def test_package_distinguishes_meam_indices_from_atom_types(tmp_path, potentials, cutoff, skin):
+    potentials[1].write_text(f"rc = {cutoff}\nEc(1,2) = 4.5\n", encoding="ascii")
     model = md.plan_model("Hf:25, Nb:75", 16, 3.4, 300, 42)
     order = md.meam_order(md.documented_meam_order(*potentials), model.elements)
     assert order == ("Nb", "Hf")
@@ -69,6 +72,7 @@ def test_package_distinguishes_meam_indices_from_atom_types(tmp_path, potentials
     }
     analysis = (first / "analiz.inc").read_text()
     assert "meam_kutuphane.meam Nb Hf meam_parametreler.meam Hf Nb" in analysis
+    assert f"neighbor {skin:.1f} bin" in analysis
     assert "dump_modify atoms sort id element Hf Nb" in analysis
     assert json.loads((first / "model.json").read_text())["counts"] == [4, 12]
 
@@ -81,6 +85,15 @@ def test_bad_meam_indices_stop_before_atomsk(tmp_path, potentials):
         md.prepare_job(output, model, *potentials, ("Nb", "Hf"), "atomsk")
     run_atomsk.assert_not_called()
     assert list(output.iterdir()) == []
+
+
+def test_potential_cutoff_shorter_than_cna_stops_before_atomsk(tmp_path, potentials):
+    model = md.plan_model("Hf, Nb", 16, 3.4, 300, 42)
+    potentials[1].write_text("rc = 3.8 # shorter than E20 CNA\n", encoding="ascii")
+    with patch("esen_md.subprocess.run") as run_atomsk, pytest.raises(ValueError, match=r"rc = 3\.8.*3\.9"):
+        md.prepare_job(tmp_path, model, *potentials, ("Nb", "Hf"), "atomsk")
+    run_atomsk.assert_not_called()
+    assert list(tmp_path.glob("md-bcc-*")) == []
 
 
 def test_polycrystal_package_uses_actual_atom_count_and_seeded_nodes(tmp_path, potentials):
@@ -114,6 +127,71 @@ def test_polycrystal_package_uses_actual_atom_count_and_seeded_nodes(tmp_path, p
     assert (metadata["grains"], metadata["atoms"], metadata["counts"]) == (3, 16, [4, 12])
     assert Counter(line.split()[1] for line in (first / "structure.lmp").read_text().split(
         "Atoms # atomic")[1].splitlines() if line) == {"1": 4, "2": 12}
+
+
+def test_md_plan_library_reopens_generated_and_added_packages(tmp_path):
+    class Truba(QObject):
+        connection_changed = Signal(bool)
+
+        def analysis_auth(self):
+            return None
+
+    def package(folder):
+        folder.mkdir(parents=True)
+        for name in md.REQUIRED_PACKAGE_FILES:
+            (folder / name).touch()
+        (folder / md.ENTRY).write_text(md.INITIAL, encoding="utf-8")
+        (folder / md.PLAN_METADATA).write_text(json.dumps({
+            "elements": ["Nb"], "counts": [128], "atoms": 128, "grains": 1,
+            "temperature": 300, "target_atoms": 128, "meam_order": ["Nb"],
+        }), encoding="utf-8")
+        return folder
+
+    app = QApplication.instance() or QApplication([])
+    settings = QSettings(str(tmp_path / "qt.ini"), QSettings.Format.IniFormat)
+    store = WindowStateStore(app, settings)
+    generated = package(tmp_path / "md-preparations" / "md-bcc-300K-sample")
+    added = package(tmp_path / "shared-plan")
+    truba = Truba()
+    windows = []
+    try:
+        with patch("esen_workspace.QSettings", return_value=settings):
+            first = EsenWorkspace(truba, history=tmp_path / "jobs")
+            windows.append(first)
+            first.tabs.setCurrentIndex(1)
+            first.show()
+            app.processEvents()
+            assert first.md_plans.count() == 1
+            assert first.md_plans.currentItem().data(Qt.ItemDataRole.UserRole) == generated
+            assert "Nb  128" in first.md_plan_source.toPlainText()
+            with patch("esen_workspace.QFileDialog.getExistingDirectory", return_value=str(tmp_path)):
+                first.md_add_plan.click()
+            assert "Choose a complete" in first.md_plan_hint.text()
+            assert first.md_plans.count() == 1
+            with patch("esen_workspace.QFileDialog.getExistingDirectory", return_value=str(added)):
+                first.md_add_plan.click()
+                first.md_add_plan.click()
+            assert first.md_plans.count() == 2
+            assert first.md_plans.currentItem().data(Qt.ItemDataRole.UserRole) == added
+            first.md_plan_file.setCurrentIndex(first.md_plan_file.findData(md.ENTRY))
+            assert first.md_plan_source.toPlainText() == md.INITIAL
+            split = next(s for s in store.splitters(first) if s.objectName() == "esenMdPreviewAndPlans")
+            split.setSizes([280, 420])
+            expected = split.sizes()
+            first.close()
+
+            second = EsenWorkspace(truba, history=tmp_path / "jobs")
+            windows.append(second)
+            second.tabs.setCurrentIndex(1)
+            second.show()
+            app.processEvents()
+            assert second.md_plans.count() == 2
+            restored = next(s for s in store.splitters(second) if s.objectName() == "esenMdPreviewAndPlans")
+            assert restored.sizes() == expected
+    finally:
+        for window in reversed(windows):
+            window.dispose()
+        app.removeEventFilter(store)
 
 
 def test_alloy_elements_fill_left_column_then_continue_on_right():

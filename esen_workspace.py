@@ -341,6 +341,7 @@ class EsenWorkspace(QDialog):
         self.resize(1300, 750)
         self.truba = truba
         self.history_root = history if history is not None else jobs.jobs_directory()
+        self.md_plans_root = self.history_root.parent / "md-preparations"
         self.preferences = QSettings("RustMech", "RustMech")
         self.executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="esen")
         self.local_task = self.remote_task = None
@@ -384,7 +385,7 @@ class EsenWorkspace(QDialog):
         language = getattr(QApplication.instance(), "_rustmech_language", None)
         if language is not None:
             for button in (*self._command_buttons, self.md_preview_button, self.md_prepare, self.md_run,
-                           self.md_apply_lattice, *self.md_file_buttons):
+                           self.md_apply_lattice, *self.md_file_buttons, *self.md_plan_buttons):
                 language.localize(button)
             language.changed.connect(self._localize_md)
         self._size_command_buttons()
@@ -808,31 +809,167 @@ class EsenWorkspace(QDialog):
             stepper.editingFinished.connect(self._md_preview)
         self.md_order.editingFinished.connect(self._save_md_order)
 
-        card, layout = panel("Model preview", paper=True, scrollable=True)
-        split.addWidget(card)
+        preview_split = QSplitter(Qt.Orientation.Horizontal)
+        preview_split.setObjectName("esenMdPreviewAndPlans")
+        preview_split.setChildrenCollapsible(False)
+        preview_split.setHandleWidth(7)
+        split.addWidget(preview_split)
         split.setSizes([480, 700])
+        card, layout = panel("Model preview", paper=True, scrollable=True)
+        preview_split.addWidget(card)
         self.md_preview = code_view("Model preview")
         self.md_preview.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
         self.md_preview.setMinimumHeight(125)
         layout.addWidget(self.md_preview, 1)
-        self._build_md_help(layout)
         self.md_note = QLabel()
         self.md_note.setTextFormat(Qt.TextFormat.PlainText)
         self.md_note.setWordWrap(True)
         self.md_note.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         layout.addWidget(self.md_note)
+        self._build_md_help(layout)
+        preview_split.addWidget(self._build_md_plans())
+        preview_split.setSizes([390, 310])
         self.md_preview_button = command("Preview model", self._md_preview)
         self.md_prepare = command("Prepare package", lambda: self._start_md(submit=False))
         self.md_run = command("Prepare and run on TRUBA", self._start_md, role="esenRun")
         outer.addLayout(button_row(self.md_preview_button, self.md_prepare, self.md_run))
         self.md_queue.currentIndexChanged.connect(self._md_preview)
         self.md_crystal.currentIndexChanged.connect(self._md_preview)
+        self.tabs.currentChanged.connect(lambda index: self._refresh_md_plans()
+                                         if self.tabs.widget(index) is page else None)
         return page
+
+    def _build_md_plans(self):
+        card, layout = panel("Saved MD plans", paper=True)
+        card.setMinimumWidth(220)
+        self.md_add_plan = command("Add package…", self._add_md_plan)
+        self.md_open_plan = command("Open folder", self._open_md_plan)
+        self.md_plan_buttons = (self.md_add_plan, self.md_open_plan)
+        layout.addLayout(button_row(*self.md_plan_buttons))
+
+        self.md_plan_hint = QLabel()
+        self.md_plan_hint.setTextFormat(Qt.TextFormat.PlainText)
+        self.md_plan_hint.setWordWrap(True)
+        layout.addWidget(self.md_plan_hint)
+        self.md_plans = QListWidget()
+        self.md_plans.setAccessibleName("Saved MD plans")
+        self.md_plans.setWordWrap(True)
+        self.md_plans.setMinimumHeight(95)
+        self.md_plans.currentItemChanged.connect(self._show_md_plan)
+        layout.addWidget(self.md_plans, 1)
+
+        self.md_plan_file = compact_combo([("Model details", ""), *((name, name) for name in md.PLAN_FILES)])
+        self.md_plan_file.setAccessibleName("MD package file")
+        self.md_plan_file.currentIndexChanged.connect(self._show_md_plan)
+        layout.addWidget(self.md_plan_file, alignment=Qt.AlignmentFlag.AlignLeft)
+        self.md_plan_source = code_view("MD package file")
+        self.md_plan_source.setMinimumHeight(100)
+        self.md_plan_source.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
+        layout.addWidget(self.md_plan_source, 2)
+        self._show_md_plan()
+        return card
+
+    def _refresh_md_plans(self, selected=None):
+        previous = self.md_plans.currentItem()
+        if selected is None and previous is not None:
+            selected = previous.data(Qt.ItemDataRole.UserRole)
+        imported = self.preferences.value("esen/md/importedPlans", [], type=list)
+        folders = {Path(path) for path in imported}
+        if self.md_plans_root.is_dir():
+            folders.update(self.md_plans_root.glob("md-bcc-*"))
+        plans = []
+        for folder in folders:
+            try:
+                model = md.read_plan(folder)
+                plans.append((folder, model, (folder / md.PLAN_METADATA).stat().st_mtime))
+            except (OSError, ValueError):
+                continue
+        with QSignalBlocker(self.md_plans):
+            self.md_plans.clear()
+            for folder, model, modified in sorted(plans, key=lambda plan: (-plan[2], str(plan[0]))):
+                title = "–".join(model["elements"])
+                crystal = translate("BCC polycrystal" if model["grains"] > 1 else "BCC single crystal")
+                date = datetime.fromtimestamp(modified).strftime("%Y-%m-%d %H:%M")
+                item = QListWidgetItem(f'{title} · {model["temperature"]} K\n'
+                                       f'{crystal} · {model["atoms"]:,} {translate("atoms")}\n{date}')
+                item.setData(Qt.ItemDataRole.UserRole, folder)
+                item.setData(Qt.ItemDataRole.UserRole + 1, model)
+                item.setToolTip(str(folder))
+                self.md_plans.addItem(item)
+                if folder == selected:
+                    self.md_plans.setCurrentItem(item)
+            if self.md_plans.currentRow() == -1 and self.md_plans.count():
+                self.md_plans.setCurrentRow(0)
+        self._show_md_plan()
+
+    def _add_md_plan(self):
+        folder = QFileDialog.getExistingDirectory(self, translate("Add package…"))
+        if not folder:
+            return
+        try:
+            path = Path(folder).resolve()
+            md.read_plan(path)
+        except (OSError, ValueError) as error:
+            self.md_plan_hint.setText(f'{translate("Choose a complete MD package folder.")}\n{error}')
+            self.md_plan_hint.show()
+            return
+        imported = self.preferences.value("esen/md/importedPlans", [], type=list)
+        if str(path) not in imported:
+            self.preferences.setValue("esen/md/importedPlans", [*imported, str(path)])
+        self._refresh_md_plans(path)
+
+    def _show_md_plan(self, *_):
+        item = self.md_plans.currentItem()
+        self.md_open_plan.setEnabled(item is not None)
+        self.md_plan_file.setEnabled(item is not None)
+        self.md_plan_hint.setVisible(item is None)
+        if item is None:
+            self.md_plan_hint.setText(translate("Prepare a package or add an existing MD package folder."))
+            self.md_plan_source.clear()
+            return
+        filename = self.md_plan_file.currentData()
+        if not filename:
+            model = item.data(Qt.ItemDataRole.UserRole + 1)
+            details = [
+                f'{translate("Target atom count")}  {model.get("target_atoms", "—")}',
+                f'{translate("Prepared atom count")}  {model["atoms"]:,}',
+                f'{translate("Grain count")}  {model["grains"]}',
+                f'{translate("Temperature")}  {model["temperature"]} K',
+                f'{translate("Lattice parameter")}  {model.get("lattice", "—")} Å',
+                f'{translate("Random seed")}  {model.get("seed", "—")}',
+                f'{translate("Protocol")}  {model.get("protocol", "—")}',
+                "",
+                translate("Prepared composition"),
+                *(f'{element}  {count:,}  ({100 * count / model["atoms"]:.4f} %)'
+                  for element, count in zip(model["elements"], model["counts"])),
+                "",
+                translate("MEAM element order"),
+                " ".join(model["meam_order"]),
+            ]
+            self.md_plan_source.setPlainText("\n".join(details))
+            return
+        path = item.data(Qt.ItemDataRole.UserRole) / filename
+        try:
+            with path.open(encoding="utf-8", errors="replace") as source:
+                contents = source.read(65_537)
+            if len(contents) > 65_536:
+                contents = contents[:65_536] + "\n\n" + translate("Open the folder to read the full file.")
+        except OSError as error:
+            contents = str(error)
+        self.md_plan_source.setPlainText(contents)
+
+    def _open_md_plan(self):
+        if item := self.md_plans.currentItem():
+            path = item.data(Qt.ItemDataRole.UserRole)
+            if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(path))):
+                self.md_plan_hint.setText(f'{translate("Could not open the package folder.")}\n{path}')
+                self.md_plan_hint.show()
 
     def _build_md_help(self, layout):
         help_card, help_layout = panel("How to choose parameters")
         layout.addWidget(help_card)
         for text in (
+            "Preparation checks the structure and MEAM mapping. Confirm scientific suitability with a small LAMMPS run and compare against reference data for your alloy.",
             "The lattice parameter a is one BCC cell edge in Å. Use a value for the same alloy and phase. The initial 3.4000 Å is an example.",
             "From the BCC (110) XRD spacing, use a = √2 × d₁₁₀. With MEAM, relax a small periodic single crystal at zero pressure. At the target temperature, average the equilibrated NPT box length and divide by the cell repeats along that axis.",
             "BCC has two atoms per cell. For a polycrystal, atom count sets the box volume and grain count sets the average grain volume. Fix the random seed to reproduce grain positions, orientations and alloy site assignments.",
@@ -865,6 +1002,7 @@ class EsenWorkspace(QDialog):
         self._size_command_buttons()
         self.md_elements.update_total()
         self._md_preview()
+        self._refresh_md_plans()
 
     def _md_lattice_result(self):
         spacing = self.md_xrd_spacing.value()
@@ -967,8 +1105,7 @@ class EsenWorkspace(QDialog):
                 self._finish_md(self.md_prepared[1], settings, auth)
                 return
             executable = md.atomsk_executable()
-            folder = self.history_root.parent / "md-preparations"
-            future = self.executor.submit(md.prepare_job, folder, *inputs, executable)
+            future = self.executor.submit(md.prepare_job, self.md_plans_root, *inputs, executable)
         except (OSError, ValueError) as error:
             self.md_note.setText(str(error))
             return
@@ -1002,6 +1139,7 @@ class EsenWorkspace(QDialog):
         return bool(self.remote_task or self.upload_task or self.sync_task or self.run_list_task)
 
     def _finish_md(self, folder, settings, auth):
+        self._refresh_md_plans(folder)
         if settings is None:
             self.md_note.setText(translate("Package prepared at {path}").format(path=folder))
         else:
@@ -1044,7 +1182,7 @@ class EsenWorkspace(QDialog):
                          if button not in (*transfer_buttons, *self._compact_input_actions, *navigation,
                                            *history_actions, *history_commands)]
         for group in (other_buttons, transfer_buttons, navigation, history_actions, history_commands,
-                      md_actions, self.md_file_buttons):
+                      md_actions, self.md_file_buttons, self.md_plan_buttons):
             width = max(button.sizeHint().width() for button in group) + 2
             for button in group:
                 button.setFixedWidth(width)

@@ -14,13 +14,37 @@ import subprocess
 from tempfile import TemporaryDirectory
 from uuid import uuid4
 
-from esen_md_protocol import ANALYSIS, ENTRY, INITIAL, RESTART, RESUME
+from esen_md_protocol import ANALYSIS, CNA_CUTOFF, ENTRY, INITIAL, RESTART, RESUME
 
 
 ELEMENT = re.compile(r"[A-Z][a-z]?")
 MEAM_INDEX = re.compile(r"^\w+\s*\(\s*(\d+(?:\s*,\s*\d+)*)\s*\)\s*=")
 MAX_ATOMS = 10_000_000
 MAX_GRAINS = 256
+PLAN_METADATA = "model.json"
+PLAN_FILES = (PLAN_METADATA, ENTRY, "analiz.inc", "kosu.inc", RESTART, "atomsk.log")
+REQUIRED_PACKAGE_FILES = (*PLAN_FILES[:-1], "structure.lmp",
+                          "meam_kutuphane.meam", "meam_parametreler.meam")
+
+
+def read_plan(folder):
+    """Read the manifest of a complete existing MD preparation package."""
+    missing = [name for name in REQUIRED_PACKAGE_FILES if not (folder / name).is_file()]
+    if missing:
+        raise ValueError(", ".join(missing))
+    with (folder / PLAN_METADATA).open(encoding="utf-8") as source:
+        data = json.loads(source.read(65_537))
+    if (not isinstance(data, dict)
+            or not all(type(data.get(key)) is int for key in ("atoms", "temperature", "grains"))
+            or not all(isinstance(data.get(key), list) and data[key]
+                       and all(isinstance(symbol, str) and ELEMENT.fullmatch(symbol) for symbol in data[key])
+                       for key in ("elements", "meam_order"))
+            or not isinstance(data.get("counts"), list)
+            or len(data["counts"]) != len(data["elements"])
+            or not all(type(count) is int and count > 0 for count in data["counts"])
+            or sum(data["counts"]) != data["atoms"]):
+        raise ValueError(PLAN_METADATA)
+    return data
 
 
 @dataclass(frozen=True)
@@ -155,11 +179,20 @@ def _meam_masses(library, parameters, order):
                    for line in parameters.read_text(encoding="utf-8-sig").splitlines()]
     if not any("=" in line for line in assignments):
         raise ValueError("MEAM parametre dosyasında parametre ataması bulunamadı.")
+    cutoff = 4.0  # LAMMPS default MEAM rc.
     for line in assignments:
         if match := MEAM_INDEX.match(line):
             if any(not 1 <= int(index) <= len(order) for index in match[1].split(",")):
                 raise ValueError(f"MEAM parametre indeksini element sırasıyla karşılaştırın: {line}")
-    return masses
+        if match := re.fullmatch(r"rc\s*=\s*(.+)", line):
+            try:
+                cutoff = float(match[1])
+            except ValueError as error:
+                raise ValueError(f"MEAM kesim yarıçapı geçersiz: {line}") from error
+    if not isfinite(cutoff) or cutoff < CNA_CUTOFF:
+        raise ValueError(f"MEAM kesim yarıçapı (rc = {cutoff:g} Å), E20 CNA kesim yarıçapını "
+                         f"({CNA_CUTOFF:g} Å) karşılamıyor. Bu potansiyel E20 şablonuyla kullanılamaz.")
+    return masses, cutoff
 
 
 def _assign_alloy(source, destination, model, masses):
@@ -237,7 +270,7 @@ def prepare_job(parent, model, library, parameters, order, executable):
         package.mkdir()
         library = Path(shutil.copyfile(library, package / "meam_kutuphane.meam"))
         parameters = Path(shutil.copyfile(parameters, package / "meam_parametreler.meam"))
-        masses = _meam_masses(library, parameters, order)
+        masses, cutoff = _meam_masses(library, parameters, order)
         raw = "atomsk.lmp"
         create = [executable, "--create", "bcc", str(model.lattice), model.elements[0]]
         if model.grains == 1:
@@ -247,9 +280,9 @@ def prepare_job(parent, model, library, parameters, order, executable):
             nodes.write_text(_grain_nodes(model), encoding="ascii", newline="\n")
             log = _run_atomsk([*create, "seed.xsf"], scratch, "seed.xsf")
             # Remove close contacts at grain boundaries using 65% of BCC nearest-neighbor spacing.
-            cutoff = f"{0.65 * sqrt(3) / 2 * model.lattice:.12g}"
+            overlap_distance = f"{0.65 * sqrt(3) / 2 * model.lattice:.12g}"
             log += _run_atomsk([executable, "--polycrystal", "seed.xsf", "package/grain-nodes.txt", raw,
-                                "-wrap", "-remove-doubles", cutoff], scratch, raw)
+                                "-wrap", "-remove-doubles", overlap_distance], scratch, raw)
         model = _assign_alloy(scratch / raw, package / "structure.lmp", model,
                               {element: masses[element] for element in model.elements})
         # Use the existing E20 protocol for every composition in this template.
@@ -258,11 +291,14 @@ def prepare_job(parent, model, library, parameters, order, executable):
                          "variable cikti_oneki index md-bcc\n")
         analysis = ANALYSIS.replace("@MEAM_ORDER@", " ".join(order))
         analysis = analysis.replace("@ATOM_TYPES@", " ".join(model.elements))
+        # CNA needs the force cutoff plus skin to exceed twice its own cutoff.
+        skin = max(3.0, 2 * CNA_CUTOFF - cutoff + 0.1)
+        analysis = analysis.replace("@NEIGHBOR_SKIN@", f"{skin:.1f}")
         for filename, content in ((ENTRY, INITIAL), (RESTART, RESUME), ("kosu.inc", run_variables),
                                   ("analiz.inc", analysis), ("atomsk.log", log)):
             (package / filename).write_text(content, encoding="utf-8", newline="\n")
         metadata = dict(asdict(model), atoms=model.atoms, box_angstrom=model.box,
                         percentages=[str(part) for part in model.percentages],
                         meam_order=order, protocol="e20-bcc-tension-cna-v1")
-        (package / "model.json").write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
+        (package / PLAN_METADATA).write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
         return package.rename(parent / f"md-bcc-{model.temperature}K-{uuid4().hex[:12]}")
