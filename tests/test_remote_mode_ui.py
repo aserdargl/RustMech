@@ -859,9 +859,8 @@ class RemoteModeUiTests(unittest.TestCase):
                 local_cancel.assert_not_called()
 
     def test_convergence_execution_toggle_stays_in_sync(self):
-        from mesh_convergence import MeshConvergenceDialog
-
-        dialog = MeshConvergenceDialog(self.window.collect(), MagicMock(), MagicMock(), self.window)
+        self.window.open_mesh_convergence()
+        dialog = self.window._mesh_convergence_dialog
         study = dialog.study
         self.assertFalse(study.run_on_truba.isChecked())
         self.assertTrue(study.run_button.isEnabled())
@@ -872,7 +871,7 @@ class RemoteModeUiTests(unittest.TestCase):
         self.assertEqual(self.window.execution_target.currentData(), "truba")
         self.assertFalse(study.run_button.isEnabled())
 
-        with patch.object(self.controller, "_physics_busy", return_value=True):
+        with patch.object(study, "future", object()):
             study.run_on_truba.click()
         self.assertTrue(study.run_on_truba.isChecked())
         self.assertTrue(self.controller.requested)
@@ -880,6 +879,8 @@ class RemoteModeUiTests(unittest.TestCase):
         self.window.execution_target.setCurrentIndex(self.window.execution_target.findData("local"))
         self.assertFalse(study.run_on_truba.isChecked())
         self.assertTrue(study.run_button.isEnabled())
+        dialog.reject()
+        self.assertIsNone(self.window._mesh_convergence_dialog)
 
     def test_convergence_and_doe_do_not_call_local_mesh_generator(self):
         from mesh_convergence import MeshConvergenceDialog

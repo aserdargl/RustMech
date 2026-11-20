@@ -303,6 +303,7 @@ class RustMechDialog(QDialog):
         self.failed_key = None
         self._preview_failure_reason = ""
         self.disposed = False
+        self._mesh_convergence_dialog = None
 
         self.setWindowTitle(
             "RustMech | Nonlinear Compression",
@@ -2312,11 +2313,21 @@ class RustMechDialog(QDialog):
         """Open a mesh study using the current design and analysis settings."""
         from mesh_convergence import MeshConvergenceDialog
 
-        dialog = MeshConvergenceDialog(
-            self.collect(), generate_volume_mesh, run_batch_experiment, parent=self,
-        )
+        dialog = self._mesh_convergence_dialog
+        if dialog is None:
+            dialog = MeshConvergenceDialog(
+                self.collect(), generate_volume_mesh, run_batch_experiment, owner=self,
+            )
+            self._mesh_convergence_dialog = dialog
+            dialog.finished.connect(self._finish_mesh_convergence)
+        if dialog.isMinimized():
+            dialog.setWindowState(dialog.windowState() & ~Qt.WindowState.WindowMinimized)
+        show_restored_window(dialog)
+
+    def _finish_mesh_convergence(self, _result):
+        dialog = self._mesh_convergence_dialog
+        self._mesh_convergence_dialog = None
         try:
-            dialog.exec()
             if dialog.selected_settings is not None:
                 for name in ("mesh_resolution", "local_mesh_size"):
                     control = self.controls[name]
@@ -3563,8 +3574,8 @@ class RustMechDialog(QDialog):
                 jobs.extend(queue.detach_remote_queue())
         if hasattr(self, "folder_batch_dialog"):
             jobs.extend(self.folder_batch_dialog.detach_remote_jobs())
-        from mesh_convergence import MeshConvergenceWidget
-        for study in self.findChildren(MeshConvergenceWidget):
+        if self._mesh_convergence_dialog is not None:
+            study = self._mesh_convergence_dialog.study
             if getattr(study.future, 'is_remote', False) is True:
                 jobs.append(study.future)
                 study.future = None
@@ -3627,6 +3638,10 @@ class RustMechDialog(QDialog):
         if hasattr(self,"remote_controller"):
             self.remote_controller.shutdown()
         self.disposed = True
+        if self._mesh_convergence_dialog is not None:
+            dialog = self._mesh_convergence_dialog
+            dialog.study.force_stop()
+            dialog.reject()
         if self.esen_workspace is not None:
             self.esen_workspace.dispose()
         self.truba_dialog.shutdown()

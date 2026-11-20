@@ -16,7 +16,7 @@ from unittest.mock import MagicMock, patch
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtTest import QTest
 from studio_style import NUMERIC_FIELD_WIDTH
-from PySide6.QtCore import QSettings
+from PySide6.QtCore import QSettings, Qt
 from PySide6.QtWidgets import QApplication, QComboBox, QDialog
 
 from mesh_convergence import (
@@ -476,10 +476,13 @@ class LiveConvergenceTests(unittest.TestCase):
         self.assertFalse(dialog.isVisible())
         dialog.deleteLater()
 
-    def test_main_screen_accepts_mesh_sizes_below_previous_input_range(self):
+    def test_main_screen_reuses_modeless_study_and_applies_selected_mesh(self):
         from nonlinear_compression import RustMechDialog
         from studio_style import CompactDoubleSpinBox
         owner = MagicMock()
+        owner._mesh_convergence_dialog = None
+        owner._finish_mesh_convergence = partial(RustMechDialog._finish_mesh_convergence, owner)
+        owner.remote_controller = None
         owner.loading_mode_combo = QComboBox()
         owner.solver_combo = self.widget().solver_combo
         owner.mesh_type_combo = self.widget().mesh_type_combo
@@ -490,15 +493,30 @@ class LiveConvergenceTests(unittest.TestCase):
         owner.controls = {key: CompactDoubleSpinBox() for key in ("mesh_resolution", "local_mesh_size")}
         for control in owner.controls.values():
             control.setRange(.1, 10)
-        dialog = MagicMock()
+        RustMechDialog.open_mesh_convergence(owner)
+        dialog = owner._mesh_convergence_dialog
+        self.addCleanup(dialog.deleteLater)
+        self.assertIsNone(dialog.parentWidget())
+        self.assertIsNone(dialog.windowHandle().transientParent())
+        self.assertFalse(dialog.isModal())
+        self.assertFalse(dialog.windowFlags() & Qt.WindowType.WindowStaysOnTopHint)
+        dialog.showMaximized()
+        dialog.showMinimized()
+        RustMechDialog.open_mesh_convergence(owner)
+        self.assertIs(owner._mesh_convergence_dialog, dialog)
+        self.assertFalse(dialog.isMinimized())
+        self.assertTrue(dialog.isMaximized())
+        owner.collect.assert_called_once()
+        self.assertAlmostEqual(owner.controls["mesh_resolution"].value(), .1)
         dialog.selected_settings = replace(SETTINGS, mesh_type="TET4", mesh_resolution=.08, local_mesh_size=.02)
-        with patch("mesh_convergence.MeshConvergenceDialog", return_value=dialog):
-            RustMechDialog.open_mesh_convergence(owner)
+        with patch.object(dialog.study, "dispose", wraps=dialog.study.dispose) as dispose:
+            dialog.accept()
+            dispose.assert_called_once()
+        self.assertIsNone(owner._mesh_convergence_dialog)
         self.assertAlmostEqual(owner.controls["mesh_resolution"].value(), .08)
         self.assertAlmostEqual(owner.controls["local_mesh_size"].value(), .02)
         self.assertEqual(owner.mesh_type_combo.currentData(), "TET4")
         owner.geometry_changed.assert_called_once()
-        dialog.study.dispose.assert_called_once()
 
     def test_restart_clears_previous_results(self):
         widget = self.widget()

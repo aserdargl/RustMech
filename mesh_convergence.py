@@ -115,8 +115,10 @@ class ConvergenceToolbarScroll(QScrollArea):
 
 
 class MeshConvergenceDialog(QDialog):
-    def __init__(self, settings, mesh_generator, solver, parent=None):
-        super().__init__(parent)
+    def __init__(self, settings, mesh_generator, solver, owner=None):
+        # An owned Windows dialog always stacks above its owner, even when modeless.
+        super().__init__(None, Qt.WindowType.Window | Qt.WindowType.WindowMinMaxButtonsHint
+                         | Qt.WindowType.WindowCloseButtonHint)
         self.setWindowTitle("Mesh Convergence")
         self.setObjectName("meshConvergenceDialog")
         self.setStyleSheet(STUDIO_STYLESHEET + CONVERGENCE_STYLESHEET)
@@ -125,7 +127,7 @@ class MeshConvergenceDialog(QDialog):
         layout.setContentsMargins(6, 6, 6, 6)
         layout.setSpacing(4)
         self.setToolTip(f"{settings.structure_name} · {settings.size:g} mm · {settings.material_name}")
-        self.remote_controller = getattr(parent,"remote_controller",None)
+        self.remote_controller = getattr(owner, "remote_controller", None)
         self.study = MeshConvergenceWidget(settings, mesh_generator, solver, self)
         layout.addWidget(self.study)
         self.resize(1080, 430)

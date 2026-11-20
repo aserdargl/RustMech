@@ -6,7 +6,7 @@ from threading import Event
 
 from PySide6.QtCore import QObject,QTimer,Signal,Qt
 from PySide6.QtWidgets import (QCheckBox,QFormLayout,QGridLayout,QGroupBox,QHBoxLayout,QLabel,
-                               QLineEdit,QPushButton,QVBoxLayout,QWidget)
+                               QLineEdit,QPushButton,QVBoxLayout)
 
 from truba_remote import RemoteContext,run_remote_job
 from studio_style import CompactSpinBox, configure_form, CompactComboBox, CompactDoubleSpinBox, CONTROL_HEIGHT
@@ -616,10 +616,11 @@ class RemoteController(QObject):
 
     def _physics_busy(self):
         window = self.window
+        convergence = window._mesh_convergence_dialog
         return bool(window.analysis_job or getattr(window.doe_studio,"_active_future",None) or
                     getattr(getattr(window, 'analysis_queue_widget', None), '_active_future', None) or
                     window.flow_workspace.job or window.thermal_workspace.job or
-                    any(getattr(child,"future",None) is not None for child in window.findChildren(QWidget) if type(child).__name__=="MeshConvergenceWidget"))
+                    (convergence is not None and convergence.study.future is not None))
 
     def set_enabled(self,enabled, *, force=False):
         if self.closing: return
