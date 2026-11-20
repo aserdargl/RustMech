@@ -348,8 +348,8 @@ def test_md_tab_enter_previews_and_run_hands_package_to_esen(tmp_path, potential
         assert record["target"] == "remote"
         assert files == (package, md.ENTRY, (), True)
         assert settings["resume_input"] == md.RESTART
-        assert settings["partition"] == "hamsi"
-        assert settings["module"] == jobs.MODULES["hamsi"]
+        assert settings["partition"] == "barbun"
+        assert settings["module"] == jobs.DEFAULT_MODULE
         assert auth is truba.auth
     finally:
         workspace.dispose()

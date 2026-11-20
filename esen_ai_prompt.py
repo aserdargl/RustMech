@@ -27,8 +27,9 @@ Eksik veri, potansiyel, hesap adı veya kaynak değerleri uydurma.
 - TRUBA’da hazır Slurm betiği için `.slurm` uzantısını kullan. Seçilen klasörde
   `.slurm` dosyası varsa TRUBA’da çalıştırılacak öğeler Slurm betikleridir.
   Dosyayı UTF-8 ve LF satır sonlarıyla kaydet. İlk satır `#!/bin/bash -l`
-  gibi geçerli bir yorumlayıcı satırı olsun. `#SBATCH` satırlarında gerçek
-  kuyruk, hesap, görev sayısı, bellek ve süreyi kullan. Uyumlu LAMMPS modülünü
+  gibi geçerli bir yorumlayıcı satırı olsun. Farklı bir kuyruk seçmediysem
+  `#SBATCH --partition=barbun` kullan. Hesap, görev sayısı, bellek ve süreyi
+  seçilen kuyruğa ve işe göre ayarla. Uyumlu LAMMPS modülünü
   yükle ve uygun MPI komutuyla `lmp -in` çağır. ESEN iş adını ve standart günlük
   yollarını ayarlar. Her betik kendi klasörüne karşılık gelen ayrı bir çalışma
   kopyasında yürür. İşaretli işler ESEN listesindeki sırayla gönderilir. Bir

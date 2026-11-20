@@ -582,6 +582,7 @@ class EsenWorkspace(QDialog):
         self._form_row(form, "MPI launcher", self.local_mpi)
         self.local_fields = (self.ranks, self.local_memory, self.local_exe, self.local_mpi)
         self.partition = compact_combo([(name, name) for name in jobs.CPU_QUEUES])
+        self.partition.setCurrentIndex(self.partition.findData(jobs.DEFAULT_PARTITION))
         self.account = QLineEdit()
         self.account.setPlaceholderText("TRUBA username")
         self.module = QLineEdit(jobs.DEFAULT_MODULE)
@@ -797,7 +798,7 @@ class EsenWorkspace(QDialog):
         self._form_row(form, "Random seed", self.md_seed)
         self.md_seed.setFixedWidth(123)
         self.md_queue = compact_combo([(name, name) for name in jobs.MODULES])
-        queue_index = self.md_queue.findData(self.preferences.value("esen/md/queue", "hamsi"))
+        queue_index = self.md_queue.findData(self.preferences.value("esen/md/queue", jobs.DEFAULT_PARTITION))
         self.md_queue.setCurrentIndex(max(0, queue_index))
         self._form_row(form, "TRUBA queue", self.md_queue)
         self.md_file_buttons = []
@@ -1231,9 +1232,13 @@ class EsenWorkspace(QDialog):
                 field.setValue(int(self.preferences.value(f"esen/{key}", field.value())))
             except (ValueError, TypeError):
                 pass
-        for key in ("partition", "remote_mpi"):
-            field = getattr(self, key)
-            index = field.findData(self.preferences.value(f"esen/{key}", field.currentData()))
+        queue = self.preferences.value("esen/queue")
+        if queue is None:
+            # The old profile saved debug even when the user never picked a queue.
+            legacy_queue = self.preferences.value("esen/partition")
+            queue = jobs.DEFAULT_PARTITION if legacy_queue == "debug" else legacy_queue
+        for field, value in ((self.partition, queue), (self.remote_mpi, self.preferences.value("esen/remote_mpi"))):
+            index = field.findData(value)
             if index >= 0:
                 with QSignalBlocker(field):
                     field.setCurrentIndex(index)
@@ -1244,8 +1249,8 @@ class EsenWorkspace(QDialog):
             self.preferences.setValue(f"esen/{key}", getattr(self, key).text())
         for key in ("ranks", "local_memory"):
             self.preferences.setValue(f"esen/{key}", getattr(self, key).value())
-        for key in ("partition", "remote_mpi"):
-            self.preferences.setValue(f"esen/{key}", getattr(self, key).currentData())
+        self.preferences.setValue("esen/queue", self.partition.currentData())
+        self.preferences.setValue("esen/remote_mpi", self.remote_mpi.currentData())
 
     def _queue_changed(self):
         current = self.partition.currentData()

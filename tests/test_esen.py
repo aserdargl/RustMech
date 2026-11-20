@@ -688,6 +688,7 @@ class EsenTests(unittest.TestCase):
         app = QApplication.instance() or QApplication([])
         preferences = QSettings(str(self.root / "settings.ini"), QSettings.Format.IniFormat)
         preferences.setValue("esen/target", "local")
+        preferences.setValue("esen/partition", "debug")
         preferences.setValue("esen/walltime", "00:01:00")
         files = [str(self.source / name) for name in (self.entry, "data/cell.lmp")]
         with patch("esen_workspace.QSettings", return_value=preferences):
@@ -696,6 +697,7 @@ class EsenTests(unittest.TestCase):
         workspace.show()
         app.processEvents()
         self.assertEqual(workspace.target.currentData(), "remote")
+        self.assertEqual(workspace.partition.currentData(), "barbun")
         self.assertTrue(workspace.partition.isVisible())
         self.assertFalse(hasattr(workspace, "walltime"))
         self.assertTrue(workspace.connection.isVisible())
@@ -710,9 +712,15 @@ class EsenTests(unittest.TestCase):
         QTest.mouseClick(workspace.use_as_script, Qt.MouseButton.LeftButton)
         self.assertEqual(workspace.entry, self.entry)
         self.assertEqual(workspace.extra, ["data/cell.lmp"])
+        self.assertIn("#SBATCH --partition=barbun", workspace.preview.toPlainText())
         self.assertIn("#SBATCH --ntasks=", workspace.preview.toPlainText())
         workspace.partition.setCurrentIndex(workspace.partition.findData("debug"))
         self.assertIn("#SBATCH --time=04:00:00", workspace.preview.toPlainText())
+        workspace._save_profiles()
+        self.assertEqual(preferences.value("esen/queue"), "debug")
+        workspace.partition.setCurrentIndex(workspace.partition.findData("barbun"))
+        workspace._load_profiles()
+        self.assertEqual(workspace.partition.currentData(), "debug")
         header = workspace.truba_settings
         QTest.mouseClick(header, Qt.MouseButton.LeftButton, pos=header.header_rect().center())
         self.assertTrue(workspace.account.isVisible())

@@ -31,11 +31,13 @@ from truba_remote import RemoteContext, RemoteTransport, safe_extract
 from truba_resources import BASELINES, candidates, fetch_catalog
 
 
+DEFAULT_PARTITION = "barbun"
+DEFAULT_MODULE = "apps/lammps/29Aug2024_stable_oneapi-2024"
 MODULES = {
+    DEFAULT_PARTITION: DEFAULT_MODULE,
     "hamsi": "apps/lammps/29Aug2024_update1_oneapi-2024-hamsi",
     "orfoz": "apps/lammps/29Aug2024_update1_oneapi-2024-orfoz",
 }
-DEFAULT_MODULE = "apps/lammps/29Aug2024_stable_oneapi-2024"
 CPU_QUEUES = tuple(name for name in BASELINES if not name.endswith("-cuda"))
 LOGS = ("stdout.log", "stderr.log")
 TERMINAL = frozenset({"Completed", "Failed", "Cancelled", "Interrupted"})
