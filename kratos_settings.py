@@ -10,6 +10,7 @@ from PySide6.QtWidgets import QCheckBox, QComboBox, QFormLayout, QLabel, QLineEd
 from studio_style import (CompactComboBox, CompactDoubleSpinBox, CompactSpinBox, SidebarGroupBox,
                           configure_form, field_label, stepper_with_unit)
 from solver_profiles import KRATOS_FIELDS
+from solver_api import KRATOS_LINEAR_SOLVERS
 
 
 class ToleranceSpinBox(CompactDoubleSpinBox):
@@ -65,7 +66,7 @@ class KratosSettingsPanel(SidebarGroupBox):
         form.addRow(self._runtime_status)
         self.fields = {}
         for key, title, choices in (
-            ("kratos_linear_solver", "Linear solver", (("Sparse LU", "sparse_lu"), ("AMGCL", "amgcl"), ("Skyline LU", "skyline_lu_factorization"))),
+            ("kratos_linear_solver", "Linear solver", ((label, value) for value, label in KRATOS_LINEAR_SOLVERS.items())),
             ("kratos_contact_method", "Contact method", (("ALM mortar", "alm"), ("Penalty mortar", "penalty"))),
         ):
             control = CompactComboBox()

@@ -15,6 +15,11 @@ from model import FEMesh, MESH_TYPES, Settings
 
 
 KRATOS_QUADRATIC_MESH_TYPES = ("HEX20", "TET10")
+KRATOS_LINEAR_SOLVERS = {
+    "sparse_lu": "Sparse LU",
+    "amgcl": "AMGCL",
+    "skyline_lu_factorization": "Skyline LU",
+}
 
 
 def kratos_quadratic_platen_errors(settings: Settings) -> list[str]:
@@ -78,7 +83,8 @@ class SolverCapabilities:
                 errors.append("Kratos line search must be a boolean.")
             elif settings.kratos_line_search:
                 errors.append("Line search is not qualified with the current Kratos contact strategy. Use Newton-Raphson.")
-            if settings.kratos_linear_solver not in ("sparse_lu", "amgcl", "skyline_lu_factorization"):
+            if (not isinstance(settings.kratos_linear_solver, str)
+                    or settings.kratos_linear_solver not in KRATOS_LINEAR_SOLVERS):
                 errors.append("Select a supported Kratos linear solver.")
             if settings.kratos_linear_solver == "amgcl" and settings.kratos_contact_method == "alm":
                 errors.append("Use Sparse LU for ALM contact, or choose penalty contact with AMGCL.")

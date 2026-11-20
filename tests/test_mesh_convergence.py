@@ -630,6 +630,50 @@ class LiveConvergenceTests(unittest.TestCase):
         self.assertEqual(submit.call_args.args[1].mesh_resolution, .2)
         self.assertIsNone(widget.future)
 
+    def test_kratos_linear_solver_is_study_specific_and_used_for_local_levels(self):
+        received = []
+
+        def solver(settings, mesh):
+            received.append(settings.kratos_linear_solver)
+            return self.solver(settings, mesh)
+
+        settings = replace(SETTINGS, solver_backend="kratos", kratos_contact_method="penalty")
+        widget = self.widget(settings=settings, solver=solver)
+        combo = widget.linear_solver_combo
+        widget.show()
+        self.app.processEvents()
+        self.assertTrue(combo.isVisible())
+        self.assertEqual(combo.currentData(), settings.kratos_linear_solver)
+        combo.setCurrentIndex(combo.findData("amgcl"))
+        widget.start()
+        self.assertFalse(combo.isEnabled())
+        self.finish(widget)
+        self.assertGreater(len(received), 1)
+        self.assertEqual(set(received), {"amgcl"})
+        self.assertEqual(settings.kratos_linear_solver, "sparse_lu")
+        widget.solver_combo.setCurrentIndex(widget.solver_combo.findData("ansys_mapdl"))
+        self.assertTrue(combo.isHidden())
+
+    def test_kratos_linear_solver_is_sent_to_truba_and_amgcl_requires_penalty(self):
+        settings = replace(SETTINGS, solver_backend="kratos", kratos_contact_method="penalty")
+        widget = self.widget(settings=settings)
+        widget.remote_controller = MagicMock(requested=True, ready=True,
+                                             capabilities={"mesh_types": ["HEX8"]})
+        widget.remote_controller.require_convergence.return_value = (RemoteContext(cores=40), object())
+        widget._solver_changed()
+        combo = widget.linear_solver_combo
+        amgcl = combo.findData("amgcl")
+        combo.setCurrentIndex(amgcl)
+        widget.single_truba_mesh.setChecked(True)
+        with patch("mesh_convergence.AnalysisProcess") as submit:
+            widget.start()
+            self.assertEqual(submit.call_args.args[1].kratos_linear_solver, "amgcl")
+            self.assertEqual(widget.level_settings(.15).kratos_linear_solver, "amgcl")
+            widget.force_stop()
+
+        alm_widget = self.widget(settings=replace(settings, kratos_contact_method="alm"))
+        self.assertFalse(alm_widget.linear_solver_combo.model().item(amgcl).isEnabled())
+
     def test_loading_and_contacts_are_frozen_for_every_level(self):
         received = []
         def solver(settings, mesh):

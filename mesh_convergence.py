@@ -26,7 +26,7 @@ from convergence_execution import (
 )
 from file_dialog import QFileDialog
 from model import ANALYSIS_FIELDS, MESH_TYPES, TETRAHEDRAL_MESH_TYPES, validate_settings
-from solver_api import SOLVER_REGISTRY, get_solver_capabilities
+from solver_api import KRATOS_LINEAR_SOLVERS, SOLVER_REGISTRY, get_solver_capabilities
 from standard_tests import kind
 from ui_copy import configure_copying
 from mesh_convergence_style import CONVERGENCE_STYLESHEET
@@ -175,6 +175,7 @@ class MeshConvergenceWidget(QWidget):
         install_copy_support(QApplication.instance())
         self.settings, self.mesh_generator, self.solver = settings, mesh_generator, solver
         self.level_base_settings = settings
+        self.kratos_linear_solver_override = None
         self.local_solver_before_truba = None
         self.remote_controller = getattr(parent,"remote_controller",None)
         self.stop_requested = get_context("spawn").Event()
@@ -224,6 +225,14 @@ class MeshConvergenceWidget(QWidget):
                                          Qt.ItemDataRole.ToolTipRole)
         self.solver_combo.setCurrentIndex(max(0, self.solver_combo.findData(settings.solver_backend)))
         controls.addWidget(self.solver_combo)
+        self.linear_solver_combo = CompactComboBox()
+        for value, label in KRATOS_LINEAR_SOLVERS.items():
+            self.linear_solver_combo.addItem(label, value)
+        self.linear_solver_combo.setFixedWidth(self.linear_solver_combo.sizeHint().width())
+        self.linear_solver_label = QLabel("Linear solver")
+        self.linear_solver_label.setBuddy(self.linear_solver_combo)
+        controls.addWidget(self.linear_solver_label)
+        controls.addWidget(self.linear_solver_combo)
         self.tolerance = self._number(2, 0.01, 100)
         self.tolerance.setFixedWidth(NUMERIC_FIELD_WIDTH - 2)
         controls.addWidget(QLabel("Tolerance"))
@@ -454,6 +463,7 @@ class MeshConvergenceWidget(QWidget):
         layout.addWidget(self.footer_scroll)
 
         self.solver_combo.currentIndexChanged.connect(self._solver_changed)
+        self.linear_solver_combo.currentIndexChanged.connect(self._linear_solver_changed)
         self.mesh_type_combo.currentIndexChanged.connect(self._mesh_type_changed)
         self.start_size.valueChanged.connect(self._sync_local_size_limit)
         if self.remote_controller is not None:
@@ -817,6 +827,7 @@ class MeshConvergenceWidget(QWidget):
                     maximum_substeps=self.settings.maximum_substeps,
                 )
         capabilities = get_solver_capabilities(self.solver_combo.currentData())
+        self._sync_linear_solver(capabilities.identifier, self.level_base_settings)
         self.solver_combo.setToolTip(capabilities.display_name if capabilities.implemented else
                                     capabilities.unavailable_reason)
         mesh_types = set(capabilities.supported_mesh_types)
@@ -843,6 +854,25 @@ class MeshConvergenceWidget(QWidget):
                 self._set_status("Ready · uses loading and contact conditions from the main setup")
             self.run_button.setToolTip("Run mesh convergence" if capabilities.implemented else
                                        capabilities.unavailable_reason)
+
+    def _linear_solver_changed(self):
+        self.kratos_linear_solver_override = self.linear_solver_combo.currentData()
+
+    def _sync_linear_solver(self, backend, settings):
+        visible = backend == "kratos"
+        self.linear_solver_label.setVisible(visible)
+        combo = self.linear_solver_combo
+        combo.setVisible(visible)
+        if not visible:
+            return
+        allow_amgcl = settings.kratos_contact_method != "alm"
+        combo.model().item(combo.findData("amgcl")).setEnabled(allow_amgcl)
+        combo.setToolTip("" if allow_amgcl else "Use Sparse LU for ALM contact, or choose penalty contact with AMGCL.")
+        value = self.kratos_linear_solver_override
+        if value is None or (value == "amgcl" and not allow_amgcl):
+            value = settings.kratos_linear_solver
+        with QSignalBlocker(combo):
+            combo.setCurrentIndex(combo.findData(value))
 
     def _mesh_type_changed(self):
         self._sync_local_size_limit()
@@ -887,6 +917,9 @@ class MeshConvergenceWidget(QWidget):
                             mesh_type=self.mesh_type_combo.currentData(),
                             solver_backend=capabilities.identifier,
                             cores=min(self.level_base_settings.cores, capabilities.max_cores))
+            if capabilities.identifier == "kratos":
+                method = self.linear_solver_combo.currentData() or level.kratos_linear_solver
+                level = replace(level, kratos_linear_solver=method)
             if self.run_on_truba.isChecked():
                 level = replace(level, cores=MIN_TRUBA_LEVEL_CPUS, automatic_cores=False)
             if level.mesh_type in TETRAHEDRAL_MESH_TYPES:
@@ -1034,7 +1067,8 @@ class MeshConvergenceWidget(QWidget):
             self.run_button.setEnabled(editable and bool(self.planned_scripts))
 
     def _set_running(self, running):
-        for control in (self.mesh_settings, self.tolerance, self.advanced, self.solver_combo, self.run_on_truba):
+        for control in (self.mesh_settings, self.tolerance, self.advanced, self.solver_combo,
+                        self.linear_solver_combo, self.run_on_truba):
             control.setEnabled(not running)
         self._refresh_script_controls()
         if running:
@@ -1171,6 +1205,8 @@ class MeshConvergenceWidget(QWidget):
         for combo, value in ((self.solver_combo, base.solver_backend), (self.mesh_type_combo, base.mesh_type)):
             with QSignalBlocker(combo):
                 combo.setCurrentIndex(combo.findData(value))
+        self.kratos_linear_solver_override = base.kratos_linear_solver if base.solver_backend == "kratos" else None
+        self._sync_linear_solver(base.solver_backend, base)
         saved = next((job.plan for job in jobs if job.plan), {})
         selection = saved.get("selected", jobs[0].request.get("selected")) or list(range(len(METRICS)))
         self.selected = selection
@@ -1527,6 +1563,9 @@ class MeshConvergenceWidget(QWidget):
         for col, value in enumerate(values):
             item = QTableWidgetItem(value)
             detail = f"{level.kind}\n{level.status}\n{level.folder}"
+            if col == 0 and level.settings.solver_backend == "kratos":
+                method = level.settings.kratos_linear_solver
+                detail += f"\nLinear solver: {KRATOS_LINEAR_SOLVERS.get(method, method)}"
             detail += (f"\nControl: {level.settings.loading_mode}; target displacement: {level.settings.compression:g} mm"
                        if level.settings.loading_mode == "displacement" else
                        f"\nControl: force; target: {level.settings.applied_force:g} N")
