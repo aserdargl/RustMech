@@ -129,10 +129,17 @@ temizliği bittikten sonra en yeni okunabilir kayıttan devam eder. Geçerli
 ilerleme yoksa eski iş 72 saatlik sınırına kadar çalışabilir. Kuyruk bekleme
 süresini Slurm belirler. RustMech kapalıyken de devir işler.
 
-Kesilen iş için **İşi yenile**, ardından **İşi sürdür** ile aynı TRUBA
-klasöründeki ara kayıttan yeni bir iş gönderin. İlk ara kayıt oluşmadan kesilen
-hesapta sürdürülecek adım yoktur. **İşi durdur**, o koşunun çalışan ve bekleyen
-Slurm işlerini iptal eder. Ara kayıtlar TRUBA scratch alanında saklanır.
+Slurm işi süre sınırında (TIMEOUT) bitirirse, Esen aynı
+koşunun çalışan veya bekleyen işi olmadığını doğrular ve devam girdisi
+tanımlıysa aynı TRUBA klasöründe otomatik bir devam işi gönderir. Yeni iş
+en son okunabilir ara kaydı yükler. Otomatik TIMEOUT kontrolü, Esen iş takibi
+başladığında ve TRUBA bağlantısı açıkken çalışır. Bir devam işi süre sınırına
+kadar yeni bir ara kayıt üretemezse, Esen aynı adımı sürekli yeniden kuyruğa
+almaz. İlk ara kayıt oluşmadan kesilen hesapta sürdürülecek adım yoktur.
+Elle devam etmek için **İşi yenile**,
+ardından **İşi sürdür** düğmesini kullanın. **İşi durdur**, o koşunun çalışan
+ve bekleyen Slurm işlerini iptal eder. Ara kayıtlar TRUBA scratch alanında
+saklanır.
 
 ## Ortak analiz projesi
 

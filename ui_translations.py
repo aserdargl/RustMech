@@ -204,6 +204,7 @@ Queued|Kuyrukta
 Interrupted|Kesintiye uğradı
 Cancellation requested|İptal istendi
 Waiting for Slurm accounting…|Slurm iş kaydı bekleniyor…
+Slurm time limit reached. Continuation submitted.|Slurm süre sınırı doldu. Devam işi gönderildi.
 Slurm has not confirmed this submission. Refresh to check again.|Slurm gönderimi henüz doğrulamadı. Yeniden kontrol etmek için işi yenileyin.
 Connect using the TRUBA account that submitted this job.|Bu işi gönderen TRUBA hesabıyla bağlanın.
 Fluid mesh|Akış ağı

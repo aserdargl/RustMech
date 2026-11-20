@@ -773,13 +773,11 @@ if ! grep -Fxq -- "$job" <<< "$ids" && [[ -n "$ids" ]]; then
     job=$(sort -nr <<< "$ids" | sed -n '1p')
 fi
 [[ -z "$job" || "$job" =~ ^[0-9]+$ ]] || exit 2
-printf 'JOB_ID=%s\n' "$job"
 for flag in completed cancelled; do
     if [[ -e "$flag" ]]; then printf '%s=1\n' "$flag"; else printf '%s=0\n' "$flag"; fi
 done
 checkpoints=$(find checkpoints -type f -name 'step.*' -size +0c -print -quit 2>/dev/null || true)
 printf 'HAS_CHECKPOINT=%s\n' "${checkpoints:+1}"
-exec 9>&-
 ''')
     refresh_status(directory, record, transport, setup, managed=True)
 
@@ -810,7 +808,7 @@ def script_step(output):
 
 
 def refresh_status(directory, record, transport, setup, *, managed=False):
-    reply = transport.command(setup + f"""
+    status_query = r"""
 if [[ -n "$job" ]]; then
     export TZ=UTC SLURM_TIME_FORMAT='%Y-%m-%dT%H:%M:%S'
     queue=$(squeue -h -j "$job" -o '%T|%M|%S|%L|%C|%D|%P|%r') || queue=''
@@ -821,6 +819,9 @@ if [[ -n "$job" ]]; then
 else
     queue= accounting=
 fi
+"""
+    continuation = esen_restart.RESUME_TIMEOUT if managed else ""
+    reply = transport.command(setup + status_query + continuation + f"""
 printf 'QUEUE=%s\\nACCT=%s\\n' "$queue" "$accounting"
 for log in {' '.join(LOGS)}; do
     printf '%s=' "$log"
@@ -829,6 +830,7 @@ for log in {' '.join(LOGS)}; do
 done
 """)
     changes = {}
+    auto_resumed = False
     if managed:
         job_id = tagged(reply, "JOB_ID")
         if not job_id:
@@ -836,6 +838,7 @@ done
             return
         changes.update(job_id=job_id, has_checkpoint=tagged(reply, "HAS_CHECKPOINT") == "1",
                        cancel_requested=tagged(reply, "cancelled") == "1")
+        auto_resumed = tagged(reply, "AUTO_RESUMED") == "1"
         if job_id != record.get("job_id"):
             changes.update(elapsed_seconds=None, script_step="", slurm={})
     queue = tagged(reply, "QUEUE")
@@ -864,11 +867,13 @@ done
     for name in LOGS:
         data = base64.b64decode(tagged(reply, re.escape(name)), validate=True)
         (directory / name).write_bytes(data)
-        if name == LOGS[0] and (step := script_step(data.decode("utf-8", errors="replace"))):
+        if name == LOGS[0] and not auto_resumed and (step := script_step(data.decode("utf-8", errors="replace"))):
             changes["script_step"] = step
     cancelling = changes.get("cancel_requested", record.get("cancel_requested"))
     if managed and tagged(reply, "completed") == "1":
         changes.update(state="Completed", detail="")
+    elif auto_resumed:
+        changes.update(state="Submitted", detail="Slurm time limit reached. Continuation submitted.")
     elif status in SLURM_TERMINAL and not queue:
         state = {"COMPLETED": "Completed" if code == "0:0" else "Failed", "CANCELLED": "Cancelled"}.get(status, "Failed")
         if managed and cancelling:

@@ -22,6 +22,19 @@ submit_segment() {
 '''
 
 
+CHECKPOINT_FUNCTIONS = r'''
+checkpoints_after() {
+    local file step
+    for file in checkpoints/"${2:-}"*/step.*; do
+        [[ -s "$file" && -f "$file" && ! -L "$file" ]] || continue
+        step=${file##*.}
+        [[ "$step" =~ ^(0|[1-9][0-9]{0,17})$ ]] || continue
+        if (( step > $1 )); then printf '%s %s\n' "$step" "$file"; fi
+    done | sort -k1,1nr
+}
+'''
+
+
 def control_script(remote, job_name, action):
     setup = f"cd {shlex.quote(remote)} || exit\njob_name={shlex.quote(job_name)}\n"
     return setup + CHAIN_FUNCTIONS + 'set -euo pipefail\nexec 9>chain.lock\nflock -w 25 9\n' + action
@@ -36,6 +49,34 @@ test -n "$(find checkpoints -type f -name 'step.*' -size +0c -print -quit)" || {
 }
 rm -f -- cancelled
 submit_segment resume
+'''
+
+RESUME_TIMEOUT = CHECKPOINT_FUNCTIONS + r'''
+# Run under chain.lock against the same Slurm snapshot used for tracking.
+auto_resumed=0
+if [[ -n "$job" && -z "$ids" && -z "$queue" && ! -e completed && ! -e cancelled ]]; then
+    state=${accounting%%|*}
+    if [[ "${state%+}" == TIMEOUT ]]; then
+        baseline=-1
+        segment_prefix=''
+        if [[ -f "checkpoints/$job.restart-step" ]]; then
+            baseline=$(cat -- "checkpoints/$job.restart-step")
+        elif [[ -f "checkpoints/$job.auto-resumed" ]]; then
+            # Older batch scripts do not report their starting step.
+            segment_prefix=$job-
+        fi
+        [[ "$baseline" =~ ^(-1|0|[1-9][0-9]{0,17})$ ]] || exit 2
+        if [[ -n "$(checkpoints_after "$baseline" "$segment_prefix")" ]]; then
+            resumed=$(submit_segment resume '' "$baseline")
+            job=${resumed#JOB_ID=}
+            touch -- "checkpoints/$job.auto-resumed"
+            accounting=''
+            auto_resumed=1
+        fi
+    fi
+fi
+printf 'AUTO_RESUMED=%s\nJOB_ID=%s\n' "$auto_resumed" "$job"
+exec 9>&-
 '''
 
 CANCEL = r'''
@@ -56,7 +97,7 @@ def batch_body(initial_input, resume_input, launcher, ranks, target, work="work"
     checkpoint_root = "/".join([".."] * len(work.split("/")))
     return (f'initial_input={shlex.quote(initial_input)}\nresume_input={shlex.quote(resume_input)}\n'
             f'work={shlex.quote(work)}\ncheckpoint_root={checkpoint_root}\n'
-            f'launch=({launcher} -n {ranks} {target})\n' + CHAIN_FUNCTIONS + r'''
+            f'launch=({launcher} -n {ranks} {target})\n' + CHAIN_FUNCTIONS + CHECKPOINT_FUNCTIONS + r'''
 set -u
 base=$PWD
 job_name=$SLURM_JOB_NAME
@@ -67,16 +108,6 @@ parent=${2:-}
 baseline=${3:--1}
 [[ "$baseline" =~ ^(-1|0|[1-9][0-9]{0,17})$ ]] || exit 2
 mkdir -p checkpoints
-
-checkpoints_after() {
-    local file step
-    for file in checkpoints/*/step.*; do
-        [[ -s "$file" && -f "$file" && ! -L "$file" ]] || continue
-        step=${file##*.}
-        [[ "$step" =~ ^(0|[1-9][0-9]{0,17})$ ]] || continue
-        if (( step > $1 )); then printf '%s %s\n' "$step" "$file"; fi
-    done | sort -k1,1nr
-}
 
 find_checkpoint() {
     local step file
@@ -153,6 +184,7 @@ exec 8>solver.lock
 flock -w 120 8
 [[ ! -e completed && ! -e cancelled ]] || exit 0
 mkdir -p "checkpoints/$segment"
+printf '%s\n' "$checkpoint_step" > "checkpoints/$job_id.restart-step"
 handover_due=0
 trap 'handover_due=1' USR1
 cd -- "$work"

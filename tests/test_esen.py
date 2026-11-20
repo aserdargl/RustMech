@@ -73,7 +73,7 @@ class EsenTests(unittest.TestCase):
         with patch("esen_jobs.RemoteTransport") as factory:
             transport = factory.return_value
             transport.command.side_effect = [
-                "JOB_ID=456\ncompleted=0\ncancelled=0\nHAS_CHECKPOINT=1\n"
+                "JOB_ID=456\nAUTO_RESUMED=0\ncompleted=0\ncancelled=0\nHAS_CHECKPOINT=1\n"
                 "QUEUE=\nACCT=TIMEOUT|0:0|\nstdout.log=\nstderr.log=\n",
                 "JOB_ID=789\n",
             ]
@@ -85,6 +85,36 @@ class EsenTests(unittest.TestCase):
             self.assertIn("submit_segment resume", command)
             self.assertEqual((record["job_id"], record["state"]), ("789", "Submitted"))
             transport.put.assert_not_called()
+
+    def test_automatic_timeout_resume_remains_in_background_tracking(self):
+        app = QApplication.instance() or QApplication([])
+        directory, record = self.new_job()
+        jobs.save_job(directory, record, username=self.auth.username, resume_input="restart.in",
+                      job_id="123", state="Running", elapsed_seconds=259200, slurm={"remaining": "0:00"})
+        truba = FakeTruba()
+        truba.auth = self.auth
+        preferences = QSettings(str(self.root / "settings.ini"), QSettings.Format.IniFormat)
+        with patch("esen_workspace.QSettings", return_value=preferences):
+            workspace = EsenWorkspace(truba, history=self.history)
+        self.addCleanup(workspace.dispose)
+
+        with (patch("esen_jobs.RemoteTransport") as factory, patch("esen_jobs.remote_files") as collect):
+            transport = factory.return_value
+            previous_log = base64.b64encode(b"ESEN_STEP=1000\n").decode("ascii")
+            transport.command.return_value = (
+                "JOB_ID=456\nAUTO_RESUMED=1\ncompleted=0\ncancelled=0\nHAS_CHECKPOINT=1\n"
+                f"QUEUE=\nACCT=\nstdout.log={previous_log}\nstderr.log=\n"
+            )
+            workspace._poll_remote()
+            workspace.remote_task[1].result(timeout=5)
+            workspace._tick()
+            collect.assert_not_called()
+
+        record = jobs.read_job(directory)
+        self.assertEqual((record["job_id"], record["state"]), ("456", "Submitted"))
+        self.assertEqual((record["elapsed_seconds"], record["script_step"], record["slurm"]), (None, "", {}))
+        self.assertEqual(workspace._active_truba_jobs[directory], self.auth.username)
+        self.assertIn("Continuation submitted.", record["detail"])
 
     def test_local_results_do_not_replace_saved_inputs(self):
         directory, record = self.new_job("local")
