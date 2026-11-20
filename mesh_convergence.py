@@ -354,6 +354,7 @@ class MeshConvergenceWidget(QWidget):
 
         self.solver_combo.currentIndexChanged.connect(self._solver_changed)
         self.mesh_type_combo.currentIndexChanged.connect(self._mesh_type_changed)
+        self.start_size.valueChanged.connect(self._sync_local_size_limit)
         if self.remote_controller is not None: self.remote_controller.changed.connect(self._solver_changed)
         self._solver_changed()
         self._configure_metrics()
@@ -451,9 +452,14 @@ class MeshConvergenceWidget(QWidget):
                                    capabilities.unavailable_reason)
 
     def _mesh_type_changed(self):
+        self._sync_local_size_limit()
         self.local_size.setEnabled(self.mesh_type_combo.currentData() in TETRAHEDRAL_MESH_TYPES)
         self.run_button.setEnabled(
             self.future is None and self._mesh_type_supported() and self._execution_available())
+
+    def _sync_local_size_limit(self):
+        if self.mesh_type_combo.currentData() in TETRAHEDRAL_MESH_TYPES:
+            self.local_size.setMaximum(self.start_size.value())
 
     def _mesh_type_supported(self):
         index = self.mesh_type_combo.currentIndex()
@@ -480,14 +486,14 @@ class MeshConvergenceWidget(QWidget):
         return button
 
     def level_settings(self, size):
-        scale = size / self.start_size.value()
         capabilities = get_solver_capabilities(self.solver_combo.currentData())
         level = replace(self.settings, mesh_resolution=size,
                         mesh_type=self.mesh_type_combo.currentData(),
                         solver_backend=capabilities.identifier,
                         cores=min(self.settings.cores, capabilities.max_cores))
         if level.mesh_type in TETRAHEDRAL_MESH_TYPES:
-            level = replace(level, local_mesh_size=self.local_size.value() * scale)
+            local_ratio = self.local_size.value() / self.start_size.value()
+            level = replace(level, local_mesh_size=size * local_ratio)
         errors = validate_settings(level)
         if errors:
             raise ValueError(errors[0])

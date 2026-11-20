@@ -369,6 +369,26 @@ class LiveConvergenceTests(unittest.TestCase):
         self.assertTrue(widget.mesh_type_combo.isEnabled())
         self.assertTrue(widget.local_size.isEnabled())
 
+    def test_tetra_local_size_is_capped_when_opening_or_changing_mesh_settings(self):
+        for mesh_type in ("TET4", "TET10"):
+            with self.subTest(mesh_type=mesh_type):
+                widget = self.widget(settings=replace(SETTINGS, mesh_type=mesh_type, local_mesh_size=.3))
+                self.assertEqual(widget.local_size.value(), .2)
+                widget.start_size.setValue(.04)
+                self.assertEqual(widget.local_size.value(), .04)
+                widget.local_size.setValue(.05)
+                self.assertEqual(widget.local_size.value(), .04)
+                level = widget.level_settings(.013)
+                self.assertEqual(level.local_mesh_size, level.mesh_resolution)
+                widget.mesh_type_combo.setCurrentIndex(widget.mesh_type_combo.findData("HEX8"))
+                widget.start_size.setValue(.03)
+                self.assertEqual(widget.local_size.value(), .04)
+                widget.mesh_type_combo.setCurrentIndex(widget.mesh_type_combo.findData(mesh_type))
+                self.assertEqual(widget.local_size.value(), .03)
+                widget.start_size.setValue(.05)
+                self.assertEqual(widget.local_size.maximum(), .05)
+                self.assertEqual(widget.local_size.value(), .03)
+
     def test_mesh_types_follow_ready_truba_runtime(self):
         widget = self.widget()
         widget.remote_controller = MagicMock(requested=True, ready=True,
