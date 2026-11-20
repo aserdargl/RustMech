@@ -61,6 +61,40 @@ def list_directory(auth, relative):
     ))
 
 
+def is_slurm_snapshot(directory):
+    return any(parent == "esen-folders" and re.fullmatch(r"[0-9a-f]{32}", name)
+               for parent, name in zip(directory.parts, directory.parts[1:]))
+
+
+def can_delete_file(entry):
+    name = entry.filename
+    return (S_ISREG(entry.st_mode or 0) and name not in ("", ".", "..") and "/" not in name
+            and "\0" not in name and not SYNC_TEMP_FILE.fullmatch(name))
+
+
+def delete_files(auth, relative, entries):
+    """Remove the selected regular files and report per-file failures."""
+    entries = tuple(entries)
+    if not all(map(can_delete_file, entries)):
+        raise ValueError("Select regular files to delete.")
+    if is_slurm_snapshot(relative):
+        raise ValueError("Synchronized inputs are read-only.")
+    failures = {}
+    with _project_directory(auth, relative) as (sftp, directory):
+        if is_slurm_snapshot(directory):
+            raise ValueError("Synchronized inputs are read-only.")
+        for entry in entries:
+            target = str(directory / entry.filename)
+            try:
+                if _file_version(sftp.lstat(target)) != _file_version(entry):
+                    failures[entry.filename] = "File changed since it was listed."
+                    continue
+                sftp.remove(target)
+            except (OSError, EOFError, SSHException) as error:
+                failures[entry.filename] = str(error) or "Could not delete the file."
+    return len(entries) - len(failures), failures
+
+
 def create_directory(auth, relative, name):
     validate_folder_name(name)
     with _project_directory(auth, relative) as (sftp, directory):

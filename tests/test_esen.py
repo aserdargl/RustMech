@@ -624,6 +624,7 @@ class EsenTests(unittest.TestCase):
                     self.assertEqual(len({button.width() for button in history_commands}), 1)
                     buttons = [button for button in workspace._command_buttons
                                if button not in (*toolbar, workspace.upload, workspace.sync, *navigation,
+                                                 browser.select_files, browser.delete_files,
                                                  *history_actions, *history_commands)]
                     width = max(button.sizeHint().width() for button in buttons) + 2
                     self.assertEqual({button.maximumWidth() for button in buttons}, {width})

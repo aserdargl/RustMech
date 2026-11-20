@@ -718,6 +718,7 @@ class EsenWorkspace(QDialog):
         self.truba_browser = TrubaFileBrowser(self.truba, self.executor, command, self.preferences)
         self.truba_browser.files.itemSelectionChanged.connect(self._select_truba_input)
         self.truba_browser.files.itemClicked.connect(self._select_truba_input)
+        self.truba_browser.state_changed.connect(self._buttons)
         truba_layout.addWidget(self.truba_browser, 1)
         split.addWidget(truba_card)
         split.setStretchFactor(2, 1)
@@ -1187,13 +1188,14 @@ class EsenWorkspace(QDialog):
         # Reserve space for the shared focus border on both sides.
         transfer_buttons = (self.upload, self.sync)
         navigation = self.truba_browser.navigation_buttons
+        file_actions = self.truba_browser.select_files, self.truba_browser.delete_files
         history_actions = (self.select_history, self.delete_job)
         history_commands = (self.use_inputs, self.refresh, self.resume, self.stop)
         md_actions = (self.md_preview_button, self.md_prepare, self.md_run)
         other_buttons = [button for button in self._command_buttons
-                         if button not in (*transfer_buttons, *self._compact_input_actions, *navigation,
+                         if button not in (*transfer_buttons, *self._compact_input_actions, *navigation, *file_actions,
                                            *history_actions, *history_commands)]
-        for group in (other_buttons, transfer_buttons, navigation, history_actions, history_commands,
+        for group in (other_buttons, transfer_buttons, navigation, file_actions, history_actions, history_commands,
                       md_actions, self.md_file_buttons, self.md_plan_buttons):
             width = max(button.sizeHint().width() for button in group) + 2
             for button in group:
@@ -2106,7 +2108,7 @@ class EsenWorkspace(QDialog):
         target = self.target.currentData()
         auth = self.truba.analysis_auth() if target == "remote" else None
         if (self.sync_task or self.run_list_task or self.batch_active or self.batch_queue or
-                (target == "remote" and (self.remote_task or not auth or self.upload_task)) or
+                (target == "remote" and (self.remote_task or not auth or self.upload_task or self.truba_browser.deleting)) or
                 (target == "local" and self.local_task)):
             return
         try:
@@ -2426,9 +2428,12 @@ class EsenWorkspace(QDialog):
                 self.truba_badge.setText(translate("Working" if working else "Connected"))
                 self.truba_badge.style().unpolish(self.truba_badge)
                 self.truba_badge.style().polish(self.truba_badge)
-        ready = authenticated and not self.remote_task if remote else not self.local_task
+        browser = self.truba_browser
+        can_submit_remote = authenticated and not self.remote_task and not browser.deleting
+        ready = can_submit_remote if remote else not self.local_task
         batch_busy = bool(self.batch_active or self.batch_queue)
         uploading = self.upload_task is not None or self.sync_task is not None or self.run_list_task is not None
+        browser.set_delete_blocked(bool(uploading or self.remote_task or batch_busy))
         root = self._sync_input_browse_root()
         path = self._input_locations[self._input_location]
         self.input_path.setText(str(root / path) if root is not None else "")
@@ -2444,7 +2449,7 @@ class EsenWorkspace(QDialog):
                 ready = ready and self._upload_ready(auth)
         if self.reuse_batch:
             targets = {record["target"] for _, record in self.reuse_batch}
-            ready = ("remote" not in targets or (authenticated and not self.remote_task)) and (
+            ready = ("remote" not in targets or can_submit_remote) and (
                 "local" not in targets or not self.local_task)
             self.connection.setVisible("remote" in targets and not authenticated)
         self.start.setEnabled(self.command_valid and ready and not batch_busy and not uploading)
@@ -2453,9 +2458,8 @@ class EsenWorkspace(QDialog):
         )
         self.upload.setEnabled(bool(remote and authenticated and has_inputs
                                     and not self.folder_scan and not uploading and not batch_busy and not self.reuse_batch
-                                    and not self.truba_browser.restoring_directory
-                                    and not self.truba_browser.is_slurm_snapshot_open()))
-        browser = self.truba_browser
+                                    and not browser.deleting and not browser.restoring_directory
+                                    and not browser.is_slurm_snapshot_open()))
         sync_directory = browser.open_directory(auth)
         self.sync.setEnabled(bool(remote and authenticated and self.folder_root and not self.folder_replay
                                   and not self.folder_scan and not uploading and not batch_busy and not self.reuse_batch

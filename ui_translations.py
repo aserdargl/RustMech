@@ -223,6 +223,15 @@ Synchronized inputs are read-only.|Eşitlenen girdiler salt okunurdur.
 Upload|Yükle
 Upload file to the open TRUBA folder|Açık TRUBA klasörüne dosya yükle
 Download selected TRUBA file|Seçili TRUBA dosyasını indir
+Select all files|Tüm dosyaları seç
+Select visible TRUBA files (Ctrl+A)|Görünen TRUBA dosyalarını seç (Ctrl+A)
+Delete selected TRUBA files (Delete)|Seçili TRUBA dosyalarını sil (Delete)
+Delete TRUBA files|TRUBA dosyalarını sil
+Deleting selected TRUBA files…|Seçili TRUBA dosyaları siliniyor…
+Could not delete the selected TRUBA files.|Seçili TRUBA dosyaları silinemedi.
+Select regular files to delete.|Silmek için normal dosyaları seçin.
+File changed since it was listed.|Dosya listelendikten sonra değişti.
+Could not delete the file.|Dosya silinemedi.
 Upload file to TRUBA|TRUBA'ya dosya yükle
 Download file from TRUBA|TRUBA'dan dosya indir
 Uploading file to TRUBA…|Dosya TRUBA'ya yükleniyor…
@@ -1479,6 +1488,11 @@ TURKISH.update({
 })
 
 TEMPLATES = {
+    'Permanently delete {count} selected files from TRUBA?':
+        'Seçilen {count} dosya TRUBA’dan kalıcı olarak silinsin mi?',
+    'Deleted {count} files from TRUBA.': 'TRUBA’dan {count} dosya silindi.',
+    'Deleted {count} files from TRUBA. Failed: {failed}.':
+        'TRUBA’dan {count} dosya silindi. Silinemeyen: {failed}.',
     'Cancel Slurm job {job_id}? This stops the entire allocation and any analyses using it.':
         '{job_id} numaralı Slurm işi iptal edilsin mi? Tahsisin tamamı ve onu kullanan analizler durdurulur.',
     'Cancel {count} selected Slurm jobs? This stops each allocation and any analyses using it.':

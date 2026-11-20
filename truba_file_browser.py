@@ -5,10 +5,11 @@ from pathlib import Path, PurePosixPath
 import re
 from stat import S_ISDIR, S_ISLNK, S_ISREG
 
-from PySide6.QtCore import QDateTime, QLocale, Qt, Signal
+from PySide6.QtCore import QDateTime, QItemSelectionModel, QLocale, QSignalBlocker, Qt, Signal
+from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
-    QApplication, QCheckBox, QHeaderView, QHBoxLayout, QLabel, QLineEdit, QStyle,
-    QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
+    QAbstractItemView, QApplication, QCheckBox, QHeaderView, QHBoxLayout, QLabel, QLineEdit, QMessageBox, QStyle,
+    QTreeWidget, QTreeWidgetItem, QTreeWidgetItemIterator, QVBoxLayout, QWidget,
 )
 
 from file_dialog import QFileDialog
@@ -27,13 +28,16 @@ BUSY_MESSAGES = {
     "mkdir": "Creating folder…",
     "upload": "Uploading file to TRUBA…",
     "download": "Downloading file from TRUBA…",
+    "delete": "Deleting selected TRUBA files…",
 }
 FAILURE_MESSAGES = {
     "list": "Could not load TRUBA files.",
     "mkdir": "Could not create the folder. Check if the name already exists.",
     "upload": "Could not upload the file to TRUBA.",
     "download": "Could not download the file from TRUBA.",
+    "delete": "Could not delete the selected TRUBA files.",
 }
+DELETABLE_FILE_ROLE = Qt.ItemDataRole.UserRole + 1
 
 
 class TrubaFileBrowser(QWidget):
@@ -52,6 +56,7 @@ class TrubaFileBrowser(QWidget):
         self.loaded = False
         self._uploaded_directory = None
         self._slurm_directory = None
+        self._delete_blocked = False
         self.entries = []
 
         layout = QVBoxLayout(self)
@@ -102,6 +107,24 @@ class TrubaFileBrowser(QWidget):
         self.files.header().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
         self.files.itemActivated.connect(self._open_folder)
         self.files.itemSelectionChanged.connect(self._update_controls)
+        if not self._batch:
+            self.files.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+            self.files.itemExpanded.connect(self._update_controls)
+            self.files.itemCollapsed.connect(self._update_controls)
+            self.select_files = command("Select all files", self._select_visible_files,
+                                        hint="Select visible TRUBA files (Ctrl+A)")
+            self.delete_files = command("Delete", self._delete_files, role="destructiveActionBtn",
+                                        hint="Delete selected TRUBA files (Delete)")
+            file_actions = ActionFlowLayout(equal_width=True)
+            file_actions.addWidget(self.select_files)
+            file_actions.addWidget(self.delete_files)
+            layout.addLayout(file_actions)
+            self.select_shortcut = QShortcut(QKeySequence.StandardKey.SelectAll, self.files)
+            self.select_shortcut.setContext(Qt.ShortcutContext.WidgetShortcut)
+            self.select_shortcut.activated.connect(self._select_visible_files)
+            self.delete_shortcut = QShortcut(QKeySequence(Qt.Key.Key_Delete), self.files)
+            self.delete_shortcut.setContext(Qt.ShortcutContext.WidgetShortcut)
+            self.delete_shortcut.activated.connect(self._delete_files)
         layout.addWidget(self.files, 1)
 
         self.upload = command("Upload", self._upload_file, hint="Upload file to the open TRUBA folder")
@@ -178,6 +201,7 @@ class TrubaFileBrowser(QWidget):
         self.filter.clear()
         self.folder_name.clear()
         self._update_address()
+        self.status.setToolTip("")
         self.status.setText("Connect using the main TRUBA button." if auth is None else "")
         self._update_controls()
         self.state_changed.emit()
@@ -206,6 +230,15 @@ class TrubaFileBrowser(QWidget):
     def navigating(self):
         return self.task is not None and (not self.loaded or self.task[1] != self.directory)
 
+    @property
+    def deleting(self):
+        return self.task is not None and self.task[2] == "delete"
+
+    def set_delete_blocked(self, blocked):
+        if self._delete_blocked != blocked:
+            self._delete_blocked = blocked
+            self._update_controls()
+
     def _update_controls(self, *_):
         if self._batch:
             self.status.setVisible(bool(self.status.text()))
@@ -221,6 +254,9 @@ class TrubaFileBrowser(QWidget):
         self.create.setEnabled(can_write and bool(self.folder_name.text().strip()))
         self.upload.setEnabled(can_write)
         self.download.setEnabled(can_change and self._selected_item(S_ISREG) is not None)
+        if not self._batch:
+            self.select_files.setEnabled(can_change and next(self._visible_file_rows(), None) is not None)
+            self.delete_files.setEnabled(can_write and not self._delete_blocked and bool(self._selected_delete_entries()))
 
     def _submit(self, kind, operation, directory, *args, success_message=""):
         if self.auth is None or self.task is not None:
@@ -229,6 +265,7 @@ class TrubaFileBrowser(QWidget):
             operation = truba_files.list_batch_directory
         future = self.executor.submit(operation, self.auth, directory, *args)
         self.task = (future, directory, kind, success_message)
+        self.status.setToolTip("")
         self.status.setText(BUSY_MESSAGES[kind])
         self._update_controls()
         self.state_changed.emit()
@@ -249,9 +286,7 @@ class TrubaFileBrowser(QWidget):
         return None
 
     def is_slurm_snapshot_open(self):
-        parts = self.directory.parts
-        return any(parent == "esen-folders" and re.fullmatch(r"[0-9a-f]{32}", name)
-                   for parent, name in zip(parts, parts[1:]))
+        return truba_files.is_slurm_snapshot(self.directory)
 
     def refresh_after_upload(self, auth, directory):
         if self.auth == auth:
@@ -298,9 +333,55 @@ class TrubaFileBrowser(QWidget):
 
     def _selected_item(self, matches_mode):
         items = self.files.selectedItems()
-        if items and matches_mode(items[0].data(0, Qt.ItemDataRole.UserRole)):
+        if len(items) == 1 and self._row_visible(items[0]) and matches_mode(items[0].data(0, Qt.ItemDataRole.UserRole)):
             return items[0]
         return None
+
+    @staticmethod
+    def _row_visible(row):
+        parent = row.parent()
+        return not row.isHidden() and (parent is None or (parent.isExpanded() and not parent.isHidden()))
+
+    def _visible_file_rows(self):
+        rows = QTreeWidgetItemIterator(self.files, QTreeWidgetItemIterator.IteratorFlag.NotHidden)
+        while (row := rows.value()) is not None:
+            if row.data(0, DELETABLE_FILE_ROLE) is not None and self._row_visible(row):
+                yield row
+            rows += 1
+
+    def _select_visible_files(self):
+        if not self.select_files.isEnabled():
+            return
+        with QSignalBlocker(self.files):
+            self.files.clearSelection()
+            for row in self._visible_file_rows():
+                row.setSelected(True)
+        self.files.itemSelectionChanged.emit()
+
+    def _selected_delete_entries(self):
+        return tuple(entry for row in self.files.selectedItems()
+                     if self._row_visible(row) and (entry := row.data(0, DELETABLE_FILE_ROLE)) is not None)
+
+    def _delete_files(self):
+        if not self.delete_files.isEnabled():
+            return
+        auth, directory = self.auth, self.directory
+        entries = self._selected_delete_entries()
+        if not entries:
+            return
+        confirm = QMessageBox(self)
+        confirm.setIcon(QMessageBox.Icon.Warning)
+        confirm.setWindowTitle(translate("Delete TRUBA files"))
+        confirm.setTextFormat(Qt.TextFormat.PlainText)
+        confirm.setText(translate("Permanently delete {count} selected files from TRUBA?").format(count=len(entries)))
+        confirm.setInformativeText(self.address.text())
+        confirm.setDetailedText("\n".join(entry.filename for entry in entries))
+        confirm.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        confirm.setDefaultButton(QMessageBox.StandardButton.No)
+        if (confirm.exec() == QMessageBox.StandardButton.Yes and self._auth() == auth and self.auth == auth
+                and self.directory == directory and self.delete_files.isEnabled()):
+            self._submit("delete", truba_files.delete_files, directory, entries)
+        confirm.deleteLater()
 
     def _upload_file(self):
         if not self.upload.isEnabled():
@@ -354,6 +435,8 @@ class TrubaFileBrowser(QWidget):
                 message = "Permission denied on TRUBA."
             else:
                 message = FAILURE_MESSAGES[kind]
+            if kind == "list" and success_message:
+                message = f"{translate(success_message)} {translate(message)}"
             self.status.setText(message)
         else:
             if kind == "mkdir":
@@ -364,6 +447,14 @@ class TrubaFileBrowser(QWidget):
             if kind == "upload":
                 self._uploaded_directory = None
                 self._refresh(success_message="File uploaded to TRUBA.")
+                return
+            if kind == "delete":
+                deleted, failures = entries
+                message = (translate("Deleted {count} files from TRUBA.").format(count=deleted) if not failures else
+                           translate("Deleted {count} files from TRUBA. Failed: {failed}.").format(
+                               count=deleted, failed=len(failures)))
+                self._refresh(success_message=message)
+                self.status.setToolTip("\n".join(f"{name}: {translate(error)}" for name, error in failures.items()))
                 return
             if kind == "download":
                 self.status.setText("File downloaded from TRUBA.")
@@ -391,8 +482,8 @@ class TrubaFileBrowser(QWidget):
 
     def _render_entries(self, *_, preserve_selection=True, select_run_list=False):
         current = self.files.selectedItems() if preserve_selection else []
-        selected_name = current[0].text(0) if current else None
-        selected_row = None
+        selected_names = {row.text(0) for row in current}
+        selected_rows = []
         run_list_row = None
         self.files.clear()
         folder_icon = self.style().standardIcon(QStyle.StandardPixmap.SP_DirIcon)
@@ -408,9 +499,11 @@ class TrubaFileBrowser(QWidget):
             size = "" if folder or entry.st_size is None else locale.formattedDataSize(entry.st_size)
             row = QTreeWidgetItem([entry.filename, size, modified_date_text(getattr(entry, "st_mtime", None))])
             row.setData(0, Qt.ItemDataRole.UserRole, mode)
+            if not self._batch and truba_files.can_delete_file(entry):
+                row.setData(0, DELETABLE_FILE_ROLE, entry)
             row.setToolTip(0, entry.filename)
-            if entry.filename == selected_name:
-                selected_row = row
+            if entry.filename in selected_names:
+                selected_rows.append(row)
             if S_ISREG(mode) and entry.filename == RUN_LIST:
                 run_list_row = row
             row.setIcon(0, folder_icon if folder else link_icon if S_ISLNK(mode) else file_icon)
@@ -435,10 +528,13 @@ class TrubaFileBrowser(QWidget):
                 self.files.addTopLevelItem(groups[category])
                 groups[category].setExpanded(True)
         self._filter_entries()
-        if select_run_list and selected_row is None:
-            selected_row = run_list_row
-        if selected_row is not None and not selected_row.isHidden():
-            self.files.setCurrentItem(selected_row)
+        if select_run_list and not selected_rows and run_list_row is not None:
+            selected_rows = [run_list_row]
+        with QSignalBlocker(self.files):
+            for row in selected_rows:
+                if self._row_visible(row):
+                    self.files.setCurrentItem(row, 0, QItemSelectionModel.SelectionFlag.Select)
+        self.files.itemSelectionChanged.emit()
 
     def _filter_entries(self, *_):
         query = self.filter.text().strip().casefold()
@@ -452,6 +548,7 @@ class TrubaFileBrowser(QWidget):
                     row.setExpanded(True)
             else:
                 self._filter_row(row, query)
+        self._update_controls()
 
     @staticmethod
     def _filter_row(row, query):

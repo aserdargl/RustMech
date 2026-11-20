@@ -15,12 +15,12 @@ from unittest.mock import MagicMock
 
 from PySide6.QtCore import QObject, QSettings, Qt, Signal
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QSplitter
+from PySide6.QtWidgets import QApplication, QMessageBox, QSplitter
 import pytest
 from paramiko import SSHException
 
 from esen_workspace import EsenWorkspace
-from truba_files import (create_directory, download_file, list_directory, project_root, stage_batch_geometries,
+from truba_files import (create_directory, delete_files, download_file, list_directory, project_root, stage_batch_geometries,
                          sync_tree, upload_file, upload_tree)
 from truba_ssh import RemoteAuth, active_session_client, register_session, unregister_session
 from window_state import WindowStateStore
@@ -63,6 +63,35 @@ def test_sftp_keeps_listing_and_folder_creation_in_project(remote):
     with pytest.raises(ValueError, match="outside the RustMech project"):
         list_directory(auth, relative)
     sftp.mkdir.assert_called_once()
+
+
+def test_delete_files_reports_partial_failures_and_keeps_project_boundaries(remote):
+    auth, sftp = remote
+    root = project_root(auth.username)
+    folder = PurePosixPath("runs")
+    files = [SimpleNamespace(filename=name, st_mode=S_IFREG, st_size=10, st_mtime=1)
+             for name in ("a.in", "changed.in", "denied.in")]
+    sftp.lstat.side_effect = lambda path: (SimpleNamespace(st_mode=S_IFLNK, st_size=10, st_mtime=1)
+                                          if path.endswith("changed.in") else files[0])
+    sftp.remove.side_effect = [None, PermissionError("Denied")]
+    deleted, failures = delete_files(auth, folder, files)
+    assert deleted == 1
+    assert failures == {"changed.in": "File changed since it was listed.", "denied.in": "Denied"}
+    assert [call.args[0] for call in sftp.remove.call_args_list] == [
+        str(root / folder / "a.in"), str(root / folder / "denied.in")
+    ]
+    sftp.remove.reset_mock()
+    for name, mode in (("../outside", S_IFREG), ("folder", S_IFDIR), ("link", S_IFLNK)):
+        with pytest.raises(ValueError, match="regular files"):
+            delete_files(auth, folder, [*files, SimpleNamespace(filename=name, st_mode=mode)])
+    snapshot = root / "esen-folders" / ("a" * 32)
+    sftp.normalize.side_effect = lambda path: str(snapshot) if path == str(root / folder) else path
+    with pytest.raises(ValueError, match="read-only"):
+        delete_files(auth, folder, files)
+    sftp.normalize.side_effect = lambda path: "/outside" if path == str(root / folder) else path
+    with pytest.raises(ValueError, match="outside the RustMech project"):
+        delete_files(auth, folder, files)
+    sftp.remove.assert_not_called()
 
 
 def test_upload_stages_data_and_never_overwrites_existing_file(remote, tmp_path):
@@ -554,6 +583,68 @@ def test_workspace_remembers_the_last_truba_folder_for_each_account(tmp_path, mo
         assert requests[-1] == (auth.username, PurePosixPath())
     finally:
         reopened.dispose()
+
+
+def test_workspace_selects_visible_truba_files_and_confirms_bulk_deletion(remote, tmp_path, monkeypatch):
+    app = QApplication.instance() or QApplication([])
+    preferences = QSettings(str(tmp_path / "layout.ini"), QSettings.Format.IniFormat)
+    monkeypatch.setattr("esen_workspace.QSettings", lambda *_: preferences)
+    auth, sftp = remote
+    truba = Truba()
+    truba.auth = auth
+    entries = {name: SimpleNamespace(filename=name, st_mode=mode, st_size=10)
+               for name, mode in (("a.in", S_IFREG), ("b.in", S_IFREG), ("keep.log", S_IFREG),
+                                  ("a.folder", S_IFDIR), ("a.link", S_IFLNK))}
+    sftp.listdir_attr.side_effect = lambda _path: list(entries.values())
+    sftp.lstat.side_effect = lambda path: entries[PurePosixPath(path).name]
+    sftp.remove.side_effect = lambda path: entries.pop(PurePosixPath(path).name)
+    workspace = EsenWorkspace(truba, history=tmp_path)
+    try:
+        workspace.show()
+        app.processEvents()
+        browser = workspace.truba_browser
+
+        def finish_request():
+            browser.task[0].result(timeout=5)
+            browser.check_task()
+
+        finish_request()
+        browser.group_files.setChecked(True)
+        browser.filter.setText(".in")
+        browser.select_files.click()
+        assert {row.text(0) for row in browser.files.selectedItems()} == {"a.in", "b.in"}
+        assert not browser.download.isEnabled()
+        assert browser.selected_file(auth) is None
+        browser.filter.clear()
+        browser.group_files.setChecked(False)
+        assert {row.text(0) for row in browser.files.selectedItems()} == {"a.in", "b.in"}
+        browser.files.setFocus()
+        QTest.keyClick(browser.files, Qt.Key.Key_A, Qt.KeyboardModifier.ControlModifier)
+        assert {row.text(0) for row in browser.files.selectedItems()} == {"a.in", "b.in", "keep.log"}
+        browser.filter.setText(".in")
+        assert browser.delete_files.isEnabled()
+
+        def reject(dialog):
+            assert dialog.defaultButton() == dialog.button(QMessageBox.StandardButton.No)
+            assert "2 selected files" in dialog.text()
+            assert set(dialog.detailedText().splitlines()) == {"a.in", "b.in"}
+            return QMessageBox.StandardButton.No
+
+        monkeypatch.setattr(QMessageBox, "exec", reject)
+        browser.delete_files.click()
+        sftp.remove.assert_not_called()
+        assert browser.task is None
+        monkeypatch.setattr(QMessageBox, "exec", lambda _dialog: QMessageBox.StandardButton.Yes)
+        QTest.keyClick(browser.files, Qt.Key.Key_Delete)
+        assert browser.deleting
+        assert not browser.delete_files.isEnabled()
+        finish_request()
+        finish_request()
+        assert set(entries) == {"keep.log", "a.folder", "a.link"}
+        assert browser.status.text() == "Deleted 2 files from TRUBA."
+        assert not browser.delete_files.isEnabled()
+    finally:
+        workspace.dispose()
 
 
 def test_workspace_browses_creates_and_restores_three_columns(remote, tmp_path, monkeypatch):
