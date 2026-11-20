@@ -134,12 +134,14 @@ class TrubaQueueStatus(QWidget):
             self.notice.setText('Connect to TRUBA to see queue status.')
 
     def refresh(self):
-        if self.shutting_down or not self.isVisible() or self.worker is not None:
+        if self.shutting_down or not self.isVisible():
             return
         auth = self.dialog.analysis_auth()
         if auth is None:
             return
         self.timer.start()
+        if self.worker is not None:
+            return
         self.refresh_button.setEnabled(False)
         self.set_notice('Updating queue status…')
         self.worker = PartitionCapacityWorker(auth, self)

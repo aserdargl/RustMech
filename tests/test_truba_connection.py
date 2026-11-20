@@ -99,7 +99,7 @@ class TrubaTests(unittest.TestCase):
         dialog.forget_password()
         self.assertEqual(dialog.password.text(), "")
 
-    def test_queue_status_loads_only_on_visible_connected_tab(self):
+    def test_queue_status_is_shared_between_connection_and_queue_tabs(self):
         dialog = self.dialog()
         tab = dialog.queue_status
         auth = RemoteAuth('tester', 'test')
@@ -111,17 +111,29 @@ class TrubaTests(unittest.TestCase):
                 RuntimeError('Unavailable'),
             ]
             dialog.show()
-            dialog.tabs.setCurrentWidget(tab)
             self.app.processEvents()
+            tables = dialog.job_tables_splitter
+            self.assertIs(tables.widget(0), dialog.job_list)
+            self.assertIs(tables.widget(1), dialog.queue_status_group)
+            self.assertIs(tab.parentWidget(), dialog.queue_status_group)
+            self.assertTrue(tab.isVisible())
             self.assertFalse(tab.refresh_button.isEnabled())
             transport.assert_not_called()
 
-            dialog.tabs.setCurrentWidget(dialog.settings_scroll)
+            dialog.tabs.setCurrentWidget(dialog.active_jobs)
             current_auth.return_value = auth
             dialog.connection_changed.emit(True)
             self.app.processEvents()
             transport.assert_not_called()
-            dialog.tabs.setCurrentWidget(tab)
+            self.assertFalse(tab.timer.isActive())
+            dialog.tabs.setCurrentWidget(dialog.settings_scroll)
+            self.assertTrue(tab.timer.isActive())
+            worker = tab.worker
+            dialog.tabs.setCurrentWidget(dialog.queue_status_page)
+            self.assertIs(tab.parentWidget(), dialog.queue_status_page)
+            self.assertTrue(tab.isVisible())
+            self.assertFalse(dialog.queue_status_group.isVisible())
+            self.assertIs(tab.worker, worker)
             self.assertTrue(tab.timer.isActive())
             self.assertTrue(tab.worker.wait(5000))
             self.app.processEvents()
@@ -141,7 +153,7 @@ class TrubaTests(unittest.TestCase):
             self.assertIn('Could not update queue status.', tab.notice.text())
             self.assertIn(tab.updated_at, tab.notice.text())
 
-            dialog.tabs.setCurrentWidget(dialog.settings_scroll)
+            dialog.tabs.setCurrentWidget(dialog.active_jobs)
             self.assertFalse(tab.timer.isActive())
             current_auth.return_value = None
             dialog.connection_changed.emit(False)
@@ -321,11 +333,22 @@ class TrubaTests(unittest.TestCase):
             self.assertGreater(first.tabs.height(), smaller_upper)
             self.assertGreater(first.tabs.height(), 0)
             expected = splitter.sizes()
+            tables = first.job_tables_splitter
+            handle = tables.handle(1)
+            center = handle.rect().center()
+            before_width = tables.sizes()[0]
+            QTest.mousePress(handle, Qt.MouseButton.LeftButton, pos=center)
+            QTest.mouseMove(handle, center + QPoint(65, 0))
+            QTest.mouseRelease(handle, Qt.MouseButton.LeftButton, pos=center)
+            expected_widths = tables.sizes()
+            self.assertGreater(expected_widths[0], before_width)
+            first.tabs.setCurrentWidget(first.queue_status_page)
             first.hide()
             second = self.dialog()
             second.show()
             self.app.processEvents()
             self.assertEqual(second.jobs_splitter.sizes(), expected)
+            self.assertEqual(second.job_tables_splitter.sizes(), expected_widths)
             self.assertEqual(second.size(), first.size())
         finally:
             self.app.removeEventFilter(store)
