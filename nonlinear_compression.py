@@ -1242,6 +1242,12 @@ class RustMechDialog(QDialog):
         self.apply_button.setToolTip("Save settings and start the selected solver.")
         self.apply_button.clicked.connect(self.apply)
 
+        self.result_button = QPushButton("Result")
+        self.result_button.setObjectName("resultBtn")
+        self.result_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.result_button.setToolTip("View latest results")
+        self.result_button.clicked.connect(self.show_latest_result)
+
         self.force_stop_button = QPushButton("Forced Stop")
         self.force_stop_button.setObjectName("forcedStopBtn")
         self.force_stop_button.setAutoDefault(False)
@@ -1293,7 +1299,9 @@ class RustMechDialog(QDialog):
         progress_policy.setRetainSizeWhenHidden(False)
         self.local_analysis_progress.setSizePolicy(progress_policy)
         status_layout.addWidget(self.local_analysis_progress, 1)
-        self._analysis_action_buttons = (cancel, self.apply_button, self.force_stop_button)
+        self._analysis_action_buttons = (
+            cancel, self.apply_button, self.result_button, self.force_stop_button,
+        )
         for button in self._analysis_action_buttons:
             status_layout.addWidget(button)
         self.execution_target = NoWheelComboBox()
@@ -3484,20 +3492,70 @@ class RustMechDialog(QDialog):
         self.status.setText("Waiting for TRUBA job and retrieving results…")
         self.analysis_poll.start()
 
-    def show_kratos_results(self):
+    def _latest_mechanical_result(self) -> Path | None:
+        if (self._result_preview_folder is not None
+                and (self._result_preview_folder / "deformed_shape.vtu").is_file()):
+            return self._result_preview_folder.parent
+        candidates = list((ROOT / "HumanResults").glob("Run_*"))
+        if self._persist_solver_profiles:
+            saved = self.solver_profile_store.settings.value("mechanical/latestResultFolder", "", type=str)
+            candidates.extend(Path(path) for path in (saved, self._latest_kratos_results) if path)
+        for folder in sorted(set(candidates), key=lambda path: path.name, reverse=True):
+            if not (folder / "03_Results" / "deformed_shape.vtu").is_file():
+                continue
+            try:
+                report = json.loads((folder / "summary.json").read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            if isinstance(report, dict) and report.get("status") in (
+                "completed", "completed_with_force_balance_warning",
+            ):
+                return folder
+        return None
+
+    def show_latest_result(self) -> None:
+        from ui_language import translate
+
+        if self.setup_tabs.currentIndex() == self._fft_method_index:
+            folder = self.fft_result_folder
+            if folder is not None and folder.is_dir():
+                self._open_fft_results()
+                return
+        else:
+            folder = self._latest_mechanical_result()
+            if folder is not None:
+                if self._result_preview_folder != folder / "03_Results":
+                    self._show_completed_analysis(folder, announce=False)
+                if self._latest_kratos_results == str(folder) and self.show_kratos_results(warn=False):
+                    return
+                self.workspace_tabs.setCurrentIndex(0)
+                field = self.result_preview_field
+                with QSignalBlocker(field):
+                    field.setCurrentIndex(field.findData("Von_Mises_MPa"))
+                self.render_preview()
+                if field.currentData() is None:
+                    QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder)))
+                return
+        QMessageBox.information(self, translate("Result"), translate("No completed analysis results found."))
+
+    def show_kratos_results(self, *, warn=True) -> bool:
+        folder = Path(self._latest_kratos_results)
         if self._kratos_result_dialog is not None:
-            self._kratos_result_dialog.show()
-            self._kratos_result_dialog.raise_()
-            return
+            if self._kratos_result_dialog.folder == folder:
+                show_restored_window(self._kratos_result_dialog)
+                return True
+            self._kratos_result_dialog.close()
         try:
             from kratos_results_view import KratosResultsDialog
-            dialog=KratosResultsDialog(self._latest_kratos_results,self)
+            dialog = KratosResultsDialog(folder, self)
         except Exception as error:
-            QMessageBox.warning(self,"Kratos results",str(error))
-            return
-        self._kratos_result_dialog=dialog
-        dialog.destroyed.connect(lambda *_:setattr(self,"_kratos_result_dialog",None))
-        dialog.show()
+            if warn:
+                QMessageBox.warning(self, "Kratos results", str(error))
+            return False
+        self._kratos_result_dialog = dialog
+        dialog.finished.connect(lambda _: setattr(self, "_kratos_result_dialog", None))
+        show_restored_window(dialog)
+        return True
 
     def force_stop_analysis(self) -> None:
         if self.analysis_job is None:
@@ -3645,6 +3703,8 @@ class RustMechDialog(QDialog):
 
             self._result_preview_folder = fields_folder
             self._result_preview_data = None
+            if self._persist_solver_profiles:
+                self.solver_profile_store.settings.setValue("mechanical/latestResultFolder", str(folder))
             self.result_preview_field.setToolTip(
                 f"{translate('Latest mechanical result · Final load step')}\n{Path(folder)}"
             )

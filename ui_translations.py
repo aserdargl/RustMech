@@ -945,6 +945,7 @@ Stop heat transfer analysis|Isı transferi analizini durdur
 Open saved thermal case|Kayıtlı ısıl senaryoyu aç
 Open result folder|Sonuç klasörünü aç
 View latest results|Son sonuçları göster
+No completed analysis results found.|Tamamlanmış analiz sonucu bulunamadı.
 Cylindrical channel · Isothermal CFD|Silindirik kanal · İzotermal CFD
 Transient water + TPMS heat transfer|Geçici su + TPMS ısı transferi
 Flow model|Akış modeli
