@@ -312,6 +312,10 @@ QTabBar::tab, #setupTabs QTabBar::tab {
 }
 QTabBar::tab:selected, #setupTabs QTabBar::tab:selected { background: #BFDBFE; color: #0F172A; border-color: #2563EB; }
 
+#esenWorkspaceTabs QTabBar::tab {
+    border-top-left-radius: 2px; border-top-right-radius: 2px;
+}
+
 #trubaTabs::pane { background: #FCFCFB; border: 1px solid #D5DBE2; border-radius: 7px; top: 0; }
 QTabBar#trubaTabBar { background: #E8EDF4; }
 QTabBar#trubaTabBar::tab, QTabBar#trubaTabBar::tab:selected {
