@@ -2,9 +2,10 @@
 
 ## MD Hazırlama
 
-**ESEN → MD Hazırlama** sekmesinde elementleri `Hf, Nb, Ta, Ti, Zr` biçiminde
-eşit oranla veya `Hf:20, Nb:80` biçiminde atom yüzdesiyle girin. Hedef atom
-sayısını belirleyin ve MEAM kütüphanesini ve parametre dosyasını seçin.
+**ESEN → MD Hazırlama** sekmesinde periyodik tablodaki elemente sağ tıklayıp
+**Ekle**’yi seçin. Listedeki her elementin atom yüzdesini girin ve toplamın
+%100 olduğunu kontrol edin. Hedef atom sayısını belirleyin ve MEAM
+kütüphanesini ve parametre dosyasını seçin.
 Dosyalarda bir `pair_coeff` örneği varsa program MEAM element sırasını oradan
 alır. Boş kalırsa parametre dosyasındaki indekslerin izlediği sırayı girin.
 

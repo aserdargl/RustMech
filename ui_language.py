@@ -146,11 +146,13 @@ class LanguageManager(QObject):
             return
         self._busy = True
         try:
+            preserve_label = widget.property('preserveLabelText')
             self._property(widget, 'toolTip', widget.toolTip, widget.setToolTip)
-            self._property(widget, 'accessibleName', widget.accessibleName, widget.setAccessibleName)
+            if not preserve_label:
+                self._property(widget, 'accessibleName', widget.accessibleName, widget.setAccessibleName)
             if widget.isWindow():
                 self._property(widget, 'windowTitle', widget.windowTitle, widget.setWindowTitle)
-            if isinstance(widget, (QLabel, QAbstractButton)):
+            if isinstance(widget, (QLabel, QAbstractButton)) and not preserve_label:
                 self._property(widget, 'text', widget.text, widget.setText)
                 if (isinstance(widget, QAbstractButton) and not isinstance(widget, QToolButton)
                         and not widget.property('managesLocalizedWidth')):

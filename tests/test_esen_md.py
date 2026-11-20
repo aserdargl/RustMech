@@ -7,13 +7,15 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
-from PySide6.QtCore import QObject, QSettings, Qt, Signal
+from PySide6.QtCore import QObject, QSettings, Qt, QTimer, Signal
+from PySide6.QtGui import QContextMenuEvent
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QLabel
 
 import esen_jobs as jobs
 import esen_md as md
 from esen_workspace import EsenWorkspace
+from ui_language import LANGUAGE_KEY, LanguageManager
 
 
 @pytest.fixture
@@ -107,7 +109,58 @@ def test_md_tab_enter_previews_and_run_hands_package_to_esen(tmp_path, potential
         assert workspace.history.rowCount() == 0
 
         truba.auth = SimpleNamespace(username="account")
-        workspace.md_elements.setText("Hf, Nb")
+        elements = workspace.md_elements
+        assert len(elements.cells) == 118
+        assert elements.total_label.text().endswith("100 %")
+        for symbol in ("Ta", "Ti", "Zr"):
+            elements.remove_element(symbol)
+        assert elements.total_label.text().endswith("40 %")
+
+        cell, add_action = elements.cells["Fe"]
+        menus = []
+
+        def add_from_context_menu():
+            menu = app.activePopupWidget()
+            if menu is not None:
+                menus.extend(action.text() for action in menu.actions())
+                QTest.mouseClick(menu, Qt.MouseButton.LeftButton, pos=menu.actionGeometry(add_action).center())
+                menu.close()
+
+        QTimer.singleShot(0, add_from_context_menu)
+        event = QContextMenuEvent(QContextMenuEvent.Reason.Mouse, cell.rect().center(),
+                                  cell.mapToGlobal(cell.rect().center()))
+        app.sendEvent(cell, event)
+        assert menus == ["Add"]
+        assert "Fe" in elements.rows
+        assert not add_action.isEnabled()
+        elements.remove_element("Fe")
+        assert add_action.isEnabled()
+
+        for symbol, total in (("Hf", 70), ("Nb", 100)):
+            percent = elements.rows[symbol][1]
+            edit = percent.lineEdit()
+            edit.setFocus()
+            edit.selectAll()
+            QTest.keyClicks(edit, "50")
+            assert elements.total_label.text().endswith(f"{total} %")
+            QTest.keyClick(edit, Qt.Key.Key_Return)
+        assert elements.total_label.text().endswith("100 %")
+        assert "Hf       " in workspace.md_preview.toPlainText()
+        assert workspace.md_task is None
+
+        preferences.setValue(LANGUAGE_KEY, "tr")
+        language = LanguageManager(app, preferences)
+        try:
+            with patch.object(app, "_rustmech_language", language, create=True):
+                elements.add_element("No")
+                cell = elements.cells["No"][0]
+                label = elements.rows["No"][0].findChild(QLabel)
+                language.localize(cell)
+                language.localize(label)
+                assert cell.text() == cell.accessibleName() == label.text() == "No"
+                elements.remove_element("No")
+        finally:
+            language.shutdown()
         workspace.md_order.setText("Nb Hf")
         workspace.md_library.setText(str(potentials[0]))
         workspace.md_parameters.setText(str(potentials[1]))

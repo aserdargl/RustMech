@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
 
 from datenburg_widgets import qss_asset_url
 from esen_ai_prompt import ESEN_AI_PROMPT
+from esen_elements import AlloyElements
 import esen_jobs as jobs
 import esen_md as md
 from file_dialog import QFileDialog
@@ -83,6 +84,11 @@ QFrame[esenCard="paper"] { background: #FFFFFF; border: 1px solid #D5DBE2; borde
 #esenWorkspace #trubaConnectionBadge[state="working"] { color: #713F12; background: #FFF4CE; }
 #esenWorkspace QPushButton { padding: 0 7px; }
 #esenWorkspace QPushButton[compactInputAction="true"] { padding: 0; }
+#mdPeriodicTable QToolButton { padding: 0; font-size: 11px; min-height: 0; }
+#mdPeriodicTable QToolButton::menu-indicator { image: none; width: 0; height: 0; }
+#mdPeriodicTable QToolButton[inAlloy="true"] { background: #BFDBFE; border-color: #93C5FD; }
+#mdPeriodicTable QToolButton:hover, #mdPeriodicTable QToolButton:focus { border-color: #2563EB; }
+#mdPeriodicTable QToolButton:pressed { background: #93C5FD; }
 #esenFileFilter { background: #FFFFFF; border: 1px solid #CBD5E1; border-radius: 4px;
                   color: #0F172A; font-size: 11px; padding: 0 3px; }
 #esenFileFilter:hover { border-color: #93C5FD; }
@@ -710,22 +716,27 @@ class EsenWorkspace(QDialog):
         split.setHandleWidth(7)
         outer.addWidget(split, 1)
 
-        inputs, layout = panel("BCC single crystal", scrollable=True)
+        inputs, layout = panel("Alloy elements", scrollable=True)
         self.md_form = QWidget()
-        form = QFormLayout(self.md_form)
+        fields = QVBoxLayout(self.md_form)
+        fields.setContentsMargins(0, 0, 0, 0)
+        fields.setSpacing(5)
+        defaults = [(element, 20) for element in ("Hf", "Nb", "Ta", "Ti", "Zr")]
+        self.md_elements = AlloyElements(defaults)
+        fields.addWidget(self.md_elements)
+        settings, settings_layout = panel("Job settings")
+        fields.addWidget(settings)
+        form = QFormLayout()
         form.setContentsMargins(0, 0, 0, 0)
         configure_form(form)
+        settings_layout.addLayout(form)
         layout.addWidget(self.md_form)
         layout.addStretch()
         split.addWidget(inputs)
 
-        self.md_elements = QLineEdit("Hf:20, Nb:20, Ta:20, Ti:20, Zr:20")
-        self.md_elements.setToolTip("Use equal shares with Hf, Nb or specify atom percentages with Hf:20, Nb:80.")
         self.md_order = QLineEdit(str(self.preferences.value("esen/md/order", "")))
         self.md_order.setPlaceholderText("Example: Hf Nb Ta Ti Zr")
         self.md_order.setToolTip("Enter the element order used by indices in the MEAM parameter file.")
-        self._form_row(form, "Elements (at.%)", self.md_elements)
-        self.md_elements.setMaximumWidth(420)
         self.md_atoms = CompactSpinBox()
         self.md_atoms.setRange(2, md.MAX_ATOMS)
         self.md_atoms.setValue(250_000)
@@ -766,7 +777,7 @@ class EsenWorkspace(QDialog):
             row.addWidget(pick)
             self._form_row(form, title, field, field_layout=row)
         self._form_row(form, "MEAM element order", self.md_order)
-        self.md_elements.editingFinished.connect(self._md_preview)
+        self.md_elements.changed.connect(self._md_preview)
         for stepper in (self.md_atoms, self.md_lattice, self.md_temperature, self.md_seed):
             stepper.editingFinished.connect(self._md_preview)
         self.md_order.editingFinished.connect(self._save_md_order)
@@ -790,7 +801,7 @@ class EsenWorkspace(QDialog):
 
     def _localize_md(self, *_):
         self._size_command_buttons()
-        self._md_preview()
+        self.md_elements.update_total()
 
     def _pick_md_meam(self, key, title):
         field = getattr(self, f"md_{key}")
@@ -816,7 +827,10 @@ class EsenWorkspace(QDialog):
     def _md_model(self):
         for stepper in (self.md_atoms, self.md_lattice, self.md_temperature, self.md_seed):
             stepper.interpretText()
-        return md.plan_model(self.md_elements.text(), self.md_atoms.value(), self.md_lattice.value(),
+        composition = self.md_elements.composition()
+        if not composition:
+            raise ValueError(translate("Add at least one element."))
+        return md.plan_model(composition, self.md_atoms.value(), self.md_lattice.value(),
                              self.md_temperature.value(), self.md_seed.value())
 
     def _md_preview(self):

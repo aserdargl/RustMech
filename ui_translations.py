@@ -3,9 +3,11 @@ from setup_help import GEOMETRY_HELP
 
 _TEXT = '''
 MD Preparation|MD Hazırlama
-BCC single crystal|BCC tek kristal
-Elements (at.%)|Elementler (atom %)
-Use equal shares with Hf, Nb or specify atom percentages with Hf:20, Nb:80.|Eşit oran için Hf, Nb veya atom yüzdesi için Hf:20, Nb:80 biçimini kullanın.
+Alloy elements|Elementler
+Periodic table|Periyodik tablo
+Right-click an element to add it.|Element eklemek için sağ tıklayın.
+Composition total|Toplam
+Add at least one element.|En az bir element ekleyin.
 Target atom count|Hedef atom sayısı
 Generated atom count|Üretilecek atom sayısı
 Lattice parameter|Kafes parametresi
