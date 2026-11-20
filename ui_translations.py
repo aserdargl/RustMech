@@ -514,7 +514,7 @@ Reference level|Referans seviye
 Use this mesh|Bu ağı kullan
 Run mesh convergence|Ağ yakınsamasını çalıştır
 Export mesh convergence|Ağ yakınsamasını dışa aktar
-Add 2 mesh levels|2 ağ seviyesi ekle
+Add 2 Extra|2 seviye daha ekle
 Previously submitted TRUBA mesh convergence studies|Daha önce gönderilen TRUBA ağ yakınsaması çalışmaları
 Submit the next two levels from this study while the current jobs run.|Mevcut işler sürerken bu çalışmanın sonraki iki ağ seviyesini gönderir.
 Saved TRUBA jobs · connect to refresh their status|Kayıtlı TRUBA işleri · durumlarını güncellemek için bağlanın

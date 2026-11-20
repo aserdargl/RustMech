@@ -46,6 +46,8 @@ QWidget#meshConvergenceStudy QFrame#convergenceResultsPanel {
 QWidget#meshConvergenceStudy QWidget#convergenceResultsHeader {
     background: #E5ECF4; border: 1px solid #D5DBE2; border-radius: 5px;
 }
+QPushButton#convergenceAppendButton { padding: 0 2px; }
+QPushButton#convergenceAppendButton:focus { border: 1px solid #3978BE; }
 QWidget#meshConvergenceStudy QLabel#convergenceResultsTitle {
     color: #0F172A; font-size: 13px; font-weight: 400;
 }

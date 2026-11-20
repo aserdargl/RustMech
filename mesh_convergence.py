@@ -15,7 +15,7 @@ from PySide6.QtGui import QActionGroup
 from PySide6.QtWidgets import (
     QAbstractItemView, QCheckBox, QComboBox, QDialog, QFormLayout, QFrame,
     QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMenu, QMessageBox, QPushButton,
-    QScrollArea, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
+    QScrollArea, QSizePolicy, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
 from analysis_process import AnalysisProcess
@@ -371,7 +371,9 @@ class MeshConvergenceWidget(QWidget):
         self.history_combo.activated.connect(self._restore_saved_study)
         self.history_combo.hide()
         header_layout.addWidget(self.history_combo)
-        self.append_button = self._button(header_layout, "Add 2 mesh levels", self.append_remote_levels)
+        self.append_button = self._button(header_layout, "Add 2 Extra", self.append_remote_levels)
+        self.append_button.setObjectName("convergenceAppendButton")
+        self.append_button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         self.append_button.setToolTip("Submit the next two levels from this study while the current jobs run.")
         self.append_button.hide()
         self.status = QLabel("Ready")

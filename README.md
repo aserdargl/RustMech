@@ -1472,7 +1472,7 @@ koyar ve ayrı iş adımlarında paralel çalıştırır. CPU ve RAM iki adıma 
 gerekmez. Program, seviye başına en az 16 CPU düşüyorsa iki seviyeyi eşler.
 İki seviye sığmazsa veya tek seviye kalırsa, o seviye
 tahsisin tüm kaynaklarını kullanır. Otomatik gönderim bir seferde en çok beş
-seviye planlar. İşler kuyruktayken veya çalışırken **Add 2 mesh levels** ile
+seviye planlar. İşler kuyruktayken veya çalışırken **Add 2 Extra** ile
 iki seviye daha gönderebilirsiniz. Düğme, en ince gönderilmiş mesh'ten devam
 eder ve çalışmanın minimum mesh boyutu ile deneme sınırını gözetir. Manuel
 modda listedeki sonraki boyutları kullanır. Slurm, her betiği kaynaklar
