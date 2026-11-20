@@ -526,6 +526,7 @@ Run mesh convergence|Ağ yakınsamasını çalıştır
 Export mesh convergence|Ağ yakınsamasını dışa aktar
 Add 2 Extra|2 seviye daha ekle
 Previously submitted TRUBA studies with running or queued mesh levels|Çalışan veya kuyrukta bekleyen ağ seviyeleri olan TRUBA çalışmaları
+New study|Yeni çalışma
 Submit the next two levels from this study while the current jobs run.|Mevcut işler sürerken bu çalışmanın sonraki iki ağ seviyesini gönderir.
 Saved TRUBA jobs · connect to refresh their status|Kayıtlı TRUBA işleri · durumlarını güncellemek için bağlanın
 TRUBA tracking paused|TRUBA takibi duraklatıldı

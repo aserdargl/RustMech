@@ -111,7 +111,7 @@ def test_reopen_shows_only_active_pairs_and_resumes_by_known_id(study):
     save_job(connection, context, settings, "102", [.2, .15], "CANCELLED by 123")
     widget = open_study()
     launch.assert_not_called()
-    assert widget.history_combo.count() == 1
+    assert widget.history_combo.count() == 2
     assert widget.history_combo.currentText().endswith("Slurm 101")
     assert [row for row in range(widget.results.rowCount()) if not widget.results.isRowHidden(row)] == [2, 3]
     assert widget.rows[0].status == "completed"
@@ -173,6 +173,48 @@ def test_reopen_with_only_finished_studies_keeps_the_table_empty(study):
     launch.assert_not_called()
 
 
+def test_pending_truba_study_leaves_local_setup_editable_and_can_be_opened_explicitly(study):
+    open_study, controller, connection, launch, _, context, settings = study
+    controller.requested = controller.ready = False
+    save_job(connection, context, settings, "100", [.15, .1], "PENDING|Priority")
+    widget = open_study()
+    assert not widget.run_on_truba.isChecked()
+    assert widget.run_on_truba.isEnabled()
+    assert widget.solver_combo.isEnabled()
+    assert widget.linear_solver_combo.isEnabled()
+    assert widget.start_size.isEnabled()
+    assert widget.run_button.isEnabled()
+    widget.start_size.setValue(.25)
+    widget._restore_saved_study(1)
+    assert widget.saved_jobs
+    assert not widget.start_size.isEnabled()
+    assert widget.history_combo.isEnabled()
+    widget._restore_saved_study(0)
+    assert not widget.saved_jobs
+    assert not widget.run_on_truba.isChecked()
+    assert widget.start_size.value() == pytest.approx(.25)
+    assert widget.run_button.isEnabled()
+    launch.assert_not_called()
+    widget.run_button.click()
+    assert launch.call_args.args[0].__name__ == "_solve_level_process"
+    assert launch.call_args.args[1].mesh_resolution == pytest.approx(.25)
+
+
+def test_returning_to_new_study_detaches_only_the_remote_tracker(study):
+    open_study, controller, connection, launch, auth, context, settings = study
+    save_job(connection, context, settings, "100", [.2, .15], "RUNNING")
+    controller.auth.return_value = auth
+    widget = open_study()
+    worker = widget.future
+    widget._restore_saved_study(0)
+    worker.detach_remote.assert_called_once()
+    worker.force_stop.assert_not_called()
+    assert widget.future is None
+    assert widget.run_on_truba.isEnabled()
+    assert widget.run_button.isEnabled()
+    assert widget.history_combo.count() == 2
+
+
 @pytest.mark.parametrize("accounting", [None, "COMPLETED|0:0"])
 def test_interrupted_tracking_resumes_the_same_job_without_marking_the_mesh_failed(study, accounting):
     open_study, controller, connection, launch, auth, context, settings = study
@@ -194,7 +236,7 @@ def test_interrupted_tracking_resumes_the_same_job_without_marking_the_mesh_fail
     worker.result.side_effect = ConnectionError("SSH closed")
     widget._poll_remote_batch()
     assert widget.future is None
-    assert widget.history_combo.count() == 1
+    assert widget.history_combo.count() == 2
     assert widget.tracking_retry.isActive()
     assert not widget.remote_outcomes
     assert all(row.status == "TRUBA tracking paused" for row in widget.rows)
@@ -219,7 +261,7 @@ def test_switch_between_previously_submitted_active_studies(study):
     widget = open_study()
     first_worker = widget.future
     assert widget.history_combo.isEnabled()
-    index = 1 - widget.history_combo.currentIndex()
+    index = 3 - widget.history_combo.currentIndex()
     job_id = widget.history_combo.itemData(index)[1].removeprefix("legacy:")
     widget.history_combo.setCurrentIndex(index)
     widget.history_combo.activated.emit(index)

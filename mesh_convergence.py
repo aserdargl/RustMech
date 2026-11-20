@@ -191,6 +191,7 @@ class MeshConvergenceWidget(QWidget):
         self.retried_tracking = set()
         self.restored_rows = set()
         self.saved_study_key = None
+        self._study_draft = None
         self.history_only = False
         self.single_remote_run = False
         self.planned_scripts = {}
@@ -473,8 +474,8 @@ class MeshConvergenceWidget(QWidget):
         self._configure_metrics()
         self._solver_changed()
         studies = self._refresh_saved_studies()
-        if studies:
-            self._restore_saved_study(0, studies)
+        if studies and self.run_on_truba.isChecked():
+            self._restore_saved_study(1, studies)
 
     def _build_script_plan(self, layout):
         self.script_plan_panel = QWidget()
@@ -977,6 +978,9 @@ class MeshConvergenceWidget(QWidget):
             QMessageBox.warning(self, "Invalid convergence plan", str(exc))
             return
         self.history_only = False
+        self._study_draft = None
+        if self.history_combo.count():
+            self.history_combo.setCurrentIndex(0)
         self.explicit_script_run = explicit
         self.saved_geometry_source = None
         self.saved_study_key = None
@@ -1155,6 +1159,8 @@ class MeshConvergenceWidget(QWidget):
             return {}
         studies = saved_mesh_studies(state_dir)
         self.history_combo.clear()
+        if studies:
+            self.history_combo.addItem("New study")
         for key, jobs in studies.items():
             first = next(job for job in jobs if job.active)
             settings = first.levels[0]
@@ -1168,6 +1174,10 @@ class MeshConvergenceWidget(QWidget):
 
     def _restore_saved_study(self, index, studies=None):
         key = self.history_combo.itemData(index)
+        if key is None:
+            if self._study_draft is not None and (self.history_only or self.future is None):
+                self._return_to_study_draft()
+            return
         if self.saved_jobs and key and (key == self.saved_study_key or key[1] == self.study_plan.get("id")):
             self._attach_saved_jobs()
             return
@@ -1180,23 +1190,23 @@ class MeshConvergenceWidget(QWidget):
         jobs = (studies if studies is not None else self._refresh_saved_studies()).get(key)
         if not jobs:
             return
-        for job in self.remote_jobs.values():
-            job.detach_remote()
-        self.remote_jobs.clear()
-        self.future = None
-        self.timer.stop()
-        self.tracking_retry.stop()
+        if self._study_draft is None:
+            self._study_draft = [
+                (control.setCurrentIndex, control.currentIndex()) for control in (
+                    self.solver_combo, self.mesh_type_combo, self.truba_wall_field)
+            ] + [
+                (control.setValue, control.value()) for control in (
+                    self.start_size, self.local_size, self.tolerance, self.factor, self.minimum,
+                    self.max_levels, self.max_elements, *self.absolute)
+            ] + [
+                (control.setChecked, control.isChecked()) for control in (
+                    self.automatic, self.single_truba_mesh, *self.metric_checks)
+            ] + [(self.manual.setText, self.manual.text())]
+            self._draft_linear_solver = self.kratos_linear_solver_override
+        self._clear_saved_study_view()
         self.history_combo.setCurrentIndex(self.history_combo.findData(key))
         self.saved_study_key = key
         self.history_only = True
-        self.saved_jobs.clear()
-        self.retried_tracking.clear()
-        self.restored_rows.clear()
-        self.remote_outcomes.clear()
-        self.remote_records.clear()
-        self.rows.clear()
-        self.results.setRowCount(0)
-        self.recommended = None
         self.stop_requested.clear()
         self.consecutive_failures = 0
         self.started = monotonic()
@@ -1285,6 +1295,38 @@ class MeshConvergenceWidget(QWidget):
             self._attach_saved_jobs()
         else:
             self._finish_saved_study()
+
+    def _clear_saved_study_view(self):
+        for job in self.remote_jobs.values():
+            job.detach_remote()
+        self.remote_jobs.clear()
+        self.future = None
+        self.timer.stop()
+        self.tracking_retry.stop()
+        self.saved_jobs.clear()
+        self.retried_tracking.clear()
+        self.restored_rows.clear()
+        self.remote_outcomes.clear()
+        self.remote_records.clear()
+        self.rows.clear()
+        self.results.setRowCount(0)
+        self.recommended = None
+
+    def _return_to_study_draft(self):
+        self._clear_saved_study_view()
+        self.saved_study_key = None
+        self.history_only = False
+        self.remote_study_base = None
+        self.saved_geometry_source = None
+        self.study_plan = {}
+        self.manual_pending.clear()
+        self.kratos_linear_solver_override = self._draft_linear_solver
+        with QSignalBlocker(self.solver_combo), QSignalBlocker(self.truba_wall_field):
+            for restore, value in self._study_draft:
+                restore(value)
+        self._study_draft = None
+        self._configure_metrics()
+        self._set_running(False)
 
     def _attach_saved_jobs(self, _connected=True):
         if not _connected or not self.saved_jobs or self.remote_controller.closing:
