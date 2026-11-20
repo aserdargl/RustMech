@@ -100,16 +100,19 @@ def save_job(connection, context, settings, job_id, sizes, state, plan=None):
     return path
 
 
-def test_reopen_shows_completed_and_pending_pairs_and_resumes_by_known_id(study):
+def test_reopen_shows_only_active_pairs_and_resumes_by_known_id(study):
     open_study, controller, connection, launch, auth, context, settings = study
     plan = dict(id="one-study", row=0, kinds=["Starting mesh", "Refinement"], factor=1.5,
                 minimum=.02, max_levels=8)
     save_job(connection, context, settings, "100", [.2, .133], "downloaded", plan)
     path = save_job(connection, context, settings, "101", [.089, .059], "PENDING|Priority",
                     {**plan, "row": 2, "kinds": ["Refinement"] * 2})
+    save_job(connection, context, settings, "102", [.2, .15], "CANCELLED by 123")
     widget = open_study()
     launch.assert_not_called()
-    assert widget.results.rowCount() == 4
+    assert widget.history_combo.count() == 1
+    assert widget.history_combo.currentText().endswith("Slurm 101")
+    assert [row for row in range(widget.results.rowCount()) if not widget.results.isRowHidden(row)] == [2, 3]
     assert widget.rows[0].status == "completed"
     assert widget.rows[0].elements == 500
     assert widget.results.item(3, 8).text() == "101"
@@ -127,6 +130,61 @@ def test_reopen_shows_completed_and_pending_pairs_and_resumes_by_known_id(study)
     assert call.args[0] is run_remote_level_pair
     assert [level.mesh_resolution for level in call.args[1]] == pytest.approx([.059 / 1.5, .059 / 1.5**2])
     assert call.kwargs["remote_options"]["study"]["id"] == "one-study"
+
+
+def test_previously_running_pair_disappears_when_slurm_reports_completion(study):
+    open_study, controller, connection, launch, auth, context, settings = study
+    path = save_job(connection, context, settings, "100", [.2, .15], "RUNNING")
+    worker = MagicMock()
+    worker.done.return_value = False
+    launch.side_effect = None
+    launch.return_value = worker
+    controller.auth.return_value = auth
+    widget = open_study()
+    assert not widget.results.isRowHidden(0)
+    record = json.loads(path.read_text())
+    record.update(state="downloading", slurm_status="COMPLETED|0:0")
+    write_record(path, record)
+    worker.remote_status.return_value = record
+    widget._poll_remote_batch()
+    assert all(widget.results.isRowHidden(row) for row in range(2))
+    worker.result.return_value = [Level(level.settings, status="completed") for level in widget.rows]
+    worker.done.return_value = True
+    widget._poll_remote_batch()
+    assert widget.history_combo.count() == 0
+    assert not widget.export_button.isEnabled()
+
+
+def test_reopen_with_only_finished_studies_keeps_the_table_empty(study):
+    open_study, _, connection, launch, _, context, settings = study
+    save_job(connection, context, settings, "100", [.2, .15], "downloaded")
+    path = save_job(connection, context, settings, "101", [.2, .15], "interrupted")
+    record = json.loads(path.read_text())
+    record["slurm_status"] = "TIMEOUT|0:0"
+    write_record(path, record)
+    widget = open_study()
+    assert widget.results.rowCount() == 0
+    assert widget.history_combo.count() == 0
+    launch.assert_not_called()
+
+
+def test_switch_between_previously_submitted_active_studies(study):
+    open_study, controller, connection, launch, auth, context, settings = study
+    paths = {
+        "100": save_job(connection, context, settings, "100", [.2, .15], "RUNNING"),
+        "101": save_job(connection, context, settings, "101", [.18, .12], "PENDING|Priority"),
+    }
+    controller.auth.return_value = auth
+    widget = open_study()
+    first_worker = widget.future
+    assert widget.history_combo.isEnabled()
+    index = 1 - widget.history_combo.currentIndex()
+    job_id = widget.history_combo.itemData(index)[1].removeprefix("legacy:")
+    widget.history_combo.setCurrentIndex(index)
+    widget.history_combo.activated.emit(index)
+    first_worker.detach_remote.assert_called_once()
+    launch.assert_called_with(resume_convergence_levels, paths[job_id], remote_auth=auth)
+    assert widget.results.item(0, 8).text() == job_id
 
 
 def test_legacy_pair_keeps_its_id_when_extended(study):

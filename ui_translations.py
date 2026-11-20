@@ -515,10 +515,11 @@ Use this mesh|Bu ağı kullan
 Run mesh convergence|Ağ yakınsamasını çalıştır
 Export mesh convergence|Ağ yakınsamasını dışa aktar
 Add 2 Extra|2 seviye daha ekle
-Previously submitted TRUBA mesh convergence studies|Daha önce gönderilen TRUBA ağ yakınsaması çalışmaları
+Previously submitted TRUBA studies with running or queued mesh levels|Çalışan veya kuyrukta bekleyen ağ seviyeleri olan TRUBA çalışmaları
 Submit the next two levels from this study while the current jobs run.|Mevcut işler sürerken bu çalışmanın sonraki iki ağ seviyesini gönderir.
 Saved TRUBA jobs · connect to refresh their status|Kayıtlı TRUBA işleri · durumlarını güncellemek için bağlanın
 Saved TRUBA mesh levels restored.|Kayıtlı TRUBA ağ seviyeleri geri yüklendi.
+No running or queued TRUBA mesh levels in this study.|Bu çalışmada çalışan veya kuyrukta bekleyen TRUBA ağ seviyesi yok.
 Solver|Çözücü
 Solver engine|Çözücü motoru
 Solver and loading|Çözücü ve yükleme

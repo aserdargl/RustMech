@@ -1477,9 +1477,9 @@ iki seviye daha gönderebilirsiniz. Düğme, en ince gönderilmiş mesh'ten deva
 eder ve çalışmanın minimum mesh boyutu ile deneme sınırını gözetir. Manuel
 modda listedeki sonraki boyutları kullanır. Slurm, her betiği kaynaklar
 müsait olduğunda başlatır.
-Mesh Convergence yeniden açıldığında **Results** alanında kayıtlı TRUBA
-çalışmaları görünür. Önceki işlerin durumunu güncellemek ve sonuçlarını
-almak için aynı TRUBA hesabıyla bağlanın.
+Mesh Convergence yeniden açıldığında **Results** alanında önceki TRUBA
+işlerinden çalışanlar ve kuyrukta bekleyenler görünür. Durumlarını
+güncellemek için aynı TRUBA hesabıyla bağlanın.
 Sonuç tablosu ve CSV her seviyenin betiğini, iş kimliğini, çözüm CPU sayısını
 ve ayrılan RAM'i gösterir. Slurm iş adımı için MaxRSS sağlarsa tepe RAM de
 görünür. **Advanced → Wall time per analysis** her

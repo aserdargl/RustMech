@@ -11,6 +11,18 @@ from truba_job_list import unfinished_records
 from truba_jobs import SLURM_TERMINAL_STATES
 from truba_remote import SlurmOutOfMemory, _rebase_paths, decode_convergence_results
 
+FINISHED_MESH_STATES = SLURM_TERMINAL_STATES | {"DOWNLOADED"}
+
+
+def mesh_job_state(record):
+    states = [str(record.get(field) or "").upper().split("|")[0].split(" ")[0].rstrip("+")
+              for field in ("state", "slurm_status", "step_status")]
+    return next((state for state in states if state in FINISHED_MESH_STATES), states[0])
+
+
+def mesh_job_finished(record):
+    return mesh_job_state(record) in FINISHED_MESH_STATES
+
 
 @dataclass
 class SavedMeshJob:
@@ -23,14 +35,11 @@ class SavedMeshJob:
 
     @property
     def state(self):
-        saved = self.record.get("state", "")
-        value = saved if str(saved).lower() in {"downloaded", "cancelled", "out_of_memory"} else (
-            self.record.get("slurm_status") or saved)
-        return str(value).upper().split("|")[0].split(" ")[0].rstrip("+")
+        return mesh_job_state(self.record)
 
     @property
     def active(self):
-        return self.state not in SLURM_TERMINAL_STATES | {"DOWNLOADED"}
+        return not mesh_job_finished(self.record)
 
     def cached_results(self):
         directory = Path(self.record["local_directory"])
@@ -94,5 +103,6 @@ def saved_mesh_studies(state_dir):
             continue
     for jobs in studies.values():
         jobs.sort(key=lambda job: (job.plan.get("row", 0), job.modified))
-    return dict(sorted(studies.items(), key=lambda item: (
-        any(job.active for job in item[1]), max(job.modified for job in item[1])), reverse=True))
+    active_studies = ((key, jobs) for key, jobs in studies.items() if any(job.active for job in jobs))
+    return dict(sorted(active_studies, key=lambda item: max(job.modified for job in item[1] if job.active),
+                       reverse=True))

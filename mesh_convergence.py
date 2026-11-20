@@ -200,6 +200,7 @@ class MeshConvergenceWidget(QWidget):
         self.remote_study_base = None
         self.saved_geometry_source = None
         self.saved_jobs = {}
+        self.restored_rows = set()
         self.saved_study_key = None
         self.history_only = False
         self.single_remote_run = False
@@ -391,7 +392,7 @@ class MeshConvergenceWidget(QWidget):
         header_layout.addWidget(results_title)
         self.history_combo = CompactComboBox()
         self.history_combo.setFixedWidth(190)
-        self.history_combo.setToolTip("Previously submitted TRUBA mesh convergence studies")
+        self.history_combo.setToolTip("Previously submitted TRUBA studies with running or queued mesh levels")
         self.history_combo.activated.connect(self._restore_saved_study)
         self.history_combo.hide()
         header_layout.addWidget(self.history_combo)
@@ -959,6 +960,7 @@ class MeshConvergenceWidget(QWidget):
             self.study_plan = self._study_snapshot(first)
         self._configure_metrics(first)
         self.rows.clear()
+        self.restored_rows.clear()
         self.remote_records.clear()
         self._show_remote_columns(self.run_on_truba.isChecked())
         self.recommended = None
@@ -1047,9 +1049,10 @@ class MeshConvergenceWidget(QWidget):
             self._solver_changed()
         self.stop_button.setEnabled(running)
         self.force_stop_button.setEnabled(running)
-        self.export_button.setEnabled(not running and bool(self.rows))
+        self.export_button.setEnabled(not running and any(
+            not self.results.isRowHidden(index) for index in range(len(self.rows))))
         self.apply_button.setEnabled(not running and self.recommended is not None)
-        self.history_combo.setEnabled(not running)
+        self.history_combo.setEnabled(not running or (self.history_only and self.history_combo.count() > 1))
         self._refresh_append_button()
 
     def _study_snapshot(self, first):
@@ -1125,7 +1128,7 @@ class MeshConvergenceWidget(QWidget):
         studies = saved_mesh_studies(state_dir)
         self.history_combo.clear()
         for key, jobs in studies.items():
-            first = jobs[0]
+            first = next(job for job in jobs if job.active)
             settings = first.levels[0]
             name = first.record.get("study_name") or settings.imported_geometry_name or settings.structure_name
             self.history_combo.addItem(f"{name} · Slurm {first.record['job_id']}", key)
@@ -1136,16 +1139,26 @@ class MeshConvergenceWidget(QWidget):
         return studies
 
     def _restore_saved_study(self, index, studies=None):
-        if self.future is not None:
-            return
         key = self.history_combo.itemData(index)
+        if self.future is not None:
+            if key == self.saved_study_key:
+                return
+            if not self.history_only or self.planned_scripts:
+                self.history_combo.setCurrentIndex(self.history_combo.findData(self.saved_study_key))
+                return
         jobs = (studies if studies is not None else self._refresh_saved_studies()).get(key)
         if not jobs:
             return
+        for job in self.remote_jobs.values():
+            job.detach_remote()
+        self.remote_jobs.clear()
+        self.future = None
+        self.timer.stop()
         self.history_combo.setCurrentIndex(self.history_combo.findData(key))
         self.saved_study_key = key
         self.history_only = True
         self.saved_jobs.clear()
+        self.restored_rows.clear()
         self.remote_outcomes.clear()
         self.remote_records.clear()
         self.rows.clear()
@@ -1214,12 +1227,16 @@ class MeshConvergenceWidget(QWidget):
             self._update_remote_records(group, job.record)
             for row in group:
                 self.remote_records[row].setdefault("solver_cores", self.rows[row].settings.cores)
-            results = job.cached_results()
-            if results is None:
+            self.restored_rows.update(group)
+            if job.active:
                 self.saved_jobs[group] = job
             else:
-                for row, result in zip(group, results, strict=True):
-                    self._collect_level(row, result, self.remote_records[row])
+                # Keep attempted levels and their results for the study's refinement and limits.
+                cached = job.cached_results()
+                for row, result in zip(group, cached or [None] * len(group), strict=True):
+                    if result is not None:
+                        self._collect_level(row, result, self.remote_records[row])
+                    self.results.setRowHidden(row, True)
         self._refresh_differences()
         if self.saved_jobs:
             self._set_running(True)
@@ -1252,9 +1269,9 @@ class MeshConvergenceWidget(QWidget):
             self.timer.start()
 
     def _finish_saved_study(self):
-        self.recommended = converged_level(
-            self.rows, self.tolerance.value(), self.selected, [control.value() for control in self.absolute])
-        self._finish("Saved TRUBA mesh levels restored.")
+        self._finish("No running or queued TRUBA mesh levels in this study." if all(
+            self.results.isRowHidden(index) for index in self.restored_rows)
+            else "Saved TRUBA mesh levels restored.")
 
     def _launch(self, settings, kind):
         if self.run_on_truba.isChecked():
@@ -1418,6 +1435,8 @@ class MeshConvergenceWidget(QWidget):
                 del self.remote_jobs[group]
                 for index in group:
                     self.rows[index].status = "Cancelled (Forced Stop)"
+                    if index in self.restored_rows:
+                        self.results.setRowHidden(index, True)
             self.future = next(iter(self.remote_jobs.values()), None)
             self._refresh_differences()
             if errors:
@@ -1551,9 +1570,14 @@ class MeshConvergenceWidget(QWidget):
                 f'{peak / 1024:.2f}' if peak is not None else '')
 
     def _poll_remote_batch(self):
+        from convergence_history import mesh_job_finished
+
         for group, job in list(self.remote_jobs.items()):
             done = job.done()
             changed = self._update_remote_records(group, job.remote_status())
+            for index in changed:
+                if index in self.restored_rows and mesh_job_finished(self.remote_records[index]):
+                    self.results.setRowHidden(index, True)
             if done:
                 results = self._job_result(job)
                 if len(group) == 1 or results is None or isinstance(results, Exception):
@@ -1561,6 +1585,8 @@ class MeshConvergenceWidget(QWidget):
                 for index, result in zip(group, results, strict=True):
                     self.remote_outcomes[index] = self._collect_level(index, result, self.remote_records.get(index))
                     self._render(index)
+                    if index in self.restored_rows and isinstance(result, Level):
+                        self.results.setRowHidden(index, True)
                 del self.remote_jobs[group]
             else:
                 for index in changed:
