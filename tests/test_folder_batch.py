@@ -113,7 +113,8 @@ class FolderBatchTests(unittest.TestCase):
         auth = SimpleNamespace(username='test-user')
         context = RemoteContext(cores=2, session_id='123')
         dialog.remote_controller = SimpleNamespace(auth=lambda: auth, context=lambda: context,
-                                                  require=Mock(return_value=(context, auth)))
+                                                  require=Mock(return_value=(context, auth)),
+                                                  require_analysis=Mock(return_value=(context, auth)))
         dialog.remote_destination = auth.username, PurePosixPath('project/batch')
 
         def stage(active_auth, sources, *, settings_by_geometry, relative):
@@ -758,7 +759,7 @@ class FolderBatchTests(unittest.TestCase):
                 context = RemoteContext(cores=2, parallel_jobs=slots, session_id='123')
                 auth = dialog.remote_controller.auth()
                 dialog.remote_controller.context = lambda: context
-                dialog.remote_controller.require.return_value = (context, auth)
+                dialog.remote_controller.require_analysis.return_value = (context, auth)
                 with patch('truba_files.stage_batch_geometries', side_effect=OSError('Upload interrupted')):
                     dialog.send.click()
                     self.finish_preparation(dialog)
@@ -788,14 +789,14 @@ class FolderBatchTests(unittest.TestCase):
                     self.assertEqual(values['kratos_contact_method'], 'penalty')
                     self.assertEqual(values['self_contact_mode'], 'disabled')
 
-                    dialog.remote_controller.require.side_effect = RuntimeError('Resource session unavailable')
+                    dialog.remote_controller.require_analysis.side_effect = RuntimeError('TRUBA connection unavailable')
                     dialog.run.click()
-                    self.assertIn('Resource session unavailable', dialog.status.text())
+                    self.assertIn('TRUBA connection unavailable', dialog.status.text())
                     self.assertTrue(dialog.run.isEnabled())
                     serial.assert_not_called()
                     parallel.assert_not_called()
 
-                    dialog.remote_controller.require.side_effect = None
+                    dialog.remote_controller.require_analysis.side_effect = None
                     dialog.run.click()
                     dispatch = serial if slots == 1 else parallel
                     dispatch.assert_called_once()

@@ -205,8 +205,8 @@ class AnalysisQueueWidget(FolderResultMixin, DoEStudioWidget):
             controller = getattr(self, 'remote_controller', None)
             try:
                 if controller is None or not controller.requested:
-                    raise RuntimeError("Enable TRUBA mode and allocate or refresh a resource session before running these jobs.")
-                controller.require('kratos', allow_handover=True)
+                    raise RuntimeError("Enable TRUBA mode and connect before running these jobs.")
+                controller.require_analysis('kratos')
             except (RuntimeError, ValueError) as error:
                 QMessageBox.warning(self, "TRUBA batch analysis", str(error))
                 return

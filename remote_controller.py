@@ -800,13 +800,14 @@ class RemoteController(QObject):
         study_name = self.window.truba_dialog.active_jobs.study_name.text().strip()
         return replace(context, study_name=study_name), auth
 
-    def require_convergence(self, settings, *, max_jobs):
+    def require_convergence(self, settings, *, max_jobs, walltime):
         """Validate the resource request for an independent Slurm submission."""
         if self.closing:
             raise RuntimeError("RustMech is closing.")
         if not self.requested or not self.convergence_solver_enabled(settings.solver_backend):
             raise ValueError("Select Kratos and enable TRUBA for mesh convergence.")
-        context = convergence_context(self.context(use_session=False), self.queue_catalog, settings.cores, max_jobs)
+        context = replace(self.context(use_session=False), walltime=walltime)
+        context = convergence_context(context, self.queue_catalog, settings.cores, max_jobs)
         self._validate_kratos_request(settings, context)
         study_name = self.window.truba_dialog.active_jobs.study_name.text().strip()
         return replace(context, study_name=study_name), self.auth()

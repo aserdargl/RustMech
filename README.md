@@ -1452,32 +1452,35 @@ sarıdır. Yalnız SSH bağlantısı yeşil READY sayılmaz.
 Hazır olma bildirimi üretim başlatmaz. **Apply** geometriyi aynı kaynağın
 `surface` adımında (büyükse otomatik chunked/periyodik yolla) üretir; VTP sonucu
 indirilip yerel ekranda çizilir. FE Mesh isteği ayrıca hacim ağını üretir.
-Ağ üretimi ve analizler aynı kaynağın `srun` adımları olarak yürütülür.
-**Mesh Convergence**, TRUBA'da her seviyeyi ayrı bir `sbatch` işi olarak kuyruğa
-gönderir. **Allocate** gerekmez. **CPUs per analysis** varsayılanı 16'dır ve
+Ağ önizleme ve DoE ağ kontrolü kaynak oturumunda `srun` adımı olarak yürütülür.
+Mekanik, FFT, CFD, CHT, DoE ve analiz kuyruğundaki çözümler kendi adlandırılmış
+betikleri ve Slurm iş kimlikleriyle ayrı `sbatch` işleri olarak gönderilir.
+**Mesh Convergence** her seviyeyi ayrı bir iş olarak gönderir. **Allocate**
+gerekmez. **CPUs per analysis** varsayılanı 16'dır ve
 kullanıcı bunu değiştirebilir. Slurm betiği, gerekirse kuyruk alt sınırı kadar
 CPU ister. Aynı grupta gönderilen seviye sayısı, bağlantı panelindeki CPU ve RAM
 bütçesine göre belirlenir ve beşi geçmez. Sonuç tablosu ve CSV iş kimliğini,
 betiği ve durumu gösterir. Betik hücresinde ayrıca Slurm'dan istenen CPU ve
-Kratos'un çalışma ayarı görünür. TRUBA betikleri seçilen kuyruğun izin verdiği
-azami süreyi ister ve bağlantı panelindeki **Wall time** değerini kullanmaz.
+Kratos'un çalışma ayarı görünür. **Advanced → Wall time per analysis** her
+seviyenin Slurm süresini belirler. Varsayılan 30 dakikadır. Süreyi seçili
+kuyruğun sınırları içinde değiştirebilirsiniz.
 **Study time budget** yalnızca yerel mesh convergence çalışmasına uygulanır.
 Tahsis öncesinde **Parallel analyses** ile DoE ve analiz kuyruğunda aynı anda
-çalışabilecek analiz sayısını seçin (varsayılan `1`). CPU ve RAM eşit paylara
-bölünür: örneğin 56 çekirdek ve 128 GiB RAM, dört analiz için analiz başına
-14 çekirdek ve 32 GiB RAM sağlar. Bellek gereksinimine göre daha az eşzamanlı
+çalışabilecek analiz sayısını seçin (varsayılan `1`). CPU ve RAM işlere
+paylaştırılır. Kuyruğun CPU alt sınırı, bir iş için ayrılacak CPU sayısını
+artırabilir. Bellek gereksinimine göre daha az eşzamanlı
 analiz seçin. Her adım ayrı CPU/bellek sınırı ve sonuç klasörü kullanır;
 boşalan paya sıradaki analiz alınır. Tamamlanma sırası değişse de sonuçlar
 doğru satıra yazılır ve kaydedilir. Tek büyük analiz, önizleme ve ortam
 hazırlığı tüm tahsisi kullanır. Kaynak ayarları oturum boyunca sabittir.
 
 Boşta geçirilen süre de tahsis süresine dahildir. **Prepare replacement resources
-near the time limit** varsayılan açıktır: DoE/analiz kuyruğu çalışırken son bir
+near the time limit** varsayılan açıktır: DoE ağ kontrolleri çalışırken son bir
 saatte (kısa tahsislerde son %10'da) aynı kaynak ayarlarıyla tek bir yedek
 tahsis istenir. Kuyruk izleyicisi açıkken bu kontrol yapılır; yalnızca boşta
-duran oturum kendiliğinden yenilenmez. Yeni analizler yedek işçi hazır olana
-kadar bekler, sonra ona yönlendirilir. Başlamış analizler eski tahsiste devam
-eder. Biten analizler tekrar çalıştırılmaz. Slurm başlangıç zamanını
+duran oturum kendiliğinden yenilenmez. Yeni ağ kontrolleri yedek işçi hazır
+olana kadar bekler, sonra ona yönlendirilir. Başlamış kontroller eski tahsiste
+devam eder. Biten kontroller tekrar çalıştırılmaz. Slurm başlangıç zamanını
 belirlediğinden beklemesiz geçiş garanti edilmez. Bu özellik çalışan çözücünün
 ara hesap adımını taşımaz. Slurm, eski tahsisin süresi dolduğunda hâlâ çalışan
 analizleri durdurur. Kaldığı adımdan devam etmek çözücü checkpoint/restart

@@ -522,14 +522,22 @@ class LiveConvergenceTests(unittest.TestCase):
     def test_truba_cpu_override_is_persisted_and_applies_only_to_remote_levels(self):
         widget = self.truba_study()
         self.assertEqual(widget.truba_cores.value(), 16)
+        self.assertEqual(widget.truba_wall_minutes.value(), 30)
         widget.truba_cores.setValue(8)
+        widget.truba_wall_minutes.setValue(75)
         reopened = self.truba_study()
         self.assertEqual(reopened.truba_cores.value(), 8)
+        self.assertEqual(reopened.truba_wall_minutes.value(), 75)
         self.assertEqual(reopened.level_settings(.2).cores, 8)
         self.assertFalse(reopened.level_settings(.2).automatic_cores)
+        settings = reopened.level_settings(.2)
+        reopened._require_remote_submission(settings, 1)
+        reopened.remote_controller.require_convergence.assert_called_once_with(
+            settings, max_jobs=1, walltime="01:15:00")
         reopened.remote_controller.requested = False
         reopened._solver_changed()
         self.assertTrue(reopened.truba_cores.isHidden())
+        self.assertTrue(reopened.truba_wall_field.isHidden())
         self.assertEqual(reopened.level_settings(.2).cores, SETTINGS.cores)
 
     def test_truba_four_consecutive_failures_prevent_another_batch(self):
@@ -576,7 +584,7 @@ class LiveConvergenceTests(unittest.TestCase):
             self.assertEqual(settings.mesh_resolution, widget.rows[1].settings.mesh_resolution)
             self.assertEqual(settings.cores, 40)
             self.assertEqual(context.memory_mb, 262144)
-            widget.remote_controller.require_convergence.assert_called_with(settings, max_jobs=1)
+            widget.remote_controller.require_convergence.assert_called_with(settings, max_jobs=1, walltime="00:30:00")
             retried.result.return_value = completed(settings.mesh_resolution, 15, 150)
             widget._poll()
             self.assertEqual(submit.call_count, 3)
@@ -592,7 +600,8 @@ class LiveConvergenceTests(unittest.TestCase):
             widget.start()
             widget._poll()
         submit.assert_called_once()
-        widget.remote_controller.require_convergence.assert_called_with(submit.call_args.args[1], max_jobs=1)
+        widget.remote_controller.require_convergence.assert_called_with(
+            submit.call_args.args[1], max_jobs=1, walltime="00:30:00")
         self.assertEqual(submit.call_args.args[1].mesh_resolution, .2)
         self.assertIsNone(widget.future)
 

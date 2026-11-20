@@ -935,7 +935,7 @@ class FolderBatchDialog(QDialog):
                 partition = self.script.currentData()
                 for settings, metadata in snapshots:
                     if partition == 'auto':
-                        _, auth = self.remote_controller.require(settings.solver_backend, settings, allow_handover=True)
+                        _, auth = self.remote_controller.require_analysis(settings.solver_backend, settings)
                     else:
                         execution = self.remote_controller.require_batch_queue(partition, settings)
                         _, auth = execution

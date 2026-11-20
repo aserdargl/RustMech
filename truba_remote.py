@@ -16,6 +16,7 @@ import tarfile
 import time
 import uuid
 
+from remote_operations import ANALYSIS_OPERATIONS
 from truba_jobs import (HOST, SAFE_NAME, SLURM_TERMINAL_STATES, SSHJobs, WinSCPJobs, connection, job_record_lock,
                         validated_remote_path, write_record, cancel_remote)
 from truba_credentials import state_directory
@@ -219,13 +220,13 @@ def slurm_script(context,username,request):
     needs_foam = request['operation'] in ('probe', 'prepare', 'flow_export', 'flow_solve', 'thermal_export', 'thermal_solve')
     foam_load = "module load "+shlex.quote(context.foam_module)+" >/dev/null 2>&1 || true" if context.foam_module and needs_foam else ":"
     step_cores, _ = request_resources(context, request['operation'])
-    if request['operation'] == 'convergence_level':
+    if request['operation'] in ('convergence_level', 'doe_solve'):
         solver_cores = request.get('settings', {}).get('cores', step_cores)
         if type(solver_cores) is not int or not 1 <= solver_cores <= step_cores:
-            raise ValueError('Convergence CPU count must fit the Slurm allocation.')
+            raise ValueError('Solver CPU count must fit the Slurm allocation.')
         step_cores = solver_cores
     job_name = "RustMech-remote"
-    if request.get("background") or request["operation"] == "convergence_level":
+    if request.get("background") or request["operation"] in ANALYSIS_OPERATIONS:
         job_name = analysis_code(request) or job_name
     return f'''#!/bin/bash -l
 #SBATCH --job-name={job_name}
@@ -281,6 +282,19 @@ def request_resources(context, operation):
     return max(1, context.cores // slots), max(1, context.memory_mb // slots)
 
 
+def _standalone_analysis_context(context, operation):
+    if operation == 'doe_solve' and context.parallel_jobs > 1:
+        from truba_resources import BASELINES, candidates
+
+        cpus, memory = request_resources(context, operation)
+        queues = candidates(context.partition, context.cores, context.memory_mb, context.walltime)
+        limits = [BASELINES[name] for name in queues.split(',')]
+        cpus = max(cpus, *(limit.min_cpus for limit in limits))
+        memory = min(memory, *(limit.memory_ceiling(cpus) for limit in limits))
+        context = replace(context, partition=queues, cores=cpus, memory_mb=memory, parallel_jobs=1)
+    return replace(context, session_id='')
+
+
 class SlurmOutOfMemory(RuntimeError):
     def __init__(self, memory_mb, log_path):
         self.memory_mb = memory_mb
@@ -325,8 +339,10 @@ def run_remote_job(request,context,auth=None,marker=None,*,directory=None,resume
     study_name = context.study_name
     if not resume_record:
         required_capability(request)
+        if request['operation'] in ANALYSIS_OPERATIONS:
+            context = _standalone_analysis_context(context, request['operation'])
     context.validate()
-    if context.session_id and not resume_record and request.get('operation') in ('doe_mesh', 'doe_solve'):
+    if context.session_id and not resume_record and request.get('operation') == 'doe_mesh':
         from truba_handover import context_for_request
         context = context_for_request(context, auth, cancelled=cancelled, marker=marker, on_progress=on_progress)
     transport = RemoteTransport(context,auth,resume_record)
@@ -405,13 +421,13 @@ def run_remote_job(request,context,auth=None,marker=None,*,directory=None,resume
             _write_paths(paths,record)
         if on_progress: on_progress("TRUBA · "+stage)
     code = analysis_code(record)
-    script_name = (f"{code}.slurm" if record.get('operation') == 'convergence_level'
+    script_name = (f"{code}.slurm" if record.get('operation') in ANALYSIS_OPERATIONS
                    and not context.session_id and code else 'run.slurm')
     try:
         if not poll_once and (not resume_record or not record.get("job_id")):
             if resume_record: request = json.loads((directory/"request.json").read_text())
             (directory/script_name).write_text(slurm_script(context,transport.username,request),encoding="utf-8",newline="\n")
-            if record.get('operation') == 'convergence_level':
+            if record.get('operation') in ANALYSIS_OPERATIONS:
                 record['script_name'] = script_name
                 record['solver_cores'] = request.get('settings', {}).get('cores')
                 _write_paths(paths, record)

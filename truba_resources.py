@@ -196,9 +196,7 @@ def convergence_context(context, catalog, solver_cpus, max_jobs):
     if context.gpus:
         raise ValueError('Mesh convergence requires a CPU queue on TRUBA.')
     if context.partition == 'auto':
-        # Find a CPU queue independently of the connection's session duration.
-        lookup = replace(context, walltime='00:01:00')
-        partition = automatic_context(lookup, catalog, min_cpus=solver_cpus).partition
+        partition = automatic_context(context, catalog, min_cpus=solver_cpus).partition
     else:
         partition = context.partition
     limit = catalog.get(partition)
@@ -209,13 +207,10 @@ def convergence_context(context, catalog, solver_cpus, max_jobs):
     minimum_memory = max(limit.min_memory_mb or 1, baseline.min_memory_mb or 1)
     slots = max(1, min(max_jobs, context.cores // cpus, context.memory_mb // minimum_memory))
     memory = min(context.memory_mb // slots, limit.memory_ceiling(cpus), baseline.memory_ceiling(cpus))
-    # Slurm rounds requested seconds up to a minute, so round the ceiling down.
-    minutes = min(limit.max_seconds, baseline.max_seconds) // 60
-    walltime = f'{minutes // 60:02d}:{minutes % 60:02d}:00'
-    candidates(partition, cpus, memory, walltime, catalog)
-    candidates(partition, cpus, memory, walltime)
+    candidates(partition, cpus, memory, context.walltime, catalog)
+    candidates(partition, cpus, memory, context.walltime)
     return replace(context, partition=partition, cores=cpus, memory_mb=memory,
-                   walltime=walltime, parallel_jobs=slots, session_id='')
+                   parallel_jobs=slots, session_id='')
 
 
 def test_submission(context, auth=None):

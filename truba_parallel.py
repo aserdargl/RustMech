@@ -37,6 +37,8 @@ class TrubaParallelMixin:
         return bool(getattr(self, '_parallel_futures', {}))
 
     def _require_truba_row(self, capability, settings):
+        if self._active_mode == 'solve':
+            return self.remote_controller.require_analysis(capability, settings)
         return self.remote_controller.require(capability, settings, allow_handover=True)
 
     def _launch_next_in_queue(self):

@@ -273,6 +273,16 @@ class MeshConvergenceWidget(QWidget):
         self.max_minutes.setToolTip("Budget checked between stages/levels; the active solver finishes its current level.")
         self.time_budget_field = stepper_with_unit(self.max_minutes, "min")
         form.addRow("Study time budget", self.time_budget_field)
+        self.truba_wall_minutes = CompactSpinBox()
+        self.truba_wall_minutes.setRange(1, 999 * 60 + 59)
+        self.truba_wall_minutes.setFixedHeight(CONTROL_HEIGHT)
+        self.truba_wall_minutes.setFixedWidth(NUMERIC_FIELD_WIDTH)
+        self.truba_wall_minutes.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.truba_wall_minutes.setKeyboardTracking(False)
+        self.truba_wall_minutes.setToolTip("Slurm time limit for each mesh analysis, in minutes.")
+        self.truba_wall_field = stepper_with_unit(self.truba_wall_minutes, "min")
+        form.addRow("Wall time per analysis", self.truba_wall_field)
+        form.setRowVisible(self.truba_wall_field, False)
         self.metric_checks, self.absolute = [], []
         for label, _ in METRICS:
             check = QCheckBox(label)
@@ -399,6 +409,9 @@ class MeshConvergenceWidget(QWidget):
         cpu_key = "meshConvergence/trubaCoresPerAnalysis"
         self.truba_cores.setValue(cpu_preferences.value(cpu_key, DEFAULT_TRUBA_CORES, type=int))
         self.truba_cores.valueChanged.connect(lambda value: cpu_preferences.setValue(cpu_key, value))
+        walltime_key = "meshConvergence/trubaWallMinutes"
+        self.truba_wall_minutes.setValue(cpu_preferences.value(walltime_key, 30, type=int))
+        self.truba_wall_minutes.valueChanged.connect(lambda value: cpu_preferences.setValue(walltime_key, value))
         self.truba_cores_label.setBuddy(self.truba_cores)
         mesh_fields.addWidget(self.truba_cores_label)
         mesh_fields.addWidget(self.truba_cores)
@@ -500,6 +513,7 @@ class MeshConvergenceWidget(QWidget):
         self.truba_cores_label.setVisible(remote)
         self.truba_cores.setVisible(remote)
         self.advanced.layout().setRowVisible(self.time_budget_field, not remote)
+        self.advanced.layout().setRowVisible(self.truba_wall_field, remote)
         self._show_remote_columns(remote or bool(self.remote_records))
 
     def _show_remote_columns(self, visible):
@@ -687,12 +701,17 @@ class MeshConvergenceWidget(QWidget):
         self._set_status(f"{kind}: {settings.mesh_resolution:.6g} mm")
         return len(self.rows) - 1
 
+    def _require_remote_submission(self, settings, max_jobs):
+        hours, minutes = divmod(self.truba_wall_minutes.value(), 60)
+        return self.remote_controller.require_convergence(
+            settings, max_jobs=max_jobs, walltime=f"{hours:02d}:{minutes:02d}:00")
+
     def _launch_remote_batch(self, settings, kind):
         limit = 1 if self.single_remote_run else min(TRUBA_BATCH_SIZE, self.max_levels.value() - len(self.rows))
         if not self.automatic.isChecked():
             limit = min(limit, 1 + len(self.manual_pending))
         try:
-            context, auth = self.remote_controller.require_convergence(settings, max_jobs=limit)
+            context, auth = self._require_remote_submission(settings, limit)
         except Exception as exc:
             message = f"Failed to start convergence: {exc}"
             self._add_level(settings, kind, message)
@@ -747,7 +766,7 @@ class MeshConvergenceWidget(QWidget):
             return
         settings = replace(self.rows[row].settings, cores=self.truba_cores.value())
         try:
-            context, auth = self.remote_controller.require_convergence(settings, max_jobs=1)
+            context, auth = self._require_remote_submission(settings, 1)
             if context.memory_mb <= memory_mb:
                 raise ValueError(f"This mesh previously exceeded {memory_mb / 1024:.1f} GiB. "
                                  "Increase the TRUBA RAM request or select a queue with more RAM.")

@@ -35,7 +35,8 @@ class FakeTransport:
     def command(self,script):
         if "RUSTMECH_JOB_ID" in script:
             if not self.server_job:
-                independent = self.request.get("background") or self.request.get("operation") == "convergence_level"
+                from remote_operations import ANALYSIS_OPERATIONS
+                independent = self.request.get("background") or self.request.get("operation") in ANALYSIS_OPERATIONS
                 self.server_job = str(320 + len(self.instances)) if independent else "321"
                 self.submissions += 1
             return "RUSTMECH_JOB_ID="+self.server_job+"\n"
@@ -178,6 +179,27 @@ class RemoteProtocolTests(unittest.TestCase):
             self.assertIn("#SBATCH --job-name=" + script.stem, script.read_text())
             self.assertIn(name, transport.put_names)
 
+    def test_solves_get_independent_jobs_even_with_an_existing_session(self):
+        context = RemoteContext(partition='barbun', cores=40, memory_mb=80000,
+                                parallel_jobs=2, session_id='900')
+        records = []
+        for operation in ('mechanical', 'fft_solve', 'flow_solve', 'thermal_solve', 'doe_solve', 'convergence_level'):
+            with self.subTest(operation=operation):
+                request = dict(operation=operation, settings=dict(solver_backend='kratos', cores=16))
+                directory = self.root / operation
+                run_remote_job(request, context, directory=directory)
+                record = json.loads((directory / 'remote_job.json').read_text())
+                self.assertFalse(record['context']['session_id'])
+                self.assertNotIn('session', record)
+                self.assertNotEqual(record['job_id'], '900')
+                script = directory / record['script_name']
+                self.assertIn(script.name, FakeTransport.instances[-1].put_names)
+                if operation == 'doe_solve':
+                    self.assertIn('#SBATCH --cpus-per-task=20', script.read_text())
+                records.append(record)
+        self.assertEqual(len({record['job_id'] for record in records}), 6)
+        self.assertEqual(len({record['script_name'] for record in records}), 6)
+
     def test_background_analyses_upload_inputs_and_poll_independently(self):
         import base64
         geometry = self.root / "specimen.vtp"
@@ -193,7 +215,8 @@ class RemoteProtocolTests(unittest.TestCase):
         self.assertEqual(first["study_name"], "A çalışması")
         self.assertEqual(first["state"], "submitted")
         self.assertEqual(base64.b64decode(FakeTransport.instances[0].request["imported_geometry_vtp"]), geometry.read_bytes())
-        self.assertIn("#SBATCH --job-name=" + analysis_code(first), (self.root / "first/run.slurm").read_text())
+        self.assertIn("#SBATCH --job-name=" + analysis_code(first),
+                      (self.root / 'first' / first['script_name']).read_text())
         self.assertFalse((self.root / "first/output/result.json").exists())
 
         command = FakeTransport.command
@@ -229,8 +252,9 @@ class RemoteProtocolTests(unittest.TestCase):
 
         self.assertIn('realpath -e -- "$project"/\'study/first batch\'', commands[0])
         self.assertIn('results="$batch/results"', commands[0])
-        self.assertIn('sbatch --parsable run.slurm', commands[1])
-        script = (directory / 'run.slurm').read_text()
+        record = json.loads((directory / 'remote_job.json').read_text())
+        self.assertIn(f"sbatch --parsable {record['script_name']}", commands[1])
+        script = (directory / record['script_name']).read_text()
         self.assertIn('#SBATCH --partition=smp', script)
         self.assertIn('results="$batch/results"', script)
         self.assertIn('RUSTMECH_BATCH_OUTPUT="$results/${PWD##*/}"', script)

@@ -25,6 +25,10 @@ OPERATIONS = {
     "thermal_export": "mesh", "thermal_solve": "thermal",
 }
 
+ANALYSIS_OPERATIONS = frozenset({
+    "mechanical", "fft_solve", "flow_solve", "thermal_solve", "doe_solve", "convergence_level",
+})
+
 
 def required_capability(request):
     operation = request.get("operation")
