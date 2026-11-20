@@ -219,6 +219,11 @@ def slurm_script(context,username,request):
     needs_foam = request['operation'] in ('probe', 'prepare', 'flow_export', 'flow_solve', 'thermal_export', 'thermal_solve')
     foam_load = "module load "+shlex.quote(context.foam_module)+" >/dev/null 2>&1 || true" if context.foam_module and needs_foam else ":"
     step_cores, _ = request_resources(context, request['operation'])
+    if request['operation'] == 'convergence_level':
+        solver_cores = request.get('settings', {}).get('cores', step_cores)
+        if type(solver_cores) is not int or not 1 <= solver_cores <= step_cores:
+            raise ValueError('Convergence CPU count must fit the Slurm allocation.')
+        step_cores = solver_cores
     job_name = "RustMech-remote"
     if request.get("background") or request["operation"] == "convergence_level":
         job_name = analysis_code(request) or job_name

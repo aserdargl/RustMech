@@ -116,15 +116,16 @@ class RemoteProtocolTests(unittest.TestCase):
                     self.submission_script = script
                 return super().command(script)
 
-        request = {"operation": "convergence_level", "settings": asdict(Settings(solver_backend="kratos"))}
+        request = {"operation": "convergence_level", "settings": asdict(Settings(solver_backend="kratos", cores=16))}
         with patch("truba_remote.RemoteTransport", SubmissionTransport):
-            _, directory = run_remote_job(request, RemoteContext(), directory=self.root / "level")
+            _, directory = run_remote_job(request, RemoteContext(cores=20), directory=self.root / "level")
         record = json.loads((directory / "remote_job.json").read_text())
         name = f"{analysis_code(record)}.slurm"
         transport = FakeTransport.instances[-1]
         self.assertIn(f"sbatch --parsable {name}", transport.submission_script)
         self.assertIn(name, transport.put_names)
         self.assertEqual(record["script_name"], name)
+        self.assertEqual(record["solver_cores"], 16)
         self.assertEqual(record["job_id"], "321")
 
     def test_submission_download_checksum_and_resume_do_not_resubmit(self):

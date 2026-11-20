@@ -4,7 +4,8 @@ import unittest
 from unittest.mock import patch
 from datetime import datetime, timezone
 
-from truba_resources import BASELINES, candidates, parse_catalog, allocate_with_limits, automatic_context, test_submission as validate_submission
+from truba_resources import (BASELINES, candidates, parse_catalog, allocate_with_limits,
+                             automatic_context, convergence_context, test_submission as validate_submission)
 from truba_remote import RemoteContext, slurm_script
 
 
@@ -70,6 +71,22 @@ class QueuePolicyTests(unittest.TestCase):
         self.assertEqual((chosen.partition, chosen.cores, chosen.memory_mb), ('hamsi', 28, 95200))
         chosen = automatic_context(RemoteContext(partition='auto'), catalog, min_cpus=64)
         self.assertEqual((chosen.partition, chosen.cores), ('orfoz', 64))
+
+    def test_convergence_sizes_each_script_and_batch_within_queue_limits(self):
+        context = RemoteContext(partition='barbun', cores=40, memory_mb=128 * 1024)
+        for solver_cpus, cpus, slots in ((8, 20, 2), (16, 20, 2), (32, 32, 1)):
+            with self.subTest(solver_cpus=solver_cpus):
+                plan = convergence_context(context, BASELINES, solver_cpus, max_jobs=5)
+                self.assertEqual((plan.cores, plan.parallel_jobs, plan.memory_mb),
+                                 (cpus, slots, context.memory_mb // slots))
+                script = slurm_script(plan, 'tester', dict(operation='convergence_level',
+                                      settings={'cores': solver_cpus}, source_sha256='0' * 64))
+                self.assertIn(f'#SBATCH --cpus-per-task={cpus}\n', script)
+                self.assertIn(f'OMP_NUM_THREADS={solver_cpus} RUSTMECH_THREADS={solver_cpus} ', script)
+        with self.assertRaises(ValueError):
+            convergence_context(context, BASELINES, 41, max_jobs=5)
+        auto = convergence_context(replace(context, partition='auto'), BASELINES, 64, max_jobs=5)
+        self.assertEqual((auto.partition, auto.cores, auto.parallel_jobs), ('orfoz', 64, 1))
 
     def test_auto_retries_whole_node_if_job_submit_plugin_rejects_half(self):
         with patch('truba_resources.fetch_catalog', return_value=BASELINES), patch('truba_resources.test_submission', side_effect=[RuntimeError('Use whole node'), None, None, None]), patch('truba_session.create_session') as submit:

@@ -447,11 +447,11 @@ class LiveConvergenceTests(unittest.TestCase):
                     else:
                         self.assertIn("Remote results are unavailable", widget.status.text())
 
-    def truba_study(self, cores=20):
+    def truba_study(self, cores=20, slots=5):
         widget = self.widget()
         widget.remote_controller = MagicMock(requested=True, ready=True,
                                              capabilities={"mesh_types": ["HEX8"]})
-        context = RemoteContext(cores=cores, memory_mb=10000, session_id="321")
+        context = RemoteContext(cores=cores, memory_mb=10000, parallel_jobs=slots)
         widget.remote_controller.require_convergence.return_value = (context, object())
         widget._solver_changed()
         return widget
@@ -502,19 +502,32 @@ class LiveConvergenceTests(unittest.TestCase):
             job.force_stop.assert_called_once()
 
     def test_truba_manual_batch_sends_independent_jobs_and_detaches_all_jobs(self):
-        widget = self.truba_study(cores=3)
+        widget = self.truba_study(cores=20, slots=2)
         widget.automatic.setChecked(False)
         widget.manual.setText(".2, .16, .13, .1, .08")
-        jobs = [MagicMock() for _ in range(5)]
+        jobs = [MagicMock() for _ in range(2)]
         with patch("mesh_convergence.AnalysisProcess", side_effect=jobs) as submit:
             widget.start()
-        self.assertEqual([call.args[1].mesh_resolution for call in submit.call_args_list], [.2, .16, .13, .1, .08])
+        self.assertEqual([call.args[1].mesh_resolution for call in submit.call_args_list], [.2, .16])
         self.assertTrue(all(not call.args[2].session_id for call in submit.call_args_list))
         self.assertEqual(widget.detach_remote_jobs(), jobs)
         self.assertIsNone(widget.future)
         self.assertFalse(widget.timer.isActive())
         for job in jobs:
             job.force_stop.assert_not_called()
+
+    def test_truba_cpu_override_is_persisted_and_applies_only_to_remote_levels(self):
+        widget = self.truba_study()
+        self.assertEqual(widget.truba_cores.value(), 16)
+        widget.truba_cores.setValue(8)
+        reopened = self.truba_study()
+        self.assertEqual(reopened.truba_cores.value(), 8)
+        self.assertEqual(reopened.level_settings(.2).cores, 8)
+        self.assertFalse(reopened.level_settings(.2).automatic_cores)
+        reopened.remote_controller.requested = False
+        reopened._solver_changed()
+        self.assertTrue(reopened.truba_cores.isHidden())
+        self.assertEqual(reopened.level_settings(.2).cores, SETTINGS.cores)
 
     def test_truba_four_consecutive_failures_prevent_another_batch(self):
         widget = self.truba_study()

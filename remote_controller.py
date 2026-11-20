@@ -11,7 +11,8 @@ from PySide6.QtWidgets import (QCheckBox,QFormLayout,QGridLayout,QGroupBox,QHBox
 from truba_remote import RemoteContext,run_remote_job
 from studio_style import CompactSpinBox, configure_form, CompactComboBox, CompactDoubleSpinBox, CONTROL_HEIGHT
 from truba_session import saved_session, create_session, refresh_session, release_session
-from truba_resources import BASELINES, AUTO_QUEUES, candidates, fetch_catalog, allocate_with_limits, automatic_context
+from truba_resources import (BASELINES, AUTO_QUEUES, candidates, fetch_catalog,
+                             allocate_with_limits, automatic_context, convergence_context)
 
 
 DEFAULT_SESSION_WALLTIME = '04:00:00'
@@ -774,17 +775,14 @@ class RemoteController(QObject):
     def require(self,capability,settings=None, *, allow_handover=False):
         return self._require(capability, settings, allow_handover=allow_handover)
 
-    def require_convergence(self, settings):
+    def require_convergence(self, settings, *, max_jobs):
         """Validate the resource request for an independent Slurm submission."""
         if self.closing:
             raise RuntimeError("RustMech is closing.")
         if not self.requested or not self.convergence_solver_enabled(settings.solver_backend):
             raise ValueError("Select Kratos and enable TRUBA for mesh convergence.")
-        context = self.context(use_session=False)
-        if context.gpus:
-            raise ValueError("Mesh convergence requires a CPU queue on TRUBA.")
-        candidates(context.partition, context.cores, context.memory_mb, context.walltime, self.queue_catalog)
-        self._validate_kratos_request(replace(settings, cores=min(settings.cores, context.cores)), context)
+        context = convergence_context(self.context(use_session=False), self.queue_catalog, settings.cores, max_jobs)
+        self._validate_kratos_request(settings, context)
         study_name = self.window.truba_dialog.active_jobs.study_name.text().strip()
         return replace(context, study_name=study_name), self.auth()
 

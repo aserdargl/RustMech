@@ -1453,10 +1453,13 @@ Hazır olma bildirimi üretim başlatmaz. **Apply** geometriyi aynı kaynağın
 `surface` adımında (büyükse otomatik chunked/periyodik yolla) üretir; VTP sonucu
 indirilip yerel ekranda çizilir. FE Mesh isteği ayrıca hacim ağını üretir.
 Ağ üretimi ve analizler aynı kaynağın `srun` adımları olarak yürütülür.
-**Mesh Convergence** seçili TRUBA ayarlarıyla grup başına en çok beş seviyeyi
-doğrudan, ayrı `sbatch` işleri olarak kuyruğa gönderir. **Allocate** gerekmez. Her seviye kendi CPU,
-RAM ve süre isteğini kullanır. Sonuç tablosu ve CSV, Slurm iş kimliğini, betiği
-ve durumunu gösterir. Betik hücresinde dosya yolları ve kaynak isteği görünür.
+**Mesh Convergence**, TRUBA'da her seviyeyi ayrı bir `sbatch` işi olarak kuyruğa
+gönderir. **Allocate** gerekmez. **CPUs per analysis** varsayılanı 16'dır ve
+kullanıcı bunu değiştirebilir. Slurm betiği, gerekirse kuyruk alt sınırı kadar
+CPU ister. Aynı grupta gönderilen seviye sayısı, bağlantı panelindeki CPU ve RAM
+bütçesine göre belirlenir ve beşi geçmez. Sonuç tablosu ve CSV iş kimliğini,
+betiği ve durumu gösterir. Betik hücresinde ayrıca Slurm'dan istenen CPU ve
+Kratos'un çalışma ayarı görünür.
 Tahsis öncesinde **Parallel analyses** ile DoE ve analiz kuyruğunda aynı anda
 çalışabilecek analiz sayısını seçin (varsayılan `1`). CPU ve RAM eşit paylara
 bölünür: örneğin 56 çekirdek ve 128 GiB RAM, dört analiz için analiz başına

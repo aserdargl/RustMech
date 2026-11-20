@@ -1286,6 +1286,8 @@ Mesh convergence|Ağ yakınsaması
 Slurm job ID|Slurm iş kimliği
 Slurm script|Slurm betiği
 Slurm state|Slurm durumu
+CPUs per analysis|Analiz başına CPU
+Kratos threads per TRUBA analysis. The Slurm queue may require reserving more CPUs.|TRUBA'da analiz başına Kratos çekirdeği. Slurm kuyruğu daha fazla CPU ayrılmasını gerektirebilir.
 DOE mesh generation|DoE ağı üretimi
 DOE analysis|DoE analizi
 Flow export|Akış dışa aktarımı

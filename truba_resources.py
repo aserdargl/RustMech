@@ -191,6 +191,28 @@ def automatic_context(context, catalog, *, min_cpus=1):
     return automatic_options(context, catalog, min_cpus=min_cpus)[0]
 
 
+def convergence_context(context, catalog, solver_cpus, max_jobs):
+    """Size independent convergence jobs from the configured CPU and RAM budget."""
+    if context.gpus:
+        raise ValueError('Mesh convergence requires a CPU queue on TRUBA.')
+    if context.partition == 'auto':
+        partition = automatic_context(context, catalog, min_cpus=solver_cpus).partition
+    else:
+        partition = context.partition
+    limit = catalog.get(partition)
+    baseline = BASELINES.get(partition)
+    if limit is None or baseline is None or limit.min_gpus:
+        raise ValueError('Mesh convergence requires an available CPU queue on TRUBA.')
+    cpus = max(solver_cpus, limit.min_cpus, baseline.min_cpus)
+    minimum_memory = max(limit.min_memory_mb or 1, baseline.min_memory_mb or 1)
+    slots = max(1, min(max_jobs, context.cores // cpus, context.memory_mb // minimum_memory))
+    memory = min(context.memory_mb // slots, limit.memory_ceiling(cpus), baseline.memory_ceiling(cpus))
+    candidates(partition, cpus, memory, context.walltime, catalog)
+    candidates(partition, cpus, memory, context.walltime)
+    return replace(context, partition=partition, cores=cpus, memory_mb=memory,
+                   parallel_jobs=slots, session_id='')
+
+
 def test_submission(context, auth=None):
     """Ask Slurm (including job-submit plugins) to validate; never allocate."""
     import shlex

@@ -35,6 +35,7 @@ RESULT_HEADERS = ("Mesh / elements", "Mesh (s)", "Solve (s)", "Force (N)",
                   "Modulus (MPa)", "SEA (J/g)", "Max Δ / ref.", "Status", *REMOTE_RESULT_HEADERS)
 MAX_FAILURE_RETRIES = 3
 TRUBA_BATCH_SIZE = 5
+DEFAULT_TRUBA_CORES = 16
 TIME_UNITS = (
     ("cs", "Centiseconds (cs)", 0.01),
     ("s", "Seconds (s)", 1.0),
@@ -370,8 +371,9 @@ class MeshConvergenceWidget(QWidget):
             label.setBuddy(control)
             mesh_fields.addWidget(label)
             mesh_fields.addWidget(stepper_with_unit(control, "mm"))
+        preferences = QSettings("RustMech", "RustMech")
         self.mesh_precision = mesh_precision_stepper(
-            QSettings("RustMech", "RustMech"), "meshConvergence/meshDisplayDecimals",
+            preferences, "meshConvergence/meshDisplayDecimals",
             self.start_size, self.local_size,
         )
         self.mesh_precision.setFixedWidth(36)
@@ -379,6 +381,23 @@ class MeshConvergenceWidget(QWidget):
         precision_label.setBuddy(self.mesh_precision)
         mesh_fields.addWidget(precision_label)
         mesh_fields.addWidget(self.mesh_precision)
+        self.truba_cores_label = QLabel("CPUs per analysis")
+        self.truba_cores = CompactSpinBox()
+        self.truba_cores.setRange(1, get_solver_capabilities("kratos").max_cores)
+        self.truba_cores.setFixedWidth(NUMERIC_FIELD_WIDTH)
+        self.truba_cores.setFixedHeight(CONTROL_HEIGHT)
+        self.truba_cores.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.truba_cores.setKeyboardTracking(False)
+        self.truba_cores.setToolTip("Kratos threads per TRUBA analysis. The Slurm queue may require reserving more CPUs.")
+        cpu_preferences = self.remote_controller.preferences if self.remote_controller is not None else preferences
+        cpu_key = "meshConvergence/trubaCoresPerAnalysis"
+        self.truba_cores.setValue(cpu_preferences.value(cpu_key, DEFAULT_TRUBA_CORES, type=int))
+        self.truba_cores.valueChanged.connect(lambda value: cpu_preferences.setValue(cpu_key, value))
+        self.truba_cores_label.setBuddy(self.truba_cores)
+        mesh_fields.addWidget(self.truba_cores_label)
+        mesh_fields.addWidget(self.truba_cores)
+        self.truba_cores_label.hide()
+        self.truba_cores.hide()
         layout.addWidget(self.mesh_settings, alignment=Qt.AlignmentFlag.AlignLeft)
 
         self.solver_combo.currentIndexChanged.connect(self._solver_changed)
@@ -464,7 +483,10 @@ class MeshConvergenceWidget(QWidget):
     def _sync_execution_target(self):
         with QSignalBlocker(self.run_on_truba):
             self.run_on_truba.setChecked(self.remote_controller.requested)
-        self._show_remote_columns(self.run_on_truba.isChecked() or bool(self.remote_records))
+        remote = self.run_on_truba.isChecked()
+        self.truba_cores_label.setVisible(remote)
+        self.truba_cores.setVisible(remote)
+        self._show_remote_columns(remote or bool(self.remote_records))
 
     def _show_remote_columns(self, visible):
         for column in range(len(RESULT_HEADERS) - len(REMOTE_RESULT_HEADERS), len(RESULT_HEADERS)):
@@ -563,6 +585,8 @@ class MeshConvergenceWidget(QWidget):
                         mesh_type=self.mesh_type_combo.currentData(),
                         solver_backend=capabilities.identifier,
                         cores=min(self.level_base_settings.cores, capabilities.max_cores))
+        if self.run_on_truba.isChecked():
+            level = replace(level, cores=self.truba_cores.value(), automatic_cores=False)
         if level.mesh_type in TETRAHEDRAL_MESH_TYPES:
             local_ratio = self.local_size.value() / self.start_size.value()
             level = replace(level, local_mesh_size=size * local_ratio)
@@ -651,14 +675,17 @@ class MeshConvergenceWidget(QWidget):
     def _launch_remote_batch(self, settings, kind):
         from truba_remote import run_remote_level
 
+        limit = min(TRUBA_BATCH_SIZE, self.max_levels.value() - len(self.rows))
+        if not self.automatic.isChecked():
+            limit = min(limit, 1 + len(self.manual_pending))
         try:
-            context, auth = self.remote_controller.require_convergence(settings)
+            context, auth = self.remote_controller.require_convergence(settings, max_jobs=limit)
         except Exception as exc:
             message = f"Failed to start convergence: {exc}"
             self._add_level(settings, kind, message)
             self._finish(message)
             return
-        limit = min(TRUBA_BATCH_SIZE, self.max_levels.value() - len(self.rows))
+        limit = min(limit, context.parallel_jobs)
         plan = [(settings, kind)]
         if self.automatic.isChecked():
             attempted = [row.settings.mesh_resolution for row in self.rows]

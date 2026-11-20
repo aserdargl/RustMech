@@ -891,7 +891,11 @@ class RemoteModeUiTests(unittest.TestCase):
         self.assertFalse(self.controller.ready)
         self.assertIsNone(self.controller.session)
         self.assertEqual(study.solver_combo.currentData(), "kratos")
-        jobs = [MagicMock() for _ in range(5)]
+        self.assertEqual(study.truba_cores.value(), 16)
+        queue = self.controller.controls['partition']
+        queue.setCurrentIndex(queue.findData('barbun'))
+        self.controller.controls['cores'].setValue(40)
+        jobs = [MagicMock() for _ in range(2)]
         for index, job in enumerate(jobs):
             job.done.return_value = False
             job.remote_status.return_value = {"job_id": str(470 + index), "state": "PENDING|Resources",
@@ -900,23 +904,27 @@ class RemoteModeUiTests(unittest.TestCase):
                 patch("remote_controller.create_session") as allocate:
             study.run_button.click()
             allocate.assert_not_called()
-        self.assertEqual(submit.call_count, 5)
+        self.assertEqual(submit.call_count, 2)
         self.assertTrue(all(call.args[0] is run_remote_level and not call.args[2].session_id
                             for call in submit.call_args_list))
-        self.assertEqual(study.results.rowCount(), 5)
+        self.assertTrue(all((call.args[1].cores, call.args[2].cores) == (16, 20)
+                            for call in submit.call_args_list))
+        self.assertFalse(study.truba_cores.isEnabled())
+        self.assertEqual(study.results.rowCount(), 2)
         self.assertIn("preparing submission", study.results.item(0, 7).text())
         study._poll()
-        for index in range(5):
+        for index in range(2):
             self.assertEqual(study.results.item(index, 8).text(), str(470 + index))
             self.assertEqual(study.results.item(index, 9).text(), f"RM-{index}.slurm")
             self.assertIn(f"/scratch/{index}/RM-{index}.slurm", study.results.item(index, 9).toolTip())
             self.assertEqual(study.results.item(index, 10).text(), "PENDING|Resources")
-        jobs[3].remote_status.return_value["state"] = "RUNNING"
+        jobs[1].remote_status.return_value["state"] = "RUNNING"
         study._poll()
-        self.assertEqual(study.results.item(3, 10).text(), "RUNNING")
+        self.assertEqual(study.results.item(1, 10).text(), "RUNNING")
         study.force_stop()
-        self.assertEqual(study.results.item(3, 7).text(), "Cancelled (Forced Stop)")
-        self.assertEqual(study.results.item(3, 8).text(), "473")
+        self.assertTrue(study.truba_cores.isEnabled())
+        self.assertEqual(study.results.item(1, 7).text(), "Cancelled (Forced Stop)")
+        self.assertEqual(study.results.item(1, 8).text(), "471")
         dialog.reject()
 
     def test_convergence_and_doe_do_not_call_local_mesh_generator(self):
