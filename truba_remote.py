@@ -270,7 +270,8 @@ def _write_paths(paths,record):
 
 
 def request_resources(context, operation):
-    slots = min(context.parallel_jobs, context.cores, context.memory_mb) if operation in ('doe_mesh', 'doe_solve') else 1
+    slots = min(context.parallel_jobs, context.cores, context.memory_mb) if operation in (
+        'doe_mesh', 'doe_solve', 'convergence_level') else 1
     return max(1, context.cores // slots), max(1, context.memory_mb // slots)
 
 
@@ -617,6 +618,8 @@ def sync_background_analysis(record, auth):
 
 
 def run_remote_level(settings,context,max_elements,selected,remote_auth=None,job_marker=None):
+    cores, _ = request_resources(context, 'convergence_level')
+    settings = replace(settings, cores=min(settings.cores, cores), automatic_cores=False)
     result,_ = run_remote_job(dict(operation="convergence_level",settings=asdict(settings),max_elements=max_elements,selected=selected),context,remote_auth,job_marker)
     if result is None:
         return None

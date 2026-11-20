@@ -14,7 +14,7 @@ import unittest
 from unittest.mock import patch
 
 from model import ROOT,Settings
-from truba_remote import (RemoteContext,analysis_code,make_source_bundle,run_remote_job,safe_extract,sync_background_analysis,
+from truba_remote import (RemoteContext,analysis_code,make_source_bundle,run_remote_job,run_remote_level,safe_extract,sync_background_analysis,
                           slurm_script,load_remote_preview,RemoteTransport)
 
 
@@ -82,6 +82,18 @@ class RemoteProtocolTests(unittest.TestCase):
                        dict(runtime_python="~/../other/bin/python"),dict(foam_module="foo\nbar"),
                        dict(cores=True),dict(walltime="00:99:00")):
             with self.subTest(values=values),self.assertRaises(ValueError): replace(RemoteContext(),**values).validate()
+
+    def test_convergence_level_uses_its_share_of_the_resource_session(self):
+        settings = Settings(solver_backend="kratos", cores=20, automatic_cores=True)
+        context = RemoteContext(cores=20, memory_mb=10000, parallel_jobs=5, session_id="321")
+        with patch("truba_remote.run_remote_job", return_value=(None, self.root)) as submit:
+            self.assertIsNone(run_remote_level(settings, context, 1000, [0]))
+        request, submitted_context, *_ = submit.call_args.args
+        self.assertEqual(request["settings"]["cores"], 4)
+        self.assertFalse(request["settings"]["automatic_cores"])
+        self.assertEqual(submitted_context, context)
+        self.assertIn("OMP_NUM_THREADS=4 RUSTMECH_THREADS=4", slurm_script(
+            context, "tester", dict(request, source_sha256="0" * 64, native_sha256="0" * 64)))
 
     def test_submission_download_checksum_and_resume_do_not_resubmit(self):
         result,directory = run_remote_job(dict(operation="probe"),RemoteContext(),directory=self.root/"job")

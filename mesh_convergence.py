@@ -33,6 +33,7 @@ from studio_style import (CONTROL_HEIGHT, NUMERIC_FIELD_WIDTH, STUDIO_STYLESHEET
 RESULT_HEADERS = ("Mesh / elements", "Mesh (s)", "Solve (s)", "Force (N)",
                   "Modulus (MPa)", "SEA (J/g)", "Max Δ / ref.", "Status")
 MAX_FAILURE_RETRIES = 3
+TRUBA_BATCH_SIZE = 5
 TIME_UNITS = (
     ("cs", "Centiseconds (cs)", 0.01),
     ("s", "Seconds (s)", 1.0),
@@ -166,6 +167,8 @@ class MeshConvergenceWidget(QWidget):
         self.stop_requested = get_context("spawn").Event()
         self.updates = None
         self.future = None
+        self.remote_jobs = {}
+        self.remote_outcomes = {}
         self.rows = []
         self.time_units = {1: "s", 2: "s"}
         self.recommended = None
@@ -199,6 +202,7 @@ class MeshConvergenceWidget(QWidget):
         self.run_on_truba = QCheckBox("Run on TRUBA")
         self.run_on_truba.setToolTip(
             "Shared execution mode. TRUBA requires a ready resource session in the TRUBA panel. "
+            f"Each batch can run up to {TRUBA_BATCH_SIZE} mesh levels within the allocation. "
             "If the solver changes for TRUBA, the study uses that solver's main workspace profile.")
         controls.addWidget(self.run_on_truba)
         self.run_on_truba.setVisible(self.remote_controller is not None)
@@ -608,30 +612,76 @@ class MeshConvergenceWidget(QWidget):
         self.apply_button.setEnabled(not running and self.recommended is not None)
 
     def _launch(self, settings, kind):
-        self.rows.append(Level(settings, kind=kind))
-        self.results.insertRow(len(self.rows) - 1)
-        self.stage_started = monotonic()
-        self._render(len(self.rows) - 1)
-        self.results.scrollToBottom()
-        self._set_status(f"{kind}: {settings.mesh_resolution:.6g} mm")
+        if self.run_on_truba.isChecked():
+            self._launch_remote_batch(settings, kind)
+            return
+        self._add_level(settings, kind)
         self.updates = get_context("spawn").Queue()
         try:
-            controller = self.remote_controller
-            if self.run_on_truba.isChecked():
-                from truba_remote import run_remote_level
-                context,auth = controller.require(settings.solver_backend,settings)
-                self.future = AnalysisProcess(run_remote_level,settings,context,self.max_elements.value(),self.selected,remote_auth=auth)
-                self.rows[-1].status = "TRUBA job"
-                self._render(len(self.rows)-1)
-            else:
-                self.future = AnalysisProcess(
-                    _solve_level_process, settings, self.mesh_generator, self.solver,
-                    self.updates, self.stop_requested, self.max_elements.value(), self.selected)
+            self.future = AnalysisProcess(
+                _solve_level_process, settings, self.mesh_generator, self.solver,
+                self.updates, self.stop_requested, self.max_elements.value(), self.selected)
         except Exception as exc:
             self.rows[-1].status = f"Failed: {exc}"
             self._render(len(self.rows) - 1)
             self._close_updates()
             self._finish(f"Failed to start convergence: {exc}")
+
+    def _add_level(self, settings, kind, status="Meshing"):
+        self.rows.append(Level(settings, kind=kind, status=status))
+        self.results.insertRow(len(self.rows) - 1)
+        self.stage_started = monotonic()
+        self._render(len(self.rows) - 1)
+        self.results.scrollToBottom()
+        self._set_status(f"{kind}: {settings.mesh_resolution:.6g} mm")
+        return len(self.rows) - 1
+
+    def _launch_remote_batch(self, settings, kind):
+        from truba_remote import run_remote_level
+
+        try:
+            context, auth = self.remote_controller.require(settings.solver_backend, settings)
+        except Exception as exc:
+            self._finish(f"Failed to start convergence: {exc}")
+            return
+        limit = min(TRUBA_BATCH_SIZE, context.cores, context.memory_mb,
+                    self.max_levels.value() - len(self.rows))
+        plan = [(settings, kind)]
+        if self.automatic.isChecked():
+            attempted = [row.settings.mesh_resolution for row in self.rows]
+            size = settings.mesh_resolution
+            while len(plan) < limit:
+                size /= self.factor.value()
+                if size < self.minimum.value():
+                    break
+                if any(math.isclose(size, previous) for previous in attempted):
+                    continue
+                try:
+                    plan.append((self.level_settings(size), "Refinement"))
+                except ValueError:
+                    break
+        else:
+            while len(plan) < limit and self.manual_pending and self.manual_pending[0].mesh_resolution >= self.minimum.value():
+                plan.append((self.manual_pending.pop(0), "Manual"))
+
+        context = replace(context, parallel_jobs=len(plan))
+        for level_settings, level_kind in plan:
+            index = self._add_level(level_settings, level_kind, "TRUBA job")
+            try:
+                self.remote_jobs[index] = AnalysisProcess(
+                    run_remote_level, level_settings, context, self.max_elements.value(), self.selected,
+                    remote_auth=auth)
+            except Exception as exc:
+                self.rows[index].status = f"Failed to start convergence: {exc}"
+                self.remote_outcomes[index] = False
+                self._render(index)
+                break
+        self.future = next(iter(self.remote_jobs.values()), None)
+        if self.future is None:
+            self.remote_outcomes.clear()
+            self._finish(self.rows[-1].status)
+        else:
+            self._set_status(f"TRUBA · {len(self.remote_jobs)} analyses active")
 
     def request_stop(self):
         self.stop_requested.set()
@@ -647,6 +697,25 @@ class MeshConvergenceWidget(QWidget):
         if self.future is None:
             return
         self.stop_requested.set()
+        if self.remote_jobs:
+            errors = []
+            for index, job in list(self.remote_jobs.items()):
+                try:
+                    job.force_stop()
+                except Exception as exc:
+                    errors.append(str(exc))
+                    continue
+                del self.remote_jobs[index]
+                self.rows[index].status = "Cancelled (Forced Stop)"
+            self.future = next(iter(self.remote_jobs.values()), None)
+            self._refresh_differences()
+            if errors:
+                self._set_status(f"Forced Stop failed: {errors[0]}")
+                return
+            self.remote_outcomes.clear()
+            self.manual_pending.clear()
+            self._finish("Cancelled (Forced Stop). Partial results can be exported.")
+            return
         try:
             self.future.force_stop()
         except Exception as exc:
@@ -716,11 +785,11 @@ class MeshConvergenceWidget(QWidget):
     def _poll(self):
         if self.future is None:
             return
-        if self.run_on_truba.isChecked() and not self.future.done():
-            record = self.future.remote_status()
-            if record: self._set_status(f"TRUBA job {record.get('job_id','pending')} · {record.get('state','preparing')}")
         if monotonic() - self.started >= 60 * self.max_minutes.value():
             self.stop_requested.set()
+        if self.remote_jobs:
+            self._poll_remote_batch()
+            return
         while True:
             try:
                 update = self.updates.get_nowait()
@@ -735,35 +804,54 @@ class MeshConvergenceWidget(QWidget):
                 if stage:
                     self._set_status(f"Level {len(self.rows)} · {stage}")
             return
-        remote_record = (self.future.remote_status() or {}) if self.run_on_truba.isChecked() else {}
+        index = len(self.rows) - 1
+        retry_allowed = self._collect_level(index, self.future)
+        self.future = None
+        # The worker can finish just after queue draining.
+        self._close_updates()
+        self._after_levels([(index, retry_allowed)])
+
+    def _poll_remote_batch(self):
+        for index, job in list(self.remote_jobs.items()):
+            if job.done():
+                self.remote_outcomes[index] = self._collect_level(index, job, job.remote_status() or {})
+                del self.remote_jobs[index]
+                self._render(index)
+        self.future = next(iter(self.remote_jobs.values()), None)
+        if self.future is not None:
+            if not self.stop_requested.is_set():
+                record = self.future.remote_status() or {}
+                self._set_status(f"TRUBA · {len(self.remote_jobs)} active · {record.get('state', 'preparing')}")
+            return
+        outcomes = sorted(self.remote_outcomes.items())
+        self.remote_outcomes.clear()
+        self._after_levels(outcomes)
+
+    def _collect_level(self, index, job, remote_record=None):
+        remote_record = remote_record or {}
+        previous = self.rows[index]
         retry_allowed = True
         try:
-            level = self.future.result()
+            level = job.result()
             if level is None:
-                level = replace(self.rows[-1], status="TRUBA job detached")
+                level = replace(previous, status="TRUBA job detached")
                 retry_allowed = False
         except CancelledError:
-            level = replace(self.rows[-1], status="Analysis cancelled")
+            level = replace(previous, status="Analysis cancelled")
             retry_allowed = False
         except Exception as exc:
-            level = replace(self.rows[-1], status=f"Failed: {exc}")
+            level = replace(previous, status=f"Failed: {exc}")
             if remote_record.get("submission_attempted") or remote_record.get("job_id"):
                 from truba_jobs import SLURM_TERMINAL_STATES
                 accounting = remote_record.get("slurm_status") or remote_record.get("step_status", "")
                 state = accounting.partition("|")[0].partition(" ")[0].rstrip("+")
                 retry_allowed = (state in SLURM_TERMINAL_STATES and state != "CANCELLED"
                                  and remote_record.get("state") != "cancelled")
-        self.future = None
-        # A worker can finish just after queue draining. Discard its remaining
-        # snapshots before the next worker is launched.
-        while True:
-            try:
-                self.updates.get_nowait()
-            except Empty:
-                break
-        self._close_updates()
-        level.kind = self.rows[-1].kind
-        self.rows[-1] = level
+        level.kind = previous.kind
+        self.rows[index] = level
+        return retry_allowed
+
+    def _after_levels(self, outcomes):
         self._refresh_differences()
         if monotonic() - self.started >= 60 * self.max_minutes.value():
             self._finish("Time budget reached; convergence not confirmed.")
@@ -771,19 +859,21 @@ class MeshConvergenceWidget(QWidget):
         if self.stop_requested.is_set():
             self._finish("Stopped; convergence not confirmed. Partial results can be exported.")
             return
-        if not retry_allowed or level.status.startswith("Element limit exceeded"):
-            self._finish(f"Convergence not confirmed: {level.status}")
-            return
-        if level.status == "completed":
-            self.consecutive_failures = 0
-            self.recommended = converged_level(
-                self.rows, self.tolerance.value(), self.selected, [c.value() for c in self.absolute])
-        else:
-            self.consecutive_failures += 1
-            if self.consecutive_failures > MAX_FAILURE_RETRIES:
-                self._finish(f"Convergence not confirmed after {MAX_FAILURE_RETRIES} failed retries. "
-                             f"{level.status}")
+        for index, retry_allowed in outcomes:
+            level = self.rows[index]
+            if not retry_allowed or level.status.startswith("Element limit exceeded"):
+                self._finish(f"Convergence not confirmed: {level.status}")
                 return
+            if level.status == "completed":
+                self.consecutive_failures = 0
+            else:
+                self.consecutive_failures += 1
+                if self.consecutive_failures > MAX_FAILURE_RETRIES:
+                    self._finish(f"Convergence not confirmed after {MAX_FAILURE_RETRIES} failed retries. "
+                                 f"{level.status}")
+                    return
+        self.recommended = converged_level(
+            self.rows, self.tolerance.value(), self.selected, [c.value() for c in self.absolute])
         if self.recommended is not None:
             index = next(i for i, v in enumerate(self.rows) if v is self.recommended)
             self.results.selectRow(index)
@@ -860,3 +950,12 @@ class MeshConvergenceWidget(QWidget):
         self.force_stop()
         if self.future is None:
             self._close_updates()
+
+    def detach_remote_jobs(self):
+        jobs = list(self.remote_jobs.values())
+        if jobs:
+            self.remote_jobs.clear()
+            self.remote_outcomes.clear()
+            self.future = None
+            self.dispose()
+        return jobs

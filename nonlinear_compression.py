@@ -3575,11 +3575,7 @@ class RustMechDialog(QDialog):
         if hasattr(self, "folder_batch_dialog"):
             jobs.extend(self.folder_batch_dialog.detach_remote_jobs())
         if self._mesh_convergence_dialog is not None:
-            study = self._mesh_convergence_dialog.study
-            if getattr(study.future, 'is_remote', False) is True:
-                jobs.append(study.future)
-                study.future = None
-                study.dispose()
+            jobs.extend(self._mesh_convergence_dialog.study.detach_remote_jobs())
         pending = [job.detach_remote() for job in jobs]
         pending.extend(dialog.detach_remote_job() for dialog in self.findChildren(DoEBoundaryPreview))
         return pending
