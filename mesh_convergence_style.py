@@ -85,7 +85,6 @@ QWidget#meshConvergenceStudy QTableWidget {
 }
 QWidget#meshConvergenceStudy QTableWidget::item { padding: 1px; border: none; }
 QWidget#meshConvergenceStudy QTableWidget::item:selected { background: #DCEEFF; color: #0F172A; }
-QWidget#meshConvergenceStudy QTableWidget#convergenceScriptPreview { background: #F1F5F9; }
 QWidget#meshConvergenceStudy QHeaderView { background: #F1F0EC; }
 QWidget#meshConvergenceStudy QHeaderView::section,
 QWidget#meshConvergenceStudy QHeaderView::section:checked {

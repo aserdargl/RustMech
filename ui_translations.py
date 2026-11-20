@@ -1342,7 +1342,7 @@ Script RAM|Betik RAM’i
 RAM per mesh (GiB)|Ağ başına RAM (GiB)
 Mesh (mm)|Ağ (mm)
 Remove selected mesh levels|Seçili ağ seviyelerini sil
-Add levels before running. Right-click a planned row to remove it.|Çalıştırmadan önce seviye ekleyin. Bir satırı silmek için sağ tıklayın.
+Click any cell to select its row, then click Delete.|Satırı seçmek için herhangi bir hücresine, ardından Sil'e tıklayın.
 Slurm plan ready|Slurm planı hazır
 Planned levels finished; convergence not confirmed.|Planlanan seviyeler bitti. Yakınsama doğrulanmadı.
 Slurm state|Slurm durumu

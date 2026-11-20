@@ -11,11 +11,11 @@ from uuid import uuid4
 
 from studio_style import CompactSpinBox, CompactComboBox
 from PySide6.QtCore import QSettings, QSignalBlocker, QTimer, Qt
-from PySide6.QtGui import QActionGroup, QColor
+from PySide6.QtGui import QActionGroup
 from PySide6.QtWidgets import (
     QAbstractItemView, QCheckBox, QComboBox, QDialog, QFormLayout, QFrame,
     QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMenu, QMessageBox, QPushButton,
-    QScrollArea, QSizePolicy, QStyle, QStyledItemDelegate, QStyleOptionViewItem,
+    QScrollArea, QSizePolicy,
     QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
@@ -28,6 +28,7 @@ from file_dialog import QFileDialog
 from model import ANALYSIS_FIELDS, MESH_TYPES, TETRAHEDRAL_MESH_TYPES, validate_settings
 from solver_api import SOLVER_REGISTRY, get_solver_capabilities
 from standard_tests import kind
+from ui_copy import configure_copying
 from mesh_convergence_style import CONVERGENCE_STYLESHEET
 from studio_style import (CONTROL_HEIGHT, NUMERIC_FIELD_WIDTH, STUDIO_STYLESHEET, CompactDoubleSpinBox,
                           configure_form, mesh_precision_stepper, stepper_with_unit)
@@ -162,23 +163,6 @@ class MeshConvergenceDialog(QDialog):
             self.study.request_stop()
             return
         super().done(result)
-
-
-class ScriptResourceDelegate(QStyledItemDelegate):
-    def paint(self, painter, option, index):
-        # The table stylesheet owns the selection background. Paint the resource
-        # color inside it so selected rows retain both the highlight and their color.
-        base = QStyleOptionViewItem(option)
-        self.initStyleOption(base, index)
-        base.text = ""
-        base.widget.style().drawControl(QStyle.ControlElement.CE_ItemViewItem, base, painter, base.widget)
-        painter.save()
-        chip = option.rect.adjusted(4, 3, -4, -3)
-        painter.fillRect(chip, index.data(Qt.ItemDataRole.BackgroundRole))
-        painter.setFont(option.font)
-        painter.setPen(QColor("#0F172A"))
-        painter.drawText(chip, Qt.AlignmentFlag.AlignCenter, str(index.data()))
-        painter.restore()
 
 
 class MeshConvergenceWidget(QWidget):
@@ -333,7 +317,6 @@ class MeshConvergenceWidget(QWidget):
         self.results.setHorizontalHeaderLabels(RESULT_HEADERS)
         # Install the shared copy actions before supplying our own context menu;
         # otherwise the application's Polish filter would replace this policy.
-        from ui_copy import configure_copying
         configure_copying(self.results)
         self.results.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.results.customContextMenuRequested.connect(self._results_context_menu)
@@ -533,17 +516,17 @@ class MeshConvergenceWidget(QWidget):
         panel.addWidget(self.script_plan_scroll)
         self.script_preview = QTableWidget(0, 5)
         self.script_preview.setObjectName("convergenceScriptPreview")
-        self.script_preview.setToolTip("Add levels before running. Right-click a planned row to remove it.")
+        self.script_preview.setToolTip("Click any cell to select its row, then click Delete.")
         self.script_preview.setHorizontalHeaderLabels(
             ["Slurm script", "Queue", "Mesh (mm)", "Solver CPUs", "RAM per mesh (GiB)"])
-        self.script_preview.verticalHeader().hide()
-        self.script_preview.verticalHeader().setDefaultSectionSize(24)
+        self.script_preview.verticalHeader().setFixedWidth(28)
+        self.script_preview.verticalHeader().setDefaultSectionSize(25)
         self.script_preview.setFixedHeight(112)
         self.script_preview.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.script_preview.setShowGrid(True)
+        configure_copying(self.script_preview)
         self.script_preview.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.script_preview.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-        for column in (3, 4):
-            self.script_preview.setItemDelegateForColumn(column, ScriptResourceDelegate(self.script_preview))
         self.script_preview.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.script_preview.customContextMenuRequested.connect(self._script_plan_menu)
         self.script_preview.selectionModel().selectionChanged.connect(self._sync_script_delete)
@@ -667,7 +650,8 @@ class MeshConvergenceWidget(QWidget):
                 for column, value in enumerate(values):
                     item = QTableWidgetItem(value)
                     item.setData(Qt.ItemDataRole.UserRole, (number, size))
-                    item.setBackground(QColor(("#E5E7EB", "#E5E7EB", "#E5E7EB", "#BFDBFE", "#BBF7D0")[column]))
+                    if column >= 2:
+                        item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
                     item.setToolTip(f"{context.cores} CPU · {context.memory_mb / 1024:.2f} GiB · {context.walltime}")
                     self.script_preview.setItem(row, column, item)
                 row += 1

@@ -1130,20 +1130,28 @@ class RemoteModeUiTests(unittest.TestCase):
             self.assertEqual(study.script_preview.rowCount(), 2)
             self.assertFalse(study.script_add.isEnabled())
             study.run_on_truba.click()
-            self.assertNotEqual(study.script_preview.item(0, 3).background().color(),
-                                study.script_preview.item(0, 0).background().color())
             self.app.processEvents()
             preview = study.script_preview.viewport().grab().toImage()
-            for column in (3, 4):
+            for column in range(study.script_preview.columnCount()):
                 cell = study.script_preview.item(0, column)
                 rect = study.script_preview.visualItemRect(cell)
-                self.assertEqual(preview.pixelColor(rect.x() + 6, rect.y() + 5), cell.background().color())
+                self.assertEqual(preview.pixelColor(rect.x() + 6, rect.y() + 4).name(), "#ffffff")
             study.script_choice.setCurrentIndex(study.script_choice.findData(1))
             study.script_count.setValue(1)
             study.script_add.click()
             study.script_add.click()
             self.assertEqual(study.script_preview.rowCount(), 3)  # Hamsi cannot fit four 16-CPU levels.
-            study.script_preview.selectRow(2)
+            cell_rect = study.script_preview.visualItemRect(study.script_preview.item(2, 4))
+            QTest.mouseClick(study.script_preview.viewport(), Qt.MouseButton.LeftButton, pos=cell_rect.center())
+            self.assertEqual([item.row() for item in study.script_preview.selectionModel().selectedRows()], [2])
+            selected = study.script_preview.viewport().grab().toImage()
+            for column in range(study.script_preview.columnCount()):
+                cell = study.script_preview.item(2, column)
+                self.assertTrue(cell.isSelected())
+                rect = study.script_preview.visualItemRect(cell)
+                fill = selected.pixelColor(rect.x() + 6, rect.y() + 4)
+                for actual, expected in zip(fill.getRgb()[:3], (220, 238, 255), strict=True):
+                    self.assertLessEqual(abs(actual - expected), 2)
             self.assertTrue(study.script_delete.isEnabled())
             study.script_delete.click()
             self.assertEqual(study.script_preview.rowCount(), 2)
