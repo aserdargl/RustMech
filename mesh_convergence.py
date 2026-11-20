@@ -30,12 +30,13 @@ from mesh_convergence_style import CONVERGENCE_STYLESHEET
 from studio_style import (CONTROL_HEIGHT, NUMERIC_FIELD_WIDTH, STUDIO_STYLESHEET, CompactDoubleSpinBox,
                           configure_form, mesh_precision_stepper, stepper_with_unit)
 
-REMOTE_RESULT_HEADERS = ("Slurm job ID", "Slurm script", "Slurm state")
+REMOTE_RESULT_HEADERS = ("Slurm job ID", "Slurm script", "Slurm state", "Solver CPUs",
+                         "Allocated RAM (GiB)", "Peak RAM (GiB)")
 RESULT_HEADERS = ("Mesh / elements", "Mesh (s)", "Solve (s)", "Force (N)",
                   "Modulus (MPa)", "SEA (J/g)", "Max Δ / ref.", "Status", *REMOTE_RESULT_HEADERS)
 MAX_FAILURE_RETRIES = 3
 TRUBA_BATCH_SIZE = 5
-DEFAULT_TRUBA_CORES = 16
+MIN_TRUBA_LEVEL_CPUS = 16
 TIME_UNITS = (
     ("cs", "Centiseconds (cs)", 0.01),
     ("s", "Seconds (s)", 1.0),
@@ -325,8 +326,13 @@ class MeshConvergenceWidget(QWidget):
         header.setMinimumSectionSize(50)
         header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         header.setStretchLastSection(True)
-        for column, width in enumerate((230, 70, 70, 95, 115, 90, 115, 160, 90, 155, 195)):
+        for column, width in enumerate((230, 70, 70, 95, 115, 90, 115, 160, 90, 155, 150, 76, 130, 108)):
             self.results.setColumnWidth(column, width)
+        for position, column in enumerate((8, 9, 11, 12, 13, 10), 1):
+            header.moveSection(header.visualIndex(column), position)
+        self.results.horizontalHeaderItem(11).setToolTip("CPU threads assigned to this solver step.")
+        self.results.horizontalHeaderItem(12).setToolTip("RAM reserved for this mesh level.")
+        self.results.horizontalHeaderItem(13).setToolTip("Peak RAM reported by Slurm for this level after the job ends.")
         self._show_remote_columns(False)
         for column in (3, 4, 5):
             self.results.horizontalHeaderItem(column).setToolTip(METRICS[column - 3][0])
@@ -397,26 +403,18 @@ class MeshConvergenceWidget(QWidget):
         precision_label.setBuddy(self.mesh_precision)
         mesh_fields.addWidget(precision_label)
         mesh_fields.addWidget(self.mesh_precision)
-        self.truba_cores_label = QLabel("CPUs per analysis")
-        self.truba_cores = CompactSpinBox()
-        self.truba_cores.setRange(1, get_solver_capabilities("kratos").max_cores)
-        self.truba_cores.setFixedWidth(NUMERIC_FIELD_WIDTH)
-        self.truba_cores.setFixedHeight(CONTROL_HEIGHT)
-        self.truba_cores.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.truba_cores.setKeyboardTracking(False)
-        self.truba_cores.setToolTip("Minimum CPUs per TRUBA analysis. Paired levels share all reserved CPUs.")
-        cpu_preferences = self.remote_controller.preferences if self.remote_controller is not None else preferences
-        cpu_key = "meshConvergence/trubaCoresPerAnalysis"
-        self.truba_cores.setValue(cpu_preferences.value(cpu_key, DEFAULT_TRUBA_CORES, type=int))
-        self.truba_cores.valueChanged.connect(lambda value: cpu_preferences.setValue(cpu_key, value))
+        self.truba_resource_info = QLabel("Automatic CPU and RAM sharing")
+        self.truba_resource_info.setObjectName("mutedHintLabel")
+        self.truba_resource_info.setWordWrap(True)
+        self.truba_resource_info.setToolTip(
+            "Two levels share one Slurm allocation when each can use at least 16 CPUs. "
+            "A single level uses the full allocation.")
+        remote_preferences = self.remote_controller.preferences if self.remote_controller is not None else preferences
         walltime_key = "meshConvergence/trubaWallMinutes"
-        self.truba_wall_minutes.setValue(cpu_preferences.value(walltime_key, 30, type=int))
-        self.truba_wall_minutes.valueChanged.connect(lambda value: cpu_preferences.setValue(walltime_key, value))
-        self.truba_cores_label.setBuddy(self.truba_cores)
-        mesh_fields.addWidget(self.truba_cores_label)
-        mesh_fields.addWidget(self.truba_cores)
-        self.truba_cores_label.hide()
-        self.truba_cores.hide()
+        self.truba_wall_minutes.setValue(remote_preferences.value(walltime_key, 30, type=int))
+        self.truba_wall_minutes.valueChanged.connect(lambda value: remote_preferences.setValue(walltime_key, value))
+        mesh_fields.addWidget(self.truba_resource_info)
+        self.truba_resource_info.hide()
         layout.addWidget(self.mesh_settings, alignment=Qt.AlignmentFlag.AlignLeft)
 
         self.solver_combo.currentIndexChanged.connect(self._solver_changed)
@@ -510,8 +508,7 @@ class MeshConvergenceWidget(QWidget):
             self.run_on_truba.setChecked(self.remote_controller.requested)
         self.single_truba_mesh.setVisible(self.run_on_truba.isChecked())
         remote = self.run_on_truba.isChecked()
-        self.truba_cores_label.setVisible(remote)
-        self.truba_cores.setVisible(remote)
+        self.truba_resource_info.setVisible(remote)
         self.advanced.layout().setRowVisible(self.time_budget_field, not remote)
         self.advanced.layout().setRowVisible(self.truba_wall_field, remote)
         self._show_remote_columns(remote or bool(self.remote_records))
@@ -614,7 +611,7 @@ class MeshConvergenceWidget(QWidget):
                         solver_backend=capabilities.identifier,
                         cores=min(self.level_base_settings.cores, capabilities.max_cores))
         if self.run_on_truba.isChecked():
-            level = replace(level, cores=self.truba_cores.value(), automatic_cores=False)
+            level = replace(level, cores=MIN_TRUBA_LEVEL_CPUS, automatic_cores=False)
         if level.mesh_type in TETRAHEDRAL_MESH_TYPES:
             local_ratio = self.local_size.value() / self.start_size.value()
             level = replace(level, local_mesh_size=size * local_ratio)
@@ -739,7 +736,7 @@ class MeshConvergenceWidget(QWidget):
         self._submit_remote_levels(plan, context, auth)
 
     def _submit_remote_levels(self, plan, context, auth):
-        from truba_remote import run_remote_level, run_remote_level_pair
+        from truba_remote import convergence_level_resources, run_remote_level, run_remote_level_pair
 
         context = replace(context, session_id="", parallel_jobs=1)
         indices = [self._add_level(settings, kind, "TRUBA · preparing submission")
@@ -750,6 +747,9 @@ class MeshConvergenceWidget(QWidget):
             levels = [self.rows[index].settings for index in group]
             target, settings = ((run_remote_level_pair, levels) if len(group) == 2 else
                                 (run_remote_level, replace(levels[0], cores=context.cores)))
+            for index, share in zip(group, convergence_level_resources(context, len(group)), strict=True):
+                self.remote_records[index] = dict(solver_cores=share['cores'], level_memory_mb=share['memory_mb'])
+                self._render(index)
             try:
                 self.remote_jobs[group] = AnalysisProcess(
                     target, settings, context, self.max_elements.value(), self.selected,
@@ -770,7 +770,7 @@ class MeshConvergenceWidget(QWidget):
         memory_mb = self.remote_records.get(row, {}).get("failure_memory_mb")
         if self.future is not None or not self.run_on_truba.isChecked() or not memory_mb:
             return
-        settings = replace(self.rows[row].settings, cores=self.truba_cores.value())
+        settings = replace(self.rows[row].settings, cores=MIN_TRUBA_LEVEL_CPUS)
         try:
             context, auth = self._require_remote_submission(settings, 1)
             if context.memory_mb <= memory_mb:
@@ -903,7 +903,7 @@ class MeshConvergenceWidget(QWidget):
                 detail += f"\nLocal mesh: {level.settings.local_mesh_size:.6g} mm"
             item.setToolTip(tooltips.get(col, detail))
             item.setTextAlignment(Qt.AlignmentFlag.AlignVCenter |
-                                  (Qt.AlignmentFlag.AlignRight if 1 <= col <= 5
+                                  (Qt.AlignmentFlag.AlignRight if 1 <= col <= 5 or col in (11, 12, 13)
                                    else Qt.AlignmentFlag.AlignLeft))
             self.results.setItem(index, col, item)
 
@@ -940,12 +940,18 @@ class MeshConvergenceWidget(QWidget):
     def _remote_values(record):
         state = ("OUT_OF_MEMORY" if record.get("failure_kind") == "out_of_memory" else
                  record.get("slurm_status") or record.get("step_status") or record.get("state", ""))
-        return (str(record.get("job_id", "")), record.get("script_name", ""), state)
+        allocated = record.get('level_memory_mb', record.get('context', {}).get('memory_mb'))
+        peak = record.get('peak_ram_mib')
+        return (str(record.get("job_id", "")), record.get("script_name", ""), state,
+                str(record.get('solver_cores') or ''),
+                f'{allocated / 1024:.2f}' if allocated is not None else '',
+                f'{peak / 1024:.2f}' if peak is not None else '')
 
     def _poll_remote_batch(self):
         for group, job in list(self.remote_jobs.items()):
+            done = job.done()
             changed = self._update_remote_records(group, job.remote_status())
-            if job.done():
+            if done:
                 results = self._job_result(job)
                 if len(group) == 1 or results is None or isinstance(results, Exception):
                     results = [results] * len(group)
@@ -973,13 +979,20 @@ class MeshConvergenceWidget(QWidget):
         if isinstance(snapshot, dict) and snapshot:
             shares = snapshot.get('level_resources')
             progress = snapshot.get('level_progress', ())
+            peaks = snapshot.get('level_peak_ram_mib', ())
             for offset, index in enumerate(group):
                 record = dict(snapshot)
+                previous = self.remote_records.get(index, {})
+                for name in ('solver_cores', 'level_memory_mb'):
+                    if not record.get(name) and name in previous:
+                        record[name] = previous[name]
                 if shares and len(shares) == len(group):
                     record.update(solver_cores=shares[offset]['cores'], level_memory_mb=shares[offset]['memory_mb'])
+                if offset < len(peaks) and peaks[offset] is not None:
+                    record['peak_ram_mib'] = peaks[offset]
                 if offset < len(progress) and str(record.get('state', '')).startswith('RUNNING'):
                     record['level_stage'] = progress[offset]
-                if record != self.remote_records.get(index):
+                if record != previous:
                     self.remote_records[index] = record
                     changed.append(index)
         return changed
@@ -1116,7 +1129,7 @@ class MeshConvergenceWidget(QWidget):
                                  "Displacement difference (%)" if self.rows[0].settings.loading_mode == "force" else "Force difference (%)",
                                  "Modulus difference (%)", "SEA difference (%)",
                                  "Final strain (%)", "Status", "Run folder", "Final force (N)", *ANALYSIS_FIELDS,
-                                 *REMOTE_RESULT_HEADERS, "TRUBA job folder", "Requested CPUs", "Solver CPUs"))
+                                 *REMOTE_RESULT_HEADERS, "TRUBA job folder", "Requested CPUs"))
                 for i, v in enumerate(self.rows):
                     record = self.remote_records.get(i, {})
                     writer.writerow((i + 1, v.kind, v.settings.mesh_resolution,
@@ -1126,7 +1139,7 @@ class MeshConvergenceWidget(QWidget):
                                      *(v.differences or [None] * 3), v.final_strain, v.status, v.folder,
                                      v.final_force, *(getattr(v.settings, name) for name in ANALYSIS_FIELDS),
                                      *self._remote_values(record), record.get("remote_directory", ""),
-                                     record.get("context", {}).get("cores", ""), record.get("solver_cores", "")))
+                                     record.get("context", {}).get("cores", "")))
         except OSError as exc:
             QMessageBox.warning(self, "Export failed", str(exc))
 

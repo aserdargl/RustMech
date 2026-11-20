@@ -65,6 +65,16 @@ class FakeTransport:
 
 
 class RemoteProtocolTests(unittest.TestCase):
+    def test_convergence_peak_ram_uses_each_slurm_step_and_ignores_other_jobs(self):
+        from truba_remote import convergence_peak_ram
+
+        accounting = ('321|RM-JOB|\n321.batch|batch|1024M\n'
+                      '321.9|mesh-2|3145728K\n321.4|mesh-1|2.5G\n'
+                      '321.5|mesh-1|200M\n999.1|mesh-1|200G\n')
+        self.assertEqual(convergence_peak_ram(accounting, '321', 2), [2560, 3072])
+        self.assertEqual(convergence_peak_ram(accounting, '321', 1), [1024])
+        self.assertEqual(convergence_peak_ram('321.1|mesh-1|\n', '321', 2), [None, None])
+
     def test_convergence_pair_shares_resources_and_keeps_a_successful_sibling(self):
         from convergence_execution import Level
         from truba_remote import SlurmOutOfMemory

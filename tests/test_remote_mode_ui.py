@@ -984,7 +984,7 @@ class RemoteModeUiTests(unittest.TestCase):
         self.assertFalse(self.controller.ready)
         self.assertIsNone(self.controller.session)
         self.assertEqual(study.solver_combo.currentData(), "kratos")
-        self.assertEqual(study.truba_cores.value(), 16)
+        self.assertFalse(study.truba_resource_info.isHidden())
         queue = self.controller.controls['partition']
         queue.setCurrentIndex(queue.findData('barbun'))
         self.controller.controls['cores'].setValue(40)
@@ -1002,15 +1002,19 @@ class RemoteModeUiTests(unittest.TestCase):
         self.assertIs(target, run_remote_level_pair)
         self.assertFalse(context.session_id)
         self.assertEqual(([level.cores for level in levels], context.cores), ([16, 16], 40))
-        self.assertFalse(study.truba_cores.isEnabled())
+        self.assertFalse(study.mesh_settings.isEnabled())
         self.assertEqual(study.results.rowCount(), 2)
         self.assertIn("preparing submission", study.results.item(0, 7).text())
+        self.assertEqual(study.results.item(0, 11).text(), "20")
+        self.assertEqual(study.results.item(0, 12).text(), f"{context.memory_mb // 2 / 1024:.2f}")
         study._poll()
         for index in range(2):
             self.assertEqual(study.results.item(index, 8).text(), "470")
             self.assertEqual(study.results.item(index, 9).text(), "RM-pair.slurm")
             self.assertIn("/scratch/pair/RM-pair.slurm", study.results.item(index, 9).toolTip())
             self.assertEqual(study.results.item(index, 10).text(), "PENDING|Resources")
+            self.assertEqual(study.results.item(index, 11).text(), "20")
+            self.assertEqual(study.results.item(index, 12).text(), "1.00")
         job.remote_status.return_value["state"] = "RUNNING"
         job.remote_status.return_value["level_progress"] = ["Meshing specimen", "Solving · 42 elements"]
         study._poll()
@@ -1018,7 +1022,7 @@ class RemoteModeUiTests(unittest.TestCase):
         self.assertEqual(study.results.item(0, 7).text(), "TRUBA · Meshing specimen")
         self.assertEqual(study.results.item(1, 7).text(), "TRUBA · Solving · 42 elements")
         study.force_stop()
-        self.assertTrue(study.truba_cores.isEnabled())
+        self.assertTrue(study.mesh_settings.isEnabled())
         self.assertEqual(study.results.item(1, 7).text(), "Cancelled (Forced Stop)")
         self.assertEqual(study.results.item(1, 8).text(), "470")
         job.force_stop.assert_called_once()

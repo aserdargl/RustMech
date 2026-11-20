@@ -318,6 +318,26 @@ def analysis_code(record):
     return "RM-" + request_id[:12].upper() if re.fullmatch(r"[a-f0-9]{32}", request_id) else ""
 
 
+def convergence_peak_ram(accounting, job_id, level_count):
+    """Return each level's Slurm MaxRSS in MiB, in mesh submission order."""
+    peaks = [None] * level_count
+    for line in accounting.splitlines():
+        step, separator, fields = line.partition('|')
+        if not separator or not step.startswith(f'{job_id}.'):
+            continue
+        name, _, rss = fields.partition('|')
+        if level_count == 1:
+            index = 0 if step == f'{job_id}.batch' else None
+        else:
+            name_match = re.fullmatch(r'mesh-(\d+)', name.strip())
+            index = int(name_match[1]) - 1 if name_match else None
+        value = re.fullmatch(r'(\d+(?:\.\d+)?)([KMGT]?)', rss.strip(), re.I)
+        if index is not None and 0 <= index < level_count and value and float(value[1]) > 0:
+            scale = {'': 1 / 1024, 'K': 1 / 1024, 'M': 1, 'G': 1024, 'T': 1024**2}[value[2].upper()]
+            peaks[index] = max(peaks[index] or 0, float(value[1]) * scale)
+    return peaks
+
+
 def _rebase_paths(directory,result):
     """Relocate the known reporting paths; never reuse a remote absolute path locally."""
     remote_output = result.get("remote_output","")
@@ -583,6 +603,17 @@ if [ -s job.id ]; then printf 'RUSTMECH_JOB_ID=%s\n' "$(cat job.id)"; fi
             if not terminal_state or terminal_state[0].rstrip("+") not in SLURM_TERMINAL_STATES:
                 return None
         record["slurm_status"] = accounting
+        if accounting and record.get('operation') == 'convergence_level' and not record.get('session'):
+            try:
+                usage = transport.command(f"sacct -n -P -j {record['job_id']} --format=JobIDRaw,JobName%32,MaxRSS",
+                                          timeout=12)
+                count = len(record.get('level_resources', ())) or 1
+                peaks = convergence_peak_ram(usage, record['job_id'], count)
+                if any(peak is not None for peak in peaks):
+                    record['level_peak_ram_mib'] = peaks
+            except Exception:
+                # Accounting usage is optional and must not block result retrieval.
+                pass
         if not poll_once or accounting == "COMPLETED|0:0":
             update("downloading")
         for name in ("slurm.out","slurm.err"):
@@ -716,16 +747,23 @@ def _decode_level(value):
     return Level(**{**value, 'settings': settings_from_dict(value['settings'])})
 
 
+def convergence_level_resources(context, count):
+    """The level shares shown in the table and sent in the TRUBA request."""
+    cpus, extra_cpus = divmod(context.cores, count)
+    ram, extra_ram = divmod(context.memory_mb, count)
+    return [dict(cores=cpus + (i >= count - extra_cpus), memory_mb=ram + (i >= count - extra_ram))
+            for i in range(count)]
+
+
 def run_remote_level_pair(settings, context, max_elements, selected, remote_auth=None, job_marker=None):
     first, second = settings
     if first.imported_geometry_path != second.imported_geometry_path:
         raise ValueError('Paired convergence levels require the same specimen.')
-    cpu_share, extra_cpu = divmod(context.cores, 2)
-    ram_share, extra_ram = divmod(context.memory_mb, 2)
-    if cpu_share < max(first.cores, second.cores) or not ram_share:
+    resources = convergence_level_resources(context, 2)
+    if resources[0]['cores'] < max(first.cores, second.cores) or not resources[0]['memory_mb']:
         raise ValueError('The Slurm request cannot fit both mesh levels.')
-    steps = [dict(settings=asdict(replace(level, cores=cpu_share + i * extra_cpu, automatic_cores=False)),
-                  memory_mb=ram_share + i * extra_ram) for i, level in enumerate(settings)]
+    steps = [dict(settings=asdict(replace(level, cores=share['cores'], automatic_cores=False)),
+                  memory_mb=share['memory_mb']) for level, share in zip(settings, resources, strict=True)]
     request = dict(operation='convergence_level', settings=steps[0]['settings'], convergence_steps=steps,
                    max_elements=max_elements, selected=selected)
     result, directory = run_remote_job(request, context, remote_auth, job_marker)

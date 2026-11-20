@@ -1294,8 +1294,14 @@ Slurm script|Slurm betiği
 Slurm state|Slurm durumu
 Wall time per analysis|Analiz başına süre sınırı
 Slurm time limit for each mesh analysis, in minutes.|Her ağ analizi için dakika cinsinden Slurm süre sınırı.
-CPUs per analysis|Analiz başına CPU
-Minimum CPUs per TRUBA analysis. Paired levels share all reserved CPUs.|TRUBA'da analiz başına asgari CPU sayısı. Eşleşen seviyeler ayrılan CPU'ların tamamını paylaşır.
+Automatic CPU and RAM sharing|Otomatik CPU ve RAM paylaşımı
+Two levels share one Slurm allocation when each can use at least 16 CPUs. A single level uses the full allocation.|Her birine en az 16 CPU düşüyorsa iki seviye tek Slurm tahsisini paylaşır. Tek seviye tahsisin tamamını kullanır.
+Solver CPUs|Çözücü CPU
+Allocated RAM (GiB)|Ayrılan RAM (GiB)
+Peak RAM (GiB)|Tepe RAM (GiB)
+CPU threads assigned to this solver step.|Bu çözüm adımına ayrılan CPU iş parçacıkları.
+RAM reserved for this mesh level.|Bu ağ seviyesine ayrılan RAM.
+Peak RAM reported by Slurm for this level after the job ends.|İş bittikten sonra Slurm'un bu seviye için bildirdiği tepe RAM.
 DOE mesh generation|DoE ağı üretimi
 DOE analysis|DoE analizi
 Flow export|Akış dışa aktarımı

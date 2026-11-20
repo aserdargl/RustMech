@@ -519,16 +519,17 @@ class LiveConvergenceTests(unittest.TestCase):
         for job in jobs:
             job.force_stop.assert_not_called()
 
-    def test_truba_cpu_override_is_persisted_and_applies_only_to_remote_levels(self):
+    def test_truba_resources_are_automatic_and_wall_time_is_persisted(self):
         widget = self.truba_study()
-        self.assertEqual(widget.truba_cores.value(), 16)
+        self.assertFalse(widget.truba_resource_info.isHidden())
+        self.assertEqual(widget.level_settings(.2).cores, 16)
         self.assertEqual(widget.truba_wall_minutes.value(), 30)
-        widget.truba_cores.setValue(8)
+        QSettings(str(self.folder / "window.ini"), QSettings.Format.IniFormat).setValue(
+            "meshConvergence/trubaCoresPerAnalysis", 8)
         widget.truba_wall_minutes.setValue(75)
         reopened = self.truba_study()
-        self.assertEqual(reopened.truba_cores.value(), 8)
         self.assertEqual(reopened.truba_wall_minutes.value(), 75)
-        self.assertEqual(reopened.level_settings(.2).cores, 8)
+        self.assertEqual(reopened.level_settings(.2).cores, 16)
         self.assertFalse(reopened.level_settings(.2).automatic_cores)
         settings = reopened.level_settings(.2)
         reopened._require_remote_submission(settings, 1)
@@ -536,7 +537,7 @@ class LiveConvergenceTests(unittest.TestCase):
             settings, max_jobs=1, walltime="01:15:00")
         reopened.remote_controller.requested = False
         reopened._solver_changed()
-        self.assertTrue(reopened.truba_cores.isHidden())
+        self.assertTrue(reopened.truba_resource_info.isHidden())
         self.assertTrue(reopened.truba_wall_field.isHidden())
         self.assertEqual(reopened.level_settings(.2).cores, SETTINGS.cores)
 
@@ -562,7 +563,8 @@ class LiveConvergenceTests(unittest.TestCase):
         widget = self.truba_study(cores=56, slots=2)
         job = MagicMock()
         job.remote_status.return_value = {'job_id': '321', 'level_resources': [
-            {'cores': 28, 'memory_mb': 5000}, {'cores': 28, 'memory_mb': 5000}]}
+            {'cores': 28, 'memory_mb': 5000}, {'cores': 28, 'memory_mb': 5000}],
+            'level_peak_ram_mib': [3072, None]}
         job.result.return_value = [completed(.2, 10, 100), SlurmOutOfMemory(5000, 'step.err')]
         with patch('mesh_convergence.AnalysisProcess', return_value=job) as submit:
             widget.start()
@@ -573,6 +575,8 @@ class LiveConvergenceTests(unittest.TestCase):
         self.assertEqual([row.status for row in widget.rows], ['completed', 'Insufficient RAM'])
         self.assertEqual(widget.remote_records[1]['failure_memory_mb'], 5000)
         self.assertTrue(all(widget.results.item(i, 8).text() == '321' for i in range(2)))
+        self.assertEqual(widget.results.item(0, 13).text(), '3.00')
+        self.assertEqual(widget.results.item(1, 13).text(), '—')
 
     def test_truba_memory_failure_stops_refinement_and_retries_exact_mesh_only_with_more_ram(self):
         from truba_remote import SlurmOutOfMemory
@@ -595,14 +599,14 @@ class LiveConvergenceTests(unittest.TestCase):
 
             widget.remote_controller.require_convergence.return_value = (
                 RemoteContext(cores=40, memory_mb=262144, parallel_jobs=1), object())
-            widget.truba_cores.setValue(40)
             widget._retry_memory_failure(1)
             self.assertEqual(submit.call_count, 3)
             settings, context = submit.call_args.args[1:3]
             self.assertEqual(settings.mesh_resolution, widget.rows[1].settings.mesh_resolution)
             self.assertEqual(settings.cores, 40)
             self.assertEqual(context.memory_mb, 262144)
-            widget.remote_controller.require_convergence.assert_called_with(settings, max_jobs=1, walltime="00:30:00")
+            widget.remote_controller.require_convergence.assert_called_with(
+                replace(settings, cores=16), max_jobs=1, walltime="00:30:00")
             retried.result.return_value = completed(settings.mesh_resolution, 15, 150)
             widget._poll()
             self.assertEqual(submit.call_count, 3)
