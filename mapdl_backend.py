@@ -57,12 +57,20 @@ TOP_PLATEN_PAIR = 5
 SPRING_STIFFNESS_RATIO = 1e-6
 FORCE_CONVERGENCE_TOLERANCE = 0.0005
 PLATEN_PENETRATION_BUDGET_RATIO = 0.001
+UNCONVERGED_DEBUG_SUBSTEP = 999999
 
 
 def configure_contact(mapdl, settings, element_type, pair, mode):
     """CONTA174 constants use their documented indices, shared by all interfaces."""
     platen = pair in (BOTTOM_PLATEN_PAIR, TOP_PLATEN_PAIR, 9)
     mapdl.keyopt(element_type, 2, {"augmented_lagrange": 0, "penalty": 1}[settings.contact_formulation])
+    if (pair in (BOTTOM_PLATEN_PAIR, TOP_PLATEN_PAIR) and settings.mesh_type == "TET4"
+            and mode == "frictionless" and settings.loading_mode == "displacement"):
+        from standard_tests import kind
+        if kind(settings) == "compression":
+            # Evaluate the linear tetrahedron faces against the flat platen normal.
+            # Gauss-point detection can miss edge contact and cycle on open cells.
+            mapdl.keyopt(element_type, 4, 2)
     # For rigid platens, keep material-based penalty stiffness constant within
     # a load step. Iteration-based updates also scale initial stiffness inversely
     # with FTOLN: the strict platen tolerance can otherwise inflate it by 1000x
@@ -230,14 +238,30 @@ def create_platen(mapdl, size, first_node, pair, boundary, coefficient, displace
 
 
 def stabilize_in_plane(mapdl, settings: Settings, mesh: FEMesh, first_free=None) -> None:
-    """Use weak lateral springs for the three in-plane rigid-body modes."""
+    """Remove the three in-plane rigid-body modes of the specimen."""
+    from standard_tests import kind
+    use_anchors = (settings.mesh_type == "TET10" and settings.loading_mode == "displacement"
+                   and settings.bottom_platen_contact == settings.top_platen_contact == "frictionless"
+                   and kind(settings) == "compression")
     ids = mesh.grid.point_data["ansys_node_num"]
     bottom_points = map_node_values(ids, mesh.grid.points, mesh.bottom_ids)
-    first = bottom_points[0]
+    first_index = 0
+    if use_anchors:
+        center = mesh.grid.points[:, :2].mean(axis=0)
+        first_index = int(np.argmin(np.linalg.norm(bottom_points[:, :2] - center, axis=1)))
+    first = bottom_points[first_index]
     offsets = bottom_points[:, :2] - first[:2]
     farthest = int(np.argmax(np.sum(offsets**2, axis=1)))
-    # A spring perpendicular to the dominant offset prevents rigid rotation about Z.
+    # Restraining motion perpendicular to the dominant offset prevents Z rotation.
     rotation_dof = "UY" if abs(offsets[farthest, 0]) >= abs(offsets[farthest, 1]) else "UX"
+    if use_anchors:
+        # Weak springs let these frictionless specimens drift laterally while
+        # MAPDL searches for contact. Fix only the free rigid modes.
+        anchor = int(mesh.bottom_ids[first_index])
+        mapdl.d(anchor, "UX", 0)
+        mapdl.d(anchor, "UY", 0)
+        mapdl.d(int(mesh.bottom_ids[farthest]), rotation_dof, 0)
+        return
     ground = int(ids.max()) + 11 if first_free is None else first_free
     with mapdl.non_interactive:
         mapdl.n(ground, *first)
@@ -393,6 +417,13 @@ class MapdlResults:
         self.platen_pilots = platen_pilots
         self.grid = grid
         self.settings = settings
+        self._result_indices = np.arange(int(reader.nsets), dtype=int)
+        # PyMAPDL Reader retains the load-step table from the RST header. A
+        # diagnostic substep may have nominal time 1 even when SOLVE failed.
+        step_table = getattr(reader, "_resultheader", {}).get("ls_table")
+        if isinstance(step_table, np.ndarray):
+            converged = step_table[self._result_indices, 1] != UNCONVERGED_DEBUG_SUBSTEP
+            self._result_indices = self._result_indices[converged]
         self.quadratic_topology = (
             _QUADRATIC_EDGES.get(grid.celltypes[0]) if grid is not None and grid.n_cells else None
         )
@@ -406,16 +437,17 @@ class MapdlResults:
 
     @property
     def nsets(self) -> int:
-        return int(self.reader.nsets)
+        return len(self._result_indices)
 
     @property
     def time_values(self) -> np.ndarray:
-        return np.asarray(self.reader.time_values, dtype=float)
+        return np.asarray(self.reader.time_values, dtype=float)[self._result_indices]
 
     def displacement(self, index: int, target_ids: np.ndarray) -> np.ndarray:
-        return read_displacement(self.reader, index, target_ids)
+        return read_displacement(self.reader, int(self._result_indices[index]), target_ids)
 
     def equivalent_stress(self, index: int, target_ids: np.ndarray) -> np.ndarray:
+        index = int(self._result_indices[index])
         if self.quadratic_topology:
             ids, stress = self.reader.nodal_stress(index)
             return self._quadratic_equivalent_stress(ids, stress, target_ids)
@@ -448,12 +480,13 @@ class MapdlResults:
 
     def platen_reactions(self, index: int) -> tuple[float, float]:
         bottom, top = self.platen_pilots
+        result_index = int(self._result_indices[index])
         if self.settings is not None and self.settings.loading_mode == "force":
             # UZ is free at the loaded pilot, so it has no constrained RFZ.
-            bottom_reaction, _ = reaction_totals(self.reader, index, np.atleast_1d(bottom), np.array([], dtype=int))
+            bottom_reaction, _ = reaction_totals(self.reader, result_index, np.atleast_1d(bottom), np.array([], dtype=int))
             from standard_tests import load_sign
             return bottom_reaction, load_sign(self.settings)*self.settings.applied_force * self.time_values[index]
-        return reaction_totals(self.reader, index, np.atleast_1d(bottom), np.array([top]))
+        return reaction_totals(self.reader, result_index, np.atleast_1d(bottom), np.array([top]))
 
     @property
     def force_source(self):
@@ -559,7 +592,10 @@ class MapdlBackend:
                 if result_path.exists() and result_path.stat().st_size == 0:
                     raise ValueError("MAPDL wrote an empty result file; no converged result set is available. See solve_output.txt.")
                 reader = self.binary_reader(result_path)
-                execution.results = MapdlResults(reader, platen_pilots, request.mesh.grid, request.settings)
+                results = MapdlResults(reader, platen_pilots, request.mesh.grid, request.settings)
+                if not results.nsets:
+                    raise ValueError("MAPDL wrote no converged result sets. See solve_output.txt.")
+                execution.results = results
             except Exception as exc:
                 execution.error = "; ".join(
                     filter(None, (execution.error, f"Result read failed: {exc}"))

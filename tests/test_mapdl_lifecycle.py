@@ -1,4 +1,5 @@
 """Failures preserve solver evidence and cannot target an existing instance."""
+from dataclasses import replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
@@ -83,6 +84,55 @@ class MapdlLifecycleTests(unittest.TestCase):
             ])
             session.finish.assert_called_once()
             self.assertEqual((Path(folder) / "solve_output.txt").read_text(), "SOLUTION CONVERGED")
+
+    def test_unconverged_debug_set_is_excluded_from_partial_results(self):
+        reader = MagicMock(nsets=3, time_values=np.array([.4, .8, 1.]))
+        reader._resultheader = {"ls_table": np.array([[1, 1, 4], [1, 2, 8], [1, 999999, 12]])}
+        reader.result_dof.return_value = ["UX", "UY", "UZ"]
+        reader.nodal_solution.return_value = (np.array([10]), np.array([[0., 0., -.08]]))
+        reader.principal_nodal_stress.return_value = (np.array([10]), np.ones((1, 5)))
+        reader.nodal_reaction_forces.return_value = (np.array([2., -2.]), np.array([9, 10]), np.array([3, 3]))
+        result = adapter.MapdlResults(reader, (9, 10))
+
+        self.assertEqual(result.nsets, 2)
+        np.testing.assert_array_equal(result.time_values, [.4, .8])
+        self.assertEqual(result.top_platen_displacement(-1), -.08)
+        np.testing.assert_array_equal(result.equivalent_stress(-1, np.array([10])), [1.])
+        self.assertEqual(result.platen_reactions(-1), (2., -2.))
+        reader.nodal_solution.assert_called_once_with(1)
+        reader.principal_nodal_stress.assert_called_once_with(1)
+        reader.nodal_reaction_forces.assert_called_once_with(1)
+
+    def test_frictionless_linear_tet_platen_uses_target_normal_detection(self):
+        settings = Settings(mesh_type="TET4")
+        mapdl = MagicMock()
+        adapter.configure_contact(mapdl, settings, 5, adapter.BOTTOM_PLATEN_PAIR, "frictionless")
+        mapdl.keyopt.assert_any_call(5, 4, 2)
+        for other_settings, pair, mode in (
+            (replace(settings, mesh_type="TET10"), adapter.BOTTOM_PLATEN_PAIR, "frictionless"),
+            (replace(settings, loading_mode="force"), adapter.BOTTOM_PLATEN_PAIR, "frictionless"),
+            (settings, adapter.BOTTOM_PLATEN_PAIR, "frictional"),
+            (settings, 3, "frictionless"),
+        ):
+            with self.subTest(settings=other_settings, pair=pair, mode=mode):
+                mapdl.reset_mock()
+                adapter.configure_contact(mapdl, other_settings, 5, pair, mode)
+                self.assertNotIn(call(5, 4, 2), mapdl.keyopt.call_args_list)
+
+    def test_frictionless_quadratic_tet_restrains_only_three_lateral_modes(self):
+        grid = SimpleNamespace(
+            points=np.array([[0., 0., 0.], [1., 0., 0.], [3., 0., 0.], [1., 1., 1.]]),
+            point_data={"ansys_node_num": np.array([1, 2, 3, 4])},
+        )
+        mesh = SimpleNamespace(grid=grid, bottom_ids=np.array([1, 2, 3]))
+        settings = Settings(mesh_type="TET10", bottom_platen_contact="frictionless",
+                            top_platen_contact="frictionless")
+        mapdl = MagicMock()
+
+        adapter.stabilize_in_plane(mapdl, settings, mesh)
+
+        self.assertEqual(mapdl.d.call_args_list, [call(2, "UX", 0), call(2, "UY", 0), call(3, "UY", 0)])
+        mapdl.et.assert_not_called()
 
 
 if __name__ == "__main__":
