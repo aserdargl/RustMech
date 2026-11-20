@@ -5,6 +5,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from html import escape
 from itertools import islice
+from math import cbrt, sqrt
 from operator import attrgetter
 import os
 from os.path import commonpath
@@ -22,7 +23,7 @@ from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QCheckBox, QDialog, QFormLayout, QFrame, QHeaderView, QHBoxLayout, QLabel,
     QLineEdit, QListWidget, QListWidgetItem, QMessageBox, QPlainTextEdit, QProgressBar, QPushButton,
-    QScrollArea, QSizePolicy, QSplitter, QStyle, QTableView, QTableWidget, QTableWidgetItem, QTabWidget,
+    QScrollArea, QSizePolicy, QSplitter, QStyle, QTabBar, QTableView, QTableWidget, QTableWidgetItem, QTabWidget,
     QToolTip, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
 )
 
@@ -147,6 +148,14 @@ def button_row(*buttons):
     for button in buttons:
         layout.addWidget(button)
     return layout
+
+
+class EqualWidthTabBar(QTabBar):
+    def tabSizeHint(self, index):
+        size = super().tabSizeHint(index)
+        size.setWidth(max((QTabBar.tabSizeHint(self, i).width() for i in range(self.count())),
+                          default=size.width()))
+        return size
 
 
 def compact_combo(options):
@@ -371,7 +380,8 @@ class EsenWorkspace(QDialog):
         self._build()
         language = getattr(QApplication.instance(), "_rustmech_language", None)
         if language is not None:
-            for button in (*self._command_buttons, self.md_preview_button, self.md_run, *self.md_file_buttons):
+            for button in (*self._command_buttons, self.md_preview_button, self.md_prepare, self.md_run,
+                           self.md_apply_lattice, *self.md_file_buttons):
                 language.localize(button)
             language.changed.connect(self._localize_md)
         self._size_command_buttons()
@@ -395,6 +405,9 @@ class EsenWorkspace(QDialog):
         shell.setContentsMargins(0, 0, 0, 0)
         self.tabs = QTabWidget()
         self.tabs.setObjectName("esenWorkspaceTabs")
+        tab_bar = EqualWidthTabBar()
+        tab_bar.setExpanding(False)
+        self.tabs.setTabBar(tab_bar)
         shell.addWidget(self.tabs)
         esen_page = QWidget()
         self.tabs.addTab(esen_page, "ESEN")
@@ -730,10 +743,13 @@ class EsenWorkspace(QDialog):
         form.setContentsMargins(0, 0, 0, 0)
         configure_form(form)
         settings_layout.addLayout(form)
+        self.md_settings_form = form
         layout.addWidget(self.md_form)
         layout.addStretch()
         split.addWidget(inputs)
 
+        self.md_crystal = compact_combo((("BCC single crystal", "single"), ("BCC polycrystal", "poly")))
+        self._form_row(form, "Crystal type", self.md_crystal)
         self.md_order = QLineEdit(str(self.preferences.value("esen/md/order", "")))
         self.md_order.setPlaceholderText("Example: Hf Nb Ta Ti Zr")
         self.md_order.setToolTip("Enter the element order used by indices in the MEAM parameter file.")
@@ -742,6 +758,11 @@ class EsenWorkspace(QDialog):
         self.md_atoms.setValue(250_000)
         self._form_row(form, "Target atom count", self.md_atoms)
         self.md_atoms.setFixedWidth(123)
+        self.md_grains = CompactSpinBox()
+        self.md_grains.setRange(2, md.MAX_GRAINS)
+        self.md_grains.setValue(12)
+        self.md_grains.setToolTip("Number of Voronoi grains in the periodic box.")
+        self._form_row(form, "Grain count", self.md_grains)
         self.md_lattice = CompactDoubleSpinBox()
         self.md_lattice.setDecimals(4)
         self.md_lattice.setRange(0.0001, 100.0)
@@ -778,30 +799,78 @@ class EsenWorkspace(QDialog):
             self._form_row(form, title, field, field_layout=row)
         self._form_row(form, "MEAM element order", self.md_order)
         self.md_elements.changed.connect(self._md_preview)
-        for stepper in (self.md_atoms, self.md_lattice, self.md_temperature, self.md_seed):
+        for stepper in (self.md_atoms, self.md_grains, self.md_lattice, self.md_temperature, self.md_seed):
             stepper.editingFinished.connect(self._md_preview)
         self.md_order.editingFinished.connect(self._save_md_order)
 
-        card, layout = panel("Model preview", paper=True)
+        card, layout = panel("Model preview", paper=True, scrollable=True)
         split.addWidget(card)
         split.setSizes([480, 700])
         self.md_preview = code_view("Model preview")
         self.md_preview.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
+        self.md_preview.setMinimumHeight(125)
         layout.addWidget(self.md_preview, 1)
+        self._build_md_help(layout)
         self.md_note = QLabel()
         self.md_note.setTextFormat(Qt.TextFormat.PlainText)
         self.md_note.setWordWrap(True)
         self.md_note.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         layout.addWidget(self.md_note)
         self.md_preview_button = command("Preview model", self._md_preview)
+        self.md_prepare = command("Prepare package", lambda: self._start_md(submit=False))
         self.md_run = command("Prepare and run on TRUBA", self._start_md, role="esenRun")
-        outer.addLayout(button_row(self.md_preview_button, self.md_run))
+        outer.addLayout(button_row(self.md_preview_button, self.md_prepare, self.md_run))
         self.md_queue.currentIndexChanged.connect(self._md_preview)
+        self.md_crystal.currentIndexChanged.connect(self._md_preview)
         return page
+
+    def _build_md_help(self, layout):
+        help_card, help_layout = panel("How to choose parameters")
+        layout.addWidget(help_card)
+        for text in (
+            "The lattice parameter a is one BCC cell edge in Å. Use a value for the same alloy and phase. The initial 3.4000 Å is an example.",
+            "From the BCC (110) XRD spacing, use a = √2 × d₁₁₀. With MEAM, relax a small periodic single crystal at zero pressure. At the target temperature, average the equilibrated NPT box length and divide by the cell repeats along that axis.",
+            "BCC has two atoms per cell. For a polycrystal, atom count sets the box volume and grain count sets the average grain volume. Fix the random seed to reproduce grain positions, orientations and alloy site assignments.",
+            "The E20 template uses a fixed 3.9 Å CNA cutoff. Check the cutoff for your lattice parameter before interpreting CNA results.",
+        ):
+            hint = QLabel(text)
+            hint.setWordWrap(True)
+            hint.setObjectName("mutedHintLabel")
+            help_layout.addWidget(hint)
+        self.md_xrd_spacing = CompactDoubleSpinBox()
+        self.md_xrd_spacing.setDecimals(4)
+        self.md_xrd_spacing.setRange(0, 70.7106)
+        self.md_xrd_spacing.setSingleStep(0.001)
+        xrd_form = QFormLayout()
+        configure_form(xrd_form)
+        help_layout.addLayout(xrd_form)
+        self._form_row(xrd_form, "XRD d₁₁₀", self.md_xrd_spacing,
+                       field_layout=stepper_with_unit(self.md_xrd_spacing, "Å"))
+        self.md_apply_lattice = command("Use calculated a", self._apply_md_lattice)
+        self.md_xrd_result = QLabel()
+        self.md_xrd_result.setObjectName("mutedHintLabel")
+        xrd_action = ActionFlowLayout()
+        xrd_action.addWidget(self.md_apply_lattice)
+        xrd_action.addWidget(self.md_xrd_result)
+        help_layout.addLayout(xrd_action)
+        self.md_xrd_spacing.valueChanged.connect(self._md_lattice_result)
+        self._md_lattice_result()
 
     def _localize_md(self, *_):
         self._size_command_buttons()
         self.md_elements.update_total()
+        self._md_preview()
+
+    def _md_lattice_result(self):
+        spacing = self.md_xrd_spacing.value()
+        self.md_apply_lattice.setEnabled(spacing > 0)
+        self.md_xrd_result.setText(f"a = {sqrt(2) * spacing:.4f} Å" if spacing else "")
+
+    def _apply_md_lattice(self):
+        self.md_xrd_spacing.interpretText()
+        if spacing := self.md_xrd_spacing.value():
+            self.md_lattice.setValue(sqrt(2) * spacing)
+            self._md_preview()
 
     def _pick_md_meam(self, key, title):
         field = getattr(self, f"md_{key}")
@@ -825,67 +894,82 @@ class EsenWorkspace(QDialog):
         self.preferences.setValue("esen/md/order", self.md_order.text())
 
     def _md_model(self):
-        for stepper in (self.md_atoms, self.md_lattice, self.md_temperature, self.md_seed):
+        for stepper in (self.md_atoms, self.md_grains, self.md_lattice, self.md_temperature, self.md_seed):
             stepper.interpretText()
         composition = self.md_elements.composition()
         if not composition:
             raise ValueError(translate("Add at least one element."))
         return md.plan_model(composition, self.md_atoms.value(), self.md_lattice.value(),
-                             self.md_temperature.value(), self.md_seed.value())
+                             self.md_temperature.value(), self.md_seed.value(),
+                             grains=self.md_grains.value() if self.md_crystal.currentData() == "poly" else 1)
 
     def _md_preview(self):
+        self.md_settings_form.setRowVisible(self.md_grains, self.md_crystal.currentData() == "poly")
         try:
             model = self._md_model()
         except ValueError as error:
             self.md_preview.setPlainText(str(error))
             return
-        cell = " × ".join(map(str, model.repeats))
-        lines = [
-            f"{translate('BCC supercell')}   {cell}",
+        if model.grains > 1:
+            mean_size = model.box[0] / cbrt(model.grains)
+            lines = [translate("BCC polycrystal"),
+                     f"{translate('Grain count')}   {model.grains}",
+                     f"{translate('Characteristic grain size')}   {mean_size:.3f} Å",
+                     translate("Atom count and composition counts are estimates until Atomsk builds the grain boundaries.")]
+        else:
+            cell = " × ".join(map(str, model.repeats))
+            lines = [f"{translate('BCC supercell')}   {cell}",
+                     f"{translate('Generated atom count')}   {model.atoms:,}"]
+            if model.atoms != model.target_atoms:
+                lines.append(translate("The nearest nearly cubic BCC supercell is shown."))
+        dimensions = " × ".join(f"{edge:.3f}" for edge in model.box)
+        lines.extend([
+            f"{translate('Box dimensions')}   {dimensions} Å",
             f"{translate('Target atom count')}   {model.target_atoms:,}",
-            f"{translate('Generated atom count')}   {model.atoms:,}",
             "",
             *(f"{element:<3}  {count:>10,}    {100 * count / model.atoms:8.4f} %"
               for element, count in zip(model.elements, model.counts)),
             "",
             translate("Atomsk → Minimization → Equilibration → Tension and CNA"),
             f"TRUBA · {translate('Queue')}   {self.md_queue.currentText()}",
-        ]
-        if model.atoms != model.target_atoms:
-            lines.insert(3, translate("The nearest nearly cubic BCC supercell is shown."))
+        ])
         self.md_preview.setPlainText("\n".join(lines))
 
-    def _start_md(self):
+    def _start_md(self, *, submit=True):
         if self.md_task is not None:
             return
         self._md_preview()
-        auth = self.truba.analysis_auth()
+        auth = self.truba.analysis_auth() if submit else None
         try:
-            if auth is None:
+            if submit and auth is None:
                 raise ValueError(translate("Connect using the main TRUBA button."))
             model = self._md_model()
             order = md.meam_order(self.md_order.text(), model.elements)
             library, parameters = Path(self.md_library.text()), Path(self.md_parameters.text())
             if not library.is_file() or not parameters.is_file():
                 raise ValueError(translate("Choose the MEAM library and parameter files."))
-            partition = self.md_queue.currentData()
-            settings = {**self._remote_settings(auth), "partition": partition, "resume_input": md.RESTART}
-            if partition != self.partition.currentData() or settings["module"] == jobs.DEFAULT_MODULE:
-                settings["module"] = jobs.MODULES[partition]
-            self._remote_command(md.ENTRY, settings)
-            self.preferences.setValue("esen/md/queue", partition)
-            request = (model, library, parameters, order)
-            if self.md_prepared is not None and self.md_prepared[0] == request:
-                self._submit_md(self.md_prepared[1], settings, auth)
+            settings = None
+            if auth is not None:
+                partition = self.md_queue.currentData()
+                settings = {**self._remote_settings(auth), "partition": partition, "resume_input": md.RESTART}
+                if partition != self.partition.currentData() or settings["module"] == jobs.DEFAULT_MODULE:
+                    settings["module"] = jobs.MODULES[partition]
+                self._remote_command(md.ENTRY, settings)
+                self.preferences.setValue("esen/md/queue", partition)
+            inputs = (model, library, parameters, order)
+            request = (inputs, tuple(path.stat().st_mtime_ns for path in (library, parameters)))
+            if self.md_prepared is not None and self.md_prepared[0] == request and self.md_prepared[1].is_dir():
+                self._finish_md(self.md_prepared[1], settings, auth)
                 return
             executable = md.atomsk_executable()
             folder = self.history_root.parent / "md-preparations"
-            future = self.executor.submit(md.prepare_job, folder, *request, executable)
+            future = self.executor.submit(md.prepare_job, folder, *inputs, executable)
         except (OSError, ValueError) as error:
             self.md_note.setText(str(error))
             return
         self.md_task = future, request, settings, auth
         self.md_form.setEnabled(False)
+        self.md_prepare.setEnabled(False)
         self.md_run.setEnabled(False)
         self.md_note.setText(translate("Generating the structure with Atomsk…"))
 
@@ -893,22 +977,30 @@ class EsenWorkspace(QDialog):
         if self.md_task is None or not self.md_task[0].done():
             return
         future, request, settings, auth = self.md_task
-        if self._md_submission_busy() and self.truba.analysis_auth() == auth and future.exception() is None:
+        if (settings is not None and self._md_submission_busy()
+                and self.truba.analysis_auth() == auth and future.exception() is None):
             self.md_note.setText(translate("Model prepared. Waiting for ESEN to finish its current transfer…"))
             return
         self.md_task = None
         self.md_form.setEnabled(True)
+        self.md_prepare.setEnabled(True)
         self.md_run.setEnabled(True)
         try:
             folder = future.result()
             self.md_prepared = request, folder
-            self._submit_md(folder, settings, auth)
+            self._finish_md(folder, settings, auth)
         except Exception as error:
             folder = self.md_prepared[1] if self.md_prepared and self.md_prepared[0] == request else None
             self.md_note.setText(f"{error}\n{folder}" if folder is not None else str(error))
 
     def _md_submission_busy(self):
         return bool(self.remote_task or self.upload_task or self.sync_task or self.run_list_task)
+
+    def _finish_md(self, folder, settings, auth):
+        if settings is None:
+            self.md_note.setText(translate("Package prepared at {path}").format(path=folder))
+        else:
+            self._submit_md(folder, settings, auth)
 
     def _submit_md(self, folder, settings, auth):
         if self.truba.analysis_auth() != auth:
@@ -943,7 +1035,7 @@ class EsenWorkspace(QDialog):
         local_navigation = (self.input_back, self.input_forward, self.input_up)
         history_actions = (self.select_history, self.delete_job)
         history_commands = (self.use_inputs, self.refresh, self.resume, self.stop)
-        md_actions = (self.md_preview_button, self.md_run)
+        md_actions = (self.md_preview_button, self.md_prepare, self.md_run)
         other_buttons = [button for button in self._command_buttons
                          if button not in (*toolbar_labels, *self._compact_input_actions, *navigation, *local_navigation,
                                            *history_actions, *history_commands)]

@@ -82,6 +82,39 @@ def test_bad_meam_indices_stop_before_atomsk(tmp_path, potentials):
     assert list(output.iterdir()) == []
 
 
+def test_polycrystal_package_uses_actual_atom_count_and_seeded_nodes(tmp_path, potentials):
+    model = md.plan_model("Hf:25, Nb:75", 20, 3.4, 300, 42, grains=3)
+    order = md.meam_order("Nb Hf", model.elements)
+    node_files = []
+
+    def fake_atomsk(argv, *, cwd, **_):
+        if argv[1] == "--create":
+            assert argv[2:] == ["bcc", "3.4", "Hf", "seed.xsf"]
+            (cwd / "seed.xsf").touch()
+        else:
+            assert argv[1:3] == ["--polycrystal", "seed.xsf"]
+            assert argv[5:7] == ["-wrap", "-remove-doubles"]
+            node_files.append((cwd / argv[3]).read_text())
+            (cwd / argv[4]).write_text(
+                "Atomsk\n\n16 atoms\n1 atom types\n\nMasses\n\n1 178.49\n\nAtoms # atomic\n\n"
+                + "".join(f"{i} 1 {i / 10} 0 0\n" for i in range(1, 17)), encoding="ascii",
+            )
+        return SimpleNamespace(returncode=0, stdout=b"")
+
+    with patch("esen_md.subprocess.run", side_effect=fake_atomsk):
+        first = md.prepare_job(tmp_path, model, *potentials, order, "atomsk")
+        second = md.prepare_job(tmp_path, model, *potentials, order, "atomsk")
+
+    assert node_files[0] == node_files[1] == (first / "grain-nodes.txt").read_text()
+    box, *nodes = node_files[0].splitlines()
+    assert list(map(float, box.split()[1:])) == pytest.approx(model.box)
+    assert len(nodes) == 3 and all(line.startswith("node ") for line in nodes)
+    metadata = json.loads((second / "model.json").read_text())
+    assert (metadata["grains"], metadata["atoms"], metadata["counts"]) == (3, 16, [4, 12])
+    assert Counter(line.split()[1] for line in (first / "structure.lmp").read_text().split(
+        "Atoms # atomic")[1].splitlines() if line) == {"1": 4, "2": 12}
+
+
 def test_md_tab_enter_previews_and_run_hands_package_to_esen(tmp_path, potentials):
     class Truba(QObject):
         connection_changed = Signal(bool)
@@ -99,16 +132,28 @@ def test_md_tab_enter_previews_and_run_hands_package_to_esen(tmp_path, potential
         workspace.tabs.setCurrentIndex(1)
         workspace.show()
         app.processEvents()
+        tab_bar = workspace.tabs.tabBar()
+        assert tab_bar.tabRect(0).width() == tab_bar.tabRect(1).width()
+        tab_bar.setTabText(1, "MD Hazırlama")
+        assert tab_bar.tabRect(0).width() == tab_bar.tabRect(1).width()
+        assert not workspace.md_grains.isVisible()
         workspace.md_atoms.lineEdit().setText("128")
         QTest.keyClick(workspace.md_atoms.lineEdit(), Qt.Key.Key_Return)
         assert workspace.md_atoms.value() == 128
         assert "4 × 4 × 4" in workspace.md_preview.toPlainText()
         assert workspace.md_task is None
+        workspace.md_crystal.setCurrentIndex(workspace.md_crystal.findData("poly"))
+        assert workspace.md_grains.isVisible()
+        assert "Characteristic grain size" in workspace.md_preview.toPlainText()
+        workspace.md_xrd_spacing.setValue(2.4)
+        assert workspace.md_xrd_result.text() == "a = 3.3941 Å"
+        workspace.md_apply_lattice.click()
+        assert workspace.md_lattice.value() == pytest.approx(3.3941)
+        assert workspace.md_task is None
         workspace.md_run.click()
         assert "TRUBA" in workspace.md_note.text()
         assert workspace.history.rowCount() == 0
 
-        truba.auth = SimpleNamespace(username="account")
         elements = workspace.md_elements
         assert len(elements.cells) == 118
         assert elements.total_label.text().endswith("100 %")
@@ -171,9 +216,17 @@ def test_md_tab_enter_previews_and_run_hands_package_to_esen(tmp_path, potential
         with patch("esen_md.atomsk_executable", return_value="atomsk"), \
                 patch.object(workspace.executor, "submit", return_value=prepared) as execute, \
                 patch.object(workspace, "_submit_remote") as submit:
-            workspace.md_run.click()
+            workspace.md_prepare.click()
             execute.assert_called_once()
-            assert workspace.md_task is not None
+            assert execute.call_args.args[2].grains == 12
+            workspace._check_md()
+            submit.assert_not_called()
+            assert str(package) in workspace.md_note.text()
+            truba.auth = SimpleNamespace(username="account")
+            workspace.md_grains.setValue(13)
+            workspace.md_run.click()
+            runs = [call for call in execute.call_args_list if call.args[0] is md.prepare_job]
+            assert [call.args[2].grains for call in runs] == [12, 13]
             workspace.upload_task = object()
             workspace._check_md()
             submit.assert_not_called()

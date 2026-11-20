@@ -3,6 +3,22 @@ from setup_help import GEOMETRY_HELP
 
 _TEXT = '''
 MD Preparation|MD Hazırlama
+BCC single crystal|BCC tek kristal
+BCC polycrystal|BCC polikristal
+Crystal type|Kristal tipi
+Grain count|Tane sayısı
+Number of Voronoi grains in the periodic box.|Periyodik kutudaki Voronoi tane sayısı.
+Box dimensions|Kutu boyutları
+Characteristic grain size|Karakteristik tane boyutu
+Atom count and composition counts are estimates until Atomsk builds the grain boundaries.|Atomsk tane sınırlarını oluşturana kadar atom sayıları tahminidir.
+How to choose parameters|Parametreler nasıl seçilir?
+The lattice parameter a is one BCC cell edge in Å. Use a value for the same alloy and phase. The initial 3.4000 Å is an example.|Kafes parametresi a, BCC birim hücresinin kenarıdır (Å). Aynı alaşım ve faz için belirlenmiş değeri kullanın. Başlangıçtaki 3,4000 Å örnek değerdir.
+From the BCC (110) XRD spacing, use a = √2 × d₁₁₀. With MEAM, relax a small periodic single crystal at zero pressure. At the target temperature, average the equilibrated NPT box length and divide by the cell repeats along that axis.|XRD’deki BCC (110) düzlem aralığından a = √2 × d₁₁₀ hesaplanır. MEAM ile küçük bir periyodik tek kristali sıfır basınçta gevşetin. Hedef sıcaklıkta NPT dengelemesi sonrası ortalama kutu uzunluğunu o eksendeki hücre tekrar sayısına bölün.
+BCC has two atoms per cell. For a polycrystal, atom count sets the box volume and grain count sets the average grain volume. Fix the random seed to reproduce grain positions, orientations and alloy site assignments.|BCC birim hücresinde iki atom vardır. Polikristalde hedef atom sayısı kutu hacmini, tane sayısı ise ortalama tane hacmini belirler. Tane konumlarını, yönelimlerini ve alaşım atom dağılımını tekrarlamak için aynı rastgele tohumu kullanın.
+The E20 template uses a fixed 3.9 Å CNA cutoff. Check the cutoff for your lattice parameter before interpreting CNA results.|E20 şablonunun CNA kesim yarıçapı sabit 3,9 Å’dur. CNA sonuçlarını yorumlamadan önce yarıçapın kafes parametrenize uygunluğunu kontrol edin.
+Use calculated a|Hesaplanan a’yı kullan
+Prepare package|Paketi hazırla
+Package prepared at {path}|Paket hazırlandı. {path}
 Alloy elements|Elementler
 Periodic table|Periyodik tablo
 Right-click an element to add it.|Element eklemek için sağ tıklayın.

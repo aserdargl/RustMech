@@ -9,11 +9,30 @@ kütüphanesini ve parametre dosyasını seçin.
 Dosyalarda bir `pair_coeff` örneği varsa program MEAM element sırasını oradan
 alır. Boş kalırsa parametre dosyasındaki indekslerin izlediği sırayı girin.
 
-Önizleme, hedefe en yakın dengeli BCC hücresini ve gerçekleşecek bileşimi
-gösterir. TRUBA’ya bağlandıktan sonra **Hazırla ve TRUBA’da çalıştır** düğmesine
-basın. RustMech Atomsk’ı bu bilgisayarda çalıştırır ve E20 tek kristal şablonuyla
-minimizasyon, dengeleme, çekme ve CNA işini gönderir. İşi ve sonuçları **ESEN
-iş geçmişi** üzerinden izleyin.
+**Kristal tipi** alanında BCC tek kristal veya BCC polikristal seçin. Tek kristal
+önizlemesi hedefe en yakın dengeli BCC hücresini gösterir. Polikristalde tane
+sayısını da girin. Kübik kutunun kenarı yaklaşık `a × (N / 2)^(1/3)`, tane
+boyutu ölçeği ise kutu kenarının tane sayısının küpköküne bölümüdür. Atomsk
+periyodik Voronoi tanelerini oluşturduktan sonra gerçek atom sayısı ve bileşim
+paketin `model.json` dosyasına yazılır. Aynı tohumla belirlenen tane konumları
+ve yönelimleri `grain-nodes.txt` içinde saklanır.
+
+**Parametreler nasıl seçilir?** bölümündeki hesaplayıcı, BCC (110) XRD düzlem
+aralığından `a = √2 × d₁₁₀` ile başlangıç kafes parametresini bulur. Örneğin
+`d₁₁₀ = 2,4000 Å` için `a = 3,3941 Å`. Aynı bileşim, BCC fazı ve hedef
+sıcaklık için MEAM doğrulaması yaparken küçük bir periyodik tek kristali
+sıfır basınçta gevşetin. Hedef sıcaklıkta NPT dengelemesi sonrasında ortalama
+kutu uzunluğunu o eksendeki hücre tekrar sayısına bölün.
+
+**Paketi hazırla**, Atomsk’ı bu bilgisayarda çalıştırır ve paket yolunu gösterir.
+**Hazırla ve TRUBA’da çalıştır**, E20 şablonuyla minimizasyon, dengeleme, çekme
+ve CNA işini gönderir. Şablon 3,9 Å sabit CNA kesim yarıçapı kullanır.
+Farklı kafes parametrelerinde CNA sonuçlarını yorumlamadan önce kesim
+yarıçapını doğrulayın. İşi ve sonuçları **ESEN iş geçmişi** üzerinden izleyin.
+
+[Atomsk polikristal kılavuzu](https://atomsk.univ-lille.fr/doc/en/mode_polycrystal.html) ·
+[LAMMPS kutu gevşetme](https://docs.lammps.org/fix_box_relax.html) ·
+[LAMMPS CNA](https://docs.lammps.org/stable/compute_cna_atom.html)
 
 ## ESEN ile LAMMPS çalıştırma
 

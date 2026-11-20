@@ -1,9 +1,9 @@
 """Build a reproducible Atomsk/LAMMPS job package for the ESEN runner."""
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from fractions import Fraction
 import json
-from math import isfinite, prod
+from math import asin, cbrt, degrees, isfinite, prod, sqrt
 import os
 from pathlib import Path
 import random
@@ -20,25 +20,45 @@ from esen_md_protocol import ANALYSIS, ENTRY, INITIAL, RESTART, RESUME
 ELEMENT = re.compile(r"[A-Z][a-z]?")
 MEAM_INDEX = re.compile(r"^\w+\s*\(\s*(\d+(?:\s*,\s*\d+)*)\s*\)\s*=")
 MAX_ATOMS = 10_000_000
+MAX_GRAINS = 256
 
 
 @dataclass(frozen=True)
 class Model:
     target_atoms: int
-    repeats: tuple[int, int, int]
+    repeats: tuple[int, ...]
     elements: tuple[str, ...]
     counts: tuple[int, ...]
     lattice: float
     temperature: int
     seed: int
+    grains: int
+    percentages: tuple[Fraction, ...]
 
     @property
     def atoms(self):
         return sum(self.counts)
 
+    @property
+    def box(self):
+        if self.grains == 1:
+            return tuple(self.lattice * repeat for repeat in self.repeats)
+        return (self.lattice * cbrt(self.target_atoms / 2),) * 3
 
-def plan_model(composition, target_atoms, lattice, temperature, seed):
-    """Use BCC cells with edge lengths differing by at most one repeat."""
+
+def _alloy_counts(atoms, percentages):
+    ideal = [atoms * part / 100 for part in percentages]
+    counts = [int(part) for part in ideal]
+    by_remainder = sorted(range(len(counts)), key=lambda i: ideal[i] - counts[i], reverse=True)
+    for index in by_remainder[:atoms - sum(counts)]:
+        counts[index] += 1
+    if not all(counts):
+        raise ValueError("Bu hücrede her element için en az bir atom bulunmalı.")
+    return tuple(counts)
+
+
+def plan_model(composition, target_atoms, lattice, temperature, seed, *, grains=1):
+    """Plan a BCC supercell or a cubic box for a Voronoi polycrystal."""
     entries = [part.strip().split(":") for part in composition.split(",")]
     elements = tuple(entry[0].strip() for entry in entries)
     if (any(not ELEMENT.fullmatch(element) for element in elements)
@@ -59,21 +79,31 @@ def plan_model(composition, target_atoms, lattice, temperature, seed):
         raise ValueError("Hedef atom sayısını ve kafes parametresini kontrol edin.")
     if temperature < 1 or not 1 <= seed <= 900_000_000:
         raise ValueError("Sıcaklığı ve rastgele tohumu kontrol edin.")
+    if not 1 <= grains <= MAX_GRAINS or (grains > 1 and target_atoms < 2 * grains):
+        raise ValueError("Tane sayısını ve hedef atom sayısını kontrol edin. Tane başına en az iki hedef atom gerekir.")
 
-    side = 1
-    while 2 * (side + 1) ** 3 <= target_atoms:
-        side += 1
-    candidates = [(side,) * (3 - extra) + (side + 1,) * extra for extra in range(4)]
-    repeats = min(candidates, key=lambda cell: abs(2 * prod(cell) - target_atoms))
-    atoms = 2 * prod(repeats)
-    ideal = [atoms * part / 100 for part in fractions]
-    counts = [int(part) for part in ideal]
-    by_remainder = sorted(range(len(counts)), key=lambda i: ideal[i] - counts[i], reverse=True)
-    for index in by_remainder[:atoms - sum(counts)]:
-        counts[index] += 1
-    if not all(counts):
-        raise ValueError("Bu hücrede her element için en az bir atom bulunmalı.")
-    return Model(target_atoms, repeats, elements, tuple(counts), lattice, temperature, seed)
+    repeats, atoms = (), target_atoms
+    if grains == 1:
+        side = 1
+        while 2 * (side + 1) ** 3 <= target_atoms:
+            side += 1
+        candidates = [(side,) * (3 - extra) + (side + 1,) * extra for extra in range(4)]
+        repeats = min(candidates, key=lambda cell: abs(2 * prod(cell) - target_atoms))
+        atoms = 2 * prod(repeats)
+    return Model(target_atoms, repeats, elements, _alloy_counts(atoms, fractions), lattice,
+                 temperature, seed, grains, tuple(fractions))
+
+
+def _grain_nodes(model):
+    random_nodes = random.Random(model.seed)
+    lines = ["box " + " ".join(f"{edge:.12g}" for edge in model.box)]
+    for _ in range(model.grains):
+        position = [random_nodes.random() * edge for edge in model.box]
+        # Atomsk applies X, Y, Z rotations. Uniform sin(Y) samples uniform orientations.
+        angles = [random_nodes.uniform(0, 360), degrees(asin(random_nodes.uniform(-1, 1))),
+                  random_nodes.uniform(0, 360)]
+        lines.append("node " + " ".join(f"{value:.12g}" for value in (*position, *angles)))
+    return "\n".join(lines) + "\n"
 
 
 def meam_order(text, elements):
@@ -133,10 +163,6 @@ def _meam_masses(library, parameters, order):
 
 
 def _assign_alloy(source, destination, model, masses):
-    types = bytearray()
-    for atom_type, count in enumerate(model.counts, 1):
-        types.extend(bytes([atom_type]) * count)
-    random.Random(model.seed).shuffle(types)
     with source.open(encoding="ascii") as original, destination.open("w", encoding="ascii") as output:
         header = []
         for line in original:
@@ -145,8 +171,14 @@ def _assign_alloy(source, destination, model, masses):
             header.append(line)
         header = "".join(header)
         declared = re.search(r"^\s*(\d+)\s+atoms\s*$", header, re.MULTILINE)
-        if not declared or int(declared[1]) != model.atoms:
+        atoms = int(declared[1]) if declared else 0
+        if not 2 <= atoms <= MAX_ATOMS or (model.grains == 1 and atoms != model.atoms):
             raise ValueError("Atomsk çıktısındaki atom sayısı beklenen değerle uyuşmuyor.")
+        counts = _alloy_counts(atoms, model.percentages)
+        types = bytearray()
+        for atom_type, count in enumerate(counts, 1):
+            types.extend(bytes([atom_type]) * count)
+        random.Random(model.seed).shuffle(types)
         header, replaced = re.subn(r"^[ \t]*1[ \t]+atom types[ \t]*$", f"{len(masses)} atom types",
                                    header, flags=re.MULTILINE)
         if replaced != 1:
@@ -164,11 +196,12 @@ def _assign_alloy(source, destination, model, masses):
                 continue
             atom = line.split()
             count += 1
-            if len(atom) != 5 or count > model.atoms or int(atom[0]) != count or atom[1] != "1":
+            if len(atom) != 5 or count > atoms or int(atom[0]) != count or atom[1] != "1":
                 raise ValueError("Atomsk çıktısında beklenmeyen atom satırı.")
             output.write(f"{count} {types[count - 1]} {' '.join(atom[2:])}\n")
-        if count != model.atoms:
+        if count != atoms:
             raise ValueError("Atomsk çıktısındaki atom tablosu eksik.")
+    return replace(model, counts=counts)
 
 
 def atomsk_executable():
@@ -182,6 +215,19 @@ def atomsk_executable():
     raise ValueError("Atomsk bulunamadı. Yerel Atomsk kurulumunu veya PATH ayarını kontrol edin.")
 
 
+def _run_atomsk(arguments, scratch, output):
+    try:
+        result = subprocess.run(arguments, cwd=scratch, stdin=subprocess.DEVNULL,
+                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=300,
+                                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    except subprocess.TimeoutExpired as error:
+        raise ValueError("Atomsk yapı üretimini 5 dakika içinde tamamlayamadı.") from error
+    log = result.stdout.decode(errors="replace")
+    if result.returncode or not (scratch / output).is_file():
+        raise ValueError(f"Atomsk yapı üretemedi.\n{log[-2000:]}")
+    return log
+
+
 def prepare_job(parent, model, library, parameters, order, executable):
     """Publish the package only after Atomsk and input validation both succeed."""
     parent.mkdir(parents=True, exist_ok=True)
@@ -193,19 +239,19 @@ def prepare_job(parent, model, library, parameters, order, executable):
         parameters = Path(shutil.copyfile(parameters, package / "meam_parametreler.meam"))
         masses = _meam_masses(library, parameters, order)
         raw = "atomsk.lmp"
-        arguments = [executable, "--create", "bcc", str(model.lattice), model.elements[0],
-                     "-duplicate", *map(str, model.repeats), raw]
-        try:
-            result = subprocess.run(arguments, cwd=scratch, stdin=subprocess.DEVNULL,
-                                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=300,
-                                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-        except subprocess.TimeoutExpired as error:
-            raise ValueError("Atomsk yapı üretimini 5 dakika içinde tamamlayamadı.") from error
-        log = result.stdout.decode(errors="replace")
-        if result.returncode or not (scratch / raw).is_file():
-            raise ValueError(f"Atomsk yapı üretemedi.\n{log[-2000:]}")
-        _assign_alloy(scratch / raw, package / "structure.lmp", model,
-                      {element: masses[element] for element in model.elements})
+        create = [executable, "--create", "bcc", str(model.lattice), model.elements[0]]
+        if model.grains == 1:
+            log = _run_atomsk([*create, "-duplicate", *map(str, model.repeats), raw], scratch, raw)
+        else:
+            nodes = package / "grain-nodes.txt"
+            nodes.write_text(_grain_nodes(model), encoding="ascii", newline="\n")
+            log = _run_atomsk([*create, "seed.xsf"], scratch, "seed.xsf")
+            # Remove close contacts at grain boundaries using 65% of BCC nearest-neighbor spacing.
+            cutoff = f"{0.65 * sqrt(3) / 2 * model.lattice:.12g}"
+            log += _run_atomsk([executable, "--polycrystal", "seed.xsf", "package/grain-nodes.txt", raw,
+                                "-wrap", "-remove-doubles", cutoff], scratch, raw)
+        model = _assign_alloy(scratch / raw, package / "structure.lmp", model,
+                              {element: masses[element] for element in model.elements})
         # Use the existing E20 protocol for every composition in this template.
         run_variables = (f"variable T index {model.temperature}\n"
                          f"variable tohum index {model.seed}\n"
@@ -215,6 +261,8 @@ def prepare_job(parent, model, library, parameters, order, executable):
         for filename, content in ((ENTRY, INITIAL), (RESTART, RESUME), ("kosu.inc", run_variables),
                                   ("analiz.inc", analysis), ("atomsk.log", log)):
             (package / filename).write_text(content, encoding="utf-8", newline="\n")
-        metadata = dict(asdict(model), atoms=model.atoms, meam_order=order, protocol="e20-bcc-tension-cna-v1")
+        metadata = dict(asdict(model), atoms=model.atoms, box_angstrom=model.box,
+                        percentages=[str(part) for part in model.percentages],
+                        meam_order=order, protocol="e20-bcc-tension-cna-v1")
         (package / "model.json").write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
         return package.rename(parent / f"md-bcc-{model.temperature}K-{uuid4().hex[:12]}")
