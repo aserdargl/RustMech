@@ -17,7 +17,7 @@ from unittest.mock import ANY, patch
 from PySide6.QtCore import QDateTime, QItemSelectionModel, QMimeData, QObject, QPoint, QSettings, Qt, QUrl, Signal
 from PySide6.QtGui import QDragEnterEvent, QDropEvent
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QLabel, QMessageBox
+from PySide6.QtWidgets import QApplication, QLabel, QMessageBox, QPushButton, QScrollArea, QSplitter
 
 import esen_jobs as jobs
 from esen_ai_prompt import ESEN_AI_PROMPT
@@ -571,7 +571,7 @@ class EsenTests(unittest.TestCase):
             self.assertEqual(record["state"], "Cancelled")
             self.assertEqual(transport.command.call_args_list[0].args[0], "scancel 456")
 
-    def test_input_commands_are_aligned_by_task_in_both_languages(self):
+    def test_left_commands_stay_on_one_toolbar_in_both_languages(self):
         app = QApplication.instance() or QApplication([])
         preferences = QSettings(str(self.root / "settings.ini"), QSettings.Format.IniFormat)
         preferences.setValue(LANGUAGE_KEY, "tr")
@@ -595,19 +595,27 @@ class EsenTests(unittest.TestCase):
                     self.assertEqual(menu.actions(), [workspace.scan_folder_action, workspace.job_folder_action])
                     self.assertEqual(workspace.upload.text(), "Send Truba")
                     self.assertEqual(workspace.sync.text(), "Eşitle" if locale == "tr" else "Sync")
-                    editing = (*workspace._input_edits, workspace.upload, workspace.sync)
-                    browsing = (workspace.input_back, workspace.input_forward, workspace.input_up,
-                                workspace.input_path)
-                    filtering = (workspace.input_filter, workspace.input_sort, workspace.copy_ai)
-                    for row in (editing, browsing, filtering):
-                        self.assertEqual(len({control.y() for control in row if control.isVisible()}), 1)
-                    self.assertLess(workspace.batch_folder.y(), workspace.input_path.y())
-                    self.assertLess(workspace.input_path.y(), workspace.input_filter.y())
+                    icons = (workspace.input_back, workspace.input_forward, workspace.input_up,
+                             workspace.batch_folder, workspace.load_files, workspace.pick_script,
+                             workspace.use_as_script, workspace.remove_inputs, workspace.move_up,
+                             workspace.move_down)
+                    buttons = (*icons, workspace.upload, workspace.sync, workspace.copy_ai,
+                               workspace.select_history, workspace.delete_job, workspace.use_inputs,
+                               workspace.refresh, workspace.resume, workspace.stop, workspace.attach)
+                    toolbar = workspace.findChild(QScrollArea, "esenLeftActions")
+                    self.assertEqual(set(toolbar.widget().findChildren(QPushButton)), set(buttons))
+                    visible = [button for button in buttons if button.isVisible()]
+                    self.assertEqual(len({button.y() for button in visible}), 1)
+                    self.assertEqual([button.x() for button in visible],
+                                     sorted({button.x() for button in visible}))
+                    self.assertEqual({button.height() for button in visible}, {25})
+                    left = workspace.findChild(QSplitter, "esenInputsAndJobs")
+                    self.assertFalse(left.findChildren(QPushButton))
                     self.assertLess(workspace.input_filter.x(), workspace.input_sort.x())
                     self.assertFalse(any(label.text() in {"Job settings", "İş ayarları"}
                                          for label in workspace.findChildren(QLabel)))
                     self.assertEqual(workspace.sync.width(), workspace.upload.width())
-                    self.assertEqual({button.width() for button in workspace._compact_input_actions}, {25})
+                    self.assertEqual({button.width() for button in icons}, {25})
                     target = workspace.target
                     label = next(label for label in workspace.findChildren(QLabel) if label.buddy() is target)
                     self.assertEqual(target.x(), workspace.partition.x())

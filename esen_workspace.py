@@ -433,7 +433,7 @@ class EsenWorkspace(QDialog):
         left.setObjectName("esenInputsAndJobs")
         left.setChildrenCollapsible(False)
         left.setHandleWidth(7)
-        self._settings_column = left
+        left.setMinimumWidth(305)
         right = QSplitter(Qt.Orientation.Vertical)
         right.setObjectName("esenPreviewAndResults")
         right.setChildrenCollapsible(False)
@@ -471,36 +471,22 @@ class EsenWorkspace(QDialog):
         for button, icon in icons:
             button.setIcon(self.style().standardIcon(icon))
             button.setIconSize(QSize(14, 14))
-        self._input_edits = (self.batch_folder, self.load_files, self.pick_script, self.use_as_script,
-                             self.remove_inputs, self.move_up, self.move_down)
+        input_edits = (self.batch_folder, self.load_files, self.pick_script, self.use_as_script,
+                       self.remove_inputs, self.move_up, self.move_down)
         input_navigation = (self.input_back, self.input_forward, self.input_up)
-        self._compact_input_actions = (*self._input_edits, *input_navigation)
-        for button in self._compact_input_actions:
+        for button in (*input_edits, *input_navigation):
             button.setProperty("compactInputAction", True)
             button.setAccessibleName(button.toolTip())
             button.setFixedWidth(CONTROL_HEIGHT)
         settings, layout = panel(scrollable=True)
         left.addWidget(settings)
-        actions = QHBoxLayout()
-        actions.setSpacing(INPUT_TOOL_SPACING)
-        for button in self._input_edits:
-            actions.addWidget(button)
-        actions.addStretch()
-        actions.addWidget(self.upload)
-        actions.addWidget(self.sync)
-        layout.addLayout(actions)
 
-        location = QHBoxLayout()
-        location.setSpacing(INPUT_TOOL_SPACING)
-        for button in input_navigation:
-            location.addWidget(button)
         self.input_path = QLineEdit()
         self.input_path.setReadOnly(True)
         self.input_path.setFixedHeight(CONTROL_HEIGHT)
         self.input_path.setAccessibleName("Job folder path")
         self.input_path.textChanged.connect(self.input_path.setToolTip)
-        location.addWidget(self.input_path, 1)
-        layout.addLayout(location)
+        layout.addWidget(self.input_path)
 
         filters = QHBoxLayout()
         filters.setSpacing(4)
@@ -521,7 +507,6 @@ class EsenWorkspace(QDialog):
         self.copy_ai = command("Copy AI", self._copy_ai, hint="Copy ESEN file preparation instructions for AI")
         filters.addWidget(self.input_filter, 1)
         filters.addWidget(self.input_sort)
-        filters.addWidget(self.copy_ai)
         layout.addLayout(filters)
         self.inputs = InputFileTree()
         self.inputs.setAcceptDrops(True)
@@ -629,7 +614,6 @@ class EsenWorkspace(QDialog):
         history, layout = panel("Job history", paper=True, scrollable=True,
                                 header_action=self.active_history_only)
         left.addWidget(history)
-        layout.addLayout(button_row(self.select_history, self.delete_job))
         self.history.currentItemChanged.connect(self._select_job)
         self.history.itemSelectionChanged.connect(self._select_job)
         layout.addWidget(self.history, 1)
@@ -637,18 +621,39 @@ class EsenWorkspace(QDialog):
         self.refresh = command("Refresh", self._refresh_history, hint="Refresh job")
         self.resume = command("Resume", self._resume_job, hint="Resume job")
         self.stop = command("Stop", self._cancel, role="destructiveActionBtn", hint="Stop job")
-        layout.addLayout(button_row(self.use_inputs, self.refresh, self.resume, self.stop))
         self.remote_folder = QLineEdit()
         self.remote_folder.setFixedHeight(CONTROL_HEIGHT)
         self.remote_folder.setPlaceholderText("TRUBA run folder")
         self.remote_folder.setAccessibleName("TRUBA run folder")
         self.remote_folder.textChanged.connect(self._buttons)
         self.attach = command("Attach", self._attach_remote, hint="Attach folder")
-        attachment = QHBoxLayout()
-        attachment.addWidget(self.remote_folder, 1)
-        attachment.addWidget(self.attach)
-        layout.addLayout(attachment)
+        layout.addWidget(self.remote_folder)
         left.setSizes([420, 270])
+
+        toolbar = QScrollArea(esen_page)
+        toolbar.setObjectName("esenLeftActions")
+        toolbar.setAccessibleName("Local input and job history actions")
+        toolbar.setFrameShape(QFrame.Shape.NoFrame)
+        toolbar.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        toolbar.setWidgetResizable(True)
+        actions = QWidget()
+        row = QHBoxLayout(actions)
+        row.setContentsMargins(0, 1, 0, 2)
+        row.setSpacing(INPUT_TOOL_SPACING)
+        groups = (
+            input_navigation, input_edits, (self.upload, self.sync, self.copy_ai),
+            (self.select_history, self.delete_job),
+            (self.use_inputs, self.refresh, self.resume, self.stop, self.attach),
+        )
+        for index, buttons in enumerate(groups):
+            if index:
+                row.addSpacing(6)
+            for button in buttons:
+                row.addWidget(button)
+        row.addStretch()
+        toolbar.setWidget(actions)
+        toolbar.setFixedHeight(CONTROL_HEIGHT + 3 + toolbar.horizontalScrollBar().sizeHint().height())
+        outer.insertWidget(0, toolbar)
 
         preview, layout = panel("Command preview", paper=True, scrollable=True)
         preview.setMinimumHeight(130)
@@ -1222,13 +1227,6 @@ class EsenWorkspace(QDialog):
             width = max(button.sizeHint().width() for button in group) + 2
             for button in group:
                 button.setFixedWidth(width)
-        # The two order arrows replace Use As Script in Slurm mode.
-        icon_count = len(self._input_edits) - 1
-        gaps = (icon_count + 1) * INPUT_TOOL_SPACING
-        edit_width = icon_count * CONTROL_HEIGHT + gaps + self.upload.width() + self.sync.width()
-        scrollbar = self.style().pixelMetric(QStyle.PixelMetric.PM_ScrollBarExtent)
-        history_width = sum(button.width() for button in history_commands) + 12
-        self._settings_column.setMinimumWidth(max(edit_width, history_width) + 2 * PANEL_PADDING + scrollbar)
 
     def _copy_ai(self):
         QApplication.clipboard().setText(ESEN_AI_PROMPT)
