@@ -14,6 +14,7 @@ from PySide6.QtWidgets import QApplication, QLabel
 
 import esen_jobs as jobs
 import esen_md as md
+from esen_elements import AlloyElements
 from esen_workspace import EsenWorkspace
 from ui_language import LANGUAGE_KEY, LanguageManager
 
@@ -113,6 +114,37 @@ def test_polycrystal_package_uses_actual_atom_count_and_seeded_nodes(tmp_path, p
     assert (metadata["grains"], metadata["atoms"], metadata["counts"]) == (3, 16, [4, 12])
     assert Counter(line.split()[1] for line in (first / "structure.lmp").read_text().split(
         "Atoms # atomic")[1].splitlines() if line) == {"1": 4, "2": 12}
+
+
+def test_alloy_elements_fill_left_column_then_continue_on_right():
+    app = QApplication.instance() or QApplication([])
+    first = ("Hf", "Nb", "Ta", "Ti", "Zr")
+    additional = ("Fe", "Mo", "W", "V", "Cr", "Ni")
+    elements = AlloyElements((symbol, 20) for symbol in first)
+    elements.show()
+    try:
+        for symbol in additional:
+            elements.cells[symbol][1].trigger()
+        app.processEvents()
+
+        def row_at(row, column):
+            return elements.list_layout.itemAtPosition(row, column).widget()
+
+        for index, symbol in enumerate(first):
+            assert row_at(index, 0) is elements.rows[symbol][0]
+        for index, symbol in enumerate(additional):
+            assert row_at(index, 1) is elements.rows[symbol][0]
+        assert row_at(0, 0).y() == row_at(0, 1).y()
+        assert row_at(0, 0).geometry().right() < row_at(0, 1).x()
+
+        elements.rows["Fe"][1].setValue(20)
+        elements.remove_element("Nb")
+        assert row_at(4, 0) is elements.rows["Fe"][0]
+        assert row_at(0, 1) is elements.rows["Mo"][0]
+        assert elements.composition().startswith("Hf:20.0000, Ta:20.0000, Ti:20.0000, Zr:20.0000, Fe:20.0000")
+        assert elements.total_label.text().endswith("100 %")
+    finally:
+        elements.close()
 
 
 def test_md_tab_enter_previews_and_run_hands_package_to_esen(tmp_path, potentials):

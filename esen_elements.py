@@ -26,6 +26,7 @@ PERIODS = (
 
 class AlloyElements(QWidget):
     changed = Signal()
+    LEFT_COLUMN_ROWS = 5
 
     def __init__(self, defaults, parent=None):
         super().__init__(parent)
@@ -49,8 +50,10 @@ class AlloyElements(QWidget):
         hint = QLabel("Right-click an element to add it.")
         hint.setWordWrap(True)
         layout.addWidget(hint)
-        self.list_layout = QVBoxLayout()
-        self.list_layout.setSpacing(2)
+        self.list_layout = QGridLayout()
+        self.list_layout.setVerticalSpacing(2)
+        self.list_layout.setHorizontalSpacing(7)
+        self.list_layout.setAlignment(Qt.AlignmentFlag.AlignLeft)
         layout.addLayout(self.list_layout)
         self.total_label = QLabel()
         self.total_label.setObjectName("mdCompositionTotal")
@@ -103,11 +106,11 @@ class AlloyElements(QWidget):
         layout.addWidget(field)
         remove = QPushButton("Remove")
         remove.setAutoDefault(False)
+        remove.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         remove.setFixedHeight(CONTROL_HEIGHT)
         remove.clicked.connect(lambda _checked=False: self.remove_element(symbol))
         layout.addWidget(remove)
-        layout.addStretch()
-        self.list_layout.addWidget(row)
+        self._place_row(row, len(self.rows))
         self.rows[symbol] = row, percent
         self._mark_added(symbol, True)
         percent.valueChanged.connect(self.update_total)
@@ -115,11 +118,20 @@ class AlloyElements(QWidget):
         percent.lineEdit().textEdited.connect(lambda text: self._show_edit_total(percent, text))
         self.update_total()
 
+    def _place_row(self, row, index):
+        if index < self.LEFT_COLUMN_ROWS:
+            self.list_layout.addWidget(row, index, 0)
+        else:
+            self.list_layout.addWidget(row, index - self.LEFT_COLUMN_ROWS, 1)
+
     def remove_element(self, symbol):
         row, _ = self.rows.pop(symbol)
         self.list_layout.removeWidget(row)
         row.hide()
         row.deleteLater()
+        for index, (remaining, _) in enumerate(self.rows.values()):
+            self.list_layout.removeWidget(remaining)
+            self._place_row(remaining, index)
         self._mark_added(symbol, False)
         self.cells[symbol][0].setFocus()
         self.update_total()
