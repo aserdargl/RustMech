@@ -92,6 +92,15 @@ class ConvergenceDecisionTests(unittest.TestCase):
         self.assertEqual(kind, "Refinement")
         self.assertAlmostEqual(next_size, .2 / 1.3**2)
 
+    def test_failed_mesh_is_not_revisited_as_an_intermediate_level(self):
+        levels = [completed(.2, 100, 100)]
+        midpoint = math.sqrt(.2 * .1)
+        levels.append(Level(replace(SETTINGS, mesh_resolution=midpoint), status="failed"))
+        levels.append(completed(.1, 150, 300))
+        next_size, kind = next_mesh_size(levels, 2, [0], 1.3)
+        self.assertEqual(kind, "Refinement")
+        self.assertAlmostEqual(next_size, .1 / 1.3)
+
     def test_intermediate_execution_order_does_not_change_comparison_order(self):
         coarse, medium, fine = completed(.2, 100, 100), completed(.15, 101, 200), completed(.1, 102, 300)
         self.assertIs(converged_level([coarse, fine, medium], 2, [0], [0] * 3), fine)
@@ -297,6 +306,18 @@ class LiveConvergenceTests(unittest.TestCase):
         self.assertFalse(widget.force_stop_button.isEnabled())
         self.assertIn("cannot spawn", widget.status.text())
 
+    def test_process_exit_during_analysis_retries_with_a_finer_mesh(self):
+        widget = self.widget()
+        process = MagicMock()
+        process.result.side_effect = RuntimeError("Analysis process exited (1).")
+        with patch("mesh_convergence.AnalysisProcess", return_value=process):
+            widget.start()
+        widget._poll()
+        self.finish(widget)
+        self.assertIn("Analysis process exited", widget.rows[0].status)
+        self.assertAlmostEqual(self.calls[0], .2 / widget.factor.value())
+        self.assertIn("Converged", widget.status.text())
+
     def test_attempt_limit_and_intermediate_values(self):
         def unstable(settings, mesh):
             result = self.solver(settings, mesh)
@@ -402,6 +423,28 @@ class LiveConvergenceTests(unittest.TestCase):
             self.assertEqual(process.call_args.args[1].mesh_type, "TET4")
             widget.force_stop()
 
+    def test_truba_retries_a_terminal_failure_and_stops_if_job_state_is_unknown(self):
+        for accounting in ("", "FAILED|1:0"):
+            with self.subTest(accounting=accounting):
+                widget = self.widget()
+                widget.remote_controller = MagicMock(requested=True, ready=True,
+                                                     capabilities={"mesh_types": ["TET4"]})
+                widget.remote_controller.require.return_value = (object(), object())
+                widget._solver_changed()
+                process = MagicMock()
+                process.result.side_effect = RuntimeError("Remote results are unavailable")
+                process.remote_status.return_value = {"job_id": "1234", "slurm_status": accounting}
+                with patch("mesh_convergence.AnalysisProcess", return_value=process) as launch:
+                    widget.start()
+                    widget._poll()
+                    self.assertEqual(launch.call_count, 2 if accounting else 1)
+                    if accounting:
+                        self.assertAlmostEqual(launch.call_args.args[1].mesh_resolution,
+                                               .2 / widget.factor.value())
+                        widget.force_stop()
+                    else:
+                        self.assertIn("Remote results are unavailable", widget.status.text())
+
     def test_loading_and_contacts_are_frozen_for_every_level(self):
         received = []
         def solver(settings, mesh):
@@ -420,7 +463,7 @@ class LiveConvergenceTests(unittest.TestCase):
             self.assertEqual(settings.top_platen_friction_coeff, .25)
             self.assertEqual(settings.contact_damping_factor, .03)
 
-    def test_failed_solver_and_incomplete_strain_do_not_continue(self):
+    def test_failed_solver_and_incomplete_strain_stop_after_three_finer_retries(self):
         for status in ("failed", "completed"):
             with self.subTest(status=status):
                 def bad_solver(settings, mesh):
@@ -428,9 +471,42 @@ class LiveConvergenceTests(unittest.TestCase):
                 widget = self.widget(solver=bad_solver)
                 widget.start()
                 self.finish(widget)
-                self.assertEqual(len(widget.rows), 1)
+                self.assertEqual(len(widget.rows), 4)
+                for index, level in enumerate(widget.rows):
+                    self.assertAlmostEqual(level.settings.mesh_resolution, .2 / widget.factor.value()**index)
+                self.assertEqual(widget.rows[-1].kind, "Retry 3/3")
                 self.assertIsNone(widget.recommended)
-                self.assertIn("not confirmed", widget.status.text())
+                self.assertIn("after 3 failed retries", widget.status.text())
+
+    def test_success_resets_the_retry_count(self):
+        outcomes = iter([False] * 3 + [True] + [False] * 3 + [True, True])
+
+        def intermittent_mesh(settings):
+            if not next(outcomes):
+                raise RuntimeError("mesh unavailable")
+            return self.mesh(settings)
+
+        widget = self.widget(mesh=intermittent_mesh)
+        widget.start()
+        self.finish(widget)
+        self.assertEqual(len(widget.rows), 9)
+        self.assertEqual([level.kind for level in widget.rows if level.kind == "Retry 3/3"],
+                         ["Retry 3/3", "Retry 3/3"])
+        self.assertIn("Converged", widget.status.text())
+
+    def test_failed_manual_level_uses_the_next_configured_size(self):
+        def first_mesh_fails(settings):
+            if settings.mesh_resolution == .2:
+                raise RuntimeError("mesh unavailable")
+            return self.mesh(settings)
+
+        widget = self.widget(mesh=first_mesh_fails)
+        widget.automatic.setChecked(False)
+        widget.manual.setText("0.2, 0.15, 0.1, 0.08")
+        widget.start()
+        self.finish(widget)
+        self.assertEqual(self.calls, [.15, .1, .08])
+        self.assertIn("Converged", widget.status.text())
 
     def test_worker_records_meshing_failure_and_missing_metrics(self):
         def broken_mesh(settings):

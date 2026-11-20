@@ -1,5 +1,6 @@
 """Live, bounded automatic mesh refinement using the existing batch solver."""
 import csv
+from concurrent.futures import CancelledError
 from dataclasses import replace
 import math
 from pathlib import Path
@@ -31,6 +32,7 @@ from studio_style import (CONTROL_HEIGHT, NUMERIC_FIELD_WIDTH, STUDIO_STYLESHEET
 
 RESULT_HEADERS = ("Mesh / elements", "Mesh (s)", "Solve (s)", "Force (N)",
                   "Modulus (MPa)", "SEA (J/g)", "Max Δ / ref.", "Status")
+MAX_FAILURE_RETRIES = 3
 TIME_UNITS = (
     ("cs", "Centiseconds (cs)", 0.01),
     ("s", "Seconds (s)", 1.0),
@@ -83,15 +85,25 @@ def converged_level(levels, tolerance, selected, absolute):
 
 
 def next_mesh_size(levels, tolerance, selected, factor):
-    """Split a large response jump before spending on a still finer mesh."""
-    ordered = ordered_levels(levels, selected)
-    fine = ordered[-1]
-    if len(ordered) >= 2:
-        coarse = ordered[-2]
-        gap = coarse.settings.mesh_resolution / fine.settings.mesh_resolution
-        if gap > 1.2 and max(differences(coarse, fine)[i] for i in selected) > max(10, 4 * tolerance):
-            return math.sqrt(coarse.settings.mesh_resolution * fine.settings.mesh_resolution), "Intermediate"
-    return fine.settings.mesh_resolution / factor, "Refinement"
+    """Refine after a failure, or split a large response jump after a success."""
+    last = levels[-1]
+    base_size = last.settings.mesh_resolution
+    attempted = [level.settings.mesh_resolution for level in levels]
+    if last.status == "completed":
+        ordered = ordered_levels(levels, selected)
+        fine = ordered[-1]
+        base_size = fine.settings.mesh_resolution
+        if len(ordered) >= 2:
+            coarse = ordered[-2]
+            gap = coarse.settings.mesh_resolution / base_size
+            if gap > 1.2 and max(differences(coarse, fine)[i] for i in selected) > max(10, 4 * tolerance):
+                midpoint = math.sqrt(coarse.settings.mesh_resolution * base_size)
+                if not any(math.isclose(midpoint, size) for size in attempted):
+                    return midpoint, "Intermediate"
+    size = base_size / factor
+    while any(math.isclose(size, previous) for previous in attempted):
+        size /= factor
+    return size, "Refinement"
 
 
 class ConvergenceToolbarScroll(QScrollArea):
@@ -574,6 +586,7 @@ class MeshConvergenceWidget(QWidget):
             return
         self.rows.clear()
         self.recommended = None
+        self.consecutive_failures = 0
         self.results.setRowCount(0)
         self.stop_requested.clear()
         self.started = monotonic()
@@ -722,10 +735,24 @@ class MeshConvergenceWidget(QWidget):
                 if stage:
                     self._set_status(f"Level {len(self.rows)} · {stage}")
             return
+        remote_record = (self.future.remote_status() or {}) if self.run_on_truba.isChecked() else {}
+        retry_allowed = True
         try:
             level = self.future.result()
+            if level is None:
+                level = replace(self.rows[-1], status="TRUBA job detached")
+                retry_allowed = False
+        except CancelledError:
+            level = replace(self.rows[-1], status="Analysis cancelled")
+            retry_allowed = False
         except Exception as exc:
             level = replace(self.rows[-1], status=f"Failed: {exc}")
+            if remote_record.get("submission_attempted") or remote_record.get("job_id"):
+                from truba_jobs import SLURM_TERMINAL_STATES
+                accounting = remote_record.get("slurm_status") or remote_record.get("step_status", "")
+                state = accounting.partition("|")[0].partition(" ")[0].rstrip("+")
+                retry_allowed = (state in SLURM_TERMINAL_STATES and state != "CANCELLED"
+                                 and remote_record.get("state") != "cancelled")
         self.future = None
         # A worker can finish just after queue draining. Discard its remaining
         # snapshots before the next worker is launched.
@@ -744,11 +771,19 @@ class MeshConvergenceWidget(QWidget):
         if self.stop_requested.is_set():
             self._finish("Stopped; convergence not confirmed. Partial results can be exported.")
             return
-        if level.status != "completed":
+        if not retry_allowed or level.status.startswith("Element limit exceeded"):
             self._finish(f"Convergence not confirmed: {level.status}")
             return
-        self.recommended = converged_level(
-            self.rows, self.tolerance.value(), self.selected, [c.value() for c in self.absolute])
+        if level.status == "completed":
+            self.consecutive_failures = 0
+            self.recommended = converged_level(
+                self.rows, self.tolerance.value(), self.selected, [c.value() for c in self.absolute])
+        else:
+            self.consecutive_failures += 1
+            if self.consecutive_failures > MAX_FAILURE_RETRIES:
+                self._finish(f"Convergence not confirmed after {MAX_FAILURE_RETRIES} failed retries. "
+                             f"{level.status}")
+                return
         if self.recommended is not None:
             index = next(i for i, v in enumerate(self.rows) if v is self.recommended)
             self.results.selectRow(index)
@@ -773,6 +808,8 @@ class MeshConvergenceWidget(QWidget):
         except ValueError as exc:
             self._finish(f"Mesh limit reached; convergence not confirmed: {exc}")
             return
+        if self.consecutive_failures:
+            kind = f"Retry {self.consecutive_failures}/{MAX_FAILURE_RETRIES}"
         self._launch(settings, kind)
 
     def _refresh_differences(self):
