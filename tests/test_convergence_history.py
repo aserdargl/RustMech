@@ -119,6 +119,7 @@ def test_reopen_shows_only_active_pairs_and_resumes_by_known_id(study):
     assert widget.results.item(3, 9).text() == "RM-101.slurm"
     assert widget.results.item(3, 11).text() == "28"
     assert widget.results.item(3, 12).text() == "66.41"
+    assert widget.results.item(3, 14).text() == "hamsi"
     controller.auth.return_value = SimpleNamespace(username="someone-else")
     connection.connection_changed.emit(True)
     launch.assert_not_called()

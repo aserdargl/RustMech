@@ -33,7 +33,7 @@ from studio_style import (CONTROL_HEIGHT, NUMERIC_FIELD_WIDTH, STUDIO_STYLESHEET
                           configure_form, mesh_precision_stepper, stepper_with_unit)
 
 REMOTE_RESULT_HEADERS = ("Slurm job ID", "Slurm script", "Slurm state", "Solver CPUs",
-                         "Allocated RAM (GiB)", "Peak RAM (GiB)")
+                         "Allocated RAM (GiB)", "Peak RAM (GiB)", "Queue")
 RESULT_HEADERS = ("Mesh / elements", "Mesh (s)", "Solve (s)", "Force (N)",
                   "Modulus (MPa)", "SEA (J/g)", "Max Δ / ref.", "Status", *REMOTE_RESULT_HEADERS)
 MAX_FAILURE_RETRIES = 3
@@ -355,9 +355,9 @@ class MeshConvergenceWidget(QWidget):
         header.setMinimumSectionSize(50)
         header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         header.setStretchLastSection(True)
-        for column, width in enumerate((230, 70, 70, 95, 115, 90, 115, 160, 90, 155, 150, 76, 130, 108)):
+        for column, width in enumerate((230, 70, 70, 95, 115, 90, 115, 160, 90, 155, 150, 76, 130, 108, 76)):
             self.results.setColumnWidth(column, width)
-        for position, column in enumerate((8, 9, 11, 12, 13, 10), 1):
+        for position, column in enumerate((8, 9, 14, 11, 12, 13, 10), 1):
             header.moveSection(header.visualIndex(column), position)
         self.results.horizontalHeaderItem(11).setToolTip("CPU threads assigned to this solver step.")
         self.results.horizontalHeaderItem(12).setToolTip("RAM reserved for this mesh level.")
@@ -1369,7 +1369,8 @@ class MeshConvergenceWidget(QWidget):
                 target = run_remote_level_pair if len(group) == 2 else run_remote_level_group
                 settings = levels
             for index, share in zip(group, convergence_level_resources(context, len(group)), strict=True):
-                self.remote_records[index] = dict(solver_cores=share['cores'], level_memory_mb=share['memory_mb'])
+                self.remote_records[index] = dict(partition=context.partition, solver_cores=share['cores'],
+                                                  level_memory_mb=share['memory_mb'])
                 self._render(index)
             try:
                 self.remote_jobs[group] = AnalysisProcess(
@@ -1521,7 +1522,7 @@ class MeshConvergenceWidget(QWidget):
         values = [mesh, self._format_time(mesh_time, 1), self._format_time(solve_time, 2),
                   *[f"{float(v):.6g}" if self._numeric(v) else "—" for v in level.metrics],
                   delta, level.status, *(value or "—" for value in remote_values)]
-        tooltips = {6: delta_hint, 8: values[8], 9: script_paths or values[9], 10: values[10]}
+        tooltips = {6: delta_hint, 8: values[8], 9: script_paths or values[9], 10: values[10], 14: values[14]}
         if memory_mb := record.get("failure_memory_mb"):
             tooltips[7] = f"{level.status}\nRequested RAM: {memory_mb / 1024:.1f} GiB"
             if directory := record.get("local_directory"):
@@ -1575,12 +1576,14 @@ class MeshConvergenceWidget(QWidget):
     def _remote_values(record):
         state = ("OUT_OF_MEMORY" if record.get("failure_kind") == "out_of_memory" else
                  record.get("slurm_status") or record.get("step_status") or record.get("state", ""))
-        allocated = record.get('level_memory_mb', record.get('context', {}).get('memory_mb'))
+        context = record.get('context', {})
+        allocated = record.get('level_memory_mb', context.get('memory_mb'))
         peak = record.get('peak_ram_mib')
         return (str(record.get("job_id", "")), record.get("script_name", ""), state,
                 str(record.get('solver_cores') or ''),
                 f'{allocated / 1024:.2f}' if allocated is not None else '',
-                f'{peak / 1024:.2f}' if peak is not None else '')
+                f'{peak / 1024:.2f}' if peak is not None else '',
+                record.get('partition') or context.get('partition', ''))
 
     def _poll_remote_batch(self):
         from convergence_history import mesh_job_finished
@@ -1643,6 +1646,8 @@ class MeshConvergenceWidget(QWidget):
             for offset, index in enumerate(group):
                 record = dict(snapshot)
                 previous = self.remote_records.get(index, {})
+                record['partition'] = (record.get('partition') or record.get('context', {}).get('partition')
+                                       or previous.get('partition', ''))
                 for name in ('solver_cores', 'level_memory_mb'):
                     if not record.get(name) and name in previous:
                         record[name] = previous[name]

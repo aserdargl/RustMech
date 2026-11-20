@@ -1057,6 +1057,7 @@ class RemoteModeUiTests(unittest.TestCase):
         self.assertIn("preparing submission", study.results.item(0, 7).text())
         self.assertEqual(study.results.item(0, 11).text(), "20")
         self.assertEqual(study.results.item(0, 12).text(), f"{context.memory_mb // 2 / 1024:.2f}")
+        self.assertEqual(study.results.item(0, 14).text(), "barbun")
         study._poll()
         for index in range(2):
             self.assertEqual(study.results.item(index, 8).text(), "470")
@@ -1065,6 +1066,7 @@ class RemoteModeUiTests(unittest.TestCase):
             self.assertEqual(study.results.item(index, 10).text(), "PENDING|Resources")
             self.assertEqual(study.results.item(index, 11).text(), "20")
             self.assertEqual(study.results.item(index, 12).text(), "1.00")
+            self.assertEqual(study.results.item(index, 14).text(), "barbun")
         job.remote_status.return_value["state"] = "RUNNING"
         job.remote_status.return_value["level_progress"] = ["Meshing specimen", "Solving · 42 elements"]
         study._poll()

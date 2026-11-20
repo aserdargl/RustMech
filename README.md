@@ -1480,7 +1480,7 @@ müsait olduğunda başlatır.
 Mesh Convergence yeniden açıldığında **Results** alanında önceki TRUBA
 işlerinden çalışanlar ve kuyrukta bekleyenler görünür. Durumlarını
 güncellemek için aynı TRUBA hesabıyla bağlanın.
-Sonuç tablosu ve CSV her seviyenin betiğini, iş kimliğini, çözüm CPU sayısını
+Sonuç tablosu ve CSV her seviyenin kuyruğunu, betiğini, iş kimliğini, çözüm CPU sayısını
 ve ayrılan RAM'i gösterir. Slurm iş adımı için MaxRSS sağlarsa tepe RAM de
 görünür. **Slurm script plan** satırındaki **Wall time per analysis** açılır
 listesi yeni betiğin Slurm süresini belirler. Varsayılan **03:00**'tır.
