@@ -656,7 +656,7 @@ class RemoteModeUiTests(unittest.TestCase):
             'Credentials and password storage',
             'CPU, RAM and resource session', 'Advanced · remote runtime'])
         self.assertEqual([panel.tabs.tabText(i) for i in range(panel.tabs.count())],
-                         ['Connection', 'Active jobs', 'Queue status'])
+                         ['Connection', 'Queue status', 'Active jobs'])
         self.assertIs(panel.tabs.currentWidget(), panel.settings_scroll)
         self.assertEqual(len({group.y() for group in groups}), 1)
         for left, right in zip(groups, groups[1:]):

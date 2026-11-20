@@ -246,8 +246,8 @@ class TrubaConnectionDialog(QDialog):
         self.queue_status_page = QWidget()
         queue_page_layout = QVBoxLayout(self.queue_status_page)
         queue_page_layout.setContentsMargins(0, 0, 0, 0)
-        self.tabs.addTab(self.active_jobs, 'Active jobs')
         self.tabs.addTab(self.queue_status_page, 'Queue status')
+        self.tabs.addTab(self.active_jobs, 'Active jobs')
 
         self.job_tables_splitter = QSplitter(Qt.Orientation.Horizontal)
         self.job_tables_splitter.setObjectName('trubaJobTablesSplitter')
