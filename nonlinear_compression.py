@@ -2325,6 +2325,7 @@ class RustMechDialog(QDialog):
                 for combo, value in (
                     (self.loading_mode_combo, selected.loading_mode),
                     (self.solver_combo, selected.solver_backend),
+                    (self.mesh_type_combo, selected.mesh_type),
                     (self.self_contact_combo, selected.self_contact_mode),
                     (self.contact_formulation_combo, selected.contact_formulation),
                     *((combo, getattr(selected, f"{side}_platen_contact"))

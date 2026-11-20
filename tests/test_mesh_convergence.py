@@ -337,19 +337,45 @@ class LiveConvergenceTests(unittest.TestCase):
 
     def test_manual_list_stops_early_on_convergence(self):
         widget = self.widget()
+        widget.mesh_type_combo.setCurrentIndex(widget.mesh_type_combo.findData("HEX20"))
         widget.automatic.setChecked(False)
         widget.manual.setText("0.2, 0.15, 0.1, 0.08")
         widget.start()
         self.finish(widget)
         self.assertEqual(self.calls, [.2, .15, .1])
+        self.assertEqual([row.settings.mesh_type for row in widget.rows], ["HEX20"] * 3)
         self.assertIn("Converged", widget.status.text())
 
     def test_tetra_local_sizes_scale_without_changing_design(self):
-        widget = self.widget(settings=replace(SETTINGS, mesh_type="TET10", local_mesh_size=.05))
+        widget = self.widget(settings=replace(SETTINGS, local_mesh_size=.05))
+        self.assertEqual(widget.mesh_type_combo.currentData(), "HEX8")
+        self.assertTrue(widget.local_size_row.isHidden())
+        widget.mesh_type_combo.setCurrentIndex(widget.mesh_type_combo.findData("TET10"))
+        self.assertFalse(widget.local_size_row.isHidden())
         level = widget.level_settings(.1)
+        self.assertEqual(level.mesh_type, "TET10")
         self.assertEqual(level.local_mesh_size, .025)
         self.assertEqual(level.compression, SETTINGS.compression)
         self.assertEqual(level.material_name, SETTINGS.material_name)
+        widget.start()
+        self.assertFalse(widget.mesh_type_combo.isEnabled())
+        self.assertFalse(widget.local_size.isEnabled())
+        self.finish(widget)
+        self.assertEqual([row.settings.mesh_type for row in widget.rows], ["TET10"] * 3)
+        self.assertTrue(widget.mesh_type_combo.isEnabled())
+
+    def test_mesh_types_follow_ready_truba_runtime(self):
+        widget = self.widget()
+        widget.remote_controller = MagicMock(requested=True, ready=True,
+                                             capabilities={"mesh_types": ["TET4"]})
+        widget._solver_changed()
+        self.assertEqual(widget.mesh_type_combo.currentData(), "TET4")
+        self.assertFalse(widget.mesh_type_combo.model().item(widget.mesh_type_combo.findData("HEX8")).isEnabled())
+        with patch("mesh_convergence.AnalysisProcess") as process:
+            widget.remote_controller.require.return_value = (object(), object())
+            widget.start()
+            self.assertEqual(process.call_args.args[1].mesh_type, "TET4")
+            widget.force_stop()
 
     def test_loading_and_contacts_are_frozen_for_every_level(self):
         received = []
@@ -431,6 +457,7 @@ class LiveConvergenceTests(unittest.TestCase):
         owner = MagicMock()
         owner.loading_mode_combo = QComboBox()
         owner.solver_combo = self.widget().solver_combo
+        owner.mesh_type_combo = self.widget().mesh_type_combo
         owner.self_contact_combo = QComboBox()
         owner.contact_formulation_combo = QComboBox()
         owner.platen_contact_combos = {}
@@ -439,11 +466,12 @@ class LiveConvergenceTests(unittest.TestCase):
         for control in owner.controls.values():
             control.setRange(.1, 10)
         dialog = MagicMock()
-        dialog.selected_settings = replace(SETTINGS, mesh_resolution=.08, local_mesh_size=.02)
+        dialog.selected_settings = replace(SETTINGS, mesh_type="TET4", mesh_resolution=.08, local_mesh_size=.02)
         with patch("mesh_convergence.MeshConvergenceDialog", return_value=dialog):
             RustMechDialog.open_mesh_convergence(owner)
         self.assertAlmostEqual(owner.controls["mesh_resolution"].value(), .08)
         self.assertAlmostEqual(owner.controls["local_mesh_size"].value(), .02)
+        self.assertEqual(owner.mesh_type_combo.currentData(), "TET4")
         owner.geometry_changed.assert_called_once()
         dialog.study.dispose.assert_called_once()
 
@@ -462,7 +490,7 @@ class LiveConvergenceTests(unittest.TestCase):
         self.app.processEvents()
         self.assertEqual(widget.run_button.text(), "Run")
         self.assertLess(widget.toolbar.y(), widget.results.y())
-        for control in (widget.solver_combo, widget.export_button, widget.apply_button,
+        for control in (widget.solver_combo, widget.mesh_type_combo, widget.export_button, widget.apply_button,
                         widget.stop_button, widget.force_stop_button, widget.run_button):
             self.assertIs(control.parentWidget(), widget.toolbar)
         for control in (widget.start_size, widget.tolerance):
