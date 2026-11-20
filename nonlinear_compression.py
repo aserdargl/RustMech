@@ -370,6 +370,8 @@ class RustMechDialog(QDialog):
         brand_layout.addWidget(self.brand_subtitle_lbl)
         self.truba_dialog = TrubaConnectionDialog(self)
         self.truba_dialog.job_list.background_updated.connect(self._background_analysis_updated)
+        from truba_job_list import TrubaJobMonitor
+        self.truba_job_monitor = TrubaJobMonitor(self, self.truba_dialog.job_list)
         self.truba_button = QPushButton("TRUBA")
         self.truba_button.setObjectName("trubaConnectBtn")
         self.truba_button.setProperty("trubaConnected", False)
@@ -381,8 +383,9 @@ class RustMechDialog(QDialog):
         self.about_button.clicked.connect(self.show_about)
         workspace_buttons = QHBoxLayout()
         workspace_buttons.setSpacing(6)
-        for button in (self.truba_button, self.about_button):
-            button.setFixedSize(124, CONTROL_HEIGHT)
+        for button in (self.truba_button, self.truba_job_monitor.button, self.about_button):
+            if button is not self.truba_job_monitor.button:
+                button.setFixedSize(124, CONTROL_HEIGHT)
             button.setAutoDefault(False)
             button.setDefault(False)
             workspace_buttons.addWidget(button)
@@ -1637,7 +1640,9 @@ class RustMechDialog(QDialog):
                 detail = 'runtime unavailable · see runtime details'
             text = f'TRUBA · RUNNING · {detail}'
         elif controller.requested:
-            state, text = 'pending', f"TRUBA · {session.get('state', 'checking runtime')}"
+            detail = session.get('state') if controller.session_watch else None
+            state, text = 'pending', 'TRUBA · ' + (detail or (
+                'direct submission' if self.truba_dialog.connected else 'connect to submit'))
         elif session.get('ready') and controller.session_watch:
             state, text = 'pending', 'Local mode · TRUBA resources reserved'
         else:
@@ -2559,12 +2564,13 @@ class RustMechDialog(QDialog):
         controller = getattr(self,"remote_controller",None)
         remote_error = None
         remote = controller is not None and controller.requested
+        direct = remote and not controller.ready and controller.auth() is not None
         if remote:
             from remote_operations import required_capability
             try:
                 capability = required_capability(dict(operation="mechanical", settings=dict(
                     solver_backend=settings.solver_backend, test_profile=settings.test_profile)))
-                controller.require(capability, settings)
+                controller.require_analysis(capability, settings)
             except (ValueError,RuntimeError) as error: errors.append(str(error))
             try: controller.require("mesh",settings)
             except (ValueError,RuntimeError) as error: remote_error = str(error)
@@ -2575,7 +2581,10 @@ class RustMechDialog(QDialog):
         self.structure_apply_button.setEnabled(self.geometry_apply_button.isEnabled())
         self.mesh_apply_button.setEnabled(not validate_geometry(settings))
         if remote_error:
-            for button in (self.geometry_apply_button,self.structure_apply_button,self.mesh_apply_button): button.setEnabled(False)
+            self.mesh_apply_button.setEnabled(False)
+            if not direct:
+                self.geometry_apply_button.setEnabled(False)
+                self.structure_apply_button.setEnabled(False)
         current = (
             self.preview
             and self.preview.key == preview_key(self.collect())
@@ -2592,7 +2601,7 @@ class RustMechDialog(QDialog):
             self.fft_distribution.setEnabled(os.name == 'nt' and not remote_fft)
             if remote_fft:
                 try:
-                    controller.require("damask")
+                    controller.require_analysis("damask")
                 except (ValueError, RuntimeError) as error:
                     fft_errors.append(str(error))
             blockers = fft_errors
@@ -2680,6 +2689,9 @@ class RustMechDialog(QDialog):
         if controller is not None and controller.requested:
             try: controller.require("mesh",settings if self._mesh_requested else None)
             except (RuntimeError,ValueError) as error:
+                if not self._mesh_requested and controller.auth() is not None:
+                    self.refresh_validity()
+                    return
                 self.status.setText(str(error))
                 if not self.apply_button.isEnabled():
                     self._set_analysis_blocker(str(error))
@@ -3290,13 +3302,14 @@ class RustMechDialog(QDialog):
         try:
             if self.remote_controller.requested:
                 from truba_remote import run_remote_mechanics
-                context,auth = self.remote_controller.require(settings.solver_backend,settings)
+                context,auth = self.remote_controller.require_analysis(settings.solver_backend,settings)
                 preview = self.preview
                 source = ""
                 if preview is not None and preview.mesh is not None and preview.key == preview_key(settings):
                     source = getattr(preview, "remote_source", "")
                 self.analysis_job = AnalysisProcess(run_remote_mechanics,settings,context,source,remote_auth=auth)
                 self.truba_dialog.job_list.submitting = True
+                self.truba_job_monitor.start_submission()
             else:
                 self.analysis_job = AnalysisProcess(run_single_analysis, settings, self.preview.mesh)
         except Exception as exc:
@@ -3319,10 +3332,11 @@ class RustMechDialog(QDialog):
         try:
             if remote:
                 from truba_remote import submit_remote_analysis
-                context, auth = self.remote_controller.require("damask")
+                context, auth = self.remote_controller.require_analysis("damask")
                 request = dict(operation="fft_solve", settings=asdict(settings), grid=grid, void_ratio=void_ratio)
                 self.analysis_job = AnalysisProcess(submit_remote_analysis, request, context, remote_auth=auth)
                 self.truba_dialog.job_list.submitting = True
+                self.truba_job_monitor.start_submission()
             else:
                 self.analysis_job = DamaskAnalysisProcess(settings, grid, void_ratio, distribution)
         except (OSError, ValueError, RuntimeError) as exc:
@@ -3466,6 +3480,8 @@ class RustMechDialog(QDialog):
         try:
             folder = job.result()
         except Exception as exc:
+            if getattr(job, "background_submission", False) is True:
+                self.truba_job_monitor.submission_failed(exc)
             self.status.setText(f"Analysis failed: {exc}")
             self._update_status_visuals("error", "● FAILED", False)
         else:
@@ -3641,6 +3657,7 @@ class RustMechDialog(QDialog):
         if self.esen_workspace is not None:
             self.esen_workspace.dispose()
         self.truba_dialog.shutdown()
+        self.truba_job_monitor.close()
         self.debounce.stop()
         self.poll.stop()
         self.mesh_cancelled.set()

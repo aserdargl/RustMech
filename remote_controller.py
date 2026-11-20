@@ -642,7 +642,7 @@ class RemoteController(QObject):
             if self.session_watch and self.session and self.session.get('ready'):
                 self.refresh(False, automatic=True)
             else:
-                self.status.setText("Allocate resources once, or refresh a saved session. All computations use that session.")
+                self.status.setText("Connect to submit analyses directly to Slurm. A resource session is optional for interactive solves.")
         else: self.status.setText("Local mode. Remote jobs already submitted can be retrieved using their records.")
 
     def disconnect(self):
@@ -775,6 +775,31 @@ class RemoteController(QObject):
     def require(self,capability,settings=None, *, allow_handover=False):
         return self._require(capability, settings, allow_handover=allow_handover)
 
+    def require_analysis(self, capability, settings=None):
+        """Use the verified workflow when available, or submit to Slurm directly."""
+        if self.ready:
+            return self.require(capability, settings)
+        if self.closing:
+            raise RuntimeError("RustMech is closing.")
+        if not self.requested:
+            raise ValueError("TRUBA computation mode is not enabled.")
+        auth = self.auth()
+        if auth is None:
+            raise RuntimeError("Connect to TRUBA to submit the analysis.")
+        context = self.context(use_session=False)
+        cores = settings.cores if capability == "kratos" and settings is not None else context.cores
+        if context.gpus:
+            raise ValueError("TRUBA analyses require a CPU queue.")
+        if context.partition == "auto":
+            context = automatic_context(context, self.queue_catalog, min_cpus=cores)
+        elif cores > context.cores:
+            raise ValueError("Solver CPU count exceeds the TRUBA request. Increase remote CPU cores or reduce solver cores.")
+        candidates(context.partition, context.cores, context.memory_mb, context.walltime, self.queue_catalog)
+        if capability == "kratos" and settings is not None:
+            self._validate_kratos_request(settings, context)
+        study_name = self.window.truba_dialog.active_jobs.study_name.text().strip()
+        return replace(context, study_name=study_name), auth
+
     def require_convergence(self, settings, *, max_jobs):
         """Validate the resource request for an independent Slurm submission."""
         if self.closing:
@@ -841,12 +866,17 @@ class RemoteController(QObject):
     def solver_enabled(self,identifier):
         return self.ready and bool(self.capabilities.get(identifier))
 
+    def analysis_solver_enabled(self, identifier):
+        if self.ready:
+            return self.solver_enabled(identifier)
+        return identifier in ("kratos", "damask", "flow", "thermal") and self.auth() is not None
+
     def convergence_solver_enabled(self, identifier):
         return identifier == "kratos" and (not self.ready or self.solver_enabled(identifier))
 
     def apply_solver_combo(self,combo, *, allow_direct_convergence=False):
         from solver_api import get_solver_capabilities,SOLVER_REGISTRY
-        remote_enabled = self.convergence_solver_enabled if allow_direct_convergence else self.solver_enabled
+        remote_enabled = self.convergence_solver_enabled if allow_direct_convergence else self.analysis_solver_enabled
         for i in range(combo.count()):
             identifier = combo.itemData(i)
             capabilities = get_solver_capabilities(identifier) if identifier in SOLVER_REGISTRY else None

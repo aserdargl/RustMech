@@ -327,11 +327,13 @@ class FlowWorkspace(QWidget):
             self._remote_job = bool(controller is not None and controller.requested)
             if self._remote_job:
                 from truba_remote import run_remote_operation
-                context,auth = controller.require("flow" if solve else "mesh")
+                context,auth = controller.require_analysis("flow") if solve else controller.require("mesh")
                 request = dict(operation="flow_solve" if solve else "flow_export",settings=asdict(specimen),flow=asdict(flow))
                 if inspection:
                     request["inspection"] = True
                 self.job = AnalysisProcess(run_remote_operation,request,context,remote_auth=auth)
+                if solve:
+                    controller.window.truba_job_monitor.start_submission()
             else:
                 target = export_geometry_inspection if inspection else execute_flow_case if solve else export_flow_case
                 self.job = AnalysisProcess(target,specimen,flow,str(directory))
@@ -361,9 +363,12 @@ class FlowWorkspace(QWidget):
         remote = bool(controller is not None and controller.requested)
         self.inspect_button.setEnabled(not remote or (controller.ready and controller.capabilities.get("mesh",False)))
         for index,capability in ((0,"mesh"),(1,"thermal" if hasattr(self,"thermal_controls") else "flow")):
-            available = not remote or (controller.ready and controller.capabilities.get(capability,False))
+            available = not remote or (controller.analysis_solver_enabled(capability) if index
+                                       else controller.solver_enabled(capability))
             self.buttons[index].setEnabled(available)
-            self.buttons[index].setToolTip("" if available else "TRUBA runtime/solver is not verified as available. Check capabilities in the TRUBA panel; local fallback is disabled.")
+            self.buttons[index].setToolTip("" if available else
+                "Connect to TRUBA and check solver availability." if index else
+                "A ready TRUBA resource session is required for this mesh operation.")
         self.distribution.setEnabled(not remote)
         self.bashrc.setEnabled(not remote)
 
@@ -392,6 +397,8 @@ class FlowWorkspace(QWidget):
             if getattr(self,"_remote_job",False): self.case_directory = Path(result)
             self.load_directory(self.case_directory)
         except Exception as error:
+            if self._remote_job and self.solving:
+                self.remote_controller.window.truba_job_monitor.submission_failed(error)
             self.status.setText("Flow operation failed. "+str(error)[-1800:])
 
     def cancel(self):

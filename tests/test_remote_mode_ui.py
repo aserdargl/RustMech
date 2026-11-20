@@ -82,6 +82,95 @@ class RemoteModeUiTests(unittest.TestCase):
         QTest.keyClick(field,Qt.Key.Key_Return)
         self.assertFalse(self.controller.requested)
 
+    def test_connected_analysis_can_submit_without_allocating(self):
+        from truba_jobs import RemoteAuth
+
+        window = self.window
+        auth = RemoteAuth("tester", "password")
+        with patch.object(window.truba_dialog, "analysis_auth", return_value=auth), \
+                patch.object(self.controller.session_executor, "submit") as allocate, \
+                patch("nonlinear_compression.save_settings"), \
+                patch("nonlinear_compression.AnalysisProcess") as start:
+            self.controller.toggle.setChecked(True)
+            self.assertIsNone(self.controller.session)
+            self.assertTrue(window.apply_button.isEnabled(), window.status.text())
+            start.return_value.remote_status.return_value = None
+            start.return_value.progress_status.return_value = None
+            try:
+                window.apply()
+                self.assertIs(start.call_args.args[0], run_remote_mechanics)
+                self.assertEqual(start.call_args.args[2].session_id, "")
+                self.assertIs(start.call_args.kwargs["remote_auth"], auth)
+                self.assertTrue(window.truba_job_monitor.isVisible())
+                self.assertFalse(window.truba_job_monitor.isModal())
+                allocate.assert_not_called()
+            finally:
+                window.analysis_poll.stop()
+                window.analysis_job = None
+
+    def test_connected_cfd_and_cht_submit_without_allocating(self):
+        from truba_jobs import RemoteAuth
+
+        window = self.window
+        with patch.object(window.truba_dialog, "analysis_auth", return_value=RemoteAuth("tester", "password")):
+            self.controller.toggle.setChecked(True)
+            for workspace, module, operation in (
+                (window.flow_workspace, "flow_workspace", "flow_solve"),
+                (window.thermal_workspace, "thermal_workspace", "thermal_solve"),
+            ):
+                with self.subTest(operation=operation), patch(module + ".AnalysisProcess") as start:
+                    self.assertTrue(workspace.buttons[1].isEnabled())
+                    workspace.run()
+                    self.assertIs(start.call_args.args[0], run_remote_operation)
+                    self.assertEqual(start.call_args.args[1]["operation"], operation)
+                    self.assertEqual(start.call_args.args[2].session_id, "")
+                    self.assertTrue(window.truba_job_monitor.isVisible())
+                    workspace.cancel()
+                    window.truba_job_monitor.close()
+
+    def test_job_monitor_reopens_and_updates_from_saved_slurm_states(self):
+        from truba_job_list import TrubaJobMonitor
+        from truba_jobs import HOST, write_record
+
+        window = self.window
+        monitor = window.truba_job_monitor
+        self.assertEqual(monitor.button.property("jobState"), "idle")
+        monitor.button.click()
+        monitor.setGeometry(70, 80, 640, 310)
+        normal = monitor.geometry()
+        monitor.close()
+        self.assertFalse(monitor.isVisible())
+
+        path = window.truba_dialog.state_dir / "jobs" / "test.json"
+        record = dict(host=HOST, operation="mechanical", request_id="a" * 32, job_id="123",
+                      geometry_name="Gyroid", background=True)
+        for saved, expected in (("PENDING|Priority", "pending"), ("RUNNING|None", "running"),
+                                ("OUT_OF_MEMORY|0:125", "error"), ("downloaded", "idle")):
+            write_record(path, dict(record, state=saved))
+            window.truba_dialog.job_list.refresh()
+            self.assertEqual(monitor.button.property("jobState"), expected)
+            self.assertFalse(monitor.isVisible())
+
+        monitor.button.click()
+        self.assertTrue(monitor.isVisible())
+        self.assertEqual(monitor.table.item(0, 0).text(), "RM-AAAAAAAAAAAA")
+        self.assertEqual(monitor.table.item(0, 1).text(), "123")
+        self.assertEqual(monitor.table.item(0, 3).text(), "downloaded")
+        monitor.close()
+        reopened = TrubaJobMonitor(window, window.truba_dialog.job_list)
+        reopened.open_window()
+        self.assertEqual(reopened.geometry(), normal)
+        reopened.showMaximized()
+        self.app.processEvents()
+        reopened.close()
+        restored = TrubaJobMonitor(window, window.truba_dialog.job_list)
+        restored.open_window()
+        self.assertTrue(restored.isMaximized())
+        restored.showNormal()
+        self.app.processEvents()
+        self.assertEqual(restored.geometry(), normal)
+        restored.close()
+
     def test_main_execution_target_stays_in_sync_across_workspaces(self):
         window = self.window
         target = window.execution_target

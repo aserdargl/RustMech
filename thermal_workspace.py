@@ -231,9 +231,11 @@ class ThermalWorkspace(FlowWorkspace):
             self._remote_job = bool(controller is not None and controller.requested)
             if self._remote_job:
                 from truba_remote import run_remote_operation
-                context,auth = controller.require("thermal" if solve else "mesh")
+                context,auth = controller.require_analysis("thermal") if solve else controller.require("mesh")
                 request = dict(operation="thermal_solve" if solve else "thermal_export",settings=asdict(specimen),flow=asdict(flow),thermal=asdict(thermal))
                 self.job = AnalysisProcess(run_remote_operation,request,context,remote_auth=auth)
+                if solve:
+                    controller.window.truba_job_monitor.start_submission()
             else:
                 self.job = AnalysisProcess(execute_thermal_case if solve else export_thermal_case,specimen,flow,thermal,str(directory))
         except Exception as error:
