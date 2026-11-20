@@ -1148,6 +1148,56 @@ class RemoteModeUiTests(unittest.TestCase):
         study.force_stop()
         dialog.reject()
 
+    def test_convergence_can_add_and_submit_new_scripts_during_a_run(self):
+        from convergence_execution import Level
+
+        self.window.open_mesh_convergence()
+        dialog = self.window._mesh_convergence_dialog
+        study = dialog.study
+        study.start_size.setValue(.2)
+        study.run_on_truba.click()
+        study.script_queue.setCurrentIndex(study.script_queue.findData("hamsi"))
+        study.script_ram.setValue(120)
+        jobs = [MagicMock() for _ in range(3)]
+        for job in jobs:
+            job.done.return_value = False
+            job.remote_status.return_value = {}
+        with patch("mesh_convergence.AnalysisProcess", side_effect=jobs) as submit:
+            study.script_add.click()
+            study.run_button.click()
+            submit.assert_called_once()
+            study_id = submit.call_args.kwargs["remote_options"]["study"]["id"]
+            self.assertEqual(study.script_preview.rowCount(), 0)
+            self.assertTrue(study.script_add.isEnabled())
+            self.assertFalse(study.run_button.isEnabled())
+
+            study.script_add.click()
+            self.assertEqual(study.script_preview.rowCount(), 1)
+            self.assertTrue(study.run_button.isEnabled())
+            submit.assert_called_once()
+            jobs[0].done.return_value = True
+            jobs[0].result.return_value = Level(
+                study.rows[0].settings, elements=100, metrics=[100] * 3, status="completed")
+            study._poll()
+            self.assertTrue(study.awaiting_script_run)
+            self.assertEqual(study.rows[0].status, "completed")
+            self.assertEqual(study.script_preview.rowCount(), 1)
+
+            study.run_button.click()
+            self.assertEqual(submit.call_count, 2)
+            self.assertFalse(study.awaiting_script_run)
+            self.assertAlmostEqual(study.rows[1].settings.mesh_resolution, .2 / 1.3)
+            self.assertEqual(submit.call_args.kwargs["remote_options"]["study"]["id"], study_id)
+            study.script_add.click()
+            self.assertEqual(submit.call_count, 2)
+            study.run_button.click()
+            self.assertEqual(submit.call_count, 3)
+            self.assertEqual(tuple(study.remote_jobs.values()), (jobs[1], jobs[2]))
+            self.assertAlmostEqual(study.rows[2].settings.mesh_resolution, .2 / 1.3**2)
+            self.assertEqual(study.rows[0].status, "completed")
+        study.force_stop()
+        dialog.reject()
+
     def test_convergence_and_doe_do_not_call_local_mesh_generator(self):
         from mesh_convergence import MeshConvergenceDialog
         local=MagicMock()

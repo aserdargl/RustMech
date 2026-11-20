@@ -206,6 +206,7 @@ class MeshConvergenceWidget(QWidget):
         self.planned_scripts = {}
         self.next_script_number = 1
         self.explicit_script_run = False
+        self.awaiting_script_run = False
         self.rows = []
         self.time_units = {1: "s", 2: "s"}
         self.recommended = None
@@ -614,8 +615,17 @@ class MeshConvergenceWidget(QWidget):
         number = self.script_choice.currentData()
         previous, existing = self.planned_scripts.get(number, (None, []))
         try:
+            active = bool(self.remote_jobs) or self.awaiting_script_run
             used = [size for _, sizes in self.planned_scripts.values() for size in sizes]
-            available = [size for size in self._available_planned_sizes()
+            if active:
+                used.extend(row.settings.mesh_resolution for row in self.rows)
+            if active and self.automatic.isChecked():
+                finest = min(row.settings.mesh_resolution for row in self.rows)
+                sizes = [size for offset in range(1, self.max_levels.value())
+                         if (size := finest / self.factor.value() ** offset) >= self.minimum.value()]
+            else:
+                sizes = self._available_planned_sizes()
+            available = [size for size in sizes
                          if not any(math.isclose(size, value) for value in used)]
             count = self.script_count.value()
             if count > len(available) or len(used) + count > self.max_levels.value():
@@ -635,6 +645,8 @@ class MeshConvergenceWidget(QWidget):
             self.script_choice.addItem(f"Script {number}", number)
         self.planned_scripts[number] = context, sizes
         self._render_script_preview()
+        self._refresh_script_controls()
+        self._refresh_append_button()
         self._set_status("Slurm plan ready")
 
     def _render_script_preview(self):
@@ -684,6 +696,10 @@ class MeshConvergenceWidget(QWidget):
         self._render_script_preview()
         self.script_preview.clearSelection()
         self._sync_script_delete()
+        if self.awaiting_script_run and not self.planned_scripts:
+            self._complete_remote_batch()
+        self._refresh_script_controls()
+        self._refresh_append_button()
 
     def _results_context_menu(self, position):
         column = self.results.columnAt(position.x())
@@ -769,7 +785,7 @@ class MeshConvergenceWidget(QWidget):
         self.single_truba_mesh.setVisible(self.run_on_truba.isChecked())
         remote = self.run_on_truba.isChecked()
         self.truba_resource_info.setVisible(remote)
-        self.script_plan_toolbar.setEnabled(remote and self.future is None and not self.saved_jobs)
+        self._refresh_script_controls()
         if remote or not self.script_queue.count():
             self._refresh_script_queues()
         self.advanced.layout().setRowVisible(self.time_budget_field, not remote)
@@ -895,6 +911,9 @@ class MeshConvergenceWidget(QWidget):
         return level
 
     def start(self):
+        if self.remote_jobs or self.awaiting_script_run:
+            self._start_additional_scripts()
+            return
         if self.future is not None or self.saved_jobs:
             return
         previous_base = self.remote_study_base
@@ -914,16 +933,7 @@ class MeshConvergenceWidget(QWidget):
                 raise ValueError("Select at least one response metric in Advanced.")
             self.manual_pending = []
             if explicit:
-                all_sizes = [size for _, sizes in self.planned_scripts.values() for size in sizes]
-                if len(all_sizes) > self.max_levels.value() or min(all_sizes) < self.minimum.value():
-                    raise ValueError("The preview exceeds the current study limits.")
-                for number, (context, sizes) in self.planned_scripts.items():
-                    settings = [self.level_settings(size) for size in sizes]
-                    verified = self.remote_controller.plan_convergence_script(
-                        settings[0], context.partition, len(settings), context.memory_mb, context.walltime)
-                    if (verified.cores, verified.memory_mb) != (context.cores, context.memory_mb):
-                        raise ValueError("The queue limits changed. Review and add the script again.")
-                    submissions.append(([(level, f"Script {number}") for level in settings], verified))
+                submissions = self._planned_submissions()
                 first = max((plan[0][0] for plan, _ in submissions), key=lambda level: level.mesh_resolution)
             elif self.automatic.isChecked() or self.single_remote_run:
                 first = self.level_settings(self.start_size.value())
@@ -958,9 +968,7 @@ class MeshConvergenceWidget(QWidget):
         self.started = monotonic()
         self._set_running(True)
         if explicit:
-            auth = self.remote_controller.auth()
-            for plan, context in submissions:
-                self._submit_remote_levels(plan, context, auth, exact_group=True)
+            self._submit_planned_scripts(submissions, self.remote_controller.auth())
             if self.future is None:
                 self.remote_outcomes.clear()
                 self._finish(self.rows[-1].status)
@@ -969,10 +977,70 @@ class MeshConvergenceWidget(QWidget):
         if self.future is not None:
             self.timer.start()
 
+    def _planned_submissions(self, *, appending=False):
+        sizes = [size for _, group in self.planned_scripts.values() for size in group]
+        attempted = [row.settings.mesh_resolution for row in self.rows] if appending else []
+        if len(sizes) + len(attempted) > self.max_levels.value() or min(sizes) < self.minimum.value():
+            raise ValueError("The preview exceeds the current study limits.")
+        if any(math.isclose(size, previous) for size in sizes for previous in attempted):
+            raise ValueError("The preview contains a mesh already submitted in this study.")
+        submissions = []
+        for number, (context, group) in self.planned_scripts.items():
+            settings = [self.level_settings(size) for size in group]
+            verified = self.remote_controller.plan_convergence_script(
+                settings[0], context.partition, len(settings), context.memory_mb, context.walltime)
+            if (verified.cores, verified.memory_mb) != (context.cores, context.memory_mb):
+                raise ValueError("The queue limits changed. Review and add the script again.")
+            submissions.append(([(level, f"Script {number}") for level in settings], verified))
+        return submissions
+
+    def _start_additional_scripts(self):
+        if not self.planned_scripts or not self.script_plan_toolbar.isEnabled():
+            return
+        try:
+            auth = self.remote_controller.auth()
+            self._prepare_saved_study_append(auth)
+            submissions = self._planned_submissions(appending=True)
+        except (ValueError, RuntimeError, OSError, KeyError) as error:
+            self._set_status(f"Unable to add Slurm script: {error}")
+            return
+        if self.single_remote_run:
+            self.single_remote_run = False
+            self.explicit_script_run = True
+            self.study_plan.update(single=False, explicit_scripts=True)
+        self.history_only = False
+        self.awaiting_script_run = False
+        self._submit_planned_scripts(submissions, auth)
+        if self.future is None:
+            self._complete_remote_batch()
+        else:
+            self.timer.start()
+
+    def _submit_planned_scripts(self, submissions, auth):
+        sizes = [level.mesh_resolution for plan, _ in submissions for level, _ in plan]
+        self.manual_pending = [level for level in self.manual_pending
+                               if not any(math.isclose(level.mesh_resolution, size) for size in sizes)]
+        self.planned_scripts.clear()
+        while self.script_choice.count() > 1:
+            self.script_choice.removeItem(1)
+        self._render_script_preview()
+        self._sync_script_delete()
+        for plan, context in submissions:
+            self._submit_remote_levels(plan, context, auth, exact_group=True)
+
+    def _refresh_script_controls(self):
+        active = bool(self.remote_jobs) or self.awaiting_script_run
+        editable = (self.run_on_truba.isChecked() and not self.saved_jobs
+                    and (self.future is None or active)
+                    and not (active and self.stop_requested.is_set()))
+        self.script_plan_toolbar.setEnabled(editable)
+        if active:
+            self.run_button.setEnabled(editable and bool(self.planned_scripts))
+
     def _set_running(self, running):
         for control in (self.mesh_settings, self.tolerance, self.advanced, self.solver_combo, self.run_on_truba):
             control.setEnabled(not running)
-        self.script_plan_toolbar.setEnabled(not running and self.run_on_truba.isChecked())
+        self._refresh_script_controls()
         if running:
             self.run_button.setEnabled(False)
         else:
@@ -1009,6 +1077,7 @@ class MeshConvergenceWidget(QWidget):
                                       (self.run_on_truba.isChecked() or bool(self.remote_records)))
         self.append_button.setEnabled(bool(self.remote_jobs or self.saved_jobs)
                                       and not self.explicit_script_run
+                                      and not self.planned_scripts
                                       and not self.stop_requested.is_set()
                                       and bool(self._next_append_sizes()))
 
@@ -1018,13 +1087,7 @@ class MeshConvergenceWidget(QWidget):
         sizes = self._next_append_sizes()
         manual = not self.automatic.isChecked()
         try:
-            if self.saved_study_key and getattr(self.remote_controller.auth(), "username", None) != self.saved_study_key[0]:
-                raise ValueError("Connect to TRUBA with this study's account to add mesh levels.")
-            if self.saved_geometry_source is not None:
-                geometry = self.saved_geometry_source.saved_geometry()
-                self.remote_study_base = replace(self.remote_study_base, imported_geometry_path=str(geometry))
-                self.manual_pending = [self._study_level(level.mesh_resolution) for level in self.manual_pending]
-                self.saved_geometry_source = None
+            self._prepare_saved_study_append(self.remote_controller.auth())
             plan = [(self.level_settings(size), "Manual" if manual else "Refinement") for size in sizes]
             if not self.remote_controller.requested:
                 self.remote_controller.toggle.setChecked(True)
@@ -1040,6 +1103,15 @@ class MeshConvergenceWidget(QWidget):
         self._submit_remote_levels(plan, context, auth)
         if self.future is not None:
             self.timer.start()
+
+    def _prepare_saved_study_append(self, auth):
+        if self.saved_study_key and getattr(auth, "username", None) != self.saved_study_key[0]:
+            raise ValueError("Connect to TRUBA with this study's account to add mesh levels.")
+        if self.saved_geometry_source is not None:
+            geometry = self.saved_geometry_source.saved_geometry()
+            self.remote_study_base = replace(self.remote_study_base, imported_geometry_path=str(geometry))
+            self.manual_pending = [self._study_level(level.mesh_resolution) for level in self.manual_pending]
+            self.saved_geometry_source = None
 
     def _refresh_saved_studies(self):
         if self.remote_controller is None:
@@ -1281,6 +1353,7 @@ class MeshConvergenceWidget(QWidget):
                     self.remote_outcomes[index] = False
                     self._render(index)
         self.future = next(iter(self.remote_jobs.values()), None)
+        self._refresh_script_controls()
         self._refresh_append_button()
         if self.future is None and not exact_group:
             self.remote_outcomes.clear()
@@ -1312,6 +1385,10 @@ class MeshConvergenceWidget(QWidget):
 
     def request_stop(self):
         self.stop_requested.set()
+        if self.awaiting_script_run:
+            self._complete_remote_batch()
+            return
+        self._refresh_script_controls()
         self._refresh_append_button()
         self._set_status("Stopping after the current stage…")
 
@@ -1323,8 +1400,11 @@ class MeshConvergenceWidget(QWidget):
 
     def force_stop(self):
         if self.future is None:
+            if self.awaiting_script_run:
+                self.request_stop()
             return
         self.stop_requested.set()
+        self._refresh_script_controls()
         if self.remote_jobs:
             errors = []
             for group, job in list(self.remote_jobs.items()):
@@ -1495,11 +1575,25 @@ class MeshConvergenceWidget(QWidget):
             return
         if self.saved_jobs:
             self.timer.stop()
+            self._refresh_script_controls()
             self._refresh_append_button()
             return
+        if self.planned_scripts and not self.stop_requested.is_set():
+            self.awaiting_script_run = True
+            self.timer.stop()
+            self._refresh_differences()
+            self._refresh_script_controls()
+            self._set_status("Slurm plan ready")
+            return
+        self._complete_remote_batch()
+
+    def _complete_remote_batch(self):
+        self.awaiting_script_run = False
         outcomes = sorted(self.remote_outcomes.items())
         self.remote_outcomes.clear()
         self._after_levels(outcomes)
+        if self.future is not None and not self.timer.isActive():
+            self.timer.start()
 
     def _update_remote_records(self, group, snapshot):
         changed = []
@@ -1640,6 +1734,7 @@ class MeshConvergenceWidget(QWidget):
 
     def _finish(self, message):
         self.timer.stop()
+        self.awaiting_script_run = False
         self._set_running(False)
         if self.study_plan:
             self._refresh_saved_studies()
