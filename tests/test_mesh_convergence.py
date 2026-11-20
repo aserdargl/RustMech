@@ -800,7 +800,10 @@ class LiveConvergenceTests(unittest.TestCase):
             self.assertIs(control.parentWidget(), widget.toolbar)
         self.assertIs(widget.tolerance.parentWidget().parentWidget(), widget.toolbar)
         layout = widget.layout()
-        self.assertIs(layout.itemAt(layout.count() - 1).widget(), widget.mesh_settings)
+        self.assertIs(layout.itemAt(layout.count() - 1).widget(), widget.footer_scroll)
+        footer = widget.footer_scroll.widget().layout()
+        self.assertIs(footer.itemAt(0).widget(), widget.mesh_settings)
+        self.assertIs(footer.itemAt(1).widget(), widget.operation_progress)
         fields = widget.mesh_settings.layout()
         for index, (text, control) in enumerate((
                 ("Element", widget.mesh_type_combo), ("Mesh Size", widget.start_size),
@@ -811,8 +814,17 @@ class LiveConvergenceTests(unittest.TestCase):
             self.assertTrue(control.isVisible())
         self.assertEqual(fields.itemAt(0).widget().x(), fields.contentsMargins().left())
         self.assertEqual(widget.mesh_settings.width(), widget.mesh_settings.sizeHint().width())
-        self.assertEqual(widget.mesh_settings.y() - widget.results_panel.geometry().bottom() - 1,
+        self.assertEqual(widget.footer_scroll.y() - widget.results_panel.geometry().bottom() - 1,
                          layout.spacing())
+        idle_height = footer.geometry().height()
+        progress = widget.operation_progress
+        with progress.step("Running"):
+            self.assertTrue(progress.isVisible())
+            self.assertEqual(footer.geometry().height(), idle_height)
+            self.assertEqual(progress.y(), widget.mesh_settings.y())
+            self.assertGreater(progress.x(), widget.mesh_settings.geometry().right())
+            self.assertLess(progress.label.geometry().right(), progress.bar.x())
+            self.assertEqual(progress.geometry().right(), widget.width() - 1)
         buttons = (widget.export_button, widget.apply_button, widget.stop_button,
                    widget.force_stop_button, widget.run_button)
         self.assertEqual(len({(button.width(), button.height()) for button in buttons}), 1)
@@ -856,6 +868,11 @@ class LiveConvergenceTests(unittest.TestCase):
         self.app.processEvents()
         self.assertEqual(widget.width(), 650)
         self.assertGreater(widget.toolbar_scroll.horizontalScrollBar().maximum(), 0)
+        with widget.operation_progress.step("Starting mesh"):
+            self.assertEqual(widget.width(), 650)
+            footer = widget.footer_scroll
+            self.assertGreater(footer.horizontalScrollBar().maximum(), 0)
+            self.assertGreaterEqual(footer.viewport().height(), widget.operation_progress.height())
         widget.resize(widget.toolbar.minimumSizeHint().width() + 50, 350)
         self.app.processEvents()
         self.assertEqual(widget.toolbar_scroll.horizontalScrollBar().maximum(), 0)

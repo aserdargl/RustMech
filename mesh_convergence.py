@@ -120,9 +120,13 @@ class ConvergenceToolbarScroll(QScrollArea):
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.setWidget(toolbar)
         self.setFixedHeight(toolbar.sizeHint().height())
+        self.horizontalScrollBar().rangeChanged.connect(self._sync_height)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
+        self._sync_height()
+
+    def _sync_height(self):
         height = self.widget().sizeHint().height()
         if self.width() < self.widget().minimumSizeHint().width():
             height += self.horizontalScrollBar().sizeHint().height()
@@ -363,15 +367,6 @@ class MeshConvergenceWidget(QWidget):
         results_layout.addWidget(results_header)
         results_layout.addWidget(self.results, 1)
         layout.addWidget(self.results_panel, 1)
-        from operation_progress import OperationProgress
-        self.operation_progress = OperationProgress(self, provider=lambda: (
-            self.future is not None,
-            (self.status.text() + " · " + self.rows[-1].status) if self.rows else self.status.text(),
-        ))
-        progress_policy = self.operation_progress.sizePolicy()
-        progress_policy.setRetainSizeWhenHidden(False)
-        self.operation_progress.setSizePolicy(progress_policy)
-        layout.addWidget(self.operation_progress)
 
         self.mesh_settings = QWidget()
         mesh_fields = QHBoxLayout(self.mesh_settings)
@@ -405,7 +400,6 @@ class MeshConvergenceWidget(QWidget):
         mesh_fields.addWidget(self.mesh_precision)
         self.truba_resource_info = QLabel("Automatic CPU and RAM sharing")
         self.truba_resource_info.setObjectName("mutedHintLabel")
-        self.truba_resource_info.setWordWrap(True)
         self.truba_resource_info.setToolTip(
             "Two levels share one Slurm allocation when each can use at least 16 CPUs. "
             "A single level uses the full allocation.")
@@ -415,7 +409,26 @@ class MeshConvergenceWidget(QWidget):
         self.truba_wall_minutes.valueChanged.connect(lambda value: remote_preferences.setValue(walltime_key, value))
         mesh_fields.addWidget(self.truba_resource_info)
         self.truba_resource_info.hide()
-        layout.addWidget(self.mesh_settings, alignment=Qt.AlignmentFlag.AlignLeft)
+        from operation_progress import OperationProgress
+        self.operation_progress = OperationProgress(self, provider=lambda: (
+            self.future is not None,
+            (self.status.text() + " · " + self.rows[-1].status) if self.rows else self.status.text(),
+        ), bar_at_end=True)
+        self.operation_progress.layout().setContentsMargins(4, 0, 4, 0)
+        self.operation_progress.setFixedHeight(CONTROL_HEIGHT)
+        self.operation_progress.label.setMinimumWidth(110)
+        progress_policy = self.operation_progress.sizePolicy()
+        progress_policy.setRetainSizeWhenHidden(False)
+        self.operation_progress.setSizePolicy(progress_policy)
+
+        footer_widget = QWidget()
+        footer = QHBoxLayout(footer_widget)
+        footer.setContentsMargins(0, 0, 0, 0)
+        footer.setSpacing(layout.spacing())
+        footer.addWidget(self.mesh_settings, alignment=Qt.AlignmentFlag.AlignLeft)
+        footer.addWidget(self.operation_progress, 1)
+        self.footer_scroll = ConvergenceToolbarScroll(footer_widget)
+        layout.addWidget(self.footer_scroll)
 
         self.solver_combo.currentIndexChanged.connect(self._solver_changed)
         self.mesh_type_combo.currentIndexChanged.connect(self._mesh_type_changed)
