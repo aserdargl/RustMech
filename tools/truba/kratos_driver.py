@@ -141,6 +141,12 @@ class CompressionAnalysis(StructuralMechanicsAnalysis):
         else:
             part.Nodes[self.payload["pilot_node"]].SetSolutionStepValue(SMA.POINT_LOAD_Z, self.load_sign*self.settings["applied_force"] * factor)
 
+    def _InitializeInternals(self):
+        if self.contact_problem:
+            # The native contact strategy calls these processes at each split time.
+            self._GetSolver().AddProcessesList(self._GetListOfProcesses())
+        super()._InitializeInternals()
+
     def ModifyBeforeSolutionLoop(self):
         part=self.model['Structure']
         if self.settings['self_contact_mode']!='disabled':
@@ -183,19 +189,29 @@ class CompressionAnalysis(StructuralMechanicsAnalysis):
 
     def RunSolutionLoop(self):
         # Do not let AnalysisStage silently finalize a nonconverged load step.
+        solver = self._GetSolver()
+        part = self.model['Structure']
+        target_time = self.time
         while self.time < self.end_time - 1e-12:
-            solver = self._GetSolver()
-            self.time = min(solver.AdvanceInTime(self.time), self.end_time)
+            previous_time = self.time
+            if previous_time >= target_time - 1e-12:
+                target_time = min(previous_time + solver.ComputeDeltaTime(), self.end_time)
+            # Clone the bounded target so Kratos and the load processes use the same time.
+            part.ProcessInfo[KM.STEP] += 1
+            part.CloneTimeStep(target_time)
+            self.time = target_time
             self.InitializeSolutionStep()
             if not self.SolveSolutionStep():
                 raise RuntimeError(f"Kratos did not converge at load factor {self.time:.9g}")
-            actual_time=float(self.model['Structure'].ProcessInfo[KM.TIME])
-            if abs(actual_time-self.time)>1e-8:
-                raise RuntimeError(f'Kratos stopped at load factor {actual_time:.9g}, requested {self.time:.9g}')
+            actual_time = float(part.ProcessInfo[KM.TIME])
+            if not previous_time < actual_time <= target_time + 1e-8:
+                raise RuntimeError(f'Kratos returned an invalid load factor {actual_time:.9g}, requested {target_time:.9g}')
+            # A split may converge below the target. Save the solved load and finish
+            # the remainder of that increment on the next pass.
+            self.time = actual_time
             contact_state=None
             contact_fields={}
             if self.settings['self_contact_mode']!='disabled':
-                part=self.model['Structure']
                 mapping=self.payload.get('self_contact_nodes',{})
                 nodes=self.contact_output_nodes
                 active=[node for node in nodes if node.Is(KM.ACTIVE)]
@@ -215,7 +231,6 @@ class CompressionAnalysis(StructuralMechanicsAnalysis):
                     contact_fields[key]=field
             self.FinalizeSolutionStep()
             self.extrapolate.ExecuteFinalizeSolutionStep()
-            part = self.model["Structure"]
             ids = np.asarray(self.payload["specimen_node_ids"],dtype=np.int64)
             displacement = np.array([list(part.Nodes[int(n)].GetSolutionStepValue(KM.DISPLACEMENT)) for n in ids])
             stress = np.array([list(part.Nodes[int(n)].GetValue(KM.CAUCHY_STRESS_VECTOR)) for n in ids])
@@ -225,7 +240,10 @@ class CompressionAnalysis(StructuralMechanicsAnalysis):
             vm = np.sqrt(np.maximum(0, .5*((xx-yy)**2+(yy-zz)**2+(zz-xx)**2)+3*(xy**2+yz**2+xz**2)))
             bottom,top = [sum(part.Nodes[n].GetSolutionStepValue(KM.REACTION_Z) for n in self.payload["plate_nodes"][side]) for side in ("BottomPlaten","TopPlaten")]
             if self.settings["loading_mode"] == "force":
-                top = self.load_sign*self.settings["applied_force"] * self.time
+                top = part.Nodes[self.payload['pilot_node']].GetSolutionStepValue(SMA.POINT_LOAD_Z)
+                expected_force = self.load_sign * self.settings['applied_force'] * self.time
+                if not np.isclose(top, expected_force, rtol=1e-6, atol=1e-9):
+                    raise RuntimeError('The requested pilot force was not reached in this substep.')
             uz = float(np.mean([part.Nodes[n].GetSolutionStepValue(KM.DISPLACEMENT_Z) for n in self.payload["plate_nodes"]["TopPlaten"]]))
             if self.settings['loading_mode']=='displacement' and not np.isclose(uz,self.load_sign*self.settings['compression']*self.time,rtol=1e-6,atol=1e-9):
                 raise RuntimeError('The requested platen displacement was not reached in this substep.')

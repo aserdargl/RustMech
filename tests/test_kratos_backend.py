@@ -9,8 +9,9 @@ from unittest.mock import patch
 
 import numpy as np
 from model import Settings
-from kratos_backend import KratosResults, KratosBackend
+from kratos_backend import KratosResults, KratosBackend, LocalKratosBackend
 from kratos_export import export_kratos, mesh_digest, specimen_surfaces
+from local_kratos import local_kratos_python
 from solver_api import KRATOS_CAPABILITIES, AnalysisRequest
 from tools.verify_kratos_pipeline import cube_mesh
 from truba_jobs import RemoteAuth, shell_job_settings, validated_remote_path, run_remote
@@ -48,6 +49,26 @@ class KratosIntegrityTests(unittest.TestCase):
         self.manifest['steps'][0]['time']=.5
         self.save()
         with self.assertRaisesRegex(ValueError,'final load'):KratosResults(self.root,self.mesh)
+
+    @unittest.skipUnless(local_kratos_python() is not None, "Local Kratos runtime is not installed")
+    def test_split_contact_steps_keep_the_prescribed_displacement(self):
+        settings = Settings(size=1, cell_size=1, mesh_resolution=.5, compression=.06,
+                            substeps=9, maximum_substeps=128, cores=1, solver_backend="kratos",
+                            material_model="linear_elastic", young_modulus=1000,
+                            self_contact_mode="disabled", bottom_platen_contact="frictionless",
+                            top_platen_contact="frictionless", kratos_contact_method="penalty",
+                            kratos_max_iterations=3)
+        execution = LocalKratosBackend().solve(AnalysisRequest(settings, self.mesh, self.root))
+        log = (self.root / "kratos.log").read_text(encoding="utf-8")
+        self.assertIn("SPLITTING TIME STEP", log)
+        self.assertFalse(execution.error, execution.error)
+        result = execution.results
+        self.assertTrue(result.manifest["complete"])
+        self.assertAlmostEqual(result.time_values[-1], 1.)
+        for target in np.linspace(0., 1., settings.substeps + 1)[1:]:
+            self.assertTrue(np.isclose(result.time_values, target, rtol=0, atol=1e-8).any())
+        for index, load in enumerate(result.time_values):
+            self.assertAlmostEqual(result.top_platen_displacement(index), -settings.compression * load)
 
     def test_rejects_path_escape_duplicate_ids_and_nan(self):
         self.manifest['steps'][0]['file']='../step_000001.npz'
