@@ -797,6 +797,7 @@ Enter your TRUBA username and password.|TRUBA kullanıcı adınızı ve parolan�
 Connected to TRUBA. Password could not be saved for this Windows user.|TRUBA bağlantısı kuruldu. Parola bu Windows kullanıcısı için kaydedilemedi.
 Saved credentials could not be removed.|Kayıtlı kimlik bilgileri silinemedi.
 Saved credentials cannot be read by this Windows user. Enter your credentials again.|Bu Windows kullanıcısı kayıtlı kimlik bilgilerini okuyamıyor. Bilgilerinizi yeniden girin.
+No saved TRUBA credentials. Open TRUBA to enter and remember your credentials.|Kayıtlı TRUBA kimlik bilgisi yok. Bilgilerinizi girip kaydetmek için TRUBA’yı açın.
 Saved credentials belong to this Windows account. Use separate Windows accounts on shared computers.|Kayıtlı kimlik bilgileri bu Windows hesabına aittir. Ortak bilgisayarlarda ayrı Windows hesapları kullanın.
 Verify TRUBA server identity|TRUBA sunucu kimliğini doğrulayın
 First connection to this server. Verify this fingerprint with TRUBA before accepting:|Bu sunucuya ilk bağlantı. Kabul etmeden önce parmak izini TRUBA ile doğrulayın:
@@ -993,6 +994,7 @@ Apply geometry settings and refresh the 3D preview.|Geometri ayarlarını uygula
 Apply the selected structure and geometry settings to the 3D preview.|Seçili yapı ve geometri ayarlarını 3B önizlemeye uygulayın.
 Save settings and start the selected solver.|Ayarları kaydedip seçili çözücüyü başlatın.
 Connect to TRUBA with your own username and password|Kendi kullanıcı adınız ve parolanızla TRUBA'ya bağlanın
+Connect to TRUBA with saved credentials|Kayıtlı bilgilerle TRUBA’ya bağlan
 Open Design of Experiments settings.|Deney tasarımı ayarlarını açın.
 Select settings method|Ayar yöntemini seçin
 Select workspace|Çalışma alanını seçin

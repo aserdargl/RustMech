@@ -98,6 +98,7 @@ class ConnectionWorker(QThread):
 
 class TrubaConnectionDialog(QDialog):
     connection_changed = Signal(bool)
+    connection_ui_changed = Signal()
     disconnect_requested = Signal()
 
     def analysis_auth(self):
@@ -224,14 +225,7 @@ class TrubaConnectionDialog(QDialog):
         self.resize(940, 590)
         self.connect_button.clicked.connect(self.start_connection)
         self.disconnect_button.clicked.connect(self.stop_connection)
-        try:
-            saved = self.credentials.load()
-            if saved:
-                self.username.setText(saved[0])
-                self.password.setText(saved[1])
-                self.remember.setChecked(True)
-        except (OSError, ValueError):
-            self.status.setText("Saved credentials cannot be read by this Windows user. Enter your credentials again.")
+        self._restore_saved_credentials()
         self._update_controls()
         self.language_manager.changed.connect(self._language_changed)
         from truba_job_list import TrubaJobList
@@ -343,6 +337,30 @@ class TrubaConnectionDialog(QDialog):
         self.show_password.setChecked(False)
         super().hideEvent(event)
 
+    def _restore_saved_credentials(self, *, required=False):
+        try:
+            saved = self.credentials.load()
+        except (OSError, ValueError):
+            self.status.setText("Saved credentials cannot be read by this Windows user. Enter your credentials again.")
+            return False
+        if not saved or not saved[0].strip() or not saved[1]:
+            if required:
+                self.status.setText("No saved TRUBA credentials. Open TRUBA to enter and remember your credentials.")
+            return False
+        self.username.setText(saved[0])
+        self.password.setText(saved[1])
+        self.remember.setChecked(True)
+        return True
+
+    def start_saved_connection(self):
+        if self.worker is not None or self.connected:
+            return False
+        if not self._restore_saved_credentials(required=True):
+            self.connection_ui_changed.emit()
+            return False
+        self.start_connection()
+        return True
+
     def start_connection(self):
         if self.worker is not None:
             return
@@ -407,6 +425,7 @@ class TrubaConnectionDialog(QDialog):
     def _show_failure_detail(self, message):
         if not self.stopping:
             self.status.setText(message)
+            self.connection_ui_changed.emit()
 
     def _set_connection_badge(self, text, state):
         self.connection_badge.setText(text)
@@ -424,6 +443,7 @@ class TrubaConnectionDialog(QDialog):
         self.disconnect_button.setEnabled(running and not self.stopping)
         for field in (self.username, self.password, self.remember):
             field.setEnabled(not running)
+        self.connection_ui_changed.emit()
 
     def stop_connection(self):
         if self.worker is not None:

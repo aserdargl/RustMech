@@ -50,6 +50,7 @@ from PySide6.QtWidgets import (
     QTabBar,
     QTabWidget,
     QToolButton,
+    QToolTip,
     QVBoxLayout,
     QWidget,
 )
@@ -378,14 +379,22 @@ class RustMechDialog(QDialog):
         self.truba_button.setToolTip("Connect to TRUBA with your own username and password")
         self.truba_button.clicked.connect(lambda: show_restored_window(self.truba_dialog))
         self.truba_dialog.connection_changed.connect(self._update_truba_button)
+        self.truba_quick_connect = QPushButton(self)
+        self.truba_quick_connect.setFixedSize(CONTROL_HEIGHT, CONTROL_HEIGHT)
+        self.truba_quick_connect.setIcon(QIcon.fromTheme(
+            "network-connect", self.style().standardIcon(QStyle.StandardPixmap.SP_DriveNetIcon)))
+        self.truba_quick_connect.setAccessibleName("Connect to TRUBA with saved credentials")
+        self.truba_quick_connect.clicked.connect(self._connect_to_truba_with_saved_credentials)
+        self.truba_dialog.connection_ui_changed.connect(self._update_truba_quick_connect)
+        self._update_truba_quick_connect()
         self.about_button = QPushButton("About")
         self.about_button.setObjectName("aboutBtn")
         self.about_button.clicked.connect(self.show_about)
         workspace_buttons = QHBoxLayout()
         workspace_buttons.setSpacing(6)
-        for button in (self.truba_button, self.truba_job_monitor.button, self.about_button):
-            if button is not self.truba_job_monitor.button:
-                button.setFixedSize(124, CONTROL_HEIGHT)
+        for button in (self.truba_button, self.about_button):
+            button.setFixedSize(124, CONTROL_HEIGHT)
+        for button in (self.truba_button, self.truba_quick_connect, self.truba_job_monitor.button, self.about_button):
             button.setAutoDefault(False)
             button.setDefault(False)
             workspace_buttons.addWidget(button)
@@ -1677,6 +1686,17 @@ class RustMechDialog(QDialog):
             "<p>Licensed under GPL-3.0-or-later.</p>"
             '<p><a href="https://github.com/aserdargl/RustMech">RustMech on GitHub</a></p>',
         )
+
+    def _update_truba_quick_connect(self):
+        dialog = self.truba_dialog
+        self.truba_quick_connect.setEnabled(dialog.worker is None and not dialog.connected)
+        label = self.truba_quick_connect.accessibleName()
+        self.truba_quick_connect.setToolTip(f"{label}\n{dialog.status.text()}")
+
+    def _connect_to_truba_with_saved_credentials(self):
+        if not self.truba_dialog.start_saved_connection():
+            button = self.truba_quick_connect
+            QToolTip.showText(button.mapToGlobal(button.rect().bottomLeft()), button.toolTip(), button)
 
     def _update_truba_button(self, connected: bool) -> None:
         self.truba_button.setText("Connected" if connected else "TRUBA")

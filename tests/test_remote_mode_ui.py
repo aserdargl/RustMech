@@ -82,6 +82,41 @@ class RemoteModeUiTests(unittest.TestCase):
         QTest.keyClick(field,Qt.Key.Key_Return)
         self.assertFalse(self.controller.requested)
 
+    def test_truba_quick_connect_uses_saved_credentials_without_opening_panel(self):
+        window = self.window
+        dialog = window.truba_dialog
+        button = window.truba_quick_connect
+        self.assertGreater(button.x(), window.truba_button.geometry().right())
+        self.assertFalse(button.icon().isNull())
+        dialog.username.setText("unsaved-user")
+        dialog.password.setText("unsaved-password")
+        with patch.object(dialog.credentials, "load", return_value=("saved-user", "saved-password")) as load, \
+                patch("truba_connection.ConnectionWorker") as worker:
+            button.click()
+            self.assertTrue(load.called)
+            reads = load.call_count
+            button.click()
+            self.assertEqual(load.call_count, reads)
+            worker.assert_called_once_with("saved-user", "saved-password", dialog.state_dir, dialog)
+            worker.return_value.start.assert_called_once()
+            self.assertFalse(dialog.isVisible())
+            self.assertFalse(button.isEnabled())
+            dialog._state_changed("authentication_failed")
+            dialog._finished()
+            self.assertTrue(button.isEnabled())
+            self.assertIn("rejected", button.toolTip())
+
+    def test_truba_quick_connect_with_no_saved_credentials_does_not_use_form_values(self):
+        dialog = self.window.truba_dialog
+        dialog.username.setText("unsaved-user")
+        dialog.password.setText("unsaved-password")
+        with patch.object(dialog.credentials, "load", return_value=None), \
+                patch("truba_connection.ConnectionWorker") as worker:
+            self.window.truba_quick_connect.click()
+            worker.assert_not_called()
+        self.assertIn("No saved TRUBA credentials", self.window.truba_quick_connect.toolTip())
+        self.assertFalse(dialog.isVisible())
+
     def test_connected_analysis_can_submit_without_allocating(self):
         from truba_jobs import RemoteAuth
 
