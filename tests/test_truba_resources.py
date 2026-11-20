@@ -83,10 +83,20 @@ class QueuePolicyTests(unittest.TestCase):
                                       settings={'cores': solver_cpus}, source_sha256='0' * 64))
                 self.assertIn(f'#SBATCH --cpus-per-task={cpus}\n', script)
                 self.assertIn(f'OMP_NUM_THREADS={solver_cpus} RUSTMECH_THREADS={solver_cpus} ', script)
+                self.assertIn('#SBATCH --time=72:00:00\n', script)
         with self.assertRaises(ValueError):
             convergence_context(context, BASELINES, 41, max_jobs=5)
         auto = convergence_context(replace(context, partition='auto'), BASELINES, 64, max_jobs=5)
         self.assertEqual((auto.partition, auto.cores, auto.parallel_jobs), ('orfoz', 64, 1))
+
+    def test_convergence_uses_live_queue_time_limit_instead_of_connection_walltime(self):
+        catalog = dict(BASELINES)
+        catalog['barbun'] = replace(catalog['barbun'], max_seconds=7 * 3600 + 59)
+        for partition in ('auto', 'barbun'):
+            with self.subTest(partition=partition):
+                context = RemoteContext(partition=partition, cores=40, memory_mb=80000, walltime='72:00:00')
+                plan = convergence_context(context, catalog, solver_cpus=16, max_jobs=2)
+                self.assertEqual((plan.partition, plan.walltime), ('barbun', '07:00:00'))
 
     def test_auto_retries_whole_node_if_job_submit_plugin_rejects_half(self):
         with patch('truba_resources.fetch_catalog', return_value=BASELINES), patch('truba_resources.test_submission', side_effect=[RuntimeError('Use whole node'), None, None, None]), patch('truba_session.create_session') as submit:

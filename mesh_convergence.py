@@ -271,7 +271,8 @@ class MeshConvergenceWidget(QWidget):
         form.addRow("Maximum elements", self.max_elements)
         self.max_minutes = self._number(120, 0.1, 100000)
         self.max_minutes.setToolTip("Budget checked between stages/levels; the active solver finishes its current level.")
-        form.addRow("Study time budget", stepper_with_unit(self.max_minutes, "min"))
+        self.time_budget_field = stepper_with_unit(self.max_minutes, "min")
+        form.addRow("Study time budget", self.time_budget_field)
         self.metric_checks, self.absolute = [], []
         for label, _ in METRICS:
             check = QCheckBox(label)
@@ -498,6 +499,7 @@ class MeshConvergenceWidget(QWidget):
         remote = self.run_on_truba.isChecked()
         self.truba_cores_label.setVisible(remote)
         self.truba_cores.setVisible(remote)
+        self.advanced.layout().setRowVisible(self.time_budget_field, not remote)
         self._show_remote_columns(remote or bool(self.remote_records))
 
     def _show_remote_columns(self, visible):
@@ -881,11 +883,11 @@ class MeshConvergenceWidget(QWidget):
     def _poll(self):
         if self.future is None:
             return
-        if monotonic() - self.started >= 60 * self.max_minutes.value():
-            self.stop_requested.set()
         if self.remote_jobs:
             self._poll_remote_batch()
             return
+        if monotonic() - self.started >= 60 * self.max_minutes.value():
+            self.stop_requested.set()
         while True:
             try:
                 update = self.updates.get_nowait()
@@ -970,7 +972,7 @@ class MeshConvergenceWidget(QWidget):
 
     def _after_levels(self, outcomes):
         self._refresh_differences()
-        if monotonic() - self.started >= 60 * self.max_minutes.value():
+        if not self.run_on_truba.isChecked() and monotonic() - self.started >= 60 * self.max_minutes.value():
             self._finish("Time budget reached; convergence not confirmed.")
             return
         if self.stop_requested.is_set():

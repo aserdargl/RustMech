@@ -482,6 +482,8 @@ class LiveConvergenceTests(unittest.TestCase):
         with patch("mesh_convergence.AnalysisProcess", side_effect=launch) as submit:
             widget.start()
             self.assertEqual(len(jobs), 5)
+            self.assertTrue(widget.time_budget_field.isHidden())
+            widget.started -= 60 * widget.max_minutes.value() + 1
             self.assertFalse(submit.call_args.args[2].session_id)
             self.assertEqual(request_resources(submit.call_args.args[2], "convergence_level"), (20, 10000))
             initial_sizes = [row.settings.mesh_resolution for row in widget.rows]
@@ -491,6 +493,7 @@ class LiveConvergenceTests(unittest.TestCase):
             self.assertEqual(len(jobs), 5)
             jobs[0].done.return_value = True
             widget._poll()
+            self.assertFalse(widget.stop_requested.is_set())
             self.assertEqual(len(jobs), 8)
             self.assertEqual(request_resources(submit.call_args.args[2], "convergence_level"), (20, 10000))
             self.assertEqual(widget.rows[5].kind, "Intermediate")

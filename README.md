@@ -1459,7 +1459,9 @@ kullanıcı bunu değiştirebilir. Slurm betiği, gerekirse kuyruk alt sınırı
 CPU ister. Aynı grupta gönderilen seviye sayısı, bağlantı panelindeki CPU ve RAM
 bütçesine göre belirlenir ve beşi geçmez. Sonuç tablosu ve CSV iş kimliğini,
 betiği ve durumu gösterir. Betik hücresinde ayrıca Slurm'dan istenen CPU ve
-Kratos'un çalışma ayarı görünür.
+Kratos'un çalışma ayarı görünür. TRUBA betikleri seçilen kuyruğun izin verdiği
+azami süreyi ister ve bağlantı panelindeki **Wall time** değerini kullanmaz.
+**Study time budget** yalnızca yerel mesh convergence çalışmasına uygulanır.
 Tahsis öncesinde **Parallel analyses** ile DoE ve analiz kuyruğunda aynı anda
 çalışabilecek analiz sayısını seçin (varsayılan `1`). CPU ve RAM eşit paylara
 bölünür: örneğin 56 çekirdek ve 128 GiB RAM, dört analiz için analiz başına
