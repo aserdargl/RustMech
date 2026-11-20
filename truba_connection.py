@@ -383,8 +383,9 @@ class TrubaConnectionDialog(QDialog):
         worker = self.worker
         if worker is None or self.stopping:
             return
+        owner = self if self.isVisible() else self.parentWidget()
         answer = QMessageBox.question(
-            self, "Verify TRUBA server identity",
+            owner, "Verify TRUBA server identity",
             "First connection to this server. Verify this fingerprint with TRUBA before accepting:\n\n" + fingerprint,
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No)
         worker.decide_host_key(answer == QMessageBox.StandardButton.Yes)

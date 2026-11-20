@@ -50,7 +50,6 @@ from PySide6.QtWidgets import (
     QTabBar,
     QTabWidget,
     QToolButton,
-    QToolTip,
     QVBoxLayout,
     QWidget,
 )
@@ -353,9 +352,12 @@ class RustMechDialog(QDialog):
         self.brand_header = brand_card
         brand_card.setObjectName("brandHeader")
         brand_card.setProperty('computeState', 'local')
-        brand_layout = QHBoxLayout(brand_card)
-        brand_layout.setContentsMargins(10, 4, 10, 4)
+        brand_content = QVBoxLayout(brand_card)
+        brand_content.setContentsMargins(10, 4, 10, 4)
+        brand_content.setSpacing(2)
+        brand_layout = QHBoxLayout()
         brand_layout.setSpacing(12)
+        brand_content.addLayout(brand_layout)
         eyebrow = QLabel("RustMech")
         eyebrow.setObjectName("brandEyebrow")
         title = QLabel("Nonlinear Compression")
@@ -385,6 +387,13 @@ class RustMechDialog(QDialog):
             "network-connect", self.style().standardIcon(QStyle.StandardPixmap.SP_DriveNetIcon)))
         self.truba_quick_connect.setAccessibleName("Connect to TRUBA with saved credentials")
         self.truba_quick_connect.clicked.connect(self._connect_to_truba_with_saved_credentials)
+        self.truba_quick_status = QLabel()
+        self.truba_quick_status.setObjectName("mutedHintLabel")
+        self.truba_quick_status.setTextFormat(Qt.TextFormat.PlainText)
+        self.truba_quick_status.setWordWrap(True)
+        self.truba_quick_status.setProperty("preserveLabelText", True)
+        self.truba_quick_status.hide()
+        brand_content.addWidget(self.truba_quick_status)
         self.truba_dialog.connection_ui_changed.connect(self._update_truba_quick_connect)
         self._update_truba_quick_connect()
         self.about_button = QPushButton("About")
@@ -1458,6 +1467,7 @@ class RustMechDialog(QDialog):
     def _refresh_ui_language(self, *_):
         from ui_language import translate
         self.language_manager.localize_tree(self)
+        self._update_truba_quick_connect()
         if self.setup_tabs.currentIndex() == self._fft_method_index:
             self._update_fft_preview_summary(self.collect())
         elif self.result_preview_field.currentData() is not None:
@@ -1688,15 +1698,18 @@ class RustMechDialog(QDialog):
         )
 
     def _update_truba_quick_connect(self):
+        from ui_language import translate
+
         dialog = self.truba_dialog
         self.truba_quick_connect.setEnabled(dialog.worker is None and not dialog.connected)
-        label = self.truba_quick_connect.accessibleName()
-        self.truba_quick_connect.setToolTip(f"{label}\n{dialog.status.text()}")
+        label = translate("Connect to TRUBA with saved credentials")
+        status = translate(dialog.status.text())
+        self.truba_quick_connect.setToolTip(f"{label}\n{status}")
+        self.truba_quick_status.setText(f"TRUBA · {status}")
 
     def _connect_to_truba_with_saved_credentials(self):
-        if not self.truba_dialog.start_saved_connection():
-            button = self.truba_quick_connect
-            QToolTip.showText(button.mapToGlobal(button.rect().bottomLeft()), button.toolTip(), button)
+        self.truba_quick_status.show()
+        self.truba_dialog.start_saved_connection()
 
     def _update_truba_button(self, connected: bool) -> None:
         self.truba_button.setText("Connected" if connected else "TRUBA")

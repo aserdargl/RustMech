@@ -7,7 +7,7 @@ from unittest.mock import MagicMock,patch
 
 from PySide6.QtCore import QCoreApplication,QEvent,QPoint,QSettings,Qt
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication,QWidget,QGroupBox
+from PySide6.QtWidgets import QApplication,QWidget,QGroupBox,QMessageBox
 
 from model import Settings
 from nonlinear_compression import RustMechDialog
@@ -86,8 +86,10 @@ class RemoteModeUiTests(unittest.TestCase):
         window = self.window
         dialog = window.truba_dialog
         button = window.truba_quick_connect
+        status = window.truba_quick_status
         self.assertGreater(button.x(), window.truba_button.geometry().right())
         self.assertFalse(button.icon().isNull())
+        self.assertFalse(status.isVisible())
         dialog.username.setText("unsaved-user")
         dialog.password.setText("unsaved-password")
         with patch.object(dialog.credentials, "load", return_value=("saved-user", "saved-password")) as load, \
@@ -101,10 +103,21 @@ class RemoteModeUiTests(unittest.TestCase):
             worker.return_value.start.assert_called_once()
             self.assertFalse(dialog.isVisible())
             self.assertFalse(button.isEnabled())
+            self.assertTrue(status.isVisible())
+            self.assertIn("Connecting...", status.text())
+            with patch.object(QMessageBox, "question", return_value=QMessageBox.StandardButton.No) as question:
+                dialog._confirm_host_key("fingerprint")
+            self.assertIs(question.call_args.args[0], window)
+            worker.return_value.decide_host_key.assert_called_once_with(False)
+            dialog._state_changed("waiting_for_network")
+            self.assertIn("Waiting for VPN", status.text())
+            with patch.object(dialog.credentials, "save"), patch.object(dialog, "analysis_auth", return_value=None):
+                dialog._state_changed("connected")
+            self.assertIn("Connected to TRUBA", status.text())
             dialog._state_changed("authentication_failed")
             dialog._finished()
             self.assertTrue(button.isEnabled())
-            self.assertIn("rejected", button.toolTip())
+            self.assertIn("rejected", status.text())
 
     def test_truba_quick_connect_with_no_saved_credentials_does_not_use_form_values(self):
         dialog = self.window.truba_dialog
@@ -114,7 +127,9 @@ class RemoteModeUiTests(unittest.TestCase):
                 patch("truba_connection.ConnectionWorker") as worker:
             self.window.truba_quick_connect.click()
             worker.assert_not_called()
-        self.assertIn("No saved TRUBA credentials", self.window.truba_quick_connect.toolTip())
+        status = self.window.truba_quick_status
+        self.assertTrue(status.isVisible())
+        self.assertIn("No saved TRUBA credentials", status.text())
         self.assertFalse(dialog.isVisible())
 
     def test_connected_analysis_can_submit_without_allocating(self):
