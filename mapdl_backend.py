@@ -328,6 +328,8 @@ def prepare_ansys(mapdl, settings: Settings, mesh: FEMesh) -> tuple[int, int]:
     minimum, maximum = settings.substep_limits
     mapdl.nsubst(settings.substeps, maximum, minimum)
     mapdl.neqit(50)
+    # End a failed solve while keeping MAPDL available to report the failure.
+    mapdl.ncnv(2)
     mapdl.lnsrch("ON")
     mapdl.time(1.0)
     mapdl.outres("ALL", "ALL")
@@ -508,6 +510,10 @@ class MapdlBackend:
                 mapdl_output=str(directory / "mapdl_process.out"),
             )
             mapdl.clear()
+            # PyMAPDL enables verification and disables aborts on connect.
+            # Restore normal solver behavior before importing the specimen.
+            mapdl.verify("OFF")
+            mapdl.run("/NERR,DEFA")
             mapdl.input(str(directory / "gyroid_mesh.inp"))
             verify_imported_mesh(mapdl, request.mesh)
             execution.diagnostics["mesh_import_verified"] = True
@@ -525,8 +531,13 @@ class MapdlBackend:
                 # gRPC redirects command output to anstmp, overriding /OUTPUT.
                 # Preserve it before FINISH/EXIT can replace the original log.
                 try:
+                    log_path = directory / "solve_output.txt"
                     if (directory / "anstmp").is_file():
-                        copyfile(directory / "anstmp", directory / "solve_output.txt")
+                        copyfile(directory / "anstmp", log_path)
+                    else:
+                        response = getattr(mapdl, "last_response", None)
+                        if isinstance(response, str) and "MAPDL SOLVE" in response:
+                            log_path.write_text(response, encoding="utf-8")
                 except OSError as log_error:
                     execution.diagnostics["output_capture_warning"] = str(log_error)
             else:

@@ -3,7 +3,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 import numpy as np
 
@@ -61,12 +61,26 @@ class MapdlLifecycleTests(unittest.TestCase):
             self.assertEqual(execution.error, "first failure")
             self.assertEqual(execution.diagnostics["shutdown_warning"], "exit failure")
 
+    def test_solve_failure_preserves_grpc_response_when_temp_log_is_gone(self):
+        with TemporaryDirectory() as folder:
+            session = MagicMock()
+            session.solve.side_effect = RuntimeError("Solution not converged")
+            session.last_response = "MAPDL SOLVE COMMAND\nSolution not converged"
+            execution, _, _ = self.run_backend(folder, session)
+            self.assertEqual(execution.error, "Solution not converged")
+            self.assertEqual((Path(folder) / "solve_output.txt").read_text(),
+                             session.last_response)
+
     def test_success_saves_output_before_finishing(self):
         with TemporaryDirectory() as folder:
             session = MagicMock()
             session.solve.return_value = "SOLUTION CONVERGED"
             execution, _, _ = self.run_backend(folder, session)
             self.assertIsNone(execution.error)
+            session.assert_has_calls([
+                call.clear(), call.verify("OFF"), call.run("/NERR,DEFA"),
+                call.input(str(Path(folder) / "gyroid_mesh.inp")), call.solve(),
+            ])
             session.finish.assert_called_once()
             self.assertEqual((Path(folder) / "solve_output.txt").read_text(), "SOLUTION CONVERGED")
 
