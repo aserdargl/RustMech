@@ -265,16 +265,16 @@ class RemoteModeUiTests(unittest.TestCase):
                 controller.poll()
                 self.assertTrue(button.isEnabled())
 
-    def test_default_session_is_72_hours_and_explicit_allocate_enables_remote_mode(self):
+    def test_default_session_is_four_hours_and_explicit_allocate_enables_remote_mode(self):
         from concurrent.futures import Future
         from remote_controller import allocate_with_limits
         pending = Future()
-        self.assertEqual(self.controller.controls['walltime'].text(), '72:00:00')
+        self.assertEqual(self.controller.controls['walltime'].text(), '04:00:00')
         with patch.object(self.controller.session_executor, 'submit', return_value=pending) as submit:
             self.controller.session_command('allocate')
         try:
             self.assertIs(submit.call_args.args[0], allocate_with_limits)
-            self.assertEqual(submit.call_args.args[1].walltime, '72:00:00')
+            self.assertEqual(submit.call_args.args[1].walltime, '04:00:00')
             self.assertEqual(submit.call_args.args[1].partition, 'auto')
             self.assertTrue(self.controller.requested)
         finally:
@@ -484,7 +484,7 @@ class RemoteModeUiTests(unittest.TestCase):
         self.assertTrue(self.controller.session_watch)
         self.assertTrue(self.controller.session['ready'])
 
-    def test_old_debug_preference_does_not_shorten_the_72_hour_default(self):
+    def test_saved_debug_queue_accepts_the_four_hour_default(self):
         import json
         from dataclasses import asdict
         from remote_controller import RemoteController
@@ -492,8 +492,8 @@ class RemoteModeUiTests(unittest.TestCase):
         self.preferences.setValue('remote/context', json.dumps(asdict(RemoteContext(partition='debug', walltime='00:30:00'))))
         restored = RemoteController(self.window, self.preferences)
         try:
-            self.assertEqual(restored.context().partition, 'auto')
-            self.assertEqual(restored.context().walltime, '72:00:00')
+            self.assertEqual(restored.context().partition, 'debug')
+            self.assertEqual(restored.context().walltime, '04:00:00')
         finally:
             restored.shutdown()
             restored.scroll.deleteLater()

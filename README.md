@@ -1427,15 +1427,14 @@ projenin tüm dosyaları RustMech konumundadır. PyCharm için RustMech klasör�
 
 TRUBA panelinde bağlantıyı kurun, kuyruk (Partition), hesap, CPU, bellek ve
 Wall time değerlerini belirleyip **Allocate resources** düğmesine basın.
-Yeni oturumların varsayılan süresi `72:00:00` (üç gün), kuyruk seçimi **Auto**
-olur. Kaydedilmiş bir kuyruk seçimi korunur; 72 saat desteklemeyen eski Debug
-tercihi yeni istekler için Auto'ya alınır. Mevcut tahsis değiştirilmez.
+Yeni oturumların varsayılan süresi `04:00:00` (dört saat), kuyruk seçimi **Auto**
+olur. Kaydedilmiş kuyruk seçimi ve etkin tahsisin süre sınırı korunur.
 Auto, hamsi/barbun/orfoz CPU kuyruklarını gerçek iş oluşturmayan
 `sbatch --test-only` ile doğrular ve Slurm'un tahmin ettiği en erken başlangıcı
 seçer. Tahmin yoksa canlı CPU/bellek durumunda uygun boş kapasiteyi tercih eder.
 GPU kuyrukları mevcut CPU çözücüleri için ayrılmaz; ücretli öncelik veya ek
 hizmet talebi gönderilmez. Tahmin değişebilir; kuyruğun ve hesabın
-72 saati ve kaynak miktarını kabul etmesi gerekir. İlk tahsis Slurm'da bekler.
+istenen süreyi ve kaynak miktarını kabul etmesi gerekir. İlk tahsis Slurm'da bekler.
 **Refresh session** kayıtlı oturumu bu çalıştırmaya bağlar ve durumu yeniler.
 
 Bağlanmak veya TRUBA hesaplama modunu işaretlemek tek başına Slurm işi
@@ -1468,13 +1467,13 @@ near the time limit** varsayılan açıktır: DoE/analiz kuyruğu çalışırken
 saatte (kısa tahsislerde son %10'da) aynı kaynak ayarlarıyla tek bir yedek
 tahsis istenir. Kuyruk izleyicisi açıkken bu kontrol yapılır; yalnızca boşta
 duran oturum kendiliğinden yenilenmez. Yeni analizler yedek işçi hazır olana
-kadar bekler, sonra ona yönlendirilir. Eski tahsiste çalışan analizler orada
-tamamlanır; biten analizler tekrar çalıştırılmaz. Slurm başlangıç zamanını
+kadar bekler, sonra ona yönlendirilir. Başlamış analizler eski tahsiste devam
+eder. Biten analizler tekrar çalıştırılmaz. Slurm başlangıç zamanını
 belirlediğinden beklemesiz geçiş garanti edilmez. Bu özellik çalışan çözücünün
-ara hesap adımını taşımak değildir: eski tahsisin süre sınırını aşan tek bir
-analiz durabilir; tam adım devamı ayrıca çözücü checkpoint/restart desteği
-gerektirir. Yeni tahsis hazır olsa bile devam eden süreç taşınmaz. Eski tahsis
-süresi bitene veya kaynaklar bırakılana kadar ayrılmış kalabilir.
+ara hesap adımını taşımaz. Slurm, eski tahsisin süresi dolduğunda hâlâ çalışan
+analizleri durdurur. Kaldığı adımdan devam etmek çözücü checkpoint/restart
+desteği gerektirir. Eski tahsis süresi bitene veya kaynaklar bırakılana kadar
+ayrılmış kalabilir.
 
 Bir analizi iptal etmek diğer analizleri veya kaynak oturumunu kapatmaz.
 Kuyruğun Stop düğmesi tüm etkin kuyruk analizlerini durdurur.

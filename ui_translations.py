@@ -262,7 +262,7 @@ Fitted cell budget|Ağ hücresi bütçesi
 Parallel analyses|Paralel analizler
 Prepare replacement resources near the time limit|Süre dolmadan yedek kaynak hazırla
 Maximum simultaneous DoE / analysis queue jobs. CPU cores and RAM are divided equally between jobs; each job has separate results. Limited by the allocated cores and memory. Set 1 for a single large analysis.|Aynı anda çalışan DoE / analiz kuyruğu işi üst sınırı. CPU ve RAM işler arasında eşit bölünür; sonuçlar ayrı kaydedilir. Tahsis edilen çekirdek ve bellekle sınırlıdır. Tek büyük analiz için 1 seçin.
-Batch queues: request a replacement within the final hour (10% for shorter sessions). New analyses wait for it; running analyses finish on their original resource. This does not restart a solver from a saved calculation step.|Toplu analizlerde son bir saatte (kısa oturumlarda son %10'da) yedek kaynak istenir. Yeni analizler yedeği bekler; çalışanlar eski kaynakta tamamlanır. Çözücü kaydedilmiş bir hesap adımından yeniden başlatılmaz.
+Batch queues request replacement resources in the last hour or the final 10%, whichever is shorter. New analyses wait for them. Running analyses remain subject to the original Slurm time limit.|Toplu analizler, son bir saat ile oturumun son %10'undan hangisi daha kısaysa o aralıkta yedek kaynak ister. Yeni analizler yedek kaynağı bekler. Çalışan analizler mevcut Slurm süre sınırına tabidir.
 Inspect geometry (no solve)|Geometriyi incele (çözüm yok)
 Geometry diagnostics|Geometri kontrolleri
 Geometry inspection saved. No solver files were generated.|Geometri incelemesi kaydedildi. Çözücü dosyası üretilmedi.
@@ -801,8 +801,8 @@ Retrieve TRUBA job…|TRUBA işini geri al…
 Stop remote check/setup|Uzak denetimi / kurulumu durdur
 Local mode. Connecting alone does not move computations to TRUBA.|Yerel mod. Bağlanmak tek başına hesaplamaları TRUBA'ya taşımaz.
 Local mode. Remote jobs already submitted can be retrieved using their records.|Yerel mod. Gönderilmiş uzak işler kayıtlarıyla geri alınabilir.
-No resource session. Wall time sets the requested session duration (72:00:00 = 3 days).|Kaynak oturumu yok. Oturum süresi istenen kaynak kullanım süresidir (72:00:00 = 3 gün).
-The default session lasts 72 hours, including idle time. Closing RustMech keeps the session and submitted jobs running.|Varsayılan oturum boşta geçen süreyle birlikte 72 saat sürer. RustMech kapatıldığında oturum ve gönderilmiş işler devam eder.
+No resource session. Wall time includes idle time and limits all jobs in the allocation.|Kaynak oturumu yok. Oturum süresi boşta geçen süreyi de kapsar ve tahsisteki tüm işleri sınırlar.
+Slurm stops running analyses when the allocation reaches its wall time.|Tahsis süresi dolduğunda Slurm çalışan analizleri durdurur.
 Queue unavailable. Connect and refresh limits or choose another queue.|Kuyruk kullanılamıyor. Bağlanıp sınırları yenileyin veya başka kuyruk seçin.
 Min: unavailable|Min: bilinmiyor
 Max: unavailable|Maks: bilinmiyor

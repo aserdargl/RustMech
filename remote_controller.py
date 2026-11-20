@@ -14,6 +14,9 @@ from truba_session import saved_session, create_session, refresh_session, releas
 from truba_resources import BASELINES, AUTO_QUEUES, candidates, fetch_catalog, allocate_with_limits, automatic_context
 
 
+DEFAULT_SESSION_WALLTIME = '04:00:00'
+
+
 def ensure_remote_runtime(context, auth, *, cancelled, on_progress=None, prepare_damask=False, detach_requested=None):
     """Reuse a verified runtime; repair the app-owned environment once if needed."""
     result, directory = run_remote_job(dict(operation='probe'), context, auth,
@@ -100,12 +103,10 @@ class RemoteController(QObject):
         self.session_action = ""
         self.session_watch = False
         self.session_executor = ThreadPoolExecutor(max_workers=1,thread_name_prefix="truba-session")
-        defaults = RemoteContext(partition='auto', walltime='72:00:00')
+        defaults = RemoteContext(partition='auto', walltime=DEFAULT_SESSION_WALLTIME)
         try: defaults = RemoteContext(**json.loads(preferences.value("remote/context",json.dumps(asdict(defaults)))))
         except (ValueError,TypeError): pass
-        defaults = replace(defaults, walltime='72:00:00')
-        if defaults.partition == 'debug':
-            defaults = replace(defaults, partition='auto')  # Debug cannot reserve 72 hours.
+        defaults = replace(defaults, walltime=DEFAULT_SESSION_WALLTIME)
         preferred_partition = defaults.partition
         if self.session and self.session.get("state") not in ("released","ended"):
             defaults = RemoteContext(**self.session["context"])
@@ -180,7 +181,7 @@ class RemoteController(QObject):
         layout.addLayout(form)
         self.auto_renew = QCheckBox('Prepare replacement resources near the time limit')
         self.auto_renew.setChecked(defaults.auto_renew)
-        self.auto_renew.setToolTip('Batch queues: request a replacement within the final hour (10% for shorter sessions). New analyses wait for it; running analyses finish on their original resource. This does not restart a solver from a saved calculation step.')
+        self.auto_renew.setToolTip('Batch queues request replacement resources in the last hour or the final 10%, whichever is shorter. New analyses wait for them. Running analyses remain subject to the original Slurm time limit.')
         self.auto_renew.toggled.connect(self.configuration_changed)
         layout.addWidget(self.auto_renew)
         self.queue_hint = QLabel()
@@ -198,7 +199,7 @@ class RemoteController(QObject):
         self.session_state.setTextFormat(Qt.TextFormat.PlainText)
         self.session_state.setWordWrap(True)
         layout.addWidget(self.session_state)
-        self.session_status = QLabel("No resource session. Wall time sets the requested session duration (72:00:00 = 3 days).")
+        self.session_status = QLabel("No resource session. Wall time includes idle time and limits all jobs in the allocation.")
         self.session_status.setTextFormat(Qt.TextFormat.PlainText)
         self.session_status.setWordWrap(True)
         layout.addWidget(self.session_status)
@@ -216,13 +217,14 @@ class RemoteController(QObject):
         self.session_refresh.clicked.connect(lambda:self.session_command("refresh"))
         self.session_release.clicked.connect(lambda:self.session_command("release"))
         layout.addLayout(session_buttons)
-        hint = QLabel("The default session lasts 72 hours, including idle time. Closing RustMech keeps the session and submitted jobs running.")
+        hint = QLabel("Slurm stops running analyses when the allocation reaches its wall time.")
         hint.setWordWrap(True)
         hint.setObjectName("mutedHintLabel")
         layout.addWidget(hint)
         # Keep the session explanation available without pushing actions below
         # the standard window's fold.
         self.toggle.setToolTip(hint.text())
+        self.controls['walltime'].setToolTip(hint.text())
         hint.hide()
         buttons = QGridLayout()
         buttons.setHorizontalSpacing(6)
