@@ -458,8 +458,10 @@ def run_remote_job(request,context,auth=None,marker=None,*,directory=None,resume
     code = analysis_code(record)
     script_name = (f"{code}.slurm" if record.get('operation') in ANALYSIS_OPERATIONS
                    and not context.session_id and code else 'run.slurm')
+    staging_phase = None
     try:
         if not poll_once and (not resume_record or not record.get("job_id")):
+            staging_phase = "Preparing local Slurm script"
             if resume_record: request = json.loads((directory/"request.json").read_text())
             (directory/script_name).write_text(slurm_script(context,transport.username,request),encoding="utf-8",newline="\n")
             if record.get('operation') in ANALYSIS_OPERATIONS:
@@ -475,8 +477,13 @@ def run_remote_job(request,context,auth=None,marker=None,*,directory=None,resume
             command = "mkdir -p -- " + remote_path
             if setup:
                 command = f"set -e\n{command}\ncd {remote_path}\n{setup}"
+            staging_phase = "Creating the TRUBA work directory"
             transport.command(command)
-            for name in ("engine.tar.gz","request.json",script_name): transport.put(directory/name,remote+"/"+name)
+            for name in ("engine.tar.gz","request.json",script_name):
+                staging_phase = f"Uploading {name} to TRUBA"
+                transport.put(directory/name,remote+"/"+name)
+            staging_phase = None
+            record.pop("staging_error", None)
         if is_cancelled():
             if poll_once:
                 return None
@@ -673,11 +680,14 @@ if [ -s job.id ]; then printf 'RUSTMECH_JOB_ID=%s\n' "$(cat job.id)"; fi
         return result,directory
     except SlurmOutOfMemory:
         raise
-    except BaseException:
+    except BaseException as error:
         saved = json.loads(paths[0].read_text()) if paths[0].exists() else {}
         if is_detaching() and record.get('submission_attempted') and not submit_only:
             record['detached'] = True
-        if saved.get("state")!="cancelled": update("interrupted; resume using this job record")
+        if saved.get("state") != "cancelled":
+            if staging_phase is not None and isinstance(error, Exception):
+                record["staging_error"] = f"{staging_phase}: {str(error)[-1500:]}"
+            update("interrupted; resume using this job record")
         raise
 
 

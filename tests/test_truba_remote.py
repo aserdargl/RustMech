@@ -264,6 +264,24 @@ class RemoteProtocolTests(unittest.TestCase):
         self.assertEqual(FakeTransport.instances[-1].submissions,0)
         self.assertEqual(FakeTransport.instances[-1].put_names,[])
 
+    def test_convergence_keeps_pre_submission_error_in_saved_record(self):
+        from paramiko import AuthenticationException
+
+        request = dict(operation="convergence_level", settings=dict(solver_backend="kratos"))
+        directory = self.root / "job"
+        context = RemoteContext(partition="barbun", cores=40, memory_mb=136000, walltime="04:00:00")
+        with patch.object(FakeTransport, "command", side_effect=AuthenticationException("Authentication failed.")):
+            with self.assertRaises(AuthenticationException):
+                run_remote_job(request, context, directory=directory)
+        record = json.loads((directory / "remote_job.json").read_text())
+        self.assertEqual(record["staging_error"], "Creating the TRUBA work directory: Authentication failed.")
+        self.assertNotIn("job_id", record)
+        self.assertNotIn("submission_attempted", record)
+
+        resumed = run_remote_job({}, context, resume_record=record, submit_only=True)
+        self.assertNotIn("staging_error", resumed)
+        self.assertEqual(resumed["state"], "submitted")
+
     def test_convergence_submits_separately_named_slurm_scripts(self):
         request = dict(operation="convergence_level", settings=dict(solver_backend="kratos"))
         records = [run_remote_job(request, RemoteContext(), directory=self.root / str(i), submit_only=True)
