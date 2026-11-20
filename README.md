@@ -1470,8 +1470,9 @@ betikleri ve Slurm iş kimlikleriyle ayrı `sbatch` işleri olarak gönderilir.
 koyar ve ayrı iş adımlarında paralel çalıştırır. CPU ve RAM iki adıma bölünür.
 Örneğin Hamsi'de 56 CPU, seviye başına 28 CPU olarak kullanılır. **Allocate**
 gerekmez. Program, seviye başına en az 16 CPU düşüyorsa iki seviyeyi eşler.
-İki seviye sığmazsa veya tek seviye kalırsa, o seviye
-tahsisin tüm kaynaklarını kullanır. Otomatik gönderim bir seferde en çok beş
+Her betik, kuyruğun tek düğüm için izin verdiği tüm CPU'ları ister. Örneğin
+Barbun'da tek seviye 40 CPU alır. Aynı betikte iki seviye varsa her biri
+20 CPU alır. Otomatik gönderim bir seferde en çok beş
 seviye planlar. İşler kuyruktayken veya çalışırken **Add 2 Extra** ile
 iki seviye daha gönderebilirsiniz. Düğme, en ince gönderilmiş mesh'ten devam
 eder ve çalışmanın minimum mesh boyutu ile deneme sınırını gözetir. Manuel

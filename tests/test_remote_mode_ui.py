@@ -1219,6 +1219,25 @@ class RemoteModeUiTests(unittest.TestCase):
         study.force_stop()
         dialog.reject()
 
+    def test_single_convergence_level_shows_all_barbun_cores(self):
+        self.window.open_mesh_convergence()
+        dialog = self.window._mesh_convergence_dialog
+        study = dialog.study
+        study.run_on_truba.click()
+        self.enable()
+        study.start_size.setValue(.2)
+        study.single_truba_mesh.setChecked(True)
+        queue = self.controller.controls['partition']
+        queue.setCurrentIndex(queue.findData('barbun'))
+        with patch("mesh_convergence.AnalysisProcess") as start:
+            study.start()
+            target, settings, context, *_ = start.call_args.args
+            self.assertIs(target, run_remote_level)
+            self.assertEqual((settings.cores, context.cores), (40, 40))
+            self.assertEqual(study.results.item(0, 11).text(), "40")
+            study.force_stop()
+        dialog.reject()
+
     def test_convergence_and_doe_do_not_call_local_mesh_generator(self):
         from mesh_convergence import MeshConvergenceDialog
         local=MagicMock()

@@ -4,8 +4,9 @@ import unittest
 from unittest.mock import patch
 from datetime import datetime, timezone
 
-from truba_resources import (BASELINES, candidates, parse_catalog, allocate_with_limits,
-                             automatic_context, convergence_context, test_submission as validate_submission)
+from truba_resources import (BASELINES, candidates, parse_catalog, allocate_with_limits, automatic_context,
+                             convergence_context, planned_convergence_context,
+                             test_submission as validate_submission)
 from truba_remote import RemoteContext, slurm_script
 
 
@@ -74,7 +75,7 @@ class QueuePolicyTests(unittest.TestCase):
 
     def test_convergence_sizes_each_script_and_batch_within_queue_limits(self):
         context = RemoteContext(partition='barbun', cores=40, memory_mb=128 * 1024)
-        for solver_cpus, cpus, slots in ((8, 40, 2), (16, 40, 2), (32, 32, 1)):
+        for solver_cpus, cpus, slots in ((8, 40, 2), (16, 40, 2), (32, 40, 1)):
             with self.subTest(solver_cpus=solver_cpus):
                 plan = convergence_context(context, BASELINES, solver_cpus, max_jobs=5)
                 self.assertEqual((plan.cores, plan.parallel_jobs, plan.memory_mb),
@@ -87,7 +88,18 @@ class QueuePolicyTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             convergence_context(context, BASELINES, 41, max_jobs=5)
         auto = convergence_context(replace(context, partition='auto'), BASELINES, 64, max_jobs=5)
-        self.assertEqual((auto.partition, auto.cores, auto.parallel_jobs), ('orfoz', 64, 1))
+        self.assertEqual((auto.partition, auto.cores, auto.parallel_jobs), ('orfoz', 112, 1))
+
+    def test_single_convergence_level_uses_full_node_in_both_submission_paths(self):
+        context = RemoteContext(partition='barbun', cores=20, memory_mb=128 * 1024)
+        catalog = dict(BASELINES)
+        for live_max in (40, 32):
+            catalog['barbun'] = replace(BASELINES['barbun'], max_cpus=live_max)
+            auto = convergence_context(context, catalog, solver_cpus=16, max_jobs=1)
+            planned = planned_convergence_context(context, catalog, 'barbun', 16, 1, context.memory_mb)
+            for script in (auto, planned):
+                self.assertEqual((script.cores, script.memory_mb, script.parallel_jobs),
+                                 (live_max, context.memory_mb, 1))
 
     def test_convergence_preserves_requested_time_and_checks_live_queue_limit(self):
         catalog = dict(BASELINES)
