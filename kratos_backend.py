@@ -121,8 +121,9 @@ class LocalKratosBackend:
         environment = os.environ.copy()
         environment.pop("SLURM_JOB_ID", None)
         environment.update(OMP_NUM_THREADS=str(request.settings.cores), OPENBLAS_NUM_THREADS="1")
+        report_analysis_step("Kratos · initializing model…")
         try:
-            with log_path.open("w", encoding="utf-8") as log, system_dll_search(), subprocess.Popen(
+            with log_path.open("w", encoding="utf-8", buffering=1) as log, system_dll_search(), subprocess.Popen(
                 [str(python), "-E", "-s", "-u", "kratos_driver.py"], cwd=raw, env=environment,
                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8",
                 errors="replace", creationflags=subprocess.CREATE_NO_WINDOW,
@@ -130,9 +131,11 @@ class LocalKratosBackend:
                 execution.solve_attempted = True
                 for line in process.stdout:
                     log.write(line)
+                    target = re.fullmatch(r"RUSTMECH_SOLVING_LOAD=(\S+)\s*", line)
+                    if target:
+                        report_analysis_step(f"Kratos · solving load {target[1]}…")
                     increment = re.fullmatch(r"RUSTMECH_STEP=(\d+) LOAD=(\S+)\s*", line)
                     if increment:
-                        log.flush()
                         report_analysis_step(f"Kratos · increment {increment[1]} · load {increment[2]}")
                 exit_code = process.wait()
 

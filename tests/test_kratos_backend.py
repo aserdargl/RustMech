@@ -58,8 +58,14 @@ class KratosIntegrityTests(unittest.TestCase):
                             self_contact_mode="disabled", bottom_platen_contact="frictionless",
                             top_platen_contact="frictionless", kratos_contact_method="penalty",
                             kratos_max_iterations=3)
-        execution = LocalKratosBackend().solve(AnalysisRequest(settings, self.mesh, self.root))
+        with patch('analysis_process.report_analysis_step') as progress:
+            execution = LocalKratosBackend().solve(AnalysisRequest(settings, self.mesh, self.root))
         log = (self.root / "kratos.log").read_text(encoding="utf-8")
+        self.assertLess(log.index("RUSTMECH_SOLVING_LOAD="), log.index("RUSTMECH_STEP="))
+        messages = [call.args[0] for call in progress.call_args_list]
+        self.assertEqual(messages[0], "Kratos · initializing model…")
+        self.assertTrue(messages[1].startswith("Kratos · solving load "))
+        self.assertTrue(messages[2].startswith("Kratos · increment 1 · load "))
         self.assertIn("SPLITTING TIME STEP", log)
         self.assertFalse(execution.error, execution.error)
         result = execution.results

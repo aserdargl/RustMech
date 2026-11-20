@@ -200,6 +200,7 @@ class CompressionAnalysis(StructuralMechanicsAnalysis):
             part.ProcessInfo[KM.STEP] += 1
             part.CloneTimeStep(target_time)
             self.time = target_time
+            print(f"RUSTMECH_SOLVING_LOAD={target_time:.9g}", flush=True)
             self.InitializeSolutionStep()
             if not self.SolveSolutionStep():
                 raise RuntimeError(f"Kratos did not converge at load factor {self.time:.9g}")
