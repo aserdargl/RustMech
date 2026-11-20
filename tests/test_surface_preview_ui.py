@@ -59,6 +59,39 @@ class SurfacePreviewUITests(unittest.TestCase):
         self.assertTrue(self.window._mesh_requested)
         self.assertIsNone(self.window.preview.mesh)
 
+    def test_ansys_export_uses_the_current_volume_mesh(self):
+        window = self.window
+        button = window.mesh_export_button
+        self.assertFalse(button.isEnabled())
+        window.preview = build_preview(self.settings, window.preview, include_mesh=True)
+        window.refresh_validity()
+        self.assertTrue(button.isEnabled())
+        self.assertEqual(button.size(), window.mesh_apply_button.size())
+        self.assertFalse(button.autoDefault())
+
+        with TemporaryDirectory() as folder:
+            path = Path(folder) / "mesh.cdb"
+            with patch("file_dialog.QFileDialog.getSaveFileName", return_value=("", "")):
+                button.click()
+                self.assertTrue(button.isEnabled())
+            with patch("file_dialog.QFileDialog.getSaveFileName", return_value=(str(path), "")), \
+                 patch("nonlinear_compression.QMessageBox.information") as complete:
+                button.click()
+                self.assertFalse(button.isEnabled())
+                window._mesh_export_future.result(timeout=5)
+                window._poll_mesh_export()
+                complete.assert_called_once()
+
+            archive = path.read_text(encoding="ascii")
+            self.assertTrue(archive.startswith("/COM,ANSYS RELEASE"))
+            self.assertIn("NBLOCK,6,SOLID", archive)
+            self.assertIn("EBLOCK,19,SOLID", archive)
+            self.assertIn("/UNITS,MPA", archive)
+
+        self.assertTrue(button.isEnabled())
+        window.controls["mesh_resolution"].setValue(self.settings.mesh_resolution * 2)
+        self.assertFalse(button.isEnabled())
+
     def test_geometry_button_hides_excluded_mesh_fragments(self):
         preview = build_preview(self.settings, self.window.preview, include_mesh=True)
         fragment = preview.mesh.grid.extract_cells([0])

@@ -5,6 +5,7 @@ import traceback
 from shutil import copyfile
 from pathlib import Path
 from dataclasses import replace
+from tempfile import TemporaryDirectory
 
 import numpy as np
 import pyvista as pv
@@ -38,6 +39,48 @@ def write_apdl_mesh(mesh: FEMesh, path: Path) -> None:
     ids = grid.point_data["ansys_node_num"]
     element_type, connectivity = _solid_connectivity(grid)
     write_apdl(path, grid.points, ids, connectivity, grid.cell_data["ansys_elem_num"], element_type)
+
+
+def write_cdb_mesh(mesh: FEMesh, path: Path) -> Path:
+    """Export the specimen mesh in the blocked Mechanical APDL archive format."""
+    grid = mesh.grid
+    element_type, connectivity = _solid_connectivity(grid)
+    points = grid.points
+    node_ids = grid.point_data["ansys_node_num"]
+    element_ids = grid.cell_data["ansys_elem_num"]
+    max_node, max_element = int(node_ids.max()), int(element_ids.max())
+    if min(node_ids.min(), element_ids.min()) < 1 or max(max_node, max_element) > 999_999_999:
+        raise ValueError("Mesh IDs do not fit the CDB integer fields.")
+    if not np.isfinite(points).all() or connectivity.min() < 0 or connectivity.max() >= len(node_ids):
+        raise ValueError("Non-finite mesh point or invalid mesh connectivity.")
+
+    # Stage beside the destination so failures leave an existing archive intact.
+    with TemporaryDirectory(prefix=".rustmech-cdb-", dir=path.parent) as folder:
+        staged = Path(folder) / "mesh.cdb"
+        with staged.open("w", encoding="ascii", newline="\n", buffering=1024 * 1024) as stream:
+            # Workbench's blocked archive check looks for this comment prefix.
+            stream.write("/COM,ANSYS RELEASE - RustMech blocked mesh archive\n")
+            stream.write(f"/PREP7\n/UNITS,MPA\nET,1,{element_type}\n")
+            if element_type == 186:
+                stream.write("KEYOPT,1,2,1\n")
+            stream.write(f"NBLOCK,6,SOLID,{max_node:9d},{len(node_ids):9d}\n(3i9,6e21.13)\n")
+            for node_id, (x, y, z) in zip(node_ids, points, strict=True):
+                stream.write(f"{node_id:9d}{0:9d}{0:9d}{x:21.13E}{y:21.13E}{z:21.13E}\n")
+            stream.write("N,UNBL,LOC,       -1,\n")
+
+            stream.write(f"EBLOCK,19,SOLID,{max_element:9d},{len(element_ids):9d}\n(19i9)\n")
+            # The first record has 11 attribute fields followed by up to eight node IDs.
+            attributes = (1, 1, 1, 1, 0, 0, 0, 0, connectivity.shape[1], 0)
+            prefix = "".join(f"{value:9d}" for value in attributes)
+            for element_id, cell in zip(element_ids, connectivity, strict=True):
+                nodes = node_ids[cell]
+                first_nodes = "".join(f"{node:9d}" for node in nodes[:8])
+                stream.write(f"{prefix}{element_id:9d}{first_nodes}\n")
+                if len(nodes) > 8:
+                    stream.write("".join(f"{node:9d}" for node in nodes[8:]) + "\n")
+            stream.write(f"{-1:9d}\nFINISH\n")
+        staged.replace(path)
+    return path
 
 
 def _solid_connectivity(grid):

@@ -291,6 +291,7 @@ class RustMechDialog(QDialog):
         )
         self._fft_preview_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="fft-preview")
         self.future = None
+        self._mesh_export_future = None
         self._fft_preview_request = None
         self._fft_preview_future = None
         self._fft_preview_result = None
@@ -592,16 +593,29 @@ class RustMechDialog(QDialog):
         self.mesh_apply_button.setObjectName("meshApplyBtn")
         self.mesh_apply_button.setAutoDefault(False)
         self.mesh_apply_button.setDefault(False)
-        self.mesh_apply_button.setFixedWidth(self.structure_apply_button.width())
         self.mesh_apply_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.mesh_apply_button.setToolTip("Apply current settings and build the FE mesh.")
         self.mesh_apply_button.clicked.connect(self.apply_mesh)
+        self.mesh_export_button = QPushButton("Export to ANSYS")
+        self.mesh_export_button.setAutoDefault(False)
+        self.mesh_export_button.setDefault(False)
+        self.mesh_export_button.setEnabled(False)
+        self.mesh_export_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.mesh_export_button.setToolTip("Save the generated FE mesh as an ANSYS CDB file (mm).")
+        self.mesh_export_button.clicked.connect(self.export_mesh_to_ansys)
+        self.mesh_export_button.ensurePolished()
+        mesh_action_width = max(
+            self.mesh_export_button.fontMetrics().horizontalAdvance(label)
+            for label in ("Export to ANSYS", "ANSYS'e Aktar")
+        ) + 24
+        for button in (self.mesh_apply_button, self.mesh_export_button):
+            button.setFixedSize(mesh_action_width, CONTROL_HEIGHT)
         mesh_actions = QWidget()
-        mesh_action_row = QHBoxLayout(mesh_actions)
-        mesh_action_row.setContentsMargins(0, 0, 0, 0)
-        mesh_action_row.setSpacing(0)
-        mesh_action_row.addStretch()
-        mesh_action_row.addWidget(self.mesh_apply_button)
+        mesh_action_layout = QVBoxLayout(mesh_actions)
+        mesh_action_layout.setContentsMargins(0, 0, 0, 0)
+        mesh_action_layout.setSpacing(3)
+        mesh_action_layout.addWidget(self.mesh_apply_button, alignment=Qt.AlignmentFlag.AlignRight)
+        mesh_action_layout.addWidget(self.mesh_export_button, alignment=Qt.AlignmentFlag.AlignRight)
         mesh_form.addRow(mesh_actions)
         self.tetra_strategy_combo.currentIndexChanged.connect(self.geometry_changed)
         self.mesh_type_combo.currentIndexChanged.connect(self._sync_mesh_type)
@@ -1417,6 +1431,7 @@ class RustMechDialog(QDialog):
         self.poll = QTimer(self)
         self.poll.setInterval(80)
         self.poll.timeout.connect(self.poll_preview)
+        self.poll.timeout.connect(self._poll_mesh_export)
         self.poll.timeout.connect(self._poll_fft_preview)
         self.poll.start()
 
@@ -2561,6 +2576,42 @@ class RustMechDialog(QDialog):
             self.mode.setCurrentIndex(1)
             self.start_preview()
 
+    def export_mesh_to_ansys(self) -> None:
+        if not self.mesh_export_button.isEnabled():
+            return
+        from file_dialog import QFileDialog
+        from mapdl_backend import write_cdb_mesh
+        from ui_language import translate
+
+        preview = self.preview
+        filename, _ = QFileDialog.getSaveFileName(
+            self, "Export to ANSYS", "rustmech_mesh.cdb", translate("ANSYS mesh (*.cdb)"),
+            default_suffix="cdb",
+        )
+        if not filename or self.disposed:
+            return
+        if self.preview is not preview or preview.key != preview_key(self.collect()):
+            return
+        self._mesh_export_future = self.executor.submit(write_cdb_mesh, preview.mesh, Path(filename))
+        self.mesh_export_button.setEnabled(False)
+        self.status.setText("Exporting mesh to ANSYS…")
+
+    def _poll_mesh_export(self) -> None:
+        future = self._mesh_export_future
+        if future is None or not future.done():
+            return
+        from ui_language import translate
+
+        self._mesh_export_future = None
+        self.refresh_validity()
+        try:
+            path = future.result()
+        except Exception as error:
+            QMessageBox.warning(self, "ANSYS mesh export failed", str(error))
+        else:
+            message = translate("ANSYS mesh saved to") + f"\n{path}"
+            QMessageBox.information(self, "Export to ANSYS", message)
+
     def _select_model_view(self, index):
         if self.mode.currentIndex() == index:
             self.result_preview_field.setCurrentIndex(0)
@@ -2620,10 +2671,14 @@ class RustMechDialog(QDialog):
                 self.structure_apply_button.setEnabled(False)
         current = (
             self.preview
-            and self.preview.key == preview_key(self.collect())
+            and self.preview.key == preview_key(settings)
         )
         mesh_errors = self.preview.mesh.solve_errors if current and self.preview.mesh is not None else []
         pending = self.has_pending_geometry()
+        self.mesh_export_button.setEnabled(
+            bool(current and self.preview.mesh is not None and not pending
+                 and self._mesh_export_future is None)
+        )
         self.doe_studio.use_model_btn.setEnabled(geometry_valid)
         method = self.setup_tabs.currentIndex()
         idle = self.analysis_job is None and self.future is None

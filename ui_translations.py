@@ -909,6 +909,12 @@ Cancelling mesh generation…|Ağ üretimi iptal ediliyor…
 Smooth geometry · Ready|Pürüzsüz geometri · Hazır
 Ready · uses loading and contact conditions from the main setup|Hazır · Ana ayarlardaki yükleme ve temas koşullarını kullanır
 Geometry or mesh settings have changed. Click Apply to update the preview.|Geometri veya ağ ayarları değişti. Önizlemeyi güncellemek için Uygula'ya tıklayın.
+Export to ANSYS|ANSYS'e Aktar
+Save the generated FE mesh as an ANSYS CDB file (mm).|Oluşturulan sonlu eleman ağını ANSYS CDB dosyası (mm) olarak kaydet.
+ANSYS mesh (*.cdb)|ANSYS ağı (*.cdb)
+Exporting mesh to ANSYS…|Ağ ANSYS'e aktarılıyor…
+ANSYS mesh export failed|ANSYS ağı dışa aktarılamadı
+ANSYS mesh saved to|ANSYS ağı kaydedildi
 Geometry preview unavailable.|Geometri önizlemesi kullanılamıyor.
 Geometry is empty; adjust its parameters.|Geometri boş; parametreleri düzenleyin.
 Plan opened. Click Apply to preview geometry.|Plan açıldı. Geometriyi önizlemek için Uygula'ya tıklayın.

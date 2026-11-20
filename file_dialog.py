@@ -244,7 +244,7 @@ class QFileDialog(QtFileDialog):
         return super().nativeEvent(event_type, message)
 
     @classmethod
-    def _choose(cls, parent, title, directory, filters, mode, *, save=False):
+    def _choose(cls, parent, title, directory, filters, mode, *, save=False, default_suffix=""):
         app = QApplication.instance()
         store = getattr(app, "_rustmech_window_state", None)
         settings = store.settings if store is not None else QSettings("RustMech", "RustMech")
@@ -265,6 +265,8 @@ class QFileDialog(QtFileDialog):
         dialog.setOption(cls.Option.DontUseNativeDialog)
         dialog.setAcceptMode(cls.AcceptMode.AcceptSave if save else cls.AcceptMode.AcceptOpen)
         dialog.setFileMode(mode)
+        if default_suffix:
+            dialog.setDefaultSuffix(default_suffix)
         if filters:
             # Directory mode resets the filter selector to "Directories".
             dialog.setNameFilter(filters)
@@ -295,8 +297,10 @@ class QFileDialog(QtFileDialog):
         return cls._choose(parent, caption, dir, filter, cls.FileMode.ExistingFiles)
 
     @classmethod
-    def getSaveFileName(cls, parent=None, caption="", dir="", filter=""):
-        files, selected_filter = cls._choose(parent, caption, dir, filter, cls.FileMode.AnyFile, save=True)
+    def getSaveFileName(cls, parent=None, caption="", dir="", filter="", *, default_suffix=""):
+        files, selected_filter = cls._choose(
+            parent, caption, dir, filter, cls.FileMode.AnyFile, save=True, default_suffix=default_suffix,
+        )
         return (files[0] if files else ""), selected_filter
 
     @classmethod
