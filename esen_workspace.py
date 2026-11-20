@@ -22,7 +22,7 @@ from PySide6.QtCore import (
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QCheckBox, QDialog, QFormLayout, QFrame, QHeaderView, QHBoxLayout, QLabel,
-    QLineEdit, QListWidget, QListWidgetItem, QMessageBox, QPlainTextEdit, QProgressBar, QPushButton,
+    QLineEdit, QListWidget, QListWidgetItem, QMenu, QMessageBox, QPlainTextEdit, QProgressBar, QPushButton,
     QScrollArea, QSizePolicy, QSplitter, QStyle, QTabBar, QTableView, QTableWidget, QTableWidgetItem, QTabWidget,
     QToolTip, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
 )
@@ -85,13 +85,15 @@ QFrame[esenCard="paper"] { background: #FFFFFF; border: 1px solid #D5DBE2; borde
 #esenWorkspace #trubaConnectionBadge[state="working"] { color: #713F12; background: #FFF4CE; }
 #esenWorkspace QPushButton { padding: 0 7px; }
 #esenWorkspace QPushButton[compactInputAction="true"] { padding: 0; }
+#esenWorkspace QPushButton#esenFolderMenu { padding-right: 5px; }
+#esenWorkspace QPushButton#esenFolderMenu::menu-indicator { width: 6px; height: 6px; }
 #mdPeriodicTable QToolButton { padding: 0; font-size: 11px; min-height: 0; }
 #mdPeriodicTable QToolButton::menu-indicator { image: none; width: 0; height: 0; }
 #mdPeriodicTable QToolButton[inAlloy="true"] { background: #BFDBFE; border-color: #93C5FD; }
 #mdPeriodicTable QToolButton:hover, #mdPeriodicTable QToolButton:focus { border-color: #2563EB; }
 #mdPeriodicTable QToolButton:pressed { background: #93C5FD; }
 #esenFileFilter { background: #FFFFFF; border: 1px solid #CBD5E1; border-radius: 4px;
-                  color: #0F172A; font-size: 11px; padding: 0 3px; }
+                  color: #0F172A; font-size: 11px; padding: 0 3px; min-height: 23px; max-height: 23px; }
 #esenFileFilter:hover { border-color: #93C5FD; }
 #esenFileFilter:focus { border-color: #3B82F6; }
 #esenRun { color: #FFFFFF; background: #285EA6; }
@@ -128,7 +130,7 @@ def panel(title, *, paper=False, scrollable=False, actions=()):
     return card, layout
 
 
-def command(text, slot, *, role="", hint=""):
+def command(text, slot=None, *, role="", hint=""):
     button = QPushButton(text)
     button.setAutoDefault(False)
     button.setDefault(False)
@@ -139,7 +141,8 @@ def command(text, slot, *, role="", hint=""):
         button.setObjectName(role)
     if hint:
         button.setToolTip(hint)
-    button.clicked.connect(slot)
+    if slot is not None:
+        button.clicked.connect(slot)
     return button
 
 
@@ -439,7 +442,11 @@ class EsenWorkspace(QDialog):
         split.setStretchFactor(0, 1)
         split.setStretchFactor(1, 1)
 
-        self.batch_folder = command("Folder", self._pick_batch_folder, hint="Select Folder")
+        self.batch_folder = command("", role="esenFolderMenu", hint="Select Folder")
+        folder_menu = QMenu(self.batch_folder)
+        self.scan_folder_action = folder_menu.addAction("Scan folder for jobs", self._pick_batch_folder)
+        self.job_folder_action = folder_menu.addAction("Set job folder for selected files", self._pick_root)
+        self.batch_folder.setMenu(folder_menu)
         self.upload = command("Send Truba", self._upload_inputs, hint="Upload inputs to the open TRUBA folder")
         self.sync = command("Sync", self._sync_folders,
                             hint="Sync the local folder with the open TRUBA subfolder")
@@ -447,14 +454,19 @@ class EsenWorkspace(QDialog):
         self.pick_script = command("", self._pick_script, hint="LAMMPS input script")
         self.use_as_script = command("", self._use_as_script, hint="Use As Script")
         self.remove_inputs = command("", self._remove_files, hint="Remove selected files")
-        self.pick_root = command("", self._pick_root, hint="Job folder")
         self.move_up = command("↑", lambda: self._move_script(-1), hint="Move script up")
         self.move_down = command("↓", lambda: self._move_script(1), hint="Move script down")
-        icons = ((self.load_files, QStyle.StandardPixmap.SP_DialogOpenButton),
+        self.input_back = command("", lambda: self._step_input_directory(-1), hint="Previous folder")
+        self.input_forward = command("", lambda: self._step_input_directory(1), hint="Next folder")
+        self.input_up = command("", self._up_input_directory, hint="Up")
+        icons = ((self.batch_folder, QStyle.StandardPixmap.SP_DialogOpenButton),
+                 (self.load_files, QStyle.StandardPixmap.SP_FileDialogContentsView),
                  (self.pick_script, QStyle.StandardPixmap.SP_FileIcon),
-                 (self.pick_root, QStyle.StandardPixmap.SP_DirHomeIcon),
                  (self.use_as_script, QStyle.StandardPixmap.SP_DialogApplyButton),
-                 (self.remove_inputs, QStyle.StandardPixmap.SP_DialogDiscardButton))
+                 (self.remove_inputs, QStyle.StandardPixmap.SP_DialogDiscardButton),
+                 (self.input_back, QStyle.StandardPixmap.SP_ArrowBack),
+                 (self.input_forward, QStyle.StandardPixmap.SP_ArrowForward),
+                 (self.input_up, QStyle.StandardPixmap.SP_FileDialogToParent))
         for button, icon in icons:
             button.setIcon(self.style().standardIcon(icon))
             button.setIconSize(QSize(14, 14))
@@ -465,41 +477,31 @@ class EsenWorkspace(QDialog):
             button.setFixedWidth(CONTROL_HEIGHT)
         settings, layout = panel("Job settings", scrollable=True)
         left.addWidget(settings)
-        actions = QHBoxLayout()
-        actions.setSpacing(INPUT_TOOL_SPACING)
-        for button in (self.batch_folder, self.upload, self.sync, self.load_files, self.pick_script,
-                       self.move_up, self.move_down, self.pick_root, self.use_as_script, self.remove_inputs):
-            actions.addWidget(button)
-        actions.addStretch()
-        layout.addLayout(actions)
-
-        self.input_back = command("", lambda: self._step_input_directory(-1), hint="Previous folder")
-        self.input_forward = command("", lambda: self._step_input_directory(1), hint="Next folder")
-        self.input_up = command("", self._up_input_directory, hint="Up")
-        navigation = QHBoxLayout()
-        navigation.setSpacing(INPUT_TOOL_SPACING)
-        for button, icon in ((self.input_back, QStyle.StandardPixmap.SP_ArrowBack),
-                             (self.input_forward, QStyle.StandardPixmap.SP_ArrowForward),
-                             (self.input_up, QStyle.StandardPixmap.SP_FileDialogToParent)):
-            button.setProperty("compactInputAction", True)
-            button.setAccessibleName(button.toolTip())
-            button.setIcon(self.style().standardIcon(icon))
-            button.setIconSize(QSize(14, 14))
-            button.setFixedWidth(CONTROL_HEIGHT)
-            navigation.addWidget(button)
+        location = QHBoxLayout()
+        location.setSpacing(INPUT_TOOL_SPACING)
         self.input_path = QLineEdit()
         self.input_path.setReadOnly(True)
         self.input_path.setFixedHeight(CONTROL_HEIGHT)
         self.input_path.setAccessibleName("Job folder path")
         self.input_path.textChanged.connect(self.input_path.setToolTip)
-        navigation.addWidget(self.input_path, 1)
-        layout.addLayout(navigation)
+        location.addWidget(self.input_path, 1)
+        location.addWidget(self.upload)
+        location.addWidget(self.sync)
+        layout.addLayout(location)
+
+        actions = QHBoxLayout()
+        actions.setSpacing(INPUT_TOOL_SPACING)
+        for button in (self.batch_folder, self.load_files, self.pick_script, self.use_as_script,
+                       self.remove_inputs, self.move_up, self.move_down,
+                       self.input_back, self.input_forward, self.input_up):
+            actions.addWidget(button)
 
         self.input_filter = QLineEdit()
         self.input_filter.setObjectName("esenFileFilter")
         self.input_filter.setFixedHeight(CONTROL_HEIGHT)
         self.input_filter.setClearButtonEnabled(True)
-        self.input_filter.setPlaceholderText("Filter by name or extension")
+        self.input_filter.setMinimumWidth(90)
+        self.input_filter.setPlaceholderText("Filter")
         self.input_filter.setAccessibleName("Filter input files")
         self.input_filter.setToolTip("Checked files stay checked when hidden by the filter.")
         self.input_filter.textChanged.connect(self._filter_inputs)
@@ -508,10 +510,9 @@ class EsenWorkspace(QDialog):
         self.input_sort.setAccessibleName("Sort input files")
         self.input_sort.setToolTip("For manual Slurm ordering, select Job order and clear the filter.")
         self.input_sort.currentIndexChanged.connect(self._sort_inputs)
-        file_view = QHBoxLayout()
-        file_view.addWidget(self.input_filter, 1)
-        file_view.addWidget(self.input_sort)
-        layout.addLayout(file_view)
+        actions.addWidget(self.input_filter, 1)
+        actions.addWidget(self.input_sort)
+        layout.addLayout(actions)
         self.inputs = InputFileTree()
         self.inputs.setAcceptDrops(True)
         self.inputs.viewport().setAcceptDrops(True)
@@ -537,11 +538,6 @@ class EsenWorkspace(QDialog):
         layout.addWidget(self.sync_status)
         self.whole_folder = QCheckBox("Include entire job folder")
         self.whole_folder.toggled.connect(self._preview)
-        layout.addWidget(self.whole_folder)
-
-        self.job_form = form = QFormLayout()
-        configure_form(form)
-        layout.addLayout(form)
         self.target = compact_combo((("TRUBA", "remote"), ("This computer", "local")))
         self.ranks = CompactSpinBox()
         self.ranks.setRange(1, getattr(os, "process_cpu_count", os.cpu_count)() or 1)
@@ -557,12 +553,21 @@ class EsenWorkspace(QDialog):
         self.truba_badge.setObjectName("trubaConnectionBadge")
         self.truba_badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.truba_badge.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        target_label = QLabel("Run on")
+        target_label.setObjectName("esenFieldLabel")
+        target_label.setBuddy(self.target)
         target_row = QHBoxLayout()
-        target_row.setSpacing(6)
+        target_row.setSpacing(INPUT_TOOL_SPACING)
+        target_row.addWidget(target_label)
         target_row.addWidget(self.target)
+        target_row.addWidget(self.whole_folder)
         target_row.addWidget(self.truba_badge)
         target_row.addStretch()
-        self._form_row(form, "Run on", self.target, field_layout=target_row)
+        layout.addLayout(target_row)
+
+        self.job_form = form = QFormLayout()
+        configure_form(form)
+        layout.addLayout(form)
         self._form_row(form, "Local CPU cores", self.ranks)
         self._form_row(form, "Local RAM limit (MiB)", self.local_memory)
         self._form_row(form, "LAMMPS executable", self.local_exe)
@@ -1030,24 +1035,23 @@ class EsenWorkspace(QDialog):
 
     def _size_command_buttons(self):
         # Reserve space for the shared focus border on both sides.
-        toolbar_labels = (self.batch_folder, self.upload, self.sync)
+        transfer_buttons = (self.upload, self.sync)
         navigation = self.truba_browser.navigation_buttons
-        local_navigation = (self.input_back, self.input_forward, self.input_up)
         history_actions = (self.select_history, self.delete_job)
         history_commands = (self.use_inputs, self.refresh, self.resume, self.stop)
         md_actions = (self.md_preview_button, self.md_prepare, self.md_run)
         other_buttons = [button for button in self._command_buttons
-                         if button not in (*toolbar_labels, *self._compact_input_actions, *navigation, *local_navigation,
+                         if button not in (*transfer_buttons, *self._compact_input_actions, *navigation,
                                            *history_actions, *history_commands)]
-        for group in (other_buttons, toolbar_labels, navigation, history_actions, history_commands,
+        for group in (other_buttons, transfer_buttons, navigation, history_actions, history_commands,
                       md_actions, self.md_file_buttons):
             width = max(button.sizeHint().width() for button in group) + 2
             for button in group:
                 button.setFixedWidth(width)
         # The two order arrows replace Use As Script in Slurm mode.
         icon_count = len(self._compact_input_actions) - 1
-        gaps = (len(toolbar_labels) + icon_count - 1) * INPUT_TOOL_SPACING
-        toolbar_width = sum(button.width() for button in toolbar_labels) + icon_count * CONTROL_HEIGHT + gaps
+        gaps = (icon_count + 1) * INPUT_TOOL_SPACING
+        toolbar_width = icon_count * CONTROL_HEIGHT + gaps + self.input_filter.minimumWidth() + self.input_sort.width()
         scrollbar = self.style().pixelMetric(QStyle.PixelMetric.PM_ScrollBarExtent)
         self._settings_column.setMinimumWidth(max(305, toolbar_width + 2 * PANEL_PADDING + scrollbar))
 
@@ -1622,7 +1626,7 @@ class EsenWorkspace(QDialog):
         self.use_as_script.setVisible(not folder_mode and not slurm)
         self.remove_inputs.setVisible(not folder_mode)
         self.whole_folder.setVisible(not folder_mode)
-        self.pick_root.setVisible(not folder_mode)
+        self.job_folder_action.setVisible(not folder_mode)
         self.upload.setVisible(remote)
         self.sync.setVisible(remote)
         self.sync_status.setText(self.sync_message)
@@ -2232,7 +2236,7 @@ class EsenWorkspace(QDialog):
                                   and browser.loaded and browser.task is None
                                   and sync_directory and "esen-folders" not in PurePosixPath(sync_directory).parts))
         for control in (self.target, self.batch_folder, self.load_files, self.pick_script, self.inputs,
-                        self.pick_root, self.whole_folder, self.input_filter, self.input_sort):
+                        self.whole_folder, self.input_filter, self.input_sort):
             control.setEnabled(not uploading)
         selected = self.inputs.selectedItems()
         supporting_file_selected = any(item.job_order is not None and item.path in self.extra for item in selected)

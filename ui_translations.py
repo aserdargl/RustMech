@@ -86,6 +86,8 @@ Input script…|Girdi betiği…
 Job folder…|İş klasörü…
 Add Folder|Klasör Ekle
 Select Folder|Klasör Seç
+Scan folder for jobs|Klasördeki işleri tara
+Set job folder for selected files|Seçili dosyalar için iş klasörünü ayarla
 Upload to TRUBA|TRUBA’ya Aktar
 Upload inputs to the open TRUBA folder|Girdileri açık TRUBA klasörüne doğrudan aktar
 Sync|Eşitle
@@ -142,6 +144,7 @@ Choose a job folder outside the ESEN history directory.|ESEN iş geçmişini iç
 Load files…|Dosya yükle…
 LAMMPS input files|LAMMPS girdi dosyaları
 Include entire job folder|İş klasörünün tamamını ekle
+Filter|Filtre
 Filter by name or extension|Ada veya uzantıya göre filtrele
 Filter input files|Girdi dosyalarını filtrele
 Checked files stay checked when hidden by the filter.|Filtreyle gizlenen dosyaların işareti korunur.

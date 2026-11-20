@@ -17,7 +17,7 @@ from unittest.mock import ANY, patch
 from PySide6.QtCore import QDateTime, QItemSelectionModel, QMimeData, QObject, QPoint, QSettings, Qt, QUrl, Signal
 from PySide6.QtGui import QDragEnterEvent, QDropEvent
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QMessageBox
+from PySide6.QtWidgets import QApplication, QLabel, QMessageBox
 
 import esen_jobs as jobs
 from esen_ai_prompt import ESEN_AI_PROMPT
@@ -587,18 +587,25 @@ class EsenTests(unittest.TestCase):
                     if locale != language.language:
                         language.set_language(locale)
                     app.processEvents()
-                    self.assertEqual(workspace.batch_folder.text(), "Folder")
+                    self.assertFalse(workspace.batch_folder.text())
+                    self.assertFalse(workspace.batch_folder.icon().isNull())
+                    menu = workspace.batch_folder.menu()
+                    language.localize(menu)
+                    self.assertEqual(menu.actions()[0].text(),
+                                     "Klasördeki işleri tara" if locale == "tr" else "Scan folder for jobs")
+                    self.assertEqual(menu.actions(), [workspace.scan_folder_action, workspace.job_folder_action])
                     self.assertEqual(workspace.upload.text(), "Send Truba")
                     self.assertEqual(workspace.sync.text(), "Eşitle" if locale == "tr" else "Sync")
-                    toolbar = (workspace.batch_folder, workspace.upload, workspace.sync,
-                               *workspace._compact_input_actions)
-                    self.assertEqual(len({button.y() for button in toolbar if button.isVisible()}), 1)
-                    self.assertEqual(workspace.batch_folder.width(), workspace.upload.width())
+                    toolbar = (*workspace._compact_input_actions, workspace.input_filter, workspace.input_sort)
+                    self.assertEqual(len({control.y() for control in toolbar if control.isVisible()}), 1)
+                    self.assertLess(workspace.input_filter.x(), workspace.input_sort.x())
                     self.assertEqual(workspace.sync.width(), workspace.upload.width())
                     self.assertEqual({button.width() for button in workspace._compact_input_actions}, {25})
-                    local_navigation = (workspace.input_back, workspace.input_forward, workspace.input_up)
-                    self.assertEqual({button.width() for button in local_navigation}, {25})
-                    self.assertEqual(len({button.y() for button in local_navigation}), 1)
+                    target, whole_folder = workspace.target, workspace.whole_folder
+                    label = next(label for label in workspace.findChildren(QLabel) if label.buddy() is target)
+                    self.assertEqual(target.x() - (label.x() + label.width()), 2)
+                    self.assertEqual(whole_folder.x() - (target.x() + target.width()), 2)
+                    self.assertLessEqual(abs(whole_folder.geometry().center().y() - target.geometry().center().y()), 1)
                     browser = workspace.truba_browser
                     date_header = "Değiştirilme tarihi" if locale == "tr" else "Date modified"
                     self.assertEqual(workspace.inputs.headerItem().text(2), date_header)
@@ -614,7 +621,7 @@ class EsenTests(unittest.TestCase):
                     self.assertEqual(len({button.width() for button in history_actions}), 1)
                     self.assertEqual(len({button.width() for button in history_commands}), 1)
                     buttons = [button for button in workspace._command_buttons
-                               if button not in (*toolbar, *navigation, *local_navigation,
+                               if button not in (*toolbar, workspace.upload, workspace.sync, *navigation,
                                                  *history_actions, *history_commands)]
                     width = max(button.sizeHint().width() for button in buttons) + 2
                     self.assertEqual({button.maximumWidth() for button in buttons}, {width})
@@ -886,7 +893,7 @@ class EsenTests(unittest.TestCase):
 
     def load_batch(self, workspace):
         with patch("esen_workspace.QFileDialog.getExistingDirectory", return_value=str(self.source)):
-            workspace.batch_folder.click()
+            workspace.scan_folder_action.trigger()
         workspace.folder_scan[0].result(timeout=5)
         workspace._tick()
 
