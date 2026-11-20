@@ -70,6 +70,27 @@ class KratosIntegrityTests(unittest.TestCase):
         for index, load in enumerate(result.time_values):
             self.assertAlmostEqual(result.top_platen_displacement(index), -settings.compression * load)
 
+    @unittest.skipUnless(local_kratos_python() is not None, "Local Kratos runtime is not installed")
+    def test_quadratic_platen_contact_preserves_reference_cube_stiffness(self):
+        base = Settings(size=1, cell_size=1, compression=.001, substeps=3, cores=1,
+                        solver_backend="kratos", material_model="linear_elastic", young_modulus=1000,
+                        self_contact_mode="disabled", bottom_platen_contact="frictionless",
+                        top_platen_contact="frictionless", kratos_contact_method="penalty")
+        # For a 1 mm cube at 0.1% strain, E * area * strain is 1 N.
+        for mesh_type in ("HEX20", "TET10"):
+            for divisions in (4, 6):
+                with self.subTest(mesh_type=mesh_type, divisions=divisions):
+                    mesh = cube_mesh(mesh_type == "TET10", subdivisions=divisions, quadratic=True)
+                    settings = replace(base, mesh_type=mesh_type, mesh_resolution=1 / divisions)
+                    folder = self.root / f"{mesh_type}-{divisions}"
+                    folder.mkdir()
+                    execution = LocalKratosBackend().solve(AnalysisRequest(settings, mesh, folder))
+                    self.assertFalse(execution.error, execution.error)
+                    result = execution.results
+                    self.assertTrue(result.manifest["complete"])
+                    _, top = result.platen_reactions(result.nsets - 1)
+                    self.assertAlmostEqual(top, -1., delta=.01)
+
     def test_rejects_path_escape_duplicate_ids_and_nan(self):
         self.manifest['steps'][0]['file']='../step_000001.npz'
         self.save()

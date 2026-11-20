@@ -257,12 +257,19 @@ def export_kratos(mesh, settings, directory):
             radius=np.linalg.norm(coordinates-center,axis=1).max()
             distance=max(np.linalg.norm(center[:2]-master_center) for master_center in master_centers)
             search_factor=max(search_factor,float(distance/max(radius,1e-12))+2.)
+    penalty_factor = 500 if settings.kratos_contact_method == "alm" else settings.kratos_penalty_factor
+    penalty = penalty_factor * settings.young_modulus / spacing
+    if quadratic and experiment == "compression":
+        # The linear mortar triangles on quadratic platen faces use a gap
+        # weighted by surface area. Normalize by the nominal mesh face area
+        # so refining the specimen does not progressively soften the interface.
+        penalty /= spacing**2
     process = {"python_module": "alm_contact_process" if settings.kratos_contact_method == "alm" else "penalty_contact_process",
                "kratos_module": "KratosMultiphysics.ContactStructuralMechanicsApplication", "Parameters": {
                    "model_part_name": "Structure", "contact_model_part": contact_parts,
                    "assume_master_slave": slaves, "friction_coefficients": coefficients,
                    "contact_property_ids":{key:100+int(key) for key in contact_parts},
-                   "advance_ALM_parameters": {"manual_ALM": True, "penalty": (500 if settings.kratos_contact_method == "alm" else settings.kratos_penalty_factor)*settings.young_modulus/spacing, "scale_factor": settings.young_modulus},
+                   "advance_ALM_parameters": {"manual_ALM": True, "penalty": penalty, "scale_factor": settings.young_modulus},
                    "search_parameters": {"search_factor": search_factor, "consider_gap_threshold": True, "dynamic_search": True,
                                          **({'normal_orientation_threshold':1.5} if settings.self_contact_mode!='disabled' else {})},
                    "not_normal_update_frictional": True,
