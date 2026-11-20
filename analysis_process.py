@@ -40,7 +40,7 @@ def _execute(result_path, target, args):
 
 
 class AnalysisProcess:
-    def __init__(self, target, *args, remote_auth=None):
+    def __init__(self, target, *args, remote_auth=None, remote_options=None):
         self._scratch = tempfile.TemporaryDirectory(prefix="rustmech-analysis-")
         self._result_path = Path(self._scratch.name) / "result.pkl"
         self._remote_auth=remote_auth
@@ -57,7 +57,7 @@ class AnalysisProcess:
             # Only SSH orchestration runs here; numerical work remains on Slurm.
             # Stay in the panel's process to reuse its authenticated SSH session.
             self._remote_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix='truba-job')
-            self._remote_future = self._remote_executor.submit(target, *args)
+            self._remote_future = self._remote_executor.submit(target, *args, **(remote_options or {}))
             return
         self._process = multiprocessing.get_context("spawn").Process(
             target=_execute, args=(str(self._result_path), target, args),

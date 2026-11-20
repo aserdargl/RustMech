@@ -225,7 +225,14 @@ class RemoteProtocolTests(unittest.TestCase):
         self.assertEqual(first.put_names,["engine.tar.gz","request.json","run.slurm"])
         record = json.loads((directory/"remote_job.json").read_text())
         self.assertEqual(record["state"],"downloaded")
-        run_remote_job({},RemoteContext(),resume_record=record)
+        command = FakeTransport.command
+
+        def refuse_submission_lookup(transport, script):
+            self.assertNotIn("RUSTMECH_JOB_ID", script)
+            return command(transport, script)
+
+        with patch.object(FakeTransport, "command", refuse_submission_lookup):
+            run_remote_job({},RemoteContext(),resume_record=record)
         self.assertEqual(FakeTransport.instances[-1].submissions,0)
         self.assertEqual(FakeTransport.instances[-1].put_names,[])
 

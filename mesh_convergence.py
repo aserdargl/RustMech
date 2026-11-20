@@ -7,6 +7,7 @@ from pathlib import Path
 from queue import Empty
 from multiprocessing import get_context
 from time import monotonic
+from uuid import uuid4
 
 from studio_style import CompactSpinBox, CompactComboBox
 from PySide6.QtCore import QSettings, QSignalBlocker, QTimer, Qt
@@ -177,6 +178,12 @@ class MeshConvergenceWidget(QWidget):
         self.remote_jobs = {}
         self.remote_outcomes = {}
         self.remote_records = {}
+        self.study_plan = {}
+        self.remote_study_base = None
+        self.saved_geometry_source = None
+        self.saved_jobs = {}
+        self.saved_study_key = None
+        self.history_only = False
         self.single_remote_run = False
         self.rows = []
         self.time_units = {1: "s", 2: "s"}
@@ -358,6 +365,15 @@ class MeshConvergenceWidget(QWidget):
         results_title.setObjectName("convergenceResultsTitle")
         results_title.setMinimumHeight(21)
         header_layout.addWidget(results_title)
+        self.history_combo = CompactComboBox()
+        self.history_combo.setFixedWidth(190)
+        self.history_combo.setToolTip("Previously submitted TRUBA mesh convergence studies")
+        self.history_combo.activated.connect(self._restore_saved_study)
+        self.history_combo.hide()
+        header_layout.addWidget(self.history_combo)
+        self.append_button = self._button(header_layout, "Add 2 mesh levels", self.append_remote_levels)
+        self.append_button.setToolTip("Submit the next two levels from this study while the current jobs run.")
+        self.append_button.hide()
         self.status = QLabel("Ready")
         self.status.setObjectName("convergenceStatus")
         self.status.setWordWrap(True)
@@ -436,8 +452,12 @@ class MeshConvergenceWidget(QWidget):
         if self.remote_controller is not None:
             self.run_on_truba.toggled.connect(self._select_execution_target)
             self.remote_controller.changed.connect(self._solver_changed)
+            self.remote_controller.window.truba_dialog.connection_changed.connect(self._attach_saved_jobs)
         self._configure_metrics()
         self._solver_changed()
+        studies = self._refresh_saved_studies()
+        if studies:
+            self._restore_saved_study(0, studies)
 
     def _results_context_menu(self, position):
         column = self.results.columnAt(position.x())
@@ -489,13 +509,14 @@ class MeshConvergenceWidget(QWidget):
         divisor = next(scale for unit, _, scale in TIME_UNITS if unit == self.time_units[column])
         return f"{seconds / divisor:.2f}"
 
-    def _configure_metrics(self):
-        metrics = response_metrics(self.settings)
+    def _configure_metrics(self, settings=None):
+        settings = settings or self.settings
+        metrics = response_metrics(settings)
         for column,(label,_) in enumerate(metrics,3):
             self.results.horizontalHeaderItem(column).setText(label)
             self.results.horizontalHeaderItem(column).setToolTip(label)
-        if kind(self.settings)=='compression':
-            for column,label in enumerate(('Displ. (mm)' if self.settings.loading_mode=='force' else 'Force (N)','Modulus (MPa)','SEA (J/g)'),3):
+        if kind(settings)=='compression':
+            for column,label in enumerate(('Displ. (mm)' if settings.loading_mode=='force' else 'Force (N)','Modulus (MPa)','SEA (J/g)'),3):
                 self.results.horizontalHeaderItem(column).setText(label)
         for check, (label, _) in zip(self.metric_checks, metrics):
             check.setText(label)
@@ -525,6 +546,7 @@ class MeshConvergenceWidget(QWidget):
         self.advanced.layout().setRowVisible(self.time_budget_field, not remote)
         self.advanced.layout().setRowVisible(self.truba_wall_field, remote)
         self._show_remote_columns(remote or bool(self.remote_records))
+        self._refresh_append_button()
 
     def _show_remote_columns(self, visible):
         for column in range(len(RESULT_HEADERS) - len(REMOTE_RESULT_HEADERS), len(RESULT_HEADERS)):
@@ -618,24 +640,36 @@ class MeshConvergenceWidget(QWidget):
         return button
 
     def level_settings(self, size):
-        capabilities = get_solver_capabilities(self.solver_combo.currentData())
-        level = replace(self.level_base_settings, mesh_resolution=size,
-                        mesh_type=self.mesh_type_combo.currentData(),
-                        solver_backend=capabilities.identifier,
-                        cores=min(self.level_base_settings.cores, capabilities.max_cores))
-        if self.run_on_truba.isChecked():
-            level = replace(level, cores=MIN_TRUBA_LEVEL_CPUS, automatic_cores=False)
-        if level.mesh_type in TETRAHEDRAL_MESH_TYPES:
-            local_ratio = self.local_size.value() / self.start_size.value()
-            level = replace(level, local_mesh_size=size * local_ratio)
+        if self.remote_study_base is not None:
+            level = self._study_level(size)
+        else:
+            capabilities = get_solver_capabilities(self.solver_combo.currentData())
+            level = replace(self.level_base_settings, mesh_resolution=size,
+                            mesh_type=self.mesh_type_combo.currentData(),
+                            solver_backend=capabilities.identifier,
+                            cores=min(self.level_base_settings.cores, capabilities.max_cores))
+            if self.run_on_truba.isChecked():
+                level = replace(level, cores=MIN_TRUBA_LEVEL_CPUS, automatic_cores=False)
+            if level.mesh_type in TETRAHEDRAL_MESH_TYPES:
+                local_ratio = self.local_size.value() / self.start_size.value()
+                level = replace(level, local_mesh_size=size * local_ratio)
         errors = validate_settings(level)
         if errors:
             raise ValueError(errors[0])
         return level
 
+    def _study_level(self, size):
+        base = self.remote_study_base
+        level = replace(base, mesh_resolution=size, cores=MIN_TRUBA_LEVEL_CPUS, automatic_cores=False)
+        if level.mesh_type in TETRAHEDRAL_MESH_TYPES:
+            level = replace(level, local_mesh_size=size * (base.local_mesh_size / base.mesh_resolution))
+        return level
+
     def start(self):
-        if self.future is not None:
+        if self.future is not None or self.saved_jobs:
             return
+        previous_base = self.remote_study_base
+        self.remote_study_base = None
         self.single_remote_run = self.run_on_truba.isChecked() and self.single_truba_mesh.isChecked()
         try:
             capabilities = get_solver_capabilities(self.solver_combo.currentData())
@@ -659,8 +693,17 @@ class MeshConvergenceWidget(QWidget):
             if first.mesh_resolution < self.minimum.value():
                 raise ValueError("Starting size is below the minimum global size.")
         except ValueError as exc:
+            self.remote_study_base = previous_base
             QMessageBox.warning(self, "Invalid convergence plan", str(exc))
             return
+        self.history_only = False
+        self.saved_geometry_source = None
+        self.saved_study_key = None
+        self.study_plan = {}
+        if self.run_on_truba.isChecked():
+            self.remote_study_base = first
+            self.study_plan = self._study_snapshot(first)
+        self._configure_metrics(first)
         self.rows.clear()
         self.remote_records.clear()
         self._show_remote_columns(self.run_on_truba.isChecked())
@@ -685,6 +728,204 @@ class MeshConvergenceWidget(QWidget):
         self.force_stop_button.setEnabled(running)
         self.export_button.setEnabled(not running and bool(self.rows))
         self.apply_button.setEnabled(not running and self.recommended is not None)
+        self.history_combo.setEnabled(not running)
+        self._refresh_append_button()
+
+    def _study_snapshot(self, first):
+        return dict(id=uuid4().hex, automatic=self.automatic.isChecked(),
+                    factor=self.factor.value(), minimum=self.minimum.value(),
+                    max_levels=self.max_levels.value(), max_elements=self.max_elements.value(),
+                    wall_minutes=self.truba_wall_minutes.value(), tolerance=self.tolerance.value(),
+                    selected=self.selected, absolute=[control.value() for control in self.absolute],
+                    manual_sizes=[first.mesh_resolution, *(level.mesh_resolution for level in self.manual_pending)],
+                    single=self.single_remote_run)
+
+    def _next_append_sizes(self):
+        limit = min(2, self.max_levels.value() - len(self.rows))
+        if limit <= 0 or self.single_remote_run or not self.rows:
+            return []
+        if not self.automatic.isChecked():
+            return [level.mesh_resolution for level in self.manual_pending[:limit]
+                    if level.mesh_resolution >= self.minimum.value()]
+        finest = min(row.settings.mesh_resolution for row in self.rows)
+        return [size for offset in range(1, limit + 1)
+                if (size := finest / self.factor.value() ** offset) >= self.minimum.value()]
+
+    def _refresh_append_button(self):
+        self.append_button.setVisible(self.remote_controller is not None and
+                                      (self.run_on_truba.isChecked() or bool(self.remote_records)))
+        self.append_button.setEnabled(bool(self.remote_jobs or self.saved_jobs)
+                                      and not self.stop_requested.is_set()
+                                      and bool(self._next_append_sizes()))
+
+    def append_remote_levels(self):
+        if not self.append_button.isEnabled():
+            return
+        sizes = self._next_append_sizes()
+        manual = not self.automatic.isChecked()
+        try:
+            if self.saved_study_key and getattr(self.remote_controller.auth(), "username", None) != self.saved_study_key[0]:
+                raise ValueError("Connect to TRUBA with this study's account to add mesh levels.")
+            if self.saved_geometry_source is not None:
+                geometry = self.saved_geometry_source.saved_geometry()
+                self.remote_study_base = replace(self.remote_study_base, imported_geometry_path=str(geometry))
+                self.manual_pending = [self._study_level(level.mesh_resolution) for level in self.manual_pending]
+                self.saved_geometry_source = None
+            plan = [(self.level_settings(size), "Manual" if manual else "Refinement") for size in sizes]
+            if not self.remote_controller.requested:
+                self.remote_controller.toggle.setChecked(True)
+            context, auth = self._require_remote_submission(plan[0][0], len(plan))
+            if self.saved_study_key and getattr(auth, "username", None) != self.saved_study_key[0]:
+                raise ValueError("Connect to TRUBA with this study's account to add mesh levels.")
+        except (ValueError, RuntimeError, OSError) as error:
+            self._set_status(f"Failed to add mesh levels: {error}")
+            return
+        if manual:
+            del self.manual_pending[:len(plan)]
+        self.history_only = False
+        self._submit_remote_levels(plan, context, auth)
+        if self.future is not None:
+            self.timer.start()
+
+    def _refresh_saved_studies(self):
+        if self.remote_controller is None:
+            return {}
+        from convergence_history import saved_mesh_studies
+
+        current = self.history_combo.currentData()
+        state_dir = self.remote_controller.window.truba_dialog.state_dir
+        if not isinstance(state_dir, Path):
+            return {}
+        studies = saved_mesh_studies(state_dir)
+        self.history_combo.clear()
+        for key, jobs in studies.items():
+            first = jobs[0]
+            settings = first.levels[0]
+            name = first.record.get("study_name") or settings.imported_geometry_name or settings.structure_name
+            self.history_combo.addItem(f"{name} · Slurm {first.record['job_id']}", key)
+        index = self.history_combo.findData(current)
+        if index >= 0:
+            self.history_combo.setCurrentIndex(index)
+        self.history_combo.setVisible(bool(studies))
+        return studies
+
+    def _restore_saved_study(self, index, studies=None):
+        if self.future is not None:
+            return
+        key = self.history_combo.itemData(index)
+        jobs = (studies if studies is not None else self._refresh_saved_studies()).get(key)
+        if not jobs:
+            return
+        self.history_combo.setCurrentIndex(self.history_combo.findData(key))
+        self.saved_study_key = key
+        self.history_only = True
+        self.saved_jobs.clear()
+        self.remote_outcomes.clear()
+        self.remote_records.clear()
+        self.rows.clear()
+        self.results.setRowCount(0)
+        self.recommended = None
+        self.stop_requested.clear()
+        self.consecutive_failures = 0
+        self.started = monotonic()
+        self.remote_study_base = base = jobs[0].levels[0]
+        self.saved_geometry_source = jobs[0] if base.imported_geometry_path else None
+        for combo, value in ((self.solver_combo, base.solver_backend), (self.mesh_type_combo, base.mesh_type)):
+            with QSignalBlocker(combo):
+                combo.setCurrentIndex(combo.findData(value))
+        saved = next((job.plan for job in jobs if job.plan), {})
+        selection = saved.get("selected", jobs[0].request.get("selected")) or list(range(len(METRICS)))
+        self.selected = selection
+        self.single_remote_run = bool(saved.get("single"))
+        original_wall = jobs[0].record.get("context", {}).get("walltime", "00:30:00")
+        try:
+            hours, minutes, _seconds = map(int, original_wall.split(":"))
+            wall_minutes = hours * 60 + minutes
+        except ValueError:
+            wall_minutes = 30
+        second = jobs[0].levels[1] if len(jobs[0].levels) > 1 else None
+        factor = base.mesh_resolution / second.mesh_resolution if second else 1.3
+        self.automatic.setChecked(saved.get("automatic", True))
+        self.start_size.setValue(base.mesh_resolution)
+        self.local_size.setValue(base.local_mesh_size)
+        for name, default in (
+            ("tolerance", 2), ("factor", factor), ("minimum", base.mesh_resolution / 10),
+            ("max_levels", max(12, sum(len(job.levels) for job in jobs))),
+            ("max_elements", jobs[0].request.get("max_elements", self.max_elements.value())),
+            ("truba_wall_minutes", saved.get("wall_minutes", wall_minutes)),
+        ):
+            control = getattr(self, name)
+            with QSignalBlocker(control):
+                control.setValue(saved.get(name, default))
+        for index, check in enumerate(self.metric_checks):
+            check.setChecked(index in selection)
+        for control, value in zip(self.absolute, saved.get("absolute", [1e-9] * len(METRICS)), strict=True):
+            control.setValue(value)
+        self.manual_pending = []
+        manual_sizes = saved.get("manual_sizes", [])
+        if manual_sizes and not self.automatic.isChecked():
+            self.manual.setText(", ".join(map(str, manual_sizes)))
+            attempted = [level.mesh_resolution for job in jobs for level in job.levels]
+            self.manual_pending = [self._study_level(size) for size in manual_sizes
+                                   if not any(math.isclose(size, used) for used in attempted)]
+        self.study_plan = saved or {**self._study_snapshot(base), "id": key[1]}
+        with QSignalBlocker(self.run_on_truba):
+            self.run_on_truba.setChecked(True)
+        self.single_truba_mesh.setChecked(self.single_remote_run)
+        self.single_truba_mesh.show()
+        self.truba_resource_info.show()
+        self.advanced.layout().setRowVisible(self.time_budget_field, False)
+        self.advanced.layout().setRowVisible(self.truba_wall_field, True)
+        self._configure_metrics(base)
+        self._show_remote_columns(True)
+        for job in jobs:
+            stages = job.plan.get("kinds", [])
+            group = tuple(self._add_level(level, stage, f"TRUBA · {job.record.get('state', 'submitted')}")
+                          for level, stage in zip(job.levels, stages or ["Saved mesh"] * len(job.levels), strict=True))
+            self._update_remote_records(group, job.record)
+            for row in group:
+                self.remote_records[row].setdefault("solver_cores", self.rows[row].settings.cores)
+            results = job.cached_results()
+            if results is None:
+                self.saved_jobs[group] = job
+            else:
+                for row, result in zip(group, results, strict=True):
+                    self._collect_level(row, result, self.remote_records[row])
+        self._refresh_differences()
+        if self.saved_jobs:
+            self._set_running(True)
+            self.stop_button.setEnabled(False)
+            self.force_stop_button.setEnabled(False)
+            self.history_combo.setEnabled(True)
+            self._set_status("Saved TRUBA jobs · connect to refresh their status")
+            self._attach_saved_jobs()
+        else:
+            self._finish_saved_study()
+
+    def _attach_saved_jobs(self, _connected=True):
+        if not _connected or not self.saved_jobs or self.remote_controller.closing:
+            return
+        auth = self.remote_controller.auth()
+        if auth is None or auth.username != self.saved_study_key[0]:
+            return
+        from truba_remote import resume_convergence_levels
+
+        for group, job in list(self.saved_jobs.items()):
+            try:
+                self.remote_jobs[group] = AnalysisProcess(resume_convergence_levels, job.path, remote_auth=auth)
+            except (ValueError, OSError, RuntimeError) as error:
+                self._set_status(f"Failed to track saved TRUBA jobs: {error}")
+                continue
+            del self.saved_jobs[group]
+        self.future = next(iter(self.remote_jobs.values()), None)
+        if self.future is not None:
+            self._set_running(True)
+            self.timer.start()
+
+    def _finish_saved_study(self):
+        self.recommended = converged_level(
+            self.rows, self.tolerance.value(), self.selected, [control.value() for control in self.absolute])
+        self._finish("Saved TRUBA mesh levels restored.")
 
     def _launch(self, settings, kind):
         if self.run_on_truba.isChecked():
@@ -766,13 +1007,16 @@ class MeshConvergenceWidget(QWidget):
             try:
                 self.remote_jobs[group] = AnalysisProcess(
                     target, settings, context, self.max_elements.value(), self.selected,
-                    remote_auth=auth)
+                    remote_auth=auth, remote_options={"study": {
+                        **self.study_plan, "row": group[0], "kinds": [self.rows[index].kind for index in group],
+                    }})
             except Exception as exc:
                 for index in group:
                     self.rows[index].status = f"Failed to start convergence: {exc}"
                     self.remote_outcomes[index] = False
                     self._render(index)
         self.future = next(iter(self.remote_jobs.values()), None)
+        self._refresh_append_button()
         if self.future is None:
             self.remote_outcomes.clear()
             self._finish(self.rows[-1].status)
@@ -803,6 +1047,7 @@ class MeshConvergenceWidget(QWidget):
 
     def request_stop(self):
         self.stop_requested.set()
+        self._refresh_append_button()
         self._set_status("Stopping after the current stage…")
 
     def _close_updates(self):
@@ -983,6 +1228,10 @@ class MeshConvergenceWidget(QWidget):
             if not self.stop_requested.is_set():
                 self._set_status(f"TRUBA · {sum(map(len, self.remote_jobs))} analyses active")
             return
+        if self.saved_jobs:
+            self.timer.stop()
+            self._refresh_append_button()
+            return
         outcomes = sorted(self.remote_outcomes.items())
         self.remote_outcomes.clear()
         self._after_levels(outcomes)
@@ -1053,6 +1302,9 @@ class MeshConvergenceWidget(QWidget):
 
     def _after_levels(self, outcomes):
         self._refresh_differences()
+        if self.history_only and not self.stop_requested.is_set():
+            self._finish_saved_study()
+            return
         if not self.run_on_truba.isChecked() and monotonic() - self.started >= 60 * self.max_minutes.value():
             self._finish("Time budget reached; convergence not confirmed.")
             return
@@ -1121,6 +1373,8 @@ class MeshConvergenceWidget(QWidget):
     def _finish(self, message):
         self.timer.stop()
         self._set_running(False)
+        if self.study_plan:
+            self._refresh_saved_studies()
         self._set_status(message)
 
     def apply_mesh(self):

@@ -13,6 +13,7 @@ from pathlib import Path, PurePosixPath
 import re
 import shlex
 import tarfile
+from threading import Lock
 import time
 import uuid
 
@@ -20,6 +21,13 @@ from remote_operations import ANALYSIS_OPERATIONS
 from truba_jobs import (HOST, SAFE_NAME, SLURM_TERMINAL_STATES, SSHJobs, WinSCPJobs, connection, job_record_lock,
                         validated_remote_path, write_record, cancel_remote)
 from truba_credentials import state_directory
+
+_convergence_followers = {}
+
+
+def _convergence_poll_lock(record):
+    with job_record_lock:
+        return _convergence_followers.setdefault(record["local_directory"], Lock())
 
 
 @dataclass(frozen=True)
@@ -338,7 +346,7 @@ def convergence_peak_ram(accounting, job_id, level_count):
     return peaks
 
 
-def _rebase_paths(directory,result):
+def _rebase_paths(directory,result, *, rewrite_summaries=True):
     """Relocate the known reporting paths; never reuse a remote absolute path locally."""
     remote_output = result.get("remote_output","")
     def transform(value):
@@ -348,8 +356,9 @@ def _rebase_paths(directory,result):
             return str(Path(directory)/"output"/value[len(remote_output):].lstrip("/"))
         return value
     result = transform(result)
-    for path in (Path(directory)/"output").rglob("summary.json"):
-        write_record(path,transform(json.loads(path.read_text())))
+    if rewrite_summaries:
+        for path in (Path(directory)/"output").rglob("summary.json"):
+            write_record(path,transform(json.loads(path.read_text())))
     return result
 
 
@@ -397,6 +406,8 @@ def run_remote_job(request,context,auth=None,marker=None,*,directory=None,resume
                       operation=request["operation"],request_id=request["request_id"],source_sha256=source_hash)
         if study_name and request["operation"] not in ("probe", "prepare", "preview", "surface"):
             record["study_name"] = study_name
+        if request['operation'] == 'convergence_level' and request.get('convergence_study'):
+            record['convergence_study'] = request['convergence_study']
         if submit_only:
             record["background"] = True
             settings = request.get("settings", {})
@@ -406,7 +417,11 @@ def run_remote_job(request,context,auth=None,marker=None,*,directory=None,resume
     registry = state_directory()/"jobs"/(PurePosixPath(remote).name+".json")
     paths = [directory/"remote_job.json",registry]+([Path(marker)] if marker else [])
     if not poll_once:
-        _write_paths(paths,record)
+        if resume_record and record.get("job_id"):
+            if marker:
+                write_record(Path(marker), record)
+        else:
+            _write_paths(paths,record)
     if context.session_id and not record.get("session"):
         from truba_session import saved_session, validate_session, refresh_session
         session = saved_session()
@@ -496,11 +511,11 @@ printf 'RUSTMECH_JOB_ID=%s\n' "$(cat job.id)"
                       " mv -- "+shlex.quote(inbox+".tmp")+" "+shlex.quote(inbox)+"\n"+
                       " printf '%s\\n' "+job_id+" > job.id\nfi\n"+
                       "printf 'RUSTMECH_JOB_ID=%s\\n' \"$(cat job.id)\"\n")
-        if not poll_once and (submit_only or marker is not None or detach_requested is not None):
+        if not poll_once and not record.get('job_id') and (submit_only or marker is not None or detach_requested is not None):
             record["submission_attempted"] = True
             update("submitting")
             script = "trap '' HUP\n" + script
-        if not poll_once or not record.get("job_id"):
+        if not record.get("job_id"):
             if poll_once:
                 # The upload finished but the client may have lost the sbatch reply.
                 # Reconnect only to an existing remote ID.
@@ -727,13 +742,24 @@ run_remote_mechanics.remote_submit_target = True
 
 
 def sync_background_analysis(record, auth):
-    return run_remote_job({}, RemoteContext(**record["context"]), auth, resume_record=record, poll_once=True)
+    if record.get("operation") != "convergence_level":
+        return run_remote_job({}, RemoteContext(**record["context"]), auth, resume_record=record, poll_once=True)
+    lock = _convergence_poll_lock(record)
+    if not lock.acquire(blocking=False):
+        return None
+    try:
+        return run_remote_job({}, RemoteContext(**record["context"]), auth, resume_record=record, poll_once=True)
+    finally:
+        lock.release()
 
 
-def run_remote_level(settings,context,max_elements,selected,remote_auth=None,job_marker=None):
+def run_remote_level(settings,context,max_elements,selected,remote_auth=None,job_marker=None,*,study=None):
     cores, _ = request_resources(context, 'convergence_level')
     settings = replace(settings, cores=min(settings.cores, cores), automatic_cores=False)
-    result,_ = run_remote_job(dict(operation="convergence_level",settings=asdict(settings),max_elements=max_elements,selected=selected),context,remote_auth,job_marker)
+    request = dict(operation='convergence_level', settings=asdict(settings), max_elements=max_elements, selected=selected)
+    if study:
+        request['convergence_study'] = study
+    result,_ = run_remote_job(request,context,remote_auth,job_marker)
     if result is None:
         return None
     return _decode_level(result['level'])
@@ -755,7 +781,7 @@ def convergence_level_resources(context, count):
             for i in range(count)]
 
 
-def run_remote_level_pair(settings, context, max_elements, selected, remote_auth=None, job_marker=None):
+def run_remote_level_pair(settings, context, max_elements, selected, remote_auth=None, job_marker=None, *, study=None):
     first, second = settings
     if first.imported_geometry_path != second.imported_geometry_path:
         raise ValueError('Paired convergence levels require the same specimen.')
@@ -766,9 +792,18 @@ def run_remote_level_pair(settings, context, max_elements, selected, remote_auth
                   memory_mb=share['memory_mb']) for level, share in zip(settings, resources, strict=True)]
     request = dict(operation='convergence_level', settings=steps[0]['settings'], convergence_steps=steps,
                    max_elements=max_elements, selected=selected)
+    if study:
+        request['convergence_study'] = study
     result, directory = run_remote_job(request, context, remote_auth, job_marker)
+    return decode_convergence_results(result, directory, steps)
+run_remote_level_pair.remote_job_target = True
+
+
+def decode_convergence_results(result, directory, steps):
     if result is None:
         return None
+    if not steps:
+        return _decode_level(result['level'])
     levels = result['levels']
     if len(levels) != len(steps):
         raise RuntimeError('TRUBA returned an incomplete convergence pair.')
@@ -782,7 +817,20 @@ def run_remote_level_pair(settings, context, max_elements, selected, remote_auth
         else:
             outcomes.append(_decode_level(entry['level']))
     return outcomes
-run_remote_level_pair.remote_job_target = True
+
+
+def resume_convergence_levels(record_path, remote_auth=None, job_marker=None):
+    record = json.loads(Path(record_path).read_text(encoding='utf-8'))
+    if not record.get('job_id') or record.get('operation') != 'convergence_level':
+        raise ValueError('A confirmed Slurm mesh convergence job is required.')
+    directory = Path(record['local_directory'])
+    request = json.loads((directory / 'request.json').read_text(encoding='utf-8'))
+    with _convergence_poll_lock(record):
+        record = json.loads(Path(record_path).read_text(encoding='utf-8'))
+        result, directory = run_remote_job({}, RemoteContext(**record['context']), remote_auth, job_marker,
+                                           resume_record=record)
+    return decode_convergence_results(result, directory, request.get('convergence_steps'))
+resume_convergence_levels.remote_job_target = True
 
 
 def run_remote_doe(index,settings,context,solve,remote_auth=None,job_marker=None,*,staged_geometry=None):

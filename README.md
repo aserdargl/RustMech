@@ -1460,7 +1460,15 @@ koyar ve ayrı iş adımlarında paralel çalıştırır. CPU ve RAM iki adıma 
 Örneğin Hamsi'de 56 CPU, seviye başına 28 CPU olarak kullanılır. **Allocate**
 gerekmez. Program, seviye başına en az 16 CPU düşüyorsa iki seviyeyi eşler.
 İki seviye sığmazsa veya tek seviye kalırsa, o seviye
-tahsisin tüm kaynaklarını kullanır. Bir seferde en çok beş seviye gönderilir.
+tahsisin tüm kaynaklarını kullanır. Otomatik gönderim bir seferde en çok beş
+seviye planlar. İşler kuyruktayken veya çalışırken **Add 2 mesh levels** ile
+iki seviye daha gönderebilirsiniz. Düğme, en ince gönderilmiş mesh'ten devam
+eder ve çalışmanın minimum mesh boyutu ile deneme sınırını gözetir. Manuel
+modda listedeki sonraki boyutları kullanır. Slurm, her betiği kaynaklar
+müsait olduğunda başlatır.
+Mesh Convergence yeniden açıldığında **Results** alanında kayıtlı TRUBA
+çalışmaları görünür. Önceki işlerin durumunu güncellemek ve sonuçlarını
+almak için aynı TRUBA hesabıyla bağlanın.
 Sonuç tablosu ve CSV her seviyenin betiğini, iş kimliğini, çözüm CPU sayısını
 ve ayrılan RAM'i gösterir. Slurm iş adımı için MaxRSS sağlarsa tepe RAM de
 görünür. **Advanced → Wall time per analysis** her
