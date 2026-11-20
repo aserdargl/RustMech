@@ -13,7 +13,7 @@ from PySide6.QtCore import QItemSelectionModel, QPoint, QSettings, Qt
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QLineEdit, QMessageBox
 
-from truba_active_jobs import PENDING_REASON_COLUMN, QUEUE_SEPARATOR, display_start
+from truba_active_jobs import PENDING_REASON_COLUMN, QUEUE_SEPARATOR, display_start, query_active_jobs
 from truba_client import TrubaSession
 from truba_connection import TrubaConnectionDialog
 from truba_credentials import CredentialStore
@@ -590,22 +590,20 @@ class TrubaTests(unittest.TestCase):
                              ['All jobs', 'A', 'Array job', 'B', 'bash', f'ESEN-{esen_id}', 'External job',
                               'RustMech-remote'])
             self.assertEqual(tab.works.currentRow(), 0)
-            estimates = {tab.jobs.item(i, 0).text(): tab.jobs.item(i, 11).text()
-                         for i in range(tab.jobs.rowCount())}
+            rows = [(table, i) for table in tab.sections.values() for i in range(table.rowCount())]
+            estimates = {table.item(i, 0).text(): table.item(i, 11).text() for table, i in rows}
             self.assertEqual(estimates['1'], '—')
             self.assertEqual(estimates['2'], display_start('2026-11-18T23:15:00'))
             self.assertEqual(estimates['5_[1-16%4]'], '—')
             self.assertEqual(tab.jobs.horizontalHeader().logicalIndex(2), PENDING_REASON_COLUMN)
-            reasons = {tab.jobs.item(i, 0).text(): tab.jobs.item(i, PENDING_REASON_COLUMN)
-                       for i in range(tab.jobs.rowCount())}
+            reasons = {table.item(i, 0).text(): table.item(i, PENDING_REASON_COLUMN) for table, i in rows}
             self.assertEqual(reasons['1'].text(), '—')
             self.assertEqual(reasons['2'].text(), 'Higher-priority jobs')
             self.assertEqual(reasons['2'].toolTip(), '<qt>Priority</qt>')
             self.assertEqual(reasons['5_[1-16%4]'].text(), 'JobArrayTaskLimit')
             self.assertFalse(tab.jobs.isColumnHidden(2))
-            self.assertEqual({(tab.jobs.item(i, 0).text(), tab.jobs.item(i, 2).text()):
-                              (tab.jobs.item(i, 1).text(), tab.jobs.item(i, 3).text())
-                              for i in range(tab.jobs.rowCount())},
+            self.assertEqual({(table.item(i, 0).text(), table.item(i, 2).text()):
+                              (table.item(i, 1).text(), table.item(i, 3).text()) for table, i in rows},
                              {('1', 'A'): ('RUNNING', 'Mechanical analysis · Gyroid'),
                               ('2', 'A'): ('PENDING', 'Thermal analysis'),
                               ('3', 'External job'): ('RUNNING', 'External job'),
@@ -615,27 +613,32 @@ class TrubaTests(unittest.TestCase):
                               ('7', 'bash'): ('RUNNING', 'bash'),
                               ('8', f'ESEN-{esen_id}'): ('RUNNING', 'LAMMPS · run_material.slurm'),
                               ('9', 'RustMech-remote'): ('RUNNING', 'Mesh preview')})
-            tab.jobs.setCurrentItem(tab.jobs.findItems('FFT Homogenization', Qt.MatchFlag.MatchExactly)[0])
+            session = tab.sections['Resource session']
+            session.setCurrentItem(session.findItems('FFT Homogenization', Qt.MatchFlag.MatchExactly)[0])
             tab.show_groups(tab.groups)
             self.assertEqual(tab.jobs.item(tab.jobs.currentRow(), 2).text(), 'B')
             tab.works.setCurrentCell(1, 0)
-            self.assertEqual(tab.selected_job_ids(), ('1',))
+            self.assertEqual(tab.selected_job_ids(), ('6',))
             self.assertTrue(tab.cancel_button.isEnabled())
             self.assertTrue(tab.jobs.isColumnHidden(2))
             self.assertFalse(tab.jobs.isColumnHidden(3))
-            self.assertEqual([tab.jobs.item(i, 0).text() for i in range(tab.jobs.rowCount())], ['1', '2', '6'])
-            self.assertEqual(tab.jobs.item(2, 3).toolTip(), '<qt>DOE mesh generation<br>DOE analysis</qt>')
+            self.assertEqual(tab.jobs.item(0, 3).toolTip(), '<qt>DOE mesh generation<br>DOE analysis</qt>')
+            self.assertEqual(set(tab.sections), {'Mechanical analysis', 'Thermal analysis', 'Resource session'})
+            mechanical = tab.sections['Mechanical analysis']
+            mechanical.setCurrentCell(0, 0, SELECT_ROW)
+            self.app.processEvents()
             self.assertTrue(tab.jobs.verticalHeader().isVisible())
             model = tab.jobs.model()
             self.assertEqual([model.headerData(row, Qt.Orientation.Vertical) for row in range(tab.jobs.rowCount())],
-                             [1, 2, 3])
+                             [1])
             self.assertEqual([tab.jobs.item(0, column).text() for column in range(4, 8)],
                              ['solve.slurm', '64', '2', 'orfoz'])
             self.assertEqual(tab.jobs.item(0, 4).toolTip(), '<qt>/scratch/a|b/solve.slurm</qt>')
             self.assertNotEqual(tab.jobs.item(0, 8).text(), '—')
             self.assertEqual(tab.jobs.item(0, 9).text(), '29:20:40')
             self.assertEqual(tab.jobs.item(0, 10).text(), '02:17:15')
-            tab.jobs.setCurrentCell(1, 0)
+            thermal = tab.sections['Thermal analysis']
+            thermal.setCurrentCell(0, 0, SELECT_ROW)
             scrollbar = tab.jobs.horizontalScrollBar()
             self.assertGreater(scrollbar.maximum(), 0)
             scrollbar.setValue(scrollbar.maximum())
@@ -643,8 +646,8 @@ class TrubaTests(unittest.TestCase):
             tab.show_groups(tab.groups)
             self.assertEqual(tab.jobs.currentItem().text(), '2')
             self.assertEqual(scrollbar.value(), scroll_position)
-            self.assertEqual(tab.jobs.item(1, 5).text(), '32')
-            self.assertEqual([tab.jobs.item(1, column).text() for column in range(8, 11)], ['—'] * 3)
+            self.assertEqual(tab.jobs.item(0, 5).text(), '32')
+            self.assertEqual([tab.jobs.item(0, column).text() for column in range(8, 11)], ['—'] * 3)
             tab.works.setCurrentCell(2, 0)
             self.assertEqual(tab.selected_job_ids(), ('5_[1-16%4]',))
             self.assertTrue(tab.cancel_button.isEnabled())
@@ -654,9 +657,81 @@ class TrubaTests(unittest.TestCase):
             self.assertEqual(tab.jobs.item(0, 0).text(), '3')
             self.assertEqual(tab.jobs.item(0, 9).text(), '00:25:40')
             self.assertEqual(tab.jobs.item(0, 10).text(), 'Unlimited')
+            dialog.tabs.setCurrentWidget(dialog.settings_scroll)
+            dialog.tabs.setCurrentWidget(tab)
+            self.assertEqual(tab.works.currentRow(), 0)
+            self.assertEqual(sum(table.rowCount() for table in tab.sections.values()), 9)
+            self.assertTrue(tab.worker.wait(5000))
+            self.app.processEvents()
             dialog.connection_changed.emit(False)
             self.assertEqual(tab.works.rowCount(), 0)
-            self.assertEqual(tab.jobs.rowCount(), 0)
+            self.assertFalse(tab.sections)
+
+    def test_active_jobs_recovers_omitted_convergence_jobs_by_slurm_id(self):
+        auth = RemoteAuth('tester', 'test')
+        for job_id, user, state, work in (
+            ('42', auth.username, 'RUNNING|None · Running two mesh levels in parallel', ''),
+            ('43', auth.username, 'submitted', 'Refinement study'),
+            ('44', auth.username, 'RUNNING', ''),
+            ('45', 'other', 'RUNNING', ''),
+        ):
+            write_record(self.directory / 'jobs' / f'{job_id}.json', dict(
+                host=HOST, username=user, state=state, job_id=job_id, operation='convergence_level',
+                geometry_name='Gyroid', study_name=work,
+            ))
+
+        account_queue = queue_output(
+            '11|RUNNING|N/A|0:10|6:00:00|1|1|short|None|External job|external.slurm',
+            '12|RUNNING|N/A|0:10|6:00:00|1|1|short|None|RM-AAAAAAAAAAAA|thermal.slurm',
+        )
+        write_record(self.directory / 'jobs' / 'in-flight.json', dict(
+            host=HOST, username=auth.username, state='submitting',
+            request_id='a' * 32, operation='thermal_solve',
+        ))
+        id_queue = queue_output(
+            '42|RUNNING|N/A|0:01|4:00:00|56|1|short|None|RM-PAIR|pair.slurm',
+            '43|PENDING|N/A|0:00|4:00:00|28|1|short|Resources|RM-NEXT|next.slurm',
+            '44|COMPLETED+|N/A|0:01|4:00:00|56|1|short|None|RM-DONE|done.slurm',
+            '45|RUNNING|N/A|0:01|4:00:00|56|1|short|None|RM-OTHER|other.slurm',
+        )
+        with patch('truba_active_jobs.RemoteTransport') as transport:
+            command = transport.return_value.command
+            command.side_effect = [account_queue, id_queue]
+            groups = query_active_jobs(auth, self.directory)
+            fallback = command.call_args_list[1].args[0]
+            self.assertIn('--user=tester', fallback)
+            self.assertTrue(fallback.endswith('--jobs=42,43,44'))
+            self.assertEqual(set(groups), {'External job', 'Mesh convergence', 'Refinement study', 'Thermal analysis'})
+            job = groups['Mesh convergence'][0]
+            self.assertEqual((job.job_id, job.state, job.purposes), ('42', 'RUNNING', ('Mesh convergence · Gyroid',)))
+            self.assertEqual(groups['Refinement study'][0].state, 'PENDING')
+            self.assertEqual(groups['Thermal analysis'][0].job_id, '12')
+
+            command.side_effect = [account_queue, RuntimeError('Queue lookup failed')]
+            self.assertEqual(set(query_active_jobs(auth, self.directory)), {'External job', 'Thermal analysis'})
+
+        dialog = self.dialog()
+        tab = dialog.active_jobs
+        dialog.tabs.setCurrentWidget(tab)
+        dialog.show()
+        with (patch.object(dialog, 'analysis_auth', return_value=auth),
+              patch.object(QMessageBox, 'question', return_value=QMessageBox.StandardButton.No) as question):
+            tab.show_groups(groups)
+            self.app.processEvents()
+            mesh = tab.sections['Mesh convergence']
+            other = tab.sections['TRUBA jobs']
+            self.assertLess(mesh.parentWidget().y(), other.parentWidget().y())
+            other.setCurrentCell(0, 0, SELECT_ROW)
+            mesh.setFocus()
+            QTest.keyClick(mesh, Qt.Key.Key_A, Qt.KeyboardModifier.ControlModifier)
+            self.assertCountEqual(tab.selected_job_ids(), ('42', '43'))
+            self.assertFalse(other.selectedItems())
+            tab.cancel_button.click()
+            self.assertIn('2 selected Slurm jobs', question.call_args.args[2])
+            other.setFocus()
+            QTest.keyClick(other, Qt.Key.Key_A, Qt.KeyboardModifier.ControlModifier)
+            self.assertEqual(tab.selected_job_ids(), ('11',))
+            self.assertFalse(mesh.selectedItems())
 
     def test_active_jobs_columns_and_splitter_restore_after_reopening(self):
         settings_path = str(self.directory / 'active.ini')
@@ -668,6 +743,13 @@ class TrubaTests(unittest.TestCase):
                 tab = first.active_jobs
                 first.tabs.setCurrentWidget(tab)
                 first.show()
+                queue = queue_output('23|PENDING|N/A|0:00|8:00:00|4|1|short|Resources|Second job|run.slurm')
+                with (patch.object(first, 'analysis_auth', return_value=RemoteAuth('tester', 'test')),
+                      patch('truba_active_jobs.RemoteTransport') as transport):
+                    transport.return_value.command.return_value = queue
+                    tab.refresh()
+                    self.assertTrue(tab.worker.wait(5000))
+                    self.app.processEvents()
                 self.app.processEvents()
                 self.assertEqual([tab.jobs.horizontalHeaderItem(column).text() for column in (2, 3, 4)],
                                  ['Work', 'Job', 'Command'])
@@ -682,13 +764,6 @@ class TrubaTests(unittest.TestCase):
                 self.assertEqual(header.sectionSize(1), original_width + 35)
                 tab.jobs.setColumnWidth(2, 147)
 
-                queue = queue_output('23|PENDING|N/A|0:00|8:00:00|4|1|short|Resources|Second job|run.slurm')
-                with (patch.object(first, 'analysis_auth', return_value=RemoteAuth('tester', 'test')),
-                      patch('truba_active_jobs.RemoteTransport') as transport):
-                    transport.return_value.command.return_value = queue
-                    tab.refresh()
-                    self.assertTrue(tab.worker.wait(5000))
-                    self.app.processEvents()
                 self.assertEqual(header.sectionSize(1), original_width + 35)
                 tab.works.setCurrentCell(1, 0)
                 self.assertTrue(tab.jobs.isColumnHidden(2))
@@ -700,7 +775,12 @@ class TrubaTests(unittest.TestCase):
                 second = self.dialog()
                 second.show()
                 second.tabs.setCurrentWidget(second.active_jobs)
-                self.app.processEvents()
+                with (patch.object(second, 'analysis_auth', return_value=RemoteAuth('tester', 'test')),
+                      patch('truba_active_jobs.RemoteTransport') as transport):
+                    transport.return_value.command.return_value = queue
+                    second.active_jobs.refresh()
+                    self.assertTrue(second.active_jobs.worker.wait(5000))
+                    self.app.processEvents()
                 self.assertEqual(second.active_jobs.splitter.sizes(), expected)
                 self.assertEqual(second.active_jobs.jobs.columnWidth(1), original_width + 35)
                 self.assertEqual(second.active_jobs.jobs.columnWidth(2), 147)
