@@ -1057,6 +1057,12 @@ Units: mm  °C  s  Pa|Birimler: mm  °C  s  Pa
 ● MESH CANCELLED|● AĞ İPTAL EDİLDİ
 ● PENDING APPLY|● UYGULAMA BEKLİYOR
 ● PREVIEW ERROR|● ÖNİZLEME HATASI
+Preview error details|Önizleme hatası ayrıntıları
+The mesh worker stopped before returning a preview.|Ağ işlemi, önizlemeyi döndürmeden durdu.
+Execution target: {target}|Yürütme hedefi: {target}
+Mesh: {element}, global size {size:g} mm|Ağ: {element}, genel boyut {size:g} mm
+Last reported stage: {stage}|Bildirilen son aşama: {stage}
+Tetrahedral meshing: {method}, local size {size:g} mm|Dört yüzlü ağ: {method}, yerel boyut {size:g} mm
 ● READY TO SOLVE|● ÇÖZÜME HAZIR
 ● SOLVER INACTIVE|● ÇÖZÜCÜ ETKİN DEĞİL
 ● UPDATING PREVIEW|● ÖNİZLEME GÜNCELLENİYOR

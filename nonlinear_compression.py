@@ -301,6 +301,7 @@ class RustMechDialog(QDialog):
         self.mesh_cancelled = Event()
         self._preview_detach = Event()
         self.mesh_progress_updates = SimpleQueue()
+        self._last_mesh_stage = None
         self.worker_key = None
         self.failed_key = None
         self._preview_failure_reason = ""
@@ -1274,6 +1275,7 @@ class RustMechDialog(QDialog):
         self.status_badge.setObjectName("statusBadge")
 
         self.status = QLabel("Generating geometry in background...")
+        self.status.setTextFormat(Qt.TextFormat.PlainText)
         self.status.setWordWrap(True)
         readout = QWidget()
         readout_layout = QVBoxLayout(readout)
@@ -1287,10 +1289,14 @@ class RustMechDialog(QDialog):
         readout_layout.addWidget(self.fragment_status)
         readout.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         kpi_row.addWidget(readout, 1)
-        self.status.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        selectable_text = (Qt.TextInteractionFlag.TextSelectableByMouse
+                           | Qt.TextInteractionFlag.TextSelectableByKeyboard)
+        for label in (self.status_badge, self.status, self.fragment_status, self.stats, self.fft_preview_summary):
+            label.setTextInteractionFlags(selectable_text)
         self.analysis_blocker = QLabel()
         self.analysis_blocker.setObjectName("analysisBlocker")
         self.analysis_blocker.setTextFormat(Qt.TextFormat.PlainText)
+        self.analysis_blocker.setTextInteractionFlags(selectable_text)
         self.analysis_blocker.setWordWrap(True)
         self.analysis_blocker.setMinimumHeight(CONTROL_HEIGHT + 4)
         self.analysis_blocker.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
@@ -1343,6 +1349,14 @@ class RustMechDialog(QDialog):
         self.preview_splitter.setSizes([800, 32])
         right.addWidget(self.result_preview_controls, 0, Qt.AlignmentFlag.AlignLeft)
         right.addWidget(self.preview_splitter, 1)
+        self.preview_error_details = QPlainTextEdit()
+        self.preview_error_details.setObjectName("previewErrorDetails")
+        self.preview_error_details.setAccessibleName("Preview error details")
+        self.preview_error_details.setReadOnly(True)
+        self.preview_error_details.setTextInteractionFlags(selectable_text)
+        self.preview_error_details.setFixedHeight(6 * self.preview_error_details.fontMetrics().lineSpacing() + 12)
+        self.preview_error_details.hide()
+        right.addWidget(self.preview_error_details)
 
         self.doe_studio = DoEStudioWidget(
             settings_provider=self.collect,
@@ -1498,6 +1512,7 @@ class RustMechDialog(QDialog):
     def _refresh_ui_language(self, *_):
         from ui_language import translate
         self.language_manager.localize_tree(self)
+        self.preview_error_details.setAccessibleName(translate("Preview error details"))
         self._update_truba_quick_connect()
         if self.setup_tabs.currentIndex() == self._fft_method_index:
             self._update_fft_preview_summary(self.collect())
@@ -2813,12 +2828,14 @@ class RustMechDialog(QDialog):
                     self.refresh_validity()
                     return
                 self.status.setText(str(error))
+                self._show_preview_error_details(str(error))
                 if not self.apply_button.isEnabled():
                     self._set_analysis_blocker(str(error))
                 return
         errors = validate_geometry(settings, include_mesh=self._mesh_requested)
         if errors:
             self.status.setText("\n".join(errors))
+            self._show_preview_error_details("\n".join(errors))
             self._set_analysis_blocker(errors[0])
             self._update_status_visuals(
                 "error", "● GEOMETRY ERROR", self.has_pending_geometry()
@@ -2827,6 +2844,8 @@ class RustMechDialog(QDialog):
         key = preview_key(settings)
         if self.future is not None or key == self.failed_key:
             return
+        self.preview_error_details.hide()
+        self.preview_error_details.clear()
         if self.preview and self.preview.key == key and (not getattr(self, '_mesh_requested', False) or self.preview.mesh is not None):
             self.refresh_validity()
             return
@@ -2837,9 +2856,11 @@ class RustMechDialog(QDialog):
             "working", "● BUILDING FE MESH" if getattr(self, '_mesh_requested', False) else "● BUILDING GEOMETRY", self.has_pending_geometry()
         )
         self.mesh_progress_updates = SimpleQueue()
+        self._last_mesh_stage = None
         self.mesh_cancelled = Event()
         self._preview_detach = Event()
         self.mesh_progress.show()
+        self._preview_includes_mesh = self._mesh_requested
         self._preview_is_remote = bool(controller is not None and controller.requested)
         if controller is not None and controller.requested:
             from truba_remote import run_remote_preview
@@ -2879,17 +2900,45 @@ class RustMechDialog(QDialog):
             while True:
                 stage = self.mesh_progress_updates.get_nowait()
         except Empty:
-            if stage and not self.mesh_cancelled.is_set():
-                self.status.setText(stage)
+            if stage:
+                self._last_mesh_stage = stage
+                if not self.mesh_cancelled.is_set():
+                    self.status.setText(stage)
+
+    def _show_preview_error_details(self, message, *, error=None, settings=None):
+        from ui_language import translate
+
+        lines = [translate(message)]
+        if settings is not None:
+            target = "TRUBA" if self._preview_is_remote else "Local"
+            lines.append(translate("Execution target: {target}").format(target=translate(target)))
+            if self._preview_includes_mesh:
+                lines.append(translate("Mesh: {element}, global size {size:g} mm").format(
+                    element=settings.mesh_type, size=settings.mesh_resolution
+                ))
+                if settings.mesh_type in TETRAHEDRAL_MESH_TYPES:
+                    lines.append(translate("Tetrahedral meshing: {method}, local size {size:g} mm").format(
+                        method=settings.tetra_strategy, size=settings.local_mesh_size
+                    ))
+            if self._last_mesh_stage:
+                lines.append(translate("Last reported stage: {stage}").format(
+                    stage=translate(self._last_mesh_stage)
+                ))
+        if error is not None:
+            lines.extend(("", "".join(traceback.format_exception(error)).rstrip()))
+        self.preview_error_details.setPlainText("\n".join(lines))
+        self.preview_error_details.show()
 
     def poll_preview(self) -> None:
         if self.future is None:
             return
-        if not self.future.done():
-            self._show_mesh_stage()
+        done = self.future.done()
+        self._show_mesh_stage()
+        if not done:
             return
         future, self.future = self.future, None
-        key = preview_key(self.preview_settings())
+        settings = self.preview_settings()
+        key = preview_key(settings)
         self.mesh_progress.hide()
         self.cancel_mesh_button.hide()
         if self.mesh_cancelled.is_set():
@@ -2904,6 +2953,7 @@ class RustMechDialog(QDialog):
                     self._preview_failure_reason = message
                     self.refresh_validity()
                     self.status.setText(message)
+                    self._show_preview_error_details(message, error=error, settings=settings)
                     return
             message = "Mesh generation cancelled. Select Update preview to retry."
             self.failed_key = key
@@ -2932,10 +2982,12 @@ class RustMechDialog(QDialog):
         except Exception as exc:
             self._analysis_after_mesh = None
             if self.worker_key == key:
-                message = f"Preview error: {exc}"
+                reason = str(exc).partition("\n")[0] or type(exc).__name__
+                message = f"Preview error: {reason}"
                 self.failed_key = key
                 self._preview_failure_reason = message
                 self.status.setText(message)
+                self._show_preview_error_details(message, error=exc, settings=settings)
                 self._set_analysis_blocker(message)
                 self._update_status_visuals(
                     "error", "● PREVIEW ERROR", self.has_pending_geometry()

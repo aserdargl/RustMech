@@ -1,6 +1,8 @@
 """Geometry-only requests, lazy FE generation and topology-safe fast contours."""
 from dataclasses import replace
 from multiprocessing.shared_memory import SharedMemory
+import os
+from pathlib import Path
 from threading import Event
 import unittest
 from unittest.mock import patch
@@ -14,7 +16,40 @@ from model import Settings
 from preview_transport import pack_preview, unpack_preview, write_arrays
 
 
+def _exit_during_preview(connection, scratch):
+    connection.recv()
+    connection.send(("progress", "Generating tetrahedra in Netgen…"))
+    (Path(scratch) / "worker-crash.txt").write_text("Native crash report", encoding="utf-8")
+    os._exit(37)
+
+
 class SurfacePreviewTests(unittest.TestCase):
+    def test_unexpected_worker_exit_keeps_exit_code_and_progress(self):
+        progress = []
+        worker = PreviewWorker()
+        try:
+            with patch("mesh_preview_worker._serve_preview", _exit_during_preview):
+                with self.assertRaisesRegex(RuntimeError, "stopped before returning") as caught:
+                    worker.build(Settings(mesh_type="TET10"), None, progress.append, Event(), include_mesh=True)
+            self.assertIn("Generating tetrahedra in Netgen…", progress)
+            self.assertIn("Mesh worker exit code: 37", caught.exception.__notes__[0])
+            self.assertIn("Native crash report", caught.exception.__notes__)
+            self.assertIsNone(worker._process)
+            self.assertIsNone(worker._scratch)
+        finally:
+            worker.close()
+
+    def test_worker_preserves_child_python_traceback(self):
+        worker = PreviewWorker()
+        try:
+            settings = Settings(size=1, cell_size=1, mesh_type="TET10", local_mesh_size=.3)
+            with self.assertRaises(ValueError) as caught:
+                worker.build(settings, None, None, Event(), include_mesh=True)
+            self.assertIn("Traceback", caught.exception.__notes__[0])
+            self.assertIn("generate_volume_mesh", caught.exception.__notes__[0])
+        finally:
+            worker.close()
+
     def test_remote_geometry_request_uses_surface_operation(self):
         from truba_remote import run_remote_preview
         settings = Settings(size=1, cell_size=1)

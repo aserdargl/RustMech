@@ -1,4 +1,5 @@
 """Explicit opt-in, capability filtering and absence of local computation paths."""
+from concurrent.futures import Future
 from pathlib import Path
 import tempfile
 from types import SimpleNamespace
@@ -6,6 +7,7 @@ import unittest
 from unittest.mock import MagicMock,patch
 
 from PySide6.QtCore import QCoreApplication,QEvent,QPoint,QSettings,Qt
+from PySide6.QtGui import QTextCursor
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication,QWidget,QGroupBox,QMessageBox
 
@@ -81,6 +83,41 @@ class RemoteModeUiTests(unittest.TestCase):
         field.setFocus()
         QTest.keyClick(field,Qt.Key.Key_Return)
         self.assertFalse(self.controller.requested)
+
+    def test_preview_failure_details_are_selectable_even_when_completion_is_immediate(self):
+        from mesh_engine import preview_key
+
+        window = self.window
+        settings = Settings(mesh_type="TET10")
+        window.preview_settings = lambda: settings
+        window._preview_includes_mesh = True
+        window._preview_is_remote = False
+        window.worker_key = preview_key(settings)
+        window.mesh_progress_updates.put("Generating tetrahedra in Netgen…")
+        failure = RuntimeError("The mesh worker stopped before returning a preview.")
+        failure.add_note("Mesh worker exit code: 37")
+        window.future = Future()
+        window.future.set_exception(failure)
+        window.poll_preview()
+        self.app.processEvents()
+
+        details = window.preview_error_details
+        self.assertTrue(details.isVisible())
+        self.assertTrue(details.isReadOnly())
+        self.assertIn("TET10", details.toPlainText())
+        self.assertIn("Generating tetrahedra in Netgen…", details.toPlainText())
+        self.assertIn("Mesh worker exit code: 37", details.toPlainText())
+
+        start = QTextCursor(details.document())
+        end = QTextCursor(start)
+        end.movePosition(QTextCursor.MoveOperation.EndOfLine)
+        QTest.mousePress(details.viewport(), Qt.MouseButton.LeftButton, pos=details.cursorRect(start).center())
+        QTest.mouseMove(details.viewport(), details.cursorRect(end).center())
+        QTest.mouseRelease(details.viewport(), Qt.MouseButton.LeftButton, pos=details.cursorRect(end).center())
+        self.assertTrue(details.textCursor().hasSelection())
+        QTest.keyClick(details, Qt.Key.Key_A, Qt.KeyboardModifier.ControlModifier)
+        QTest.keyClick(details, Qt.Key.Key_C, Qt.KeyboardModifier.ControlModifier)
+        self.assertEqual(self.app.clipboard().text(), details.toPlainText())
 
     def test_truba_quick_connect_uses_saved_credentials_without_opening_panel(self):
         window = self.window
