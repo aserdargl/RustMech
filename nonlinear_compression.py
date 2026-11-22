@@ -484,6 +484,9 @@ class RustMechDialog(QDialog):
             self.solver_profile_store.settings, "ui/meshDisplayDecimals",
             self.controls["mesh_resolution"], self.controls["local_mesh_size"],
         )
+        self._clamp_local_mesh_size()
+        for name in ("mesh_resolution", "local_mesh_size"):
+            self.controls[name].valueChanged.connect(self._clamp_local_mesh_size)
         mesh_form.addRow(field_label("Mesh decimal places", self.mesh_precision), self.mesh_precision)
         self._mesh_form = mesh_form
 
@@ -2544,6 +2547,14 @@ class RustMechDialog(QDialog):
         form.setRowVisible(self.import_geometry_label, visible)
         form.setRowVisible(self.clear_import_button, visible)
 
+    def _clamp_local_mesh_size(self) -> None:
+        global_size = self.controls["mesh_resolution"].value()
+        local_size = self.controls["local_mesh_size"]
+        if local_size.value() > global_size:
+            if local_size.minimum() > global_size:
+                local_size.setMinimum(global_size)
+            local_size.setValue(global_size)
+
     def _sync_mesh_type(self) -> None:
         local_size = self.controls["local_mesh_size"]
         tetrahedral = self.mesh_type_combo.currentData() in TETRAHEDRAL_MESH_TYPES
@@ -3371,6 +3382,7 @@ class RustMechDialog(QDialog):
                 self.controls[field_name].blockSignals(True)
                 self.controls[field_name].setValue(getattr(row_settings, field_name))
                 self.controls[field_name].blockSignals(False)
+        self._clamp_local_mesh_size()
         self.stl_resolution_input.setText(
             "auto" if row_settings.stl_resolution is None else f"{row_settings.stl_resolution:.12g}")
         self._sync_structure_ui_visibility()

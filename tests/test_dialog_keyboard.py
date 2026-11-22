@@ -2,14 +2,15 @@
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
-from PySide6.QtCore import QSettings, QTimer, Qt
+from PySide6.QtCore import QLocale, QSettings, QTimer, Qt
 from PySide6.QtTest import QTest, QSignalSpy
-from PySide6.QtWidgets import QApplication, QFrame, QPushButton
+from PySide6.QtWidgets import QApplication, QFrame, QPushButton, QWidget
 
 from model import Settings
 from nonlinear_compression import RustMechDialog
+from solver_profiles import SolverProfileStore
 from studio_style import SidebarGroupBox
 from window_state import WindowStateStore
 
@@ -18,6 +19,47 @@ class DialogKeyboardTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.app = QApplication.instance() or QApplication([])
+
+    def test_mesh_size_edits_keep_local_at_or_below_global(self):
+        directory = self.enterContext(tempfile.TemporaryDirectory())
+        preferences = QSettings(str(Path(directory) / "mesh.ini"), QSettings.Format.IniFormat)
+        self.enterContext(patch.object(RustMechDialog, "start_preview", lambda self: None))
+        self.enterContext(patch("nonlinear_compression.create_preview_viewport",
+                                side_effect=lambda *a, **kw: MagicMock(interactor=QWidget())))
+        self.enterContext(patch("remote_controller.saved_session", return_value=None))
+        dialog = RustMechDialog(
+            Settings(mesh_type="TET4", mesh_resolution=0.2, local_mesh_size=0.1),
+            solver_profile_store=SolverProfileStore(preferences),
+        )
+        self.addCleanup(dialog.dispose)
+
+        global_size = dialog.controls["mesh_resolution"]
+        local_size = dialog.controls["local_mesh_size"]
+
+        def enter(control, value):
+            control.setLocale(QLocale.c())
+            editor = control.lineEdit()
+            editor.selectAll()
+            QTest.keyClicks(editor, value)
+            QTest.keyClick(editor, Qt.Key.Key_Return)
+
+        enter(global_size, "0.07525")
+        self.assertEqual(global_size.value(), 0.07525)
+        self.assertEqual(local_size.value(), 0.07525)
+        self.assertEqual(dialog.collect().local_mesh_size, 0.07525)
+
+        enter(local_size, "0.04")
+        enter(global_size, "0.06")
+        self.assertEqual(local_size.value(), 0.04)
+
+        enter(local_size, "0.08")
+        self.assertEqual(local_size.value(), 0.06)
+
+        dialog.load_from_doe_row(
+            Settings(mesh_type="TET4", mesh_resolution=0.03, local_mesh_size=0.05),
+            preview=False,
+        )
+        self.assertEqual(local_size.value(), 0.03)
 
     def test_enter_commits_mesh_and_only_click_opens_truba(self):
         with tempfile.TemporaryDirectory() as directory:
