@@ -1,5 +1,4 @@
 from dataclasses import replace
-from unittest.mock import patch
 
 import numpy as np
 import pytest
@@ -39,17 +38,20 @@ def test_derived_mesh_conforms_and_preserves_volume(settings, hex_mesh, mesh_typ
     assert surface.area == pytest.approx(hex_mesh.grid.extract_surface(algorithm="dataset_surface").area)
 
 
-def test_formats_follow_mesh_topology_and_installed_tools(settings, hex_mesh, tmp_path):
+def test_formats_follow_mesh_topology(settings, hex_mesh, tmp_path):
     quadratic = generate_volume_mesh(replace(settings, mesh_type="HYBRID20"))
-    with patch("ansys_mesh_export._native_executable", return_value=None):
-        assert [item.rsplit("*", 1)[-1][:-1] for item in ansys_export_filters(quadratic)] == [
-            ".cdb", ".bdf", ".dat", ".nas",
-        ]
-        assert len(ansys_export_filters(hex_mesh)) == 8
-    with patch("ansys_mesh_export._native_executable", return_value="ansys.exe"):
-        assert len(ansys_export_filters(hex_mesh)) == 11
-        assert "Workbench mesh (*.acmo)" in ansys_export_filters(quadratic)
-        assert "Fluent case (*.cas)" not in ansys_export_filters(quadratic)
+    assert [item.rsplit("*", 1)[-1][:-1] for item in ansys_export_filters(quadratic)] == [
+        ".cdb", ".bdf", ".dat", ".nas",
+    ]
+    assert [item.rsplit("*", 1)[-1][:-1] for item in ansys_export_filters(hex_mesh)] == [
+        ".cdb", ".inp", ".bdf", ".dat", ".nas", ".msh", ".k", ".key",
+    ]
+
+    for suffix in (".acmo", ".cas", ".uns"):
+        destination = tmp_path / f"mesh{suffix}"
+        with pytest.raises(ValueError, match="cannot be exported as"):
+            write_ansys_mesh(hex_mesh, destination)
+        assert not destination.exists()
 
     for extension, header in (("cdb", "/COM,"), ("inp", "*HEADING"),
                               ("bdf", "$"), ("dat", "$"), ("nas", "$"),

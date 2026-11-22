@@ -1,8 +1,5 @@
 """Write specimen meshes for the ANSYS Workbench External Model importer."""
 
-import os
-import re
-import subprocess
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -42,11 +39,6 @@ _FLUENT = {
     CellType.PYRAMID: (5, ((0, 1, 2, 3), (0, 4, 1), (1, 4, 2), (2, 4, 3), (3, 4, 0))),
     CellType.WEDGE: (6, ((0, 2, 1), (3, 4, 5), (0, 1, 4, 3), (1, 2, 5, 4), (2, 0, 3, 5))),
 }
-_NATIVE_TOOLS = {
-    ".acmo": ("Framework/bin/Win64/RunWB2.exe", "Workbench mesh (*.acmo)"),
-    ".cas": ("fluent/ntbin/win64/fluent.exe", "Fluent case (*.cas)"),
-    ".uns": ("icemcfd/win64_amd/bin/icemcfd.bat", "ICEM CFD mesh (*.uns)"),
-}
 
 
 def ansys_export_filters(mesh):
@@ -59,9 +51,6 @@ def _export_options(mesh):
     for suffix, (label, supported, _) in _TEXT_EXPORTS.items():
         if types <= supported.keys():
             filters[suffix] = label
-    for suffix, (_, label) in _NATIVE_TOOLS.items():
-        if (suffix == ".acmo" or types <= _FLUENT.keys()) and _native_executable(suffix):
-            filters[suffix] = label
     return filters
 
 
@@ -73,11 +62,8 @@ def write_ansys_mesh(mesh, path: Path) -> Path:
         raise ValueError(f"The current mesh cannot be exported as {suffix or 'a file without an extension'}.")
     with TemporaryDirectory(prefix=".rustmech-mesh-", dir=path.parent) as folder:
         staged = Path(folder) / f"export{suffix}"
-        if suffix in _NATIVE_TOOLS:
-            _write_native(mesh, staged)
-        else:
-            with staged.open("w", encoding="ascii", newline="\n", buffering=1024 * 1024) as stream:
-                _TEXT_EXPORTS[suffix][2](stream, mesh.grid)
+        with staged.open("w", encoding="ascii", newline="\n", buffering=1024 * 1024) as stream:
+            _TEXT_EXPORTS[suffix][2](stream, mesh.grid)
         staged.replace(path)
     return path
 
@@ -185,96 +171,6 @@ def _write_fluent(stream, grid):
         stream.write("(45 (3 interior interior)())\n")
     stream.write("(45 (4 wall exterior)())\n")
 
-
-def _native_executable(suffix):
-    relative_path = _NATIVE_TOOLS[suffix][0]
-    versions = sorted(
-        (key for key in os.environ if re.fullmatch(r"AWP_ROOT[0-9]+", key)),
-        key=lambda key: int(key[8:]),
-        reverse=True,
-    )
-    for version in versions:
-        executable = Path(os.environ[version]) / relative_path
-        if executable.is_file():
-            return executable
-    return None
-
-
-def _write_native(mesh, output):
-    suffix = output.suffix
-    executable = _native_executable(suffix)
-    folder = output.parent
-    if suffix == ".acmo":
-        write_cdb_mesh(mesh, folder / "mesh.cdb")
-        journal = folder / "export.wbjn"
-        journal.write_text(
-            f"folder = u{ascii(str(folder))}\n" + _WORKBENCH_JOURNAL,
-            encoding="ascii",
-        )
-        command = [str(executable), "-B", "-R", str(journal)]
-    else:
-        with (folder / "mesh.msh").open("w", encoding="ascii", newline="\n") as stream:
-            _write_fluent(stream, mesh.grid)
-        if suffix == ".cas":
-            (folder / "export.jou").write_text(_FLUENT_JOURNAL, encoding="ascii")
-            command = [str(executable), "3ddp", "-g", "-wait", "-t1", "-i", "export.jou"]
-        else:
-            (folder / "export.tcl").write_text(_ICEM_SCRIPT, encoding="ascii")
-            command = [str(executable), "-batch", "-script", "export.tcl"]
-
-    log_path = folder / "process.log"
-    with log_path.open("w+b") as log:
-        process = subprocess.Popen(
-            command, cwd=folder, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-        )
-        try:
-            result = process.wait(timeout=240)
-        except subprocess.TimeoutExpired as error:
-            if os.name == "nt":
-                subprocess.run(
-                    ["taskkill", "/PID", str(process.pid), "/T", "/F"],
-                    capture_output=True, check=False, creationflags=subprocess.CREATE_NO_WINDOW,
-                )
-            process.kill()
-            process.wait()
-            raise RuntimeError(f"ANSYS timed out converting the mesh to {suffix}.") from error
-    if result or not output.is_file() or not output.stat().st_size:
-        details = folder / "export.log"
-        if not details.is_file():
-            details = log_path
-        with details.open("rb") as log:
-            log.seek(max(0, details.stat().st_size - 3000))
-            reason = log.read().decode(errors="replace").strip()
-        raise RuntimeError(f"ANSYS could not create {suffix}.\n{reason}")
-
-
-_WORKBENCH_JOURNAL = """import os
-import traceback
-try:
-    external = GetTemplate(TemplateName="External Model").CreateSystem()
-    setup = external.GetContainer(ComponentName="Setup")
-    data = setup.AddDataFile(FilePath=os.path.join(folder, "mesh.cdb"))
-    data.GetDataProperty().SetUnitSystem(System="NMM_STANDARD")
-    model = GetTemplate(TemplateName="Mechanical Model").CreateSystem().GetComponent(Name="Model")
-    external.GetComponent(Name="Setup").TransferData(TargetComponent=model)
-    model.Update(AllDependencies=True)
-    model.GetContainer().ExportMesh(FilePath=os.path.join(folder, "export.acmo"))
-except:
-    with open(os.path.join(folder, "export.log"), "w") as log:
-        log.write(traceback.format_exc())
-"""
-
-_FLUENT_JOURNAL = """/file/start-transcript "export.log"
-/file/cff-files? no
-/file/read-case "mesh.msh"
-/file/write-case "export.cas"
-/exit yes
-"""
-
-_ICEM_SCRIPT = """ic_read_external fluent [list mesh.msh]
-ic_save_unstruct export.uns
-"""
 
 _TEXT_EXPORTS = {
     ".inp": ("Abaqus input (*.inp)", _ABAQUS, _write_abaqus),
