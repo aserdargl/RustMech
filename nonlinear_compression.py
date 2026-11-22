@@ -921,7 +921,7 @@ class RustMechDialog(QDialog):
         analysis_fields.addWidget(note)
         analysis_fields.addStretch()
 
-        self._add_method_pages()
+        self._add_method_pages(settings)
         self.setup_tabs.tabBar().hide()
 
         self.main_splitter.addWidget(panel)
@@ -1515,7 +1515,7 @@ class RustMechDialog(QDialog):
         self.preview_error_details.setAccessibleName(translate("Preview error details"))
         self._update_truba_quick_connect()
         if self.setup_tabs.currentIndex() == self._fft_method_index:
-            self._update_fft_preview_summary(self.collect())
+            self._update_fft_preview_summary()
         elif self.result_preview_field.currentData() is not None:
             self.render_preview()
         menu_buttons = (
@@ -1780,7 +1780,7 @@ class RustMechDialog(QDialog):
         self.setup_tabs.addTab(scroll, title)
         return layout
 
-    def _add_method_pages(self) -> None:
+    def _add_method_pages(self, settings: Settings) -> None:
         self.method_names = ["Finite Element"]
         self.method_button_labels = self.method_names.copy()
         methods = (
@@ -1804,8 +1804,86 @@ class RustMechDialog(QDialog):
             fields.addWidget(hint)
             if tab == "FFT":
                 self._fft_method_index = self.setup_tabs.count() - 1
+                self._add_fft_geometry_controls(fields, settings)
                 self._add_fft_controls(fields)
             fields.addStretch()
+
+    def _add_fft_geometry_controls(self, fields, settings: Settings) -> None:
+        defaults = Settings()
+        if self._persist_solver_profiles:
+            preferences = self.solver_profile_store.settings
+            try:
+                saved = json.loads(preferences.value("fft/geometry", "null", type=str))
+                if saved is not None:
+                    settings = settings_from_dict(saved)
+            except (TypeError, ValueError):
+                pass
+        family, name = resolve_family_and_name(settings.structure_family, settings.structure_name)
+        if family not in ("tpms", "lattice"):
+            family, name = defaults.structure_family, defaults.structure_name
+
+        form = self.add_group(fields, "Structure / Dimensions", settings, ())
+        form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.FieldsStayAtSizeHint)
+        self.fft_family_combo = NoWheelComboBox()
+        for key in ("tpms", "lattice"):
+            self.fft_family_combo.addItem(STRUCTURE_FAMILIES[key], key)
+        self.fft_family_combo.setCurrentIndex(self.fft_family_combo.findData(family))
+        self.fft_structure_combo = NoWheelComboBox()
+        self._populate_structure_items(family, name, combo=self.fft_structure_combo)
+        self.fft_morphology_combo = NoWheelComboBox()
+        for key, label in TPMS_MORPHOLOGIES.items():
+            self.fft_morphology_combo.addItem(label, key)
+        self.fft_morphology_combo.setCurrentIndex(
+            max(0, self.fft_morphology_combo.findData(settings.tpms_morphology)))
+        for label, combo, key in (
+            ("Structure family", self.fft_family_combo, ""),
+            ("Structure type", self.fft_structure_combo, "structure_name"),
+            ("Morphology", self.fft_morphology_combo, "tpms_morphology"),
+        ):
+            label_widget = field_label(label, combo, tooltip=GEOMETRY_HELP.get(key, ""))
+            combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
+            combo.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+            form.addRow(label_widget, combo)
+
+        self.fft_cell_size = NoWheelDoubleSpinBox()
+        self.fft_solid_fraction = NoWheelDoubleSpinBox()
+        for label, control, key, minimum, maximum, step, unit in (
+            ("Cell size", self.fft_cell_size, "cell_size", 0.1, 100, 0.5, "mm"),
+            ("Solid fraction", self.fft_solid_fraction, "solid_fraction", 1, 99, 1, "%"),
+        ):
+            value = getattr(settings, key)
+            if not isinstance(value, (int, float)) or not np.isfinite(value) or value <= 0:
+                value = getattr(defaults, key)
+            if key == "solid_fraction" and value >= 100:
+                value = defaults.solid_fraction
+            control.setRange(min(minimum, value), max(maximum, value))
+            control.setSingleStep(step)
+            control.setValue(value)
+            tooltip = GEOMETRY_HELP[key] if key == "solid_fraction" else ""
+            form.addRow(field_label(label, control, tooltip=tooltip),
+                        stepper_with_unit(control, unit))
+            control.valueChanged.connect(self.refresh_validity)
+
+        def family_changed():
+            family = self.fft_family_combo.currentData()
+            self._populate_structure_items(family, combo=self.fft_structure_combo)
+            form.setRowVisible(self.fft_morphology_combo, family == "tpms")
+            self.refresh_validity()
+
+        form.setRowVisible(self.fft_morphology_combo, family == "tpms")
+        self.fft_family_combo.currentIndexChanged.connect(family_changed)
+        self.fft_structure_combo.currentIndexChanged.connect(self.refresh_validity)
+        self.fft_morphology_combo.currentIndexChanged.connect(self.refresh_validity)
+
+    def _fft_geometry_values(self):
+        family = self.fft_family_combo.currentData()
+        return dict(
+            structure_family=family,
+            structure_name=self.fft_structure_combo.currentData(),
+            tpms_morphology=self.fft_morphology_combo.currentData() if family == "tpms" else "sheet",
+            cell_size=self.fft_cell_size.value(),
+            solid_fraction=self.fft_solid_fraction.value(),
+        )
 
     def _add_fft_controls(self, fields) -> None:
         preferences = self.solver_profile_store.settings
@@ -1907,7 +1985,13 @@ class RustMechDialog(QDialog):
         material = self.fft_material_editor.material_settings()
         values = {name: getattr(material, name) for name in MATERIAL_FIELDS}
         values.update(material_model="linear_elastic", hardening_curve=())
-        return replace(settings, **values)
+        geometry = self._fft_geometry_values()
+        return replace(
+            settings, **geometry, **values, size=geometry["cell_size"], stl_resolution=None,
+            imported_geometry_path="", imported_geometry_name="", imported_geometry_role="compression",
+            test_profile="custom", specimen_architecture="solid", core_fraction=100.0,
+            random_seed=Settings().random_seed,
+        )
 
     def _show_fft_results(self, result, folder):
         labels = "    " + "".join(f"{label:>8}" for label in COMPONENTS)
@@ -2057,16 +2141,16 @@ class RustMechDialog(QDialog):
         return form
 
     def _populate_structure_items(
-        self, family_key: str, selected_name: str = ""
+        self, family_key: str, selected_name: str = "", *, combo=None
     ) -> None:
-        self.structure_combo.blockSignals(True)
-        self.structure_combo.clear()
+        if combo is None:
+            combo = self.structure_combo
         items = ALL_STRUCTURES_BY_FAMILY.get(family_key, ALL_STRUCTURES_BY_FAMILY["tpms"])
-        for item in items:
-            self.structure_combo.addItem(item, item)
-        idx = self.structure_combo.findData(selected_name)
-        self.structure_combo.setCurrentIndex(max(0, idx))
-        self.structure_combo.blockSignals(False)
+        with QSignalBlocker(combo):
+            combo.clear()
+            for item in items:
+                combo.addItem(item, item)
+            combo.setCurrentIndex(max(0, combo.findData(selected_name)))
 
     def _on_family_changed(self, *_) -> None:
         family_key = str(self.family_combo.currentData() or "tpms")
@@ -2730,8 +2814,9 @@ class RustMechDialog(QDialog):
         method = self.setup_tabs.currentIndex()
         idle = self.analysis_job is None and self.future is None
         if method == self._fft_method_index:
-            fft_errors = validate_periodic_fft(self._fft_settings(settings))
-            self._request_fft_preview(settings, valid=not fft_errors)
+            fft_settings = self._fft_settings(settings)
+            fft_errors = validate_periodic_fft(fft_settings)
+            self._request_fft_preview(fft_settings, valid=not fft_errors)
             remote_fft = remote
             self.fft_distribution.setEnabled(os.name == 'nt' and not remote_fft)
             if remote_fft:
@@ -2999,14 +3084,15 @@ class RustMechDialog(QDialog):
 
     def _request_fft_preview(self, settings, *, valid):
         grid = self.fft_grid.value()
-        key = (grid, *(getattr(settings, name) for name in GEOMETRY_FIELDS)) if valid else None
+        key = (grid, settings.structure_family, settings.structure_name, settings.tpms_morphology,
+               settings.cell_size, settings.solid_fraction) if valid else None
         old_key = self._fft_preview_request[0] if self._fft_preview_request else None
         if key != old_key:
             self._fft_preview_request = (key, settings, grid) if valid else None
             self._fft_preview_result = None
             self._fft_preview_error = ""
             self.render_preview()
-        self._update_fft_preview_summary(settings)
+        self._update_fft_preview_summary()
 
     def _poll_fft_preview(self):
         if self.disposed:
@@ -3022,7 +3108,7 @@ class RustMechDialog(QDialog):
                 except Exception as error:
                     self._fft_preview_error = str(error) or type(error).__name__
                 if self.setup_tabs.currentIndex() == self._fft_method_index:
-                    self._update_fft_preview_summary(self.collect())
+                    self._update_fft_preview_summary()
                     self.render_preview()
         if (self.setup_tabs.currentIndex() == self._fft_method_index
                 and self._fft_preview_request is not None
@@ -3032,7 +3118,7 @@ class RustMechDialog(QDialog):
             future = self._fft_preview_executor.submit(_build_fft_preview, settings, grid)
             self._fft_preview_future = (request, future)
 
-    def _update_fft_preview_summary(self, settings):
+    def _update_fft_preview_summary(self):
         from ui_language import translate
 
         if self._fft_preview_request is None:
@@ -3042,7 +3128,7 @@ class RustMechDialog(QDialog):
         elif self._fft_preview_result is None:
             text = "Preparing DAMASK voxel preview…"
         else:
-            grid = self.fft_grid.value()
+            _, settings, grid = self._fft_preview_request
             _, _, count = self._fft_preview_result
             total = grid ** 3
             ratio = self.fft_void_ratio.value()
@@ -3524,6 +3610,7 @@ class RustMechDialog(QDialog):
 
     def _save_fft_preferences(self):
         preferences = self.solver_profile_store.settings
+        preferences.setValue("fft/geometry", json.dumps(self._fft_geometry_values()))
         material = self.fft_material_editor.material_settings()
         preferences.setValue("fft/solidMaterial", json.dumps(
             {key: getattr(material, key) for key in MATERIAL_FIELDS}))

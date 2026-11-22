@@ -219,7 +219,7 @@ class SurfacePreviewUITests(unittest.TestCase):
             window._poll_fft_preview()
             self.assertIsNone(window._fft_preview_result)
             _, settings, grid = submit.call_args.args
-            self.assertEqual(settings, window.collect())
+            self.assertEqual(settings, window._fft_settings(window.collect()))
             self.assertEqual(grid, 128)
             second.set_result(_build_fft_preview(settings, grid))
             window._poll_fft_preview()
@@ -290,6 +290,54 @@ class SurfacePreviewUITests(unittest.TestCase):
                 self.assertEqual(second.material_editor.name.text(), 'A different FE material')
             finally:
                 second.close()
+
+    def test_fft_geometry_drives_preview_and_solver_and_restores_independently(self):
+        with TemporaryDirectory() as directory:
+            path = str(Path(directory) / 'preferences.ini')
+            store = SolverProfileStore(QSettings(path, QSettings.Format.IniFormat))
+            fe_settings = Settings(cell_size=3, solid_fraction=30)
+            window = RustMechDialog(fe_settings, solver_profile_store=store)
+            try:
+                window._select_settings_method(window._fft_method_index)
+                self.assertEqual(window.fft_cell_size.value(), fe_settings.cell_size)
+                family = window.fft_family_combo
+                family.setCurrentIndex(family.findData('lattice'))
+                self.assertTrue(window.fft_morphology_combo.isHidden())
+                window.fft_structure_combo.setCurrentIndex(1)
+                name = window.fft_structure_combo.currentData()
+                window.fft_solid_fraction.setValue(42)
+                window.fft_distribution.setText('Ubuntu')
+
+                cell_size = window.fft_cell_size.lineEdit()
+                with patch('nonlinear_compression.DamaskAnalysisProcess') as process:
+                    cell_size.selectAll()
+                    QTest.keyClicks(cell_size, '4.5')
+                    QTest.keyClick(cell_size, Qt.Key.Key_Return)
+                    process.assert_not_called()
+                    preview_request = window._fft_preview_request
+                    fe_draft = window.collect()
+                    self.assertEqual((fe_draft.cell_size, fe_draft.solid_fraction), (3, 30))
+                    self.assertEqual(fe_draft.structure_family, 'tpms')
+                    window.controls['cell_size'].setValue(2)
+                    window.refresh_validity()
+                    self.assertIs(window._fft_preview_request, preview_request)
+                    window.apply()
+                    assigned = process.call_args.args[0]
+                    self.assertEqual(assigned, preview_request[1])
+                    self.assertEqual((assigned.structure_family, assigned.structure_name), ('lattice', name))
+                    self.assertEqual((assigned.size, assigned.cell_size, assigned.solid_fraction), (4.5, 4.5, 42))
+            finally:
+                window.analysis_job = None
+                window.close()
+
+            restored = RustMechDialog(fe_settings, solver_profile_store=store)
+            try:
+                self.assertEqual(restored.fft_family_combo.currentData(), 'lattice')
+                self.assertEqual(restored.fft_structure_combo.currentData(), name)
+                self.assertEqual((restored.fft_cell_size.value(), restored.fft_solid_fraction.value()), (4.5, 42))
+                self.assertEqual(restored.collect().cell_size, fe_settings.cell_size)
+            finally:
+                restored.close()
 
     def test_doe_select_ignores_mesh_errors_and_pending_main_preview(self):
         self.window.controls['mesh_resolution'].setValue(2)
