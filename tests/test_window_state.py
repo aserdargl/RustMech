@@ -4,6 +4,7 @@ import tempfile
 import unittest
 from ctypes import wintypes
 from pathlib import Path
+from unittest.mock import patch
 
 from PySide6.QtCore import QPoint, QSettings, Qt
 from PySide6.QtWidgets import (
@@ -150,6 +151,15 @@ class WindowStateTests(unittest.TestCase):
         self.assertEqual(restored.sizes(), expected)
 
     def test_caption_preserves_window_actions_modality_and_saved_geometry(self):
+        # A native viewport can create the HWND before the owner is shown.
+        main = QMainWindow()
+        main.setCentralWidget(QWidget())
+        main.resize(640, 440)
+        main.move(80, 90)
+        main.ensurePolished()
+        main.centralWidget().winId()
+        self.windows.append(main)
+
         attribute = Qt.ApplicationAttribute.AA_DontUseNativeDialogs
         native_dialogs_disabled = self.app.testAttribute(attribute)
         install_window_captions(self.app)
@@ -163,7 +173,7 @@ class WindowStateTests(unittest.TestCase):
 
         def assert_integrated_frame(window):
             if service._native_frame is None:
-                self.assertTrue(window.windowFlags() & Qt.WindowType.FramelessWindowHint)
+                self.assertTrue(window.windowHandle().flags() & Qt.WindowType.FramelessWindowHint)
                 return
             frame = service._native_frame
             hwnd = int(window.winId())
@@ -215,12 +225,14 @@ class WindowStateTests(unittest.TestCase):
                 if status >= 0:
                     self.assertGreater(result.value, 0)
 
-        main = QMainWindow()
-        main.setCentralWidget(QWidget())
-        main.resize(640, 440)
-        main.move(80, 90)
-        self.windows.append(main)
-        main.show()
+        if service._native_frame is None:
+            main.show()
+        else:
+            frame = service._native_frame
+            with patch.object(frame, "_extend_dwm_frame", wraps=frame._extend_dwm_frame) as extend:
+                main.show()
+                assert_integrated_frame(main)
+                self.assertEqual(extend.call_args.args[0], int(main.winId()))
         self.app.processEvents()
         assert_integrated_frame(main)
         caption = main.property(CAPTION_PROPERTY)
@@ -249,6 +261,18 @@ class WindowStateTests(unittest.TestCase):
                 y = origin.y + round(point.y() * ratio)
                 self.assertEqual(send_message(hwnd, WM_NCHITTEST, 0, (x & 0xFFFF) | ((y & 0xFFFF) << 16)),
                                  expected_hit)
+
+            # Simulate Windows calculating the client area before Qt can
+            # route frame messages, even though the native styles are correct.
+            main.hide()
+            self.app.removeNativeEventFilter(frame)
+            try:
+                self.assertTrue(frame._set_position(hwnd, None, 0, 0, 0, 0, 0x0037))
+            finally:
+                self.app.installNativeEventFilter(frame)
+            self.assertEqual(frame._get_style(hwnd, -16) & WS_CAPTION, 0)
+            main.show()
+            assert_integrated_frame(main)
         main.resize(660, 450)
         self.app.processEvents()
         if caption.outline is not None:

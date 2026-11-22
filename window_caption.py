@@ -3,7 +3,7 @@
 import ctypes
 from ctypes import wintypes
 
-from PySide6.QtCore import QAbstractNativeEventFilter, QEvent, QMargins, QObject, QPoint, QPointF, QRect, Qt, QTimer
+from PySide6.QtCore import QAbstractNativeEventFilter, QEvent, QMargins, QObject, QPoint, QPointF, QRect, Qt
 from PySide6.QtGui import QColor, QCursor, QFont, QPainter, QPainterPath, QPen, QRegion
 from PySide6.QtWidgets import QAbstractButton, QDialog, QHBoxLayout, QMainWindow, QWidget
 
@@ -16,6 +16,7 @@ WM_STYLECHANGING = 0x007C
 WM_NCCALCSIZE = 0x0083
 WM_NCHITTEST = 0x0084
 WM_NCLBUTTONDBLCLK = 0x00A3
+WM_DWMCOMPOSITIONCHANGED = 0x031E
 HTCLIENT = 1
 HTCAPTION = 2
 HTSYSMENU = 3
@@ -33,6 +34,14 @@ ACTION_HINTS = (
     ("minimize", Qt.WindowType.WindowMinimizeButtonHint),
     ("maximize", Qt.WindowType.WindowMaximizeButtonHint),
     ("close", Qt.WindowType.WindowCloseButtonHint),
+)
+FRAME_EVENTS = (
+    QEvent.Type.Polish, QEvent.Type.Show, QEvent.Type.WinIdChange,
+)
+LAYOUT_EVENTS = FRAME_EVENTS + (
+    QEvent.Type.Resize, QEvent.Type.WindowStateChange, QEvent.Type.WindowTitleChange,
+    QEvent.Type.WindowIconChange, QEvent.Type.WindowActivate, QEvent.Type.WindowDeactivate,
+    QEvent.Type.PaletteChange, QEvent.Type.DevicePixelRatioChange,
 )
 RESIZE_HITS = {
     Qt.Edge.LeftEdge: 10, Qt.Edge.RightEdge: 11, Qt.Edge.TopEdge: 12,
@@ -110,21 +119,20 @@ class WindowsCaptionFrame(QAbstractNativeEventFilter):
         hwnd = int(window.internalWinId())
         if not hwnd:
             return
-        changed = False
         for index in (GWL_STYLE, GWL_EXSTYLE):
             style = self._get_style(hwnd, index) & 0xFFFFFFFF
             desired = self.frame_style(window, index, style)
             if desired != style:
                 self._set_style(hwnd, index, desired)
-                changed = True
-        if changed:
-            self._set_position(hwnd, None, 0, 0, 0, 0, 0x0037)  # SWP_FRAMECHANGED without move or resize.
-        QTimer.singleShot(0, window, lambda: self._configure_dwm(window, hwnd))
-
-    def _configure_dwm(self, window, hwnd):
-        # An HWND change can occur inside a synchronous Win32 message.
+        # Qt can set the expected style bits before Windows has recalculated
+        # the client rectangle. Force that calculation even when they match.
         if int(window.internalWinId()) != hwnd:
             return
+        self._set_position(hwnd, None, 0, 0, 0, 0, 0x0037)  # SWP_FRAMECHANGED without move or resize.
+        if int(window.internalWinId()) == hwnd:
+            self.configure_dwm(hwnd)
+
+    def configure_dwm(self, hwnd):
         for attribute, value in ((DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND),
                                  (DWMWA_BORDER_COLOR, FRAME_BORDER_COLOR)):
             native_value = wintypes.DWORD(value)
@@ -141,11 +149,14 @@ class WindowsCaptionFrame(QAbstractNativeEventFilter):
             return False, 0
         native = wintypes.MSG.from_address(int(message))
         if native.message not in (WM_GETMINMAXINFO, WM_STYLECHANGING, WM_NCCALCSIZE, WM_NCHITTEST,
-                                  WM_NCLBUTTONDBLCLK):
+                                  WM_NCLBUTTONDBLCLK, WM_DWMCOMPOSITIONCHANGED):
             return False, 0
         window = QWidget.find(int(native.hWnd or 0))
         caption = window.property(CAPTION_PROPERTY) if window is not None else None
         if caption is None:
+            return False, 0
+        if native.message == WM_DWMCOMPOSITIONCHANGED:
+            self.configure_dwm(native.hWnd)
             return False, 0
         if native.message == WM_STYLECHANGING:
             if native.lParam:
@@ -392,15 +403,11 @@ class WindowCaptionService(QObject):
 
     def _attach(self, window):
         flags = window.windowFlags()
-        if window.property(CAPTION_PROPERTY):
-            return
-        if self._native_frame is None:
+        if self._native_frame is None and not window.isVisible():
             window.setWindowFlag(Qt.WindowType.FramelessWindowHint)
         caption = WindowCaption(window, flags, self._native_frame)
         window.setProperty(CAPTION_PROPERTY, caption)
-        if self._native_frame is not None:
-            self._native_frame.configure(window)
-        self._update_layout(window, caption)
+        return caption
 
     def _update_layout(self, window, caption):
         fullscreen = window.isFullScreen() and not window.isMaximized()
@@ -409,6 +416,8 @@ class WindowCaptionService(QObject):
         target_margins = caption.base_margins + QMargins(grip, grip + top, grip, grip)
         if window.contentsMargins() != target_margins:
             window.setContentsMargins(target_margins)
+            if window.layout() is not None:
+                window.layout().activate()
         caption.setGeometry(grip, grip, max(0, window.width() - 2 * grip), CAPTION_HEIGHT)
         caption.setVisible(not fullscreen)
         caption.sync_actions()
@@ -423,35 +432,39 @@ class WindowCaptionService(QObject):
 
     def eventFilter(self, watched, event):
         kind = event.type()
-        if kind == QEvent.Type.Polish and isinstance(watched, (QDialog, QMainWindow)):
-            if watched.isWindow() and watched.windowType() in (
+        if kind not in LAYOUT_EVENTS and kind not in (QEvent.Type.Move, QEvent.Type.MouseButtonPress):
+            return False
+        if not isinstance(watched, (QDialog, QMainWindow)) or not watched.isWindow():
+            return False
+        caption = watched.property(CAPTION_PROPERTY)
+        if caption is None:
+            if kind not in (QEvent.Type.Polish, QEvent.Type.Show) or watched.windowType() not in (
                 Qt.WindowType.Window, Qt.WindowType.Dialog, Qt.WindowType.Sheet, Qt.WindowType.Tool
             ):
-                self._attach(watched)
-        elif isinstance(watched, (QDialog, QMainWindow)) and (caption := watched.property(CAPTION_PROPERTY)):
-            if kind in (QEvent.Type.Resize, QEvent.Type.WindowStateChange, QEvent.Type.Show,
-                        QEvent.Type.WindowTitleChange, QEvent.Type.WindowIconChange,
-                        QEvent.Type.WindowActivate, QEvent.Type.WindowDeactivate, QEvent.Type.PaletteChange,
-                        QEvent.Type.WinIdChange, QEvent.Type.DevicePixelRatioChange):
-                self._update_layout(watched, caption)
-                if kind in (QEvent.Type.WinIdChange, QEvent.Type.Show) and watched.internalWinId():
-                    if self._native_frame is not None:
-                        self._native_frame.configure(watched)
-                    else:
-                        handle = watched.windowHandle()
-                        if handle is not None and not handle.flags() & Qt.WindowType.FramelessWindowHint:
-                            handle.setFlag(Qt.WindowType.FramelessWindowHint)
-                    if caption.pin.isChecked():
-                        caption.set_pinned(True)
-            elif kind == QEvent.Type.Move:
-                caption.repaint_actions()
-            elif (self._native_frame is None and kind == QEvent.Type.MouseButtonPress
-                  and event.button() == Qt.MouseButton.LeftButton):
-                if not watched.isMaximized() and not watched.isFullScreen():
-                    edges = resize_edges(watched, event.position())
+                return False
+            # A native viewport or another Qt service may have polished the
+            # widget before caption installation. Show is the final fallback.
+            caption = self._attach(watched)
+        if kind in LAYOUT_EVENTS:
+            self._update_layout(watched, caption)
+            if kind in FRAME_EVENTS and watched.internalWinId():
+                if self._native_frame is not None:
+                    self._native_frame.configure(watched)
+                else:
                     handle = watched.windowHandle()
-                    if edges and handle is not None and handle.startSystemResize(edges):
-                        return True
+                    if handle is not None and not handle.flags() & Qt.WindowType.FramelessWindowHint:
+                        handle.setFlag(Qt.WindowType.FramelessWindowHint)
+                if caption.pin.isChecked():
+                    caption.set_pinned(True)
+        elif kind == QEvent.Type.Move:
+            caption.repaint_actions()
+        elif (self._native_frame is None and kind == QEvent.Type.MouseButtonPress
+              and event.button() == Qt.MouseButton.LeftButton):
+            if not watched.isMaximized() and not watched.isFullScreen():
+                edges = resize_edges(watched, event.position())
+                handle = watched.windowHandle()
+                if edges and handle is not None and handle.startSystemResize(edges):
+                    return True
         return False
 
 
