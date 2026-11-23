@@ -13,6 +13,13 @@ import subprocess
 import sys
 from tempfile import NamedTemporaryFile, TemporaryDirectory, gettempdir
 
+if __name__ == "__main__":
+    # The packaged worker is executed as a file under Python's isolated mode.
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from build_process import BuildStopped, join_build_job, run_build_tree
+else:
+    from .build_process import BuildStopped, join_build_job, run_build_tree
+
 
 RELEASE_REPO = "aserdargl/RustMech-Releases"
 VERSION_FILE = Path("packaging/version_info.txt")
@@ -147,31 +154,30 @@ def create_release(root, job, compiler, output):
     asset_name = f"RustMech-{tag}-Setup"
     github = shutil.which("gh.exe") if job.get("publish") else None
     repo = job.get("repo", "")
-    if job.get("publish"):
-        if not github or not REPO_PATTERN.fullmatch(repo):
-            raise ValueError("Yayın için GitHub CLI ve kullanıcı/depo biçiminde hedef gerekli.")
+    decision = Path(job["decision"]) if job.get("decision") else None
+    if decision is not None and decision.exists():
+        raise BuildStopped
+    if job.get("publish") and (not github or not REPO_PATTERN.fullmatch(repo)):
+        raise ValueError("Yayın için GitHub CLI ve kullanıcı/depo biçiminde hedef gerekli.")
+    if github and decision is None:
         run([github, "repo", "view", repo, "--json", "nameWithOwner"], root)
 
     with TemporaryDirectory(prefix="rustmech-setup-") as temporary:
         stage = Path(temporary)
-        version_file = stage / "version_info.txt"
-        windows_version_file(root, version_file, label, numeric)
-        progress(10, "RustMech ve bağımlılıkları derleniyor…")
-        run([
-            "powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
-            "-File", str(root / "Build-Exe.ps1"),
-            "-Python", sys.executable, "-DistPath", str(stage / "dist"), "-WorkPath", str(stage / "work"),
-            "-SpecPath", str(stage), "-VersionFile", str(version_file), "-CleanRelease",
-        ], root, env={key: value for key, value in os.environ.items() if key != "PSMODULEPATH"})
-
-        progress(65, "Windows kurulum dosyası sıkıştırılıyor…")
-        compiled = stage / "release"
-        run([
-            str(compiler), f"/DAppVersion={label}", f"/DNumericVersion={'.'.join(map(str, numeric))}",
-            f"/DPayloadDir={stage / 'dist/RustMech'}", f"/DSetupName={asset_name}", f"/O{compiled}",
-            str(root / INSTALLER_SCRIPT),
-        ], root)
-        setup = compiled / f"{asset_name}.exe"
+        if decision is None:
+            compile_installer(root, compiler, stage, label, numeric, asset_name)
+        else:
+            command = ["-I", "-X", "utf8", __file__, str(root), "--compile-stage", str(stage),
+                       "--version", label, "--decision", str(decision)]
+            if github:
+                command.extend(["--check-repo", repo])
+            run_build_tree([*command, "--job-name"], decision)
+            try:
+                decision.touch(exist_ok=False)
+            except FileExistsError:
+                raise BuildStopped from None
+            print("DELIVERY|Kurulum dosyası Drive klasörüne aktarılıyor...", flush=True)
+        setup = stage / "release" / f"{asset_name}.exe"
         installer = copy_installer(setup, output)
         print(f"RESULT|{installer}", flush=True)
 
@@ -184,13 +190,49 @@ def create_release(root, job, compiler, output):
     progress(100, "Kurulum dosyası hazır." if not github else "Kurulum dosyası hazır ve GitHub'da yayımlandı.")
 
 
+def compile_installer(root, compiler, stage, label, numeric, asset_name):
+    version_file = stage / "version_info.txt"
+    windows_version_file(root, version_file, label, numeric)
+    progress(10, "RustMech ve bağımlılıkları derleniyor…")
+    run([
+        "powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+        "-File", str(root / "Build-Exe.ps1"),
+        "-Python", sys.executable, "-DistPath", str(stage / "dist"), "-WorkPath", str(stage / "work"),
+        "-SpecPath", str(stage), "-VersionFile", str(version_file), "-CleanRelease",
+    ], root, env={key: value for key, value in os.environ.items() if key != "PSMODULEPATH"})
+    progress(65, "Windows kurulum dosyası sıkıştırılıyor…")
+    run([
+        str(compiler), f"/DAppVersion={label}", f"/DNumericVersion={'.'.join(map(str, numeric))}",
+        f"/DPayloadDir={stage / 'dist/RustMech'}", f"/DSetupName={asset_name}", f"/O{stage / 'release'}",
+        str(root / INSTALLER_SCRIPT),
+    ], root)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("root", type=Path)
     parser.add_argument("--check", action="store_true")
+    parser.add_argument("--compile-stage", type=Path, help=argparse.SUPPRESS)
+    parser.add_argument("--version", help=argparse.SUPPRESS)
+    parser.add_argument("--decision", type=Path, help=argparse.SUPPRESS)
+    parser.add_argument("--job-name", help=argparse.SUPPRESS)
+    parser.add_argument("--check-repo", help=argparse.SUPPRESS)
     options = parser.parse_args()
     root = options.root.resolve()
     try:
+        if options.compile_stage:
+            join_build_job(options.job_name)
+            if options.decision.exists():
+                return 0
+            label, numeric, tag = release_version(options.version)
+            compiler = check_project(root, Path(sys.executable))
+            if options.check_repo:
+                github = shutil.which("gh.exe")
+                if not github:
+                    raise ValueError("GitHub CLI bulunamadı.")
+                run([github, "repo", "view", options.check_repo, "--json", "nameWithOwner"], root)
+            compile_installer(root, compiler, options.compile_stage, label, numeric, f"RustMech-{tag}-Setup")
+            return 0
         compiler = check_project(root, Path(sys.executable))
         if options.check:
             run([sys.executable, "-c",
@@ -201,6 +243,9 @@ def main():
             job = json.load(sys.stdin)
             with build_lock(root):
                 create_release(root, job, compiler, setup_output_directory())
+    except BuildStopped:
+        print("STOPPED|Derleme durduruldu.", flush=True)
+        return 2
     except (OSError, ValueError, KeyError) as error:
         print(f"ERROR|{error}", flush=True)
         return 1

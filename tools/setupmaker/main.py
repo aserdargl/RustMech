@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+from tempfile import TemporaryDirectory
 
 from PySide6.QtCore import QProcess, QProcessEnvironment, QSettings, QSignalBlocker, QUrl
 from PySide6.QtGui import QDesktopServices, QFont
@@ -216,6 +217,8 @@ class SetupMakerWindow(QMainWindow):
         self.python = None
         self.installer = None
         self.job = None
+        self.job_workspace = None
+        self.stop_requested = False
         self.pending = ""
         self.decoder = codecs.getincrementaldecoder("utf-8")("replace")
         self.process = QProcess(self)
@@ -276,6 +279,9 @@ class SetupMakerWindow(QMainWindow):
         actions.addWidget(self.refresh_button)
         self.build_button = button("Kurulum oluştur", self.start_build, 125, primary=True)
         actions.addStretch()
+        self.stop_button = button("Durdur", self.stop_build)
+        self.stop_button.setEnabled(False)
+        actions.addWidget(self.stop_button)
         actions.addWidget(self.build_button)
         layout.addLayout(actions)
 
@@ -433,13 +439,20 @@ class SetupMakerWindow(QMainWindow):
             self.status.setText(str(error))
             return
 
-        self.job = dict(version=version, repo=repo, notes=self.notes.toPlainText(), publish=self.publish.isChecked())
+        try:
+            self.job_workspace = TemporaryDirectory(prefix="rustmech-setupmaker-job-")
+        except OSError as error:
+            self.status.setText(str(error))
+            return
+        self.job = dict(version=version, repo=repo, notes=self.notes.toPlainText(), publish=self.publish.isChecked(),
+                        decision=str(Path(self.job_workspace.name) / "decision"))
         self.installer = None
         self.pending = ""
         self.decoder.reset()
         self.log.clear()
         self.inputs.setEnabled(False)
         self.refresh_button.setEnabled(False)
+        self.stop_button.setEnabled(True)
         self.update_build_button()
         self.status.setText("Derleme başlatılıyor…")
         self.progress.setValue(0)
@@ -449,6 +462,21 @@ class SetupMakerWindow(QMainWindow):
         self.process.setProcessEnvironment(environment)
         self.process.setWorkingDirectory(str(self.project_root))
         self.process.start(str(self.python), ["-I", "-X", "utf8", "-u", str(WORKER), str(self.project_root)])
+
+    def stop_build(self):
+        if not self.stop_button.isEnabled():
+            return
+        try:
+            Path(self.job["decision"]).touch(exist_ok=False)
+        except FileExistsError:
+            self.stop_button.setEnabled(False)
+            return
+        except OSError as error:
+            self.status.setText(f"Durdurma isteği gönderilemedi: {error}")
+            return
+        self.stop_requested = True
+        self.stop_button.setEnabled(False)
+        self.status.setText("Derleme durduruluyor...")
 
     def send_job(self):
         self.process.write(json.dumps(self.job).encode("utf-8"))
@@ -463,22 +491,29 @@ class SetupMakerWindow(QMainWindow):
         for raw in lines:
             line = raw.rstrip("\r")
             marker, _, message = line.partition("|")
-            if marker == "PROGRESS":
+            if marker == "DELIVERY":
+                self.stop_button.setEnabled(False)
+                self.status.setText(message)
+                line = message
+            elif marker == "PROGRESS":
                 percent, _, status = message.partition("|")
                 if percent.isdecimal():
                     self.progress.setValue(int(percent))
-                    self.status.setText(status)
+                    if not self.stop_requested:
+                        self.status.setText(status)
                     line = status
             elif marker == "RESULT":
                 self.installer = Path(message)
                 line = f"Kurulum dosyası · {message}"
-            elif marker == "ERROR":
+            elif marker in {"STOPPED", "ERROR"}:
                 line = message
             self.log.appendPlainText(line)
 
     def finished(self, code, exit_status):
         self.read_output(final=True)
-        if code or exit_status != QProcess.ExitStatus.NormalExit:
+        if self.stop_requested and code == 2 and exit_status == QProcess.ExitStatus.NormalExit:
+            self.status.setText("Derleme durduruldu.")
+        elif code or exit_status != QProcess.ExitStatus.NormalExit:
             text = "Kurulum dosyası hazır. GitHub yayını başarısız." if self.installer else "Derleme başarısız."
             self.status.setText(f"{text} İşlem günlüğünü inceleyin.")
         self.unlock()
@@ -489,7 +524,12 @@ class SetupMakerWindow(QMainWindow):
             self.unlock()
 
     def unlock(self):
+        if self.job_workspace is not None:
+            self.job_workspace.cleanup()
+            self.job_workspace = None
         self.job = None
+        self.stop_requested = False
+        self.stop_button.setEnabled(False)
         self.inputs.setEnabled(True)
         self.refresh_button.setEnabled(True)
         self.update_build_button()
