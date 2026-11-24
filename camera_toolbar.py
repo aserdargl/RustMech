@@ -83,27 +83,27 @@ class CameraToolbar(QFrame):
         self._stack.addWidget(self.display_modes)
 
     def add_camera_action(self, action, kind):
-        button = self._add_button(self.column, kind, Qt.AlignmentFlag.AlignHCenter)
+        button = self._add_button(self.column, kind)
         action.setIcon(button.icon())
         button.setDefaultAction(action)
         button.setAccessibleName(action.text())
 
     def add_display_mode(self, kind, name, tooltip):
-        button = self._add_button(self._mode_column, kind, Qt.AlignmentFlag.AlignRight)
+        button = self._add_button(self._mode_column, kind)
         button.setCheckable(True)
         button.setAccessibleName(name)
         button.setToolTip(tooltip)
         button.installEventFilter(self)
         return button
 
-    def _add_button(self, layout, kind, alignment):
+    def _add_button(self, layout, kind):
         button = QToolButton()
         button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
         button.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         button.setIcon(camera_icon(kind))
         button.setIconSize(QSize(20, 20))
         button.setFixedSize(30, CONTROL_HEIGHT)
-        layout.addWidget(button, 0, alignment)
+        layout.addWidget(button, 0, Qt.AlignmentFlag.AlignHCenter)
         return button
 
     def _balance_camera_margins(self, minimum, maximum):

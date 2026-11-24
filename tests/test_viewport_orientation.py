@@ -169,6 +169,7 @@ class OrientationTests(unittest.TestCase):
                 viewport = dialog.plotter.interactor
                 toolbar = dialog.camera_toolbar
                 camera_group = toolbar.findChild(QScrollArea, "cameraViewGroup")
+                group = toolbar.display_modes
                 for width, height, scrolls in ((1440, 900, False), (900, 600, True), (1440, 900, False)):
                     dialog.resize(width, height)
                     QTest.qWait(100)
@@ -179,16 +180,17 @@ class OrientationTests(unittest.TestCase):
                     self.assertEqual(viewport.width() - toolbar.geometry().right() - 1, 2)
                     self.assertTrue(viewport.rect().contains(toolbar.geometry()))
                     self.assertEqual(camera_group.verticalScrollBar().maximum() > 0, scrolls)
-                    for button in camera_group.findChildren(QToolButton):
-                        x = button.mapTo(camera_group, QPoint()).x()
-                        self.assertEqual(x, camera_group.width() - x - button.width())
+                    for frame in (camera_group, group):
+                        self.assertEqual(frame.geometry().center().x(), toolbar.rect().center().x())
+                        for button in frame.findChildren(QToolButton):
+                            x = button.mapTo(frame, QPoint()).x()
+                            self.assertEqual(x, frame.width() - x - button.width())
 
                 command_bar = dialog.findChild(QWidget, "workspaceCommandBar")
                 for button in (dialog.project_button, dialog.doe_button, dialog.truba_button, dialog.about_button):
                     self.assertIs(button.parentWidget(), command_bar)
                     self.assertEqual(button.geometry().center().y(), dialog.truba_button.geometry().center().y())
                 modes = dialog.display_mode_buttons
-                group = toolbar.display_modes
                 self.assertTrue(group.isVisible())
                 self.assertGreater(group.y(), camera_group.geometry().bottom())
                 self.assertEqual(modes.checkedId(), 0)
