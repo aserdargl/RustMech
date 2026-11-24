@@ -188,12 +188,16 @@ class LanguageTests(unittest.TestCase):
                 [method.text() for method in methods],
                 ['Sonlu Eleman', 'FFT homojenleştirme', 'Malzeme noktası yöntemi', 'Peridinamik'],
             )
-            finite_element, fft, *other_methods = methods
+            finite_element, fft, mpm, peridynamics = methods
             self.assertEqual(window.sidebar_toggle.text(), finite_element.text())
-            for method in other_methods:
-                method.trigger()
-                self.assertEqual(window.setup_tabs.currentIndex(), method.data())
-                self.assertEqual(window.sidebar_toggle.accessibleName(), method.text())
+            mpm.trigger()
+            self.assertFalse(window.apply_button.isEnabled())
+            with patch.object(window, '_start_peridynamic_compression') as start_peridynamics:
+                peridynamics.trigger()
+                self.assertEqual(window.setup_tabs.currentIndex(), peridynamics.data())
+                self.assertEqual(window.sidebar_toggle.accessibleName(), peridynamics.text())
+                self.assertTrue(window.apply_button.isEnabled())
+                start_peridynamics.assert_not_called()
             fft.trigger()
             self.assertEqual(window.sidebar_toggle.text(), 'FFT')
             self.assertEqual(window.sidebar_toggle.accessibleName(), fft.text())
@@ -227,7 +231,7 @@ class LanguageTests(unittest.TestCase):
             self.manager.set_language('en')
             self.assertEqual(window.sidebar_toggle.text(), 'FFT')
             self.assertEqual(window.folder_batch_button.text(), 'Batch Analysis')
-            methods[0].trigger()
+            finite_element.trigger()
             self.assertEqual(window.sidebar_toggle.text(), 'Finite Element')
             self.assertEqual(panel.connect_button.text(), 'Connect')
             self.assertEqual(panel.username.text(), 'test-user')

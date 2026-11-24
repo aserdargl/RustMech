@@ -32,6 +32,7 @@ class FlowWorkspace(QWidget):
         self.settings_provider = settings_provider
         self.preferences = preferences if preferences is not None else QSettings("RustMech", "RustMech")
         self.job = None
+        self._remote_job = False
         self.case_directory = None
         self.display_directory = None
         self.grid = None
@@ -375,7 +376,7 @@ class FlowWorkspace(QWidget):
     def poll(self):
         if self.job is None: return
         if not self.job.done():
-            if getattr(self,"_remote_job",False):
+            if self._remote_job:
                 record = self.job.remote_status()
                 if record: self.status.setText(f"TRUBA job {record.get('job_id','pending')} · {record.get('state','preparing')}")
                 return
@@ -394,7 +395,7 @@ class FlowWorkspace(QWidget):
         self._unlock()
         try:
             result = job.result()
-            if getattr(self,"_remote_job",False): self.case_directory = Path(result)
+            if self._remote_job: self.case_directory = Path(result)
             self.load_directory(self.case_directory)
         except Exception as error:
             if self._remote_job and self.solving:
@@ -404,7 +405,7 @@ class FlowWorkspace(QWidget):
     def cancel(self):
         if self.job is None: return
         try:
-            if not getattr(self,"_remote_job",False): stop_flow_case(self.submitted_flow,self.case_directory)
+            if not self._remote_job: stop_flow_case(self.submitted_flow,self.case_directory)
             self.job.force_stop()
         except Exception as error:
             self.status.setText("Cannot stop flow job: "+str(error))

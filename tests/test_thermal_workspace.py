@@ -3,13 +3,13 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pyvista as pv
-from PySide6.QtCore import QSettings,Qt
+from PySide6.QtCore import QCoreApplication,QEvent,QSettings,Qt
 from PySide6.QtTest import QSignalSpy,QTest
-from PySide6.QtWidgets import QApplication,QPushButton
+from PySide6.QtWidgets import QApplication,QPushButton,QWidget
 
 from flow_analysis import FlowSettings
 from model import Settings
@@ -33,7 +33,12 @@ class ThermalWorkspaceTests(unittest.TestCase):
         self.dialogs = []
 
     def dialog(self):
-        with patch.object(RustMechDialog,"start_preview",lambda self:None):
+        with (
+            patch.object(RustMechDialog, "start_preview", lambda self: None),
+            patch("nonlinear_compression.create_preview_viewport",
+                  side_effect=lambda parent, **kwargs: MagicMock(interactor=QWidget(parent))),
+            patch("remote_controller.saved_session", return_value=None),
+        ):
             dialog = RustMechDialog(Settings(),solver_profile_store=SolverProfileStore(self.preferences))
         self.dialogs.append(dialog)
         dialog.show()
@@ -45,6 +50,8 @@ class ThermalWorkspaceTests(unittest.TestCase):
         for dialog in reversed(self.dialogs):
             dialog.close()
             dialog.dispose()
+            dialog.deleteLater()
+        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
         self.app.removeEventFilter(self.store)
         if self.previous:
             self.app.installEventFilter(self.previous)
@@ -118,6 +125,7 @@ class ThermalWorkspaceTests(unittest.TestCase):
         self.assertTrue(np.all(workspace.solid_grid.cell_data["Temperature_C"]==25))
         workspace.time_slider.setValue(0)
         self.assertTrue(np.all(workspace.grid.cell_data["Temperature_C"]==20))
+        self.assertEqual(workspace.plotter.add_mesh.call_args.kwargs["scalars"], "Temperature_C")
         workspace.play.click()
         self.assertTrue(workspace.play_timer.isActive())
         workspace.advance()

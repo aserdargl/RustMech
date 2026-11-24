@@ -30,8 +30,11 @@ class ParallelBatchTests(unittest.TestCase):
     def remote_studio(self, rows=4):
         studio = self.studio(rows=rows)
         context = RemoteContext(partition='hamsi', cores=56, parallel_jobs=2, session_id='321')
-        studio.remote_controller = SimpleNamespace(requested=True, context=lambda: context,
-                                                   require=lambda *a, **kw: (context, None))
+        studio.remote_controller = SimpleNamespace(
+            requested=True,
+            context=lambda: context,
+            require_analysis=lambda capability, settings: (context, None),
+        )
         self.futures = []
         self.arguments = []
         def launch(target, index, *args, **kwargs):

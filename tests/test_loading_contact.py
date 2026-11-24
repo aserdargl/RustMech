@@ -9,20 +9,37 @@ from unittest.mock import MagicMock, patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import numpy as np
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QSettings, Qt
 from PySide6.QtTest import QTest, QSignalSpy
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QWidget
 
 import mapdl_backend as backend
 from mesh_convergence import MeshConvergenceDialog, response_metrics, solve_level
 from model import Settings, loading_target_reached, save_settings, load_settings, validate_settings
 from nonlinear_compression import RustMechDialog, export_graphs, extract_curve
+from solver_profiles import SolverProfileStore
 
 
 class LoadContactTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.app = QApplication.instance() or QApplication([])
+
+    def dialog(self, settings):
+        folder = self.enterContext(TemporaryDirectory())
+        preferences = QSettings(str(Path(folder) / "ui.ini"), QSettings.Format.IniFormat)
+        with (
+            patch("window_state.install_window_state"),
+            patch.object(RustMechDialog, "start_preview", lambda self: None),
+            patch("nonlinear_compression.create_preview_viewport",
+                  side_effect=lambda parent, **kwargs: MagicMock(interactor=QWidget(parent))),
+            patch("remote_controller.saved_session", return_value=None),
+        ):
+            dialog = RustMechDialog(settings, solver_profile_store=SolverProfileStore(preferences))
+        self.addCleanup(dialog.deleteLater)
+        self.addCleanup(dialog.dispose)
+        self.addCleanup(dialog.close)
+        return dialog
 
     def test_persist_load_and_contact_conditions(self):
         settings = replace(Settings(), loading_mode="force", applied_force=234,
@@ -94,11 +111,7 @@ class LoadContactTests(unittest.TestCase):
         self.assertFalse(loading_target_reached(result.settings, .002, 100, .9))
 
     def test_main_setup_below_mesh_supplies_convergence_and_enter_only_commits(self):
-        with patch("window_state.install_window_state"), patch.object(RustMechDialog, "start_preview", lambda self: None):
-            dialog = RustMechDialog(Settings())
-        self.addCleanup(dialog.deleteLater)
-        self.addCleanup(dialog.dispose)
-        self.addCleanup(dialog.close)
+        dialog = self.dialog(Settings())
         dialog.controls["compression"].setValue(.3)
         dialog.controls["bottom_platen_friction_coeff"].setValue(.45)
         combo = dialog.platen_contact_combos["top"]
@@ -160,10 +173,7 @@ class LoadContactTests(unittest.TestCase):
             self.assertEqual(level.status, "Target force not verified")
 
     def test_automatic_defaults_preserve_physics_and_restore_custom_values(self):
-        with patch("window_state.install_window_state"), patch.object(RustMechDialog, "start_preview", lambda self: None):
-            dialog = RustMechDialog(Settings())
-        self.addCleanup(dialog.deleteLater)
-        self.addCleanup(dialog.dispose)
+        dialog = self.dialog(Settings())
         self.assertTrue(dialog.automatic_contact.isChecked())
         self.assertTrue(dialog.automatic_cores.isChecked())
         self.assertFalse(dialog.controls["cores"].isEnabled())
@@ -195,10 +205,7 @@ class LoadContactTests(unittest.TestCase):
 
     def test_existing_custom_numeric_values_open_in_manual_mode(self):
         settings = replace(Settings(), cores=2, normal_contact_stiffness_factor=.75)
-        with patch("window_state.install_window_state"), patch.object(RustMechDialog, "start_preview", lambda self: None):
-            dialog = RustMechDialog(settings)
-        self.addCleanup(dialog.deleteLater)
-        self.addCleanup(dialog.dispose)
+        dialog = self.dialog(settings)
         self.assertFalse(dialog.automatic_contact.isChecked())
         self.assertFalse(dialog.automatic_cores.isChecked())
         self.assertEqual(dialog.collect().normal_contact_stiffness_factor, .75)

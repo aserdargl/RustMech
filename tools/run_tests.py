@@ -19,7 +19,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 GUI = {
     "test_dialog_keyboard", "test_flow_workspace", "test_forced_stop_ui",
-    "test_geometry_import_ui", "test_loading_contact", "test_standard_tests",
+    "test_geometry_import_ui", "test_standard_tests", "test_truba_parallel_controls",
     "test_thermal_workspace", "test_viewport_orientation", "test_remote_mode_ui",
     "test_doe_window", "test_doe_sample_settings", "test_design_pool",
     "test_viewport_lifecycle",
@@ -31,7 +31,7 @@ GUI = {
 # Varsayilan offscreen ekrani 800x800; pencere geri yukleme testleri ekrana
 # sigmayan pencereleri kirpar. 1920x1080 tanimli ekran kullan. Qt secenekleri
 # ':' ile ayirdigindan yol, ROOT'a gore goreli olmali (surucu harfi olmamali).
-OFFSCREEN = "offscreen:configfile=tests/offscreen_screen.json"
+OFFSCREEN = "offscreen:configfile=tests/fixtures/qt_offscreen_screen.json"
 # pytest cikis kodlari: 0 basarili, 5 hic test toplanmadi.
 NO_TESTS = 5
 SUMMARY = re.compile(r"\b\d+ (passed|failed|error|errors|skipped|deselected)\b")
@@ -63,7 +63,8 @@ def main():
     failed = 0
     with tempfile.TemporaryDirectory(prefix="rustmech-tests-") as scratch:
         for name in select(a.group, a.only):
-            env = dict(os.environ, RUSTMECH_OFFLINE=os.environ.get("RUSTMECH_OFFLINE", "1"))
+            env = dict(os.environ, RUSTMECH_OFFLINE=os.environ.get("RUSTMECH_OFFLINE", "1"),
+                       PYTHONIOENCODING="utf-8")
             if name in GUI:
                 env.pop("QT_QPA_PLATFORM", None)
             else:
@@ -73,14 +74,14 @@ def main():
             t0 = time.time()
             try:
                 r = subprocess.run(command, cwd=ROOT, env=env, capture_output=True,
-                                   text=True, timeout=a.timeout)
+                                   encoding="utf-8", errors="replace", timeout=a.timeout)
                 ok = r.returncode == 0
                 info = summary(r.stdout + r.stderr)
                 if r.returncode == NO_TESTS:
                     state, info = "FAIL", "hic test toplanmadi"
                 else:
                     state = "OK" if ok else "FAIL"
-                    info = info or "ozet yok (surec beklenmedik bicimde bitti)"
+                    info = info or f"ozet yok (surec cikis kodu: {r.returncode})"
             except subprocess.TimeoutExpired:
                 ok, state, info = False, "TIMEOUT", f">{a.timeout}s"
             failed += not ok
