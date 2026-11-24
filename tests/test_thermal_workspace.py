@@ -76,7 +76,7 @@ class ThermalWorkspaceTests(unittest.TestCase):
             self.assertEqual(control.value(),70)
             constructor.assert_not_called()
             self.assertEqual(accepted.count(),0)
-            self.assertFalse(dialog.truba_dialog.isVisible())
+            self.assertIsNone(dialog.sync_window)
             thermal.buttons[1].click()
             constructor.assert_called_once()
             self.assertFalse(thermal.thermal_panel.isEnabled())

@@ -3,13 +3,12 @@ import json
 import paramiko
 
 from PySide6.QtCore import QThread, QTimer, Qt, Signal
-from PySide6.QtWidgets import (QDialog, QGroupBox, QHeaderView, QLabel, QPushButton, QStyle,
+from PySide6.QtWidgets import (QGroupBox, QHeaderView, QLabel, QPushButton,
                                QTableWidget, QTableWidgetItem, QVBoxLayout)
 
-from studio_style import CONTROL_HEIGHT, STUDIO_STYLESHEET
+from studio_style import CONTROL_HEIGHT
 from truba_jobs import HOST, SLURM_TERMINAL_STATES, cancel_remote
 from truba_remote import analysis_code, sync_background_analysis
-from window_state import show_restored_window
 
 
 OPERATIONS = {
@@ -91,108 +90,6 @@ def background_status(record):
         'DOWNLOADING': 'Downloading results…',
         'DOWNLOADED': 'Analysis complete · results downloaded',
     }.get(state, stage or 'Preparing analysis…')
-
-
-def analysis_state(record):
-    state = str(record.get('state', '')).upper().replace('|', ' ').split()
-    code = state[0].rstrip('+') if state else ''
-    if code in {'RUNNING', 'COMPLETING', 'DOWNLOADING'} or state[:3] == ['SESSION', '·', 'RUNNING']:
-        return 'running'
-    if code in {'COMPLETED', 'DOWNLOADED', 'CANCELLED'}:
-        return 'idle'
-    if code in SLURM_TERMINAL_STATES or code in {'INTERRUPTED', 'ERROR'}:
-        return 'error'
-    return 'pending'
-
-
-class TrubaJobMonitor(QDialog):
-    STATES = {
-        'idle': ('No active analyses', '#DBEAFE', '#2563EB'),
-        'pending': ('TRUBA analyses pending', '#FEF08A', '#A16207'),
-        'running': ('TRUBA analyses running', '#BBF7D0', '#15803D'),
-        'error': ('TRUBA analysis failed', '#FECACA', '#B91C1C'),
-    }
-
-    def __init__(self, parent, job_list):
-        super().__init__(parent)
-        self.setObjectName('trubaJobMonitor')
-        self.setWindowTitle('TRUBA analyses')
-        self.setWindowFlag(Qt.WindowType.WindowMinimizeButtonHint)
-        self.setWindowFlag(Qt.WindowType.WindowMaximizeButtonHint)
-        self.setStyleSheet(STUDIO_STYLESHEET + '\nQDialog#trubaJobMonitor { background: #F5F5F3; }')
-        self.resize(720, 350)
-        self.job_list = job_list
-        self.records = ()
-        self.submission_error = ''
-        self.button = QPushButton(parent)
-        self.button.setObjectName('trubaJobsBtn')
-        self.button.setFixedSize(CONTROL_HEIGHT, CONTROL_HEIGHT)
-        self.button.setAutoDefault(False)
-        self.button.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogDetailedView))
-        self.button.clicked.connect(self.open_window)
-
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(8, 8, 8, 8)
-        layout.setSpacing(7)
-        self.table = QTableWidget(0, 4)
-        self.table.setHorizontalHeaderLabels(['Analysis code', 'Slurm job ID', 'Analysis', 'Status'])
-        self.table.verticalHeader().hide()
-        self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        for column in (0, 1):
-            self.table.horizontalHeader().setSectionResizeMode(column, QHeaderView.ResizeMode.ResizeToContents)
-        for column in (2, 3):
-            self.table.horizontalHeader().setSectionResizeMode(column, QHeaderView.ResizeMode.Stretch)
-        layout.addWidget(self.table)
-        self.hint = QLabel()
-        self.hint.setWordWrap(True)
-        self.hint.setObjectName('mutedHintLabel')
-        layout.addWidget(self.hint)
-        job_list.analyses_changed.connect(self.refresh)
-        self.refresh(job_list.analysis_records)
-
-    def open_window(self):
-        self.job_list.refresh()
-        show_restored_window(self)
-
-    def start_submission(self):
-        self.submission_error = ''
-        self.refresh(self.records)
-        self.open_window()
-
-    def submission_failed(self, message):
-        self.submission_error = str(message)
-        self.refresh(self.records)
-
-    def refresh(self, records):
-        self.records = records
-        states = [analysis_state(record) for _, record in records]
-        state = ('running' if 'running' in states else 'pending' if 'pending' in states
-                 else 'error' if self.submission_error or states[:1] == ['error'] else 'idle')
-        label, background, border = self.STATES[state]
-        if self.button.property('jobState') != state:
-            self.button.setProperty('jobState', state)
-            self.button.setStyleSheet(
-                f'QPushButton {{ background: {background}; border: 1px solid {border}; border-radius: 4px; padding: 0; }}'
-                f'QPushButton:hover, QPushButton:focus {{ border: 2px solid {border}; }}'
-                f'QPushButton:pressed {{ background: {border}; }}'
-            )
-        self.button.setToolTip(f'TRUBA analyses · {label}')
-        self.button.setAccessibleName(self.button.toolTip())
-        self.hint.setText(self.submission_error or (label if not records else ''))
-        self.hint.setVisible(bool(self.hint.text()))
-        self.table.setRowCount(len(records))
-        for row, (path, record) in enumerate(records):
-            description = job_description(record)
-            if record.get('study_name'):
-                description = f"{record['study_name']} · {description}"
-            status = str(record.get('state') or 'Preparing analysis…')
-            for column, value in enumerate((analysis_code(record) or '—', str(record.get('job_id') or '—'),
-                                            description, status)):
-                item = QTableWidgetItem(value)
-                item.setToolTip(f"{value}\n{record.get('remote_directory', '')}\n"
-                                f"{record.get('local_directory') or path}")
-                self.table.setItem(row, column, item)
-            self.table.setRowHeight(row, CONTROL_HEIGHT + 6)
 
 
 class BackgroundJobSync(QThread):

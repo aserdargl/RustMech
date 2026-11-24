@@ -1,7 +1,6 @@
 from dataclasses import asdict, replace
 import json
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 import numpy as np
@@ -133,8 +132,7 @@ def test_mpm_workspace_submits_via_truba_adapter(tmp_path):
     preferences = QSettings(str(tmp_path / 'workspace.ini'), QSettings.Format.IniFormat)
     parent = QWidget()
     workspace = MPMWorkspace(lambda: GEOMETRY, parent, preferences)
-    monitor = Mock()
-    remote = Mock(requested=True, window=SimpleNamespace(truba_job_monitor=monitor))
+    remote = Mock(requested=True)
     remote.require_analysis.return_value = 'allocation', 'authentication'
     workspace.remote_controller = remote
     with patch('mpm_workspace.AnalysisProcess') as start:
@@ -143,5 +141,4 @@ def test_mpm_workspace_submits_via_truba_adapter(tmp_path):
             'operation': 'mpm_solve', 'settings': asdict(GEOMETRY), 'mpm': asdict(MPMSettings()),
         }, 'allocation', remote_auth='authentication')
         remote.require_analysis.assert_called_once_with('mpm')
-        monitor.start_submission.assert_called_once()
     workspace.dispose()

@@ -93,7 +93,7 @@ class KratosStandardProfilesTests(unittest.TestCase):
                 self.assertIsNone(selected.minimum_substeps)
                 self.assertFalse(dialog.controls['size'].isEnabled())
                 self.assertIsNone(dialog.analysis_job)
-                self.assertFalse(dialog.truba_dialog.isVisible())
+                self.assertIsNone(dialog.sync_window)
             finally:dialog.dispose();dialog.deleteLater()
 
 

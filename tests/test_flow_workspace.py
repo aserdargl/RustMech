@@ -68,7 +68,7 @@ class FlowWorkspaceTests(unittest.TestCase):
             self.assertAlmostEqual(speed.value(),.02)
             constructor.assert_not_called()
             self.assertEqual(accepted.count(),0)
-            self.assertFalse(dialog.truba_dialog.isVisible())
+            self.assertIsNone(dialog.sync_window)
             flow.buttons[1].click()
             constructor.assert_called_once()
             self.assertTrue(flow.stop.isEnabled())

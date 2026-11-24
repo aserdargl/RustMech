@@ -6,10 +6,10 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import MagicMock,patch
 
-from PySide6.QtCore import QCoreApplication,QEvent,QPoint,QSettings,Qt
+from PySide6.QtCore import QCoreApplication,QEvent,QSettings,Qt
 from PySide6.QtGui import QTextCursor
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication,QWidget,QGroupBox,QMessageBox
+from PySide6.QtWidgets import QApplication,QWidget,QMessageBox,QScrollArea,QSplitter
 
 from model import Settings
 from nonlinear_compression import RustMechDialog
@@ -28,7 +28,7 @@ class RemoteModeUiTests(unittest.TestCase):
         session_patch.start()
         self.addCleanup(session_patch.stop)
         self.temp=tempfile.TemporaryDirectory()
-        for module in ('truba_session', 'truba_jobs', 'truba_remote', 'truba_connection'):
+        for module in ('truba_session', 'truba_jobs', 'truba_remote', 'truba_sync'):
             state_patch = patch(module + '.state_directory', return_value=Path(self.temp.name) / 'truba')
             state_patch.start()
             self.addCleanup(state_patch.stop)
@@ -73,15 +73,13 @@ class RemoteModeUiTests(unittest.TestCase):
 
     def test_startup_and_hpc_launch_never_enable_or_connect(self):
         self.assertFalse(self.controller.requested)
-        with patch.object(self.window.truba_dialog,"start_connection") as connect, \
-                patch.object(self.controller,"refresh") as refresh, \
+        with patch.object(self.controller,"refresh") as refresh, \
                 patch("nonlinear_compression.open_truba_desktop") as open_desktop:
             self.window.truba_button.click()
             self.app.processEvents()
             open_desktop.assert_called_once_with()
-            connect.assert_not_called()
             refresh.assert_not_called()
-        self.assertFalse(self.window.truba_dialog.isVisible())
+        self.assertIsNone(self.window.sync_window)
         self.assertFalse(self.controller.toggle.isChecked())
         field=self.controller.controls["cores"]
         field.setFocus()
@@ -123,62 +121,12 @@ class RemoteModeUiTests(unittest.TestCase):
         QTest.keyClick(details, Qt.Key.Key_C, Qt.KeyboardModifier.ControlModifier)
         self.assertEqual(self.app.clipboard().text(), details.toPlainText())
 
-    def test_truba_quick_connect_uses_saved_credentials_without_opening_panel(self):
-        window = self.window
-        dialog = window.truba_dialog
-        button = window.truba_quick_connect
-        status = window.truba_quick_status
-        self.assertGreater(button.x(), window.truba_button.geometry().right())
-        self.assertFalse(button.icon().isNull())
-        self.assertFalse(status.isVisible())
-        dialog.username.setText("unsaved-user")
-        dialog.password.setText("unsaved-password")
-        with patch.object(dialog.credentials, "load", return_value=("saved-user", "saved-password")) as load, \
-                patch("truba_connection.ConnectionWorker") as worker:
-            button.click()
-            self.assertTrue(load.called)
-            reads = load.call_count
-            button.click()
-            self.assertEqual(load.call_count, reads)
-            worker.assert_called_once_with("saved-user", "saved-password", dialog.state_dir, dialog)
-            worker.return_value.start.assert_called_once()
-            self.assertFalse(dialog.isVisible())
-            self.assertFalse(button.isEnabled())
-            self.assertTrue(status.isVisible())
-            self.assertIn("Connecting...", status.text())
-            with patch.object(QMessageBox, "question", return_value=QMessageBox.StandardButton.No) as question:
-                dialog._confirm_host_key("fingerprint")
-            self.assertIs(question.call_args.args[0], window)
-            worker.return_value.decide_host_key.assert_called_once_with(False)
-            dialog._state_changed("waiting_for_network")
-            self.assertIn("Waiting for VPN", status.text())
-            with patch.object(dialog.credentials, "save"), patch.object(dialog, "analysis_auth", return_value=None):
-                dialog._state_changed("connected")
-            self.assertIn("Connected to TRUBA", status.text())
-            dialog._state_changed("authentication_failed")
-            dialog._finished()
-            self.assertTrue(button.isEnabled())
-            self.assertIn("rejected", status.text())
-
-    def test_truba_quick_connect_with_no_saved_credentials_does_not_use_form_values(self):
-        dialog = self.window.truba_dialog
-        dialog.username.setText("unsaved-user")
-        dialog.password.setText("unsaved-password")
-        with patch.object(dialog.credentials, "load", return_value=None), \
-                patch("truba_connection.ConnectionWorker") as worker:
-            self.window.truba_quick_connect.click()
-            worker.assert_not_called()
-        status = self.window.truba_quick_status
-        self.assertTrue(status.isVisible())
-        self.assertIn("No saved TRUBA credentials", status.text())
-        self.assertFalse(dialog.isVisible())
-
     def test_connected_analysis_can_submit_without_allocating(self):
         from truba_jobs import RemoteAuth
 
         window = self.window
         auth = RemoteAuth("tester", "password")
-        with patch.object(window.truba_dialog, "analysis_auth", return_value=auth), \
+        with patch.object(window.truba_session, "analysis_auth", return_value=auth), \
                 patch.object(self.controller.session_executor, "submit") as allocate, \
                 patch("nonlinear_compression.save_settings"), \
                 patch("nonlinear_compression.AnalysisProcess") as start:
@@ -192,8 +140,7 @@ class RemoteModeUiTests(unittest.TestCase):
                 self.assertIs(start.call_args.args[0], run_remote_mechanics)
                 self.assertEqual(start.call_args.args[2].session_id, "")
                 self.assertIs(start.call_args.kwargs["remote_auth"], auth)
-                self.assertTrue(window.truba_job_monitor.isVisible())
-                self.assertFalse(window.truba_job_monitor.isModal())
+                self.assertIsNone(window.sync_window)
                 allocate.assert_not_called()
             finally:
                 window.analysis_poll.stop()
@@ -203,7 +150,7 @@ class RemoteModeUiTests(unittest.TestCase):
         from truba_jobs import RemoteAuth
 
         window = self.window
-        with patch.object(window.truba_dialog, "analysis_auth", return_value=RemoteAuth("tester", "password")):
+        with patch.object(window.truba_session, "analysis_auth", return_value=RemoteAuth("tester", "password")):
             self.controller.toggle.setChecked(True)
             for workspace, module, operation in (
                 (window.flow_workspace, "flow_workspace", "flow_solve"),
@@ -215,52 +162,40 @@ class RemoteModeUiTests(unittest.TestCase):
                     self.assertIs(start.call_args.args[0], run_remote_operation)
                     self.assertEqual(start.call_args.args[1]["operation"], operation)
                     self.assertEqual(start.call_args.args[2].session_id, "")
-                    self.assertTrue(window.truba_job_monitor.isVisible())
+                    self.assertIsNone(window.sync_window)
                     workspace.cancel()
-                    window.truba_job_monitor.close()
 
-    def test_job_monitor_reopens_and_updates_from_saved_slurm_states(self):
-        from truba_job_list import TrubaJobMonitor
-        from truba_jobs import HOST, write_record
+    def test_sync_shows_selected_job_and_local_files_without_a_connection(self):
+        import json
+        from truba_jobs import HOST
 
-        window = self.window
-        monitor = window.truba_job_monitor
-        self.assertEqual(monitor.button.property("jobState"), "idle")
-        monitor.button.click()
-        monitor.setGeometry(70, 80, 640, 310)
-        normal = monitor.geometry()
-        monitor.close()
-        self.assertFalse(monitor.isVisible())
+        state = self.window.truba_session.state_dir
+        path = state / "jobs" / "test.json"
+        path.parent.mkdir(parents=True)
+        local = state / "analysis"
+        output = local / "output"
+        output.mkdir(parents=True)
+        (local / "run.slurm").touch()
+        (output / "result.json").touch()
+        record = dict(host=HOST, operation="mechanical", job_id="1234",
+                      state="PENDING", username="tester", local_directory=str(local),
+                      remote_directory="/arf/scratch/tester/RustMech/test")
+        path.write_text(json.dumps(record), encoding="utf-8")
 
-        path = window.truba_dialog.state_dir / "jobs" / "test.json"
-        record = dict(host=HOST, operation="mechanical", request_id="a" * 32, job_id="123",
-                      geometry_name="Gyroid", background=True)
-        for saved, expected in (("PENDING|Priority", "pending"), ("RUNNING|None", "running"),
-                                ("OUT_OF_MEMORY|0:125", "error"), ("downloaded", "idle")):
-            write_record(path, dict(record, state=saved))
-            window.truba_dialog.job_list.refresh()
-            self.assertEqual(monitor.button.property("jobState"), expected)
-            self.assertFalse(monitor.isVisible())
-
-        monitor.button.click()
-        self.assertTrue(monitor.isVisible())
-        self.assertEqual(monitor.table.item(0, 0).text(), "RM-AAAAAAAAAAAA")
-        self.assertEqual(monitor.table.item(0, 1).text(), "123")
-        self.assertEqual(monitor.table.item(0, 3).text(), "downloaded")
-        monitor.close()
-        reopened = TrubaJobMonitor(window, window.truba_dialog.job_list)
-        reopened.open_window()
-        self.assertEqual(reopened.geometry(), normal)
-        reopened.showMaximized()
-        self.app.processEvents()
-        reopened.close()
-        restored = TrubaJobMonitor(window, window.truba_dialog.job_list)
-        restored.open_window()
-        self.assertTrue(restored.isMaximized())
-        restored.showNormal()
-        self.app.processEvents()
-        self.assertEqual(restored.geometry(), normal)
-        restored.close()
+        self.assertIsNone(self.window.sync_window)
+        self.window.sync_button.click()
+        sync = self.window.sync_window
+        self.assertTrue(sync.isVisible())
+        self.assertFalse(sync.isModal())
+        self.assertEqual(sync.job_table.item(0, 1).text(), "1234")
+        self.assertEqual(sync.inputs.topLevelItem(0).text(0), "run.slurm")
+        self.assertEqual(sync.output_path.text(), str(output))
+        self.assertIn("TRUBA", sync.remote.topLevelItem(0).text(0))
+        record["state"] = "downloaded"
+        path.write_text(json.dumps(record), encoding="utf-8")
+        sync.refresh()
+        self.assertEqual(sync.job_table.item(0, 3).text(), "downloaded")
+        self.assertEqual(sync.job_table.currentRow(), 0)
 
     def test_main_execution_target_stays_in_sync_across_workspaces(self):
         window = self.window
@@ -272,9 +207,7 @@ class RemoteModeUiTests(unittest.TestCase):
             self.assertTrue(target.isVisible())
             self.assertEqual(window.apply_button.isVisible(), index == 0)
             self.assertIs(window.childAt(target.mapTo(window, target.rect().center())), target)
-        with patch.object(window.truba_dialog, "start_connection") as connect:
-            QTest.keyClick(target, Qt.Key.Key_Down)
-            connect.assert_not_called()
+        QTest.keyClick(target, Qt.Key.Key_Down)
         self.assertTrue(self.controller.requested)
         self.assertTrue(self.controller.toggle.isChecked())
         self.assertFalse(window.thermal_workspace.buttons[1].isEnabled())
@@ -329,7 +262,7 @@ class RemoteModeUiTests(unittest.TestCase):
         with patch("nonlinear_compression.local_kratos_python", return_value="python.exe"), \
                 patch("nonlinear_compression.save_settings"), \
                 patch("nonlinear_compression.AnalysisProcess") as start, \
-                patch.object(window.truba_dialog, "analysis_auth") as auth:
+                patch.object(window.truba_session, "analysis_auth") as auth:
             try:
                 window.apply()
                 args, kwargs = start.call_args
@@ -409,20 +342,18 @@ class RemoteModeUiTests(unittest.TestCase):
 
     def test_resources_runtime_actions_fit_and_dispatch_in_both_languages(self):
         from concurrent.futures import Future
-        panel = self.window.truba_dialog
+        panel = self.controller.resource_window
         controller = self.controller
-        page = panel.settings_scroll
-        panel.tabs.setCurrentWidget(page)
+        page = panel.findChild(QScrollArea)
         panel.show()
         buttons = (controller.check, controller.prepare, controller.recover, controller.stop)
         self.enable()
         for language, button, operation in (('en', controller.check, 'probe'),
                                             ('tr', controller.prepare, 'prepare')):
             with self.subTest(language=language):
-                panel.language_manager.set_language(language)
+                self.window.language_manager.set_language(language)
                 page.ensureWidgetVisible(button)
                 self.app.processEvents()
-                self.assertIs(panel.tabs.currentWidget(), page)
                 self.assertTrue(page.viewport().rect().contains(
                     button.mapTo(page.viewport(), button.rect().bottomRight())))
                 for action in buttons:
@@ -608,7 +539,7 @@ class RemoteModeUiTests(unittest.TestCase):
             controller.poll_session()
             self.assertEqual(controller.session['state'], 'released')
             self.assertIsNone(controller.session_future)
-            self.assertIn('Resources released', self.window.truba_dialog.job_list.hint.text())
+            self.assertIn('Resources released', self.controller.session_status.text())
         finally:
             controller.future = self.window.future = None
             controller.session_future = controller.release_future = None
@@ -649,12 +580,12 @@ class RemoteModeUiTests(unittest.TestCase):
         pending = Future()
         with patch.object(self.controller.session_executor, 'submit', return_value=pending) as submit:
             owner = SimpleNamespace(username='other')
-            with patch.object(self.window.truba_dialog, 'analysis_auth', return_value=owner):
+            with patch.object(self.window.truba_session, 'analysis_auth', return_value=owner):
                 self.controller.connection_changed(True)
                 self.controller.poll_session()
             submit.assert_not_called()
             owner.username = 'tester'
-            with patch.object(self.window.truba_dialog, 'analysis_auth', return_value=owner):
+            with patch.object(self.window.truba_session, 'analysis_auth', return_value=owner):
                 self.controller.connection_changed(True)
                 self.assertFalse(self.controller.session['ready'])
                 self.controller.poll_session()
@@ -686,7 +617,7 @@ class RemoteModeUiTests(unittest.TestCase):
         self.assertEqual(self.controller.controls["cores"].minimum(), 20)
         self.assertEqual(self.controller.controls["memory_mb"].minimum(), 1 / 1024)
         with patch.object(self.controller,"session_command") as command:
-            panel = self.window.truba_dialog
+            panel = self.controller.resource_window
             panel.show()
             queue = self.controller.controls['partition']
             queue.setCurrentIndex(queue.findData('hamsi'))
@@ -734,7 +665,7 @@ class RemoteModeUiTests(unittest.TestCase):
         from truba_resources import parse_catalog
         queue = self.controller.controls['partition']
         with patch('remote_controller.fetch_catalog') as fetch:
-            self.window.truba_dialog.show()
+            self.controller.resource_window.show()
             queue.setCurrentIndex(queue.findData('auto'))
             self.assertIn('Auto: Barbun', self.controller.queue_hint.text())
             self.assertEqual(self.controller.context().cores, 20)
@@ -799,7 +730,7 @@ class RemoteModeUiTests(unittest.TestCase):
                 restored.scroll.deleteLater()
 
     def test_expanded_truba_panel_keeps_geometry_after_hide_show(self):
-        panel = self.window.truba_dialog
+        panel = self.controller.resource_window
         panel.resize(720,790)
         panel.show()
         self.app.processEvents()
@@ -811,68 +742,24 @@ class RemoteModeUiTests(unittest.TestCase):
         self.app.processEvents()
         self.assertEqual(panel.frameGeometry(),expected)
 
-    def test_truba_settings_reopens_maximized_panel_with_saved_normal_bounds(self):
-        panel = self.window.truba_dialog
-        self.window.truba_settings_button.click()
+    def test_sync_reopens_maximized_with_saved_normal_bounds(self):
+        self.window.sync_button.click()
         self.app.processEvents()
+        panel = self.window.sync_window
         normal = panel.geometry()
+        splitter = panel.findChild(QSplitter, "syncFileColumns")
+        splitter.setSizes([200, 420, 220])
+        sizes = splitter.sizes()
         panel.showMaximized()
         self.app.processEvents()
         panel.hide()
-        self.window.truba_settings_button.click()
+        self.window.sync_button.click()
         self.app.processEvents()
         self.assertTrue(panel.isMaximized())
         panel.showNormal()
         self.app.processEvents()
         self.assertEqual(panel.geometry(), normal)
-
-    def test_group_order_and_full_panel_positions_survive_resize(self):
-        panel = self.window.truba_dialog
-        panel.show()
-        self.app.processEvents()
-        groups = [panel.settings_columns.itemAt(i).widget() for i in range(panel.settings_columns.count())]
-        self.assertTrue(all(isinstance(group, QGroupBox) for group in groups))
-        self.assertEqual([section.title() for section in groups], [
-            'Credentials and password storage',
-            'CPU, RAM and resource session', 'Advanced · remote runtime'])
-        self.assertEqual([panel.tabs.tabText(i) for i in range(panel.tabs.count())],
-                         ['Connection', 'Active jobs'])
-        self.assertIs(panel.tabs.currentWidget(), panel.settings_scroll)
-        self.assertEqual(len({group.y() for group in groups}), 1)
-        self.assertEqual(len({group.size().toTuple() for group in groups}), 1)
-        for left, right in zip(groups, groups[1:]):
-            self.assertLess(left.geometry().right(), right.x())
-        self.assertIs(panel.connect_button.parentWidget(), panel.username.parentWidget())
-        self.assertIs(self.controller.controls['cores'].parentWidget(), self.controller.resource_panel)
-        self.assertIs(self.controller.controls['runtime_python'].parentWidget(), self.controller.advanced_panel)
-        self.assertIs(self.controller.check.parentWidget(), self.controller.advanced_panel)
-        self.assertIs(self.controller.status.parentWidget(), self.controller.advanced_panel)
-        self.assertIs(self.controller.allocate.parentWidget(), self.controller.resource_panel)
-        widgets = [panel.username, panel.connect_button, *self.controller.controls.values(),
-                   self.controller.allocate, self.controller.check]
-
-        def positions():
-            return [(widget.mapTo(panel.settings_scroll.viewport(), QPoint()), widget.size())
-                    for widget in widgets]
-
-        expected = positions()
-        for size in ((1000, 950), (360, 240), (660, 800)):
-            panel.resize(*size)
-            self.app.processEvents()
-            self.assertEqual(positions(), expected)
-        self.controller.controls['partition'].setCurrentIndex(
-            self.controller.controls['partition'].findData('hamsi'))
-        panel._state_changed('host_key_confirmation')
-        self.controller.session = dict(job_id='test', state='PENDING', reason='Waiting for resources')
-        self.controller.update_session_controls()
-        self.app.processEvents()
-        self.assertEqual(positions(), expected)
-        scroll = panel.settings_scroll
-        self.assertGreater(scroll.horizontalScrollBar().maximum(), 0)
-        runtime_python = self.controller.controls['runtime_python']
-        scroll.ensureWidgetVisible(runtime_python)
-        self.assertTrue(scroll.viewport().rect().contains(
-            runtime_python.mapTo(scroll.viewport(), runtime_python.rect().center())))
+        self.assertEqual(splitter.sizes(), sizes)
 
     def test_only_verified_supported_solvers_and_no_local_fallback(self):
         self.enable(flow=False)
@@ -939,36 +826,19 @@ class RemoteModeUiTests(unittest.TestCase):
         self.assertEqual(self.window.solver_combo.currentData(),original)
         self.assertFalse(self.controller.requested)
 
-    def test_disconnect_restores_local_mode_and_dispatches_local_mesh(self):
-        original = self.window.solver_combo.currentData()
+    def test_truba_disconnect_updates_hpc_without_switching_execution_target(self):
+        from truba_desktop import DesktopStatus
+        from truba_shared_session import DesktopSession
+
+        session = DesktopSession("tester", 10000, "a" * 64)
         self.enable()
-        self.controller.session = dict(job_id='321', state='RUNNING', ready=True)
-        self.controller.session_watch = True
-        dialog = self.window.truba_dialog
-        dialog.worker = MagicMock()
-        dialog.connected = True
-        dialog._update_controls()
-        with patch.object(self.controller, 'refresh') as refresh:
-            dialog.disconnect_button.click()
-            self.app.processEvents()
-            refresh.assert_not_called()
-        self.assertFalse(self.controller.requested)
-        self.assertFalse(self.controller.toggle.isChecked())
+        self.window.truba_session._status_changed(DesktopStatus(session))
+        self.assertTrue(self.window.truba_button.property("trubaConnected"))
+        self.window.truba_session._status_changed(DesktopStatus())
+        self.assertFalse(self.window.truba_button.property("trubaConnected"))
+        self.assertTrue(self.controller.requested)
         self.assertFalse(self.controller.session_watch)
         self.assertIsNone(self.controller.capabilities)
-        self.assertEqual(self.window.solver_combo.currentData(), original)
-        self.assertIn('Local mode', self.controller.status.text())
-        self.assertEqual(self.controller.session['job_id'], '321')
-        with patch.object(self.controller.session_executor, 'submit') as remote_submit:
-            self.controller.poll_session()
-            remote_submit.assert_not_called()
-        with patch.object(self.window.executor, 'submit', return_value=MagicMock()) as submit, \
-                patch.object(self.controller, 'require') as require, \
-                patch('nonlinear_compression.run_mesh_preview') as local:
-            RustMechDialog.start_preview(self.window)
-            self.assertIs(submit.call_args.args[0], local)
-            require.assert_not_called()
-        self.window.future = None
 
     def test_disconnect_selects_local_mode_even_with_submitted_remote_analysis(self):
         self.enable()
@@ -1022,7 +892,7 @@ class RemoteModeUiTests(unittest.TestCase):
     def test_mechanics_cfd_and_cht_dispatch_only_remote_operations(self):
         from mesh_engine import preview_key
         self.enable()
-        self.window.truba_dialog.active_jobs.study_name.setText('A')
+        self.controller.study_name.setText('A')
         source = "/arf/scratch/tester/RustMech/"+"a"*32+"/output/preview"
         self.window.preview=SimpleNamespace(mesh=object(), key=preview_key(self.window.collect()), remote_source=source)
         with patch.object(self.window,"refresh_validity"),patch("nonlinear_compression.save_settings"),patch("nonlinear_compression.AnalysisProcess") as start:
@@ -1048,9 +918,7 @@ class RemoteModeUiTests(unittest.TestCase):
         study = dialog.study
         self.assertFalse(study.run_on_truba.isChecked())
         self.assertTrue(study.run_button.isEnabled())
-        with patch.object(self.window.truba_dialog, "start_connection") as connect:
-            study.run_on_truba.click()
-        connect.assert_not_called()
+        study.run_on_truba.click()
         self.assertTrue(self.controller.toggle.isChecked())
         self.assertEqual(self.window.execution_target.currentData(), "truba")
         self.assertTrue(study.run_button.isEnabled())

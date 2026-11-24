@@ -137,7 +137,7 @@ class LoadContactTests(unittest.TestCase):
         self.app.processEvents()
         self.assertAlmostEqual(spin.value(), .42)
         self.assertEqual(clicks.count(), 0)
-        self.assertFalse(dialog.truba_dialog.isVisible())
+        self.assertIsNone(dialog.sync_window)
         selected = dialog.collect()
         with patch("mesh_convergence.MeshConvergenceDialog") as factory:
             factory.return_value.selected_settings = None

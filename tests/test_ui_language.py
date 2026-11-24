@@ -144,10 +144,10 @@ class LanguageTests(unittest.TestCase):
         before = window.collect()
         context = window.remote_controller.context()
         plan = window.doe_studio.capture_plan()
-        panel = window.truba_dialog
-        panel.username.setText('test-user')
-        panel.password.setText('test-password')
-        with patch('truba_connection.ConnectionWorker') as worker:
+        controller = window.remote_controller
+        panel = controller.resource_window
+        controller.study_name.setText('sample-study')
+        with patch('nonlinear_compression.open_truba_desktop') as worker:
             window.show()
             self.app.processEvents()
             mesh_size = window.controls['mesh_resolution']
@@ -162,7 +162,7 @@ class LanguageTests(unittest.TestCase):
             groups = ((window.project_button, window.designs_button),
                       (window.workspace_button, window.sidebar_toggle),
                       (window.doe_button, window.folder_batch_button, window.esen_button),
-                      window.display_mode_buttons.buttons())
+                      (window.truba_button, window.sync_button))
 
             def assert_toolbar_layout():
                 for group in groups:
@@ -209,19 +209,15 @@ class LanguageTests(unittest.TestCase):
             panel.show()
             self.app.processEvents()
             self.assertEqual(window.apply_button.text(), 'Analizi çalıştır')
-            self.assertEqual(panel.connect_button.text(), 'Bağlan')
-            self.assertEqual([panel.tabs.tabText(i) for i in range(panel.tabs.count())],
-                             ['Bağlantı', 'Aktif işler'])
-            self.assertEqual(panel.queue_status_group.title(), 'Kuyruk durumu')
-            self.assertEqual(window.remote_controller.resource_panel.title(), 'CPU, RAM ve kaynak oturumu')
-            advanced = window.remote_controller.advanced_panel
+            self.assertEqual(panel.windowTitle(), 'Hesaplama kaynakları')
+            self.assertEqual(controller.resource_panel.title(), 'CPU, RAM ve kaynak oturumu')
+            advanced = controller.advanced_panel
             self.assertEqual(advanced.title(), 'Gelişmiş · Uzak çalışma ortamı')
-            self.assertTrue(advanced.rect().contains(window.remote_controller.controls['runtime_python'].geometry()))
-            panel.password.setFocus()
-            QTest.keyClick(panel.password, Qt.Key.Key_Return)
-            panel._state_changed('waiting_for_network')
-            self.app.processEvents()
-            self.assertIn('bekleniyor', panel.status.text())
+            self.assertTrue(advanced.rect().contains(controller.controls['runtime_python'].geometry()))
+            window.sync_button.click()
+            sync = window.sync_window
+            self.assertEqual(sync.job_table.horizontalHeaderItem(2).text(), 'Analiz')
+            self.assertEqual(sync.input_path.parentWidget().title(), 'Yerel girdiler')
             self.assertFalse(window.remote_controller.requested)
             worker.assert_not_called()
             self.assertEqual(window.collect(), before)
@@ -233,9 +229,9 @@ class LanguageTests(unittest.TestCase):
             self.assertEqual(window.folder_batch_button.text(), 'Batch Analysis')
             finite_element.trigger()
             self.assertEqual(window.sidebar_toggle.text(), 'Finite Element')
-            self.assertEqual(panel.connect_button.text(), 'Connect')
-            self.assertEqual(panel.username.text(), 'test-user')
-            self.assertEqual(panel.password.text(), 'test-password')
+            self.assertEqual(panel.windowTitle(), 'Compute resources')
+            self.assertEqual(sync.input_path.parentWidget().title(), 'Local inputs')
+            self.assertEqual(controller.study_name.text(), 'sample-study')
 
     def test_dynamic_translations_preserve_values_and_paths(self):
         self.manager.set_language('tr')

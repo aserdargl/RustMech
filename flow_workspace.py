@@ -333,8 +333,6 @@ class FlowWorkspace(QWidget):
                 if inspection:
                     request["inspection"] = True
                 self.job = AnalysisProcess(run_remote_operation,request,context,remote_auth=auth)
-                if solve:
-                    controller.window.truba_job_monitor.start_submission()
             else:
                 target = export_geometry_inspection if inspection else execute_flow_case if solve else export_flow_case
                 self.job = AnalysisProcess(target,specimen,flow,str(directory))
@@ -398,8 +396,6 @@ class FlowWorkspace(QWidget):
             if self._remote_job: self.case_directory = Path(result)
             self.load_directory(self.case_directory)
         except Exception as error:
-            if self._remote_job and self.solving:
-                self.remote_controller.window.truba_job_monitor.submission_failed(error)
             self.status.setText("Flow operation failed. "+str(error)[-1800:])
 
     def cancel(self):

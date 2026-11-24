@@ -64,7 +64,7 @@ from studio_style import (ActionFlowLayout, CompactDoubleSpinBox, CONTROL_HEIGHT
                           stepper_with_unit)
 from sidebar_splitter import SidebarSplitter
 from setup_help import GEOMETRY_HELP
-from truba_connection import TrubaConnectionDialog
+from truba_sync import TrubaSession, TrubaSyncWindow
 from truba_desktop import open_truba_desktop
 from window_state import show_restored_window
 from peridynamic_analysis import run_local_compression, validate_compression
@@ -232,8 +232,6 @@ class RustMechDialog(QDialog):
         preview_builder=build_preview,
         solver_capabilities: SolverCapabilities = MAPDL_CAPABILITIES,
         solver_profile_store=None,
-        *,
-        use_desktop_session=False,
     ):
         app_inst = QApplication.instance()
         if app_inst is not None:
@@ -410,45 +408,26 @@ class RustMechDialog(QDialog):
         self.brand_subtitle_lbl.setMaximumWidth(320)
         brand_layout.addWidget(self.brand_subtitle_lbl)
         context_row.addWidget(brand_card)
-        self.truba_dialog = TrubaConnectionDialog(self, use_desktop_session=use_desktop_session)
-        self.truba_dialog.open_desktop_requested.connect(self._open_truba_desktop)
-        self.truba_dialog.job_list.background_updated.connect(self._background_analysis_updated)
-        from truba_job_list import TrubaJobMonitor
-        self.truba_job_monitor = TrubaJobMonitor(self, self.truba_dialog.job_list)
+        self.truba_session = TrubaSession(self)
+        self.truba_session.background_updated.connect(self._background_analysis_updated)
+        self.truba_session.connection_changed.connect(self._update_hpc_button)
         self.truba_button = QPushButton("HPC")
         self.truba_button.setObjectName("primaryLaunchBtn")
+        self.truba_button.setAutoDefault(False)
         self.truba_button.setToolTip("Open the Connection tab in the TRUBA application")
         self.truba_button.clicked.connect(self._open_truba_desktop)
-        self.truba_settings_button = QPushButton("TRUBA Settings")
-        self.truba_settings_button.setObjectName("trubaConnectBtn")
-        self.truba_settings_button.setProperty("trubaConnected", False)
-        self.truba_settings_button.setToolTip("Open RustMech's TRUBA analysis and connection settings")
-        self.truba_settings_button.clicked.connect(lambda: show_restored_window(self.truba_dialog))
-        self.truba_dialog.connection_changed.connect(self._update_truba_settings_button)
-        self.truba_quick_connect = QPushButton(self)
-        self.truba_quick_connect.setFixedSize(CONTROL_HEIGHT, CONTROL_HEIGHT)
-        self.truba_quick_connect.setIcon(QIcon.fromTheme(
-            "network-connect", self.style().standardIcon(QStyle.StandardPixmap.SP_DriveNetIcon)))
-        self.truba_quick_connect.setAccessibleName("Connect to TRUBA with saved credentials")
-        self.truba_quick_connect.clicked.connect(self._connect_to_truba_with_saved_credentials)
-        self.truba_quick_connect.setHidden(use_desktop_session)
-        self.truba_quick_status = QLabel()
-        self.truba_quick_status.setObjectName("mutedHintLabel")
-        self.truba_quick_status.setTextFormat(Qt.TextFormat.PlainText)
-        self.truba_quick_status.setWordWrap(True)
-        self.truba_quick_status.setProperty("preserveLabelText", True)
-        self.truba_quick_status.hide()
-        brand_content.addWidget(self.truba_quick_status)
-        self.truba_dialog.connection_ui_changed.connect(self._update_truba_quick_connect)
-        self._update_truba_quick_connect()
+        self.sync_window = None
+        self.sync_button = QPushButton("SYNC")
+        self.sync_button.setObjectName("secondaryActionBtn")
+        self.sync_button.setAutoDefault(False)
+        self.sync_button.setToolTip("View RustMech analysis files and synchronized results")
+        self.sync_button.clicked.connect(self.show_truba_sync)
         self.about_button = QPushButton("About")
         self.about_button.setObjectName("aboutBtn")
         self.about_button.clicked.connect(self.show_about)
-        compute_controls = (self.truba_button, self.truba_quick_connect, self.truba_settings_button,
-                            self.truba_job_monitor.button)
-        for button in compute_controls:
+        self._compute_commands = (self.truba_button, self.sync_button)
+        for button in self._compute_commands:
             brand_layout.addWidget(button)
-        self._compute_commands = (self.truba_button, self.truba_settings_button)
         from ui_language import LanguageSelector
         self.language_selector = LanguageSelector(self.language_manager, self)
 
@@ -1079,7 +1058,7 @@ class RustMechDialog(QDialog):
         navigation.addStretch()
         navigation.addWidget(self.about_button)
         navigation.addWidget(self.language_selector)
-        header_controls = (*compute_controls, *(button for group in self._workspace_commands for button in group),
+        header_controls = (*self._compute_commands, *(button for group in self._workspace_commands for button in group),
                            self.about_button, self.language_selector.combo)
         for current, following in zip(header_controls, header_controls[1:]):
             QWidget.setTabOrder(current, following)
@@ -1363,6 +1342,13 @@ class RustMechDialog(QDialog):
         self.execution_target.setToolTip("Execution target")
         self.execution_target.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
         status_layout.addWidget(self.execution_target)
+        self.compute_resources_button = QPushButton("Resources…")
+        self.compute_resources_button.setObjectName("secondaryActionBtn")
+        self.compute_resources_button.setAutoDefault(False)
+        self.compute_resources_button.setVisible(False)
+        self.compute_resources_button.clicked.connect(
+            lambda: show_restored_window(self.remote_controller.resource_window))
+        status_layout.addWidget(self.compute_resources_button)
         self.operation_progress = OperationProgress(self, provider=lambda: (
             not self._local_analysis_in_progress() and (
                 self.future is not None or self.analysis_job is not None
@@ -1560,14 +1546,13 @@ class RustMechDialog(QDialog):
         self.language_manager.changed.connect(self._refresh_ui_language)
         self._refresh_ui_language()
         self.setMinimumWidth(max(900, self.minimumSizeHint().width()))
-        self.truba_dialog.start_desktop_monitor()
+        self.truba_session.start()
         QTimer.singleShot(0, self.start_preview)
 
     def _refresh_ui_language(self, *_):
         from ui_language import translate
         self.language_manager.localize_tree(self)
         self.preview_error_details.setAccessibleName(translate("Preview error details"))
-        self._update_truba_quick_connect()
         if self.setup_tabs.currentIndex() == self._fft_method_index:
             self._update_fft_preview_summary()
         elif self.result_preview_field.currentData() is not None:
@@ -1578,7 +1563,7 @@ class RustMechDialog(QDialog):
                                          if action.isVisible()),
         }
         for group in (*self._workspace_commands, self._compute_commands, (self.about_button,),
-                      self.display_mode_buttons.buttons()):
+                      (self.compute_resources_button,), self.display_mode_buttons.buttons()):
             # Fit the longest translated label, including room for focus and menu arrows.
             width = max(button.fontMetrics().horizontalAdvance(label)
                         + (24 if isinstance(button, QToolButton) else 16)
@@ -1696,6 +1681,7 @@ class RustMechDialog(QDialog):
 
     def _sync_execution_target(self):
         target = "truba" if self.remote_controller.requested else "local"
+        self.compute_resources_button.setVisible(target == 'truba')
         with QSignalBlocker(self.execution_target):
             self.execution_target.setCurrentIndex(self.execution_target.findData(target))
 
@@ -1757,12 +1743,12 @@ class RustMechDialog(QDialog):
         elif controller.requested:
             detail = session.get('state') if controller.session_watch else None
             state, text = 'pending', 'TRUBA · ' + (detail or (
-                'direct submission' if self.truba_dialog.connected else 'connect to submit'))
+                'direct submission' if self.truba_session.connected else 'connect to submit'))
         elif session.get('ready') and controller.session_watch:
             state, text = 'pending', 'Local mode · TRUBA resources reserved'
         else:
             local_name = self._local_workspace_solver_name()
-            text = f'SSH connected · {local_name}' if self.truba_dialog.connected else local_name
+            text = f'SSH connected · {local_name}' if self.truba_session.connected else local_name
         self.brand_subtitle_lbl.setText(text)
         self.brand_header.setToolTip(
             f"{text}\nJob: {session.get('job_id', '—')} · Nodes: {session.get('allocated_nodes', '—')}\n"
@@ -1780,7 +1766,7 @@ class RustMechDialog(QDialog):
         from window_state import show_restored_window
 
         if self.esen_workspace is None:
-            self.esen_workspace = EsenWorkspace(self.truba_dialog, self)
+            self.esen_workspace = EsenWorkspace(self.truba_session, self)
         show_restored_window(self.esen_workspace)
 
     def show_about(self):
@@ -1793,19 +1779,10 @@ class RustMechDialog(QDialog):
             '<p><a href="https://github.com/aserdargl/RustMech">RustMech on GitHub</a></p>',
         )
 
-    def _update_truba_quick_connect(self):
-        from ui_language import translate
-
-        dialog = self.truba_dialog
-        self.truba_quick_connect.setEnabled(dialog.worker is None and not dialog.connected)
-        label = translate("Connect to TRUBA with saved credentials")
-        status = translate(dialog.status.text())
-        self.truba_quick_connect.setToolTip(f"{label}\n{status}")
-        self.truba_quick_status.setText(f"TRUBA · {status}")
-
-    def _connect_to_truba_with_saved_credentials(self):
-        self.truba_quick_status.show()
-        self.truba_dialog.start_saved_connection()
+    def show_truba_sync(self):
+        if self.sync_window is None:
+            self.sync_window = TrubaSyncWindow(self.truba_session, self.language_manager, self)
+        show_restored_window(self.sync_window)
 
     def _open_truba_desktop(self):
         from ui_language import translate
@@ -1815,14 +1792,10 @@ class RustMechDialog(QDialog):
         except OSError as error:
             QMessageBox.warning(self, "HPC", translate(str(error)))
 
-    def _update_truba_settings_button(self, connected: bool) -> None:
-        self.truba_settings_button.setProperty("trubaConnected", connected)
-        self.truba_settings_button.style().unpolish(self.truba_settings_button)
-        self.truba_settings_button.style().polish(self.truba_settings_button)
-        if self.truba_dialog.desktop_monitor is not None:
-            self.truba_button.setProperty("trubaConnected", connected)
-            self.truba_button.style().unpolish(self.truba_button)
-            self.truba_button.style().polish(self.truba_button)
+    def _update_hpc_button(self, connected: bool) -> None:
+        self.truba_button.setProperty("trubaConnected", connected)
+        self.truba_button.style().unpolish(self.truba_button)
+        self.truba_button.style().polish(self.truba_button)
         self._update_remote_banner()
 
     def _add_setup_page(self, title: str) -> QVBoxLayout:
@@ -3690,8 +3663,7 @@ class RustMechDialog(QDialog):
                 if preview is not None and preview.mesh is not None and preview.key == preview_key(settings):
                     source = getattr(preview, "remote_source", "")
                 self.analysis_job = AnalysisProcess(run_remote_mechanics,settings,context,source,remote_auth=auth)
-                self.truba_dialog.job_list.submitting = True
-                self.truba_job_monitor.start_submission()
+                self.truba_session.submitting = True
             else:
                 self.analysis_job = AnalysisProcess(run_single_analysis, settings, self.preview.mesh)
         except Exception as exc:
@@ -3717,8 +3689,7 @@ class RustMechDialog(QDialog):
                 context, auth = self.remote_controller.require_analysis("damask")
                 request = dict(operation="fft_solve", settings=asdict(settings), grid=grid, void_ratio=void_ratio)
                 self.analysis_job = AnalysisProcess(submit_remote_analysis, request, context, remote_auth=auth)
-                self.truba_dialog.job_list.submitting = True
-                self.truba_job_monitor.start_submission()
+                self.truba_session.submitting = True
             else:
                 self.analysis_job = DamaskAnalysisProcess(settings, grid, void_ratio, distribution)
         except (OSError, ValueError, RuntimeError) as exc:
@@ -3751,8 +3722,7 @@ class RustMechDialog(QDialog):
                 context, auth = self.remote_controller.require_analysis("peridynamics")
                 request = dict(operation="peridynamic_solve", settings=asdict(settings), options=asdict(options))
                 self.analysis_job = AnalysisProcess(submit_remote_analysis, request, context, remote_auth=auth)
-                self.truba_dialog.job_list.submitting = True
-                self.truba_job_monitor.start_submission()
+                self.truba_session.submitting = True
             else:
                 self.analysis_job = AnalysisProcess(run_local_compression, settings, options)
         except (OSError, ValueError, RuntimeError) as error:
@@ -3785,11 +3755,11 @@ class RustMechDialog(QDialog):
                     else:
                         self.status.setText(f'TRUBA results retrieved: {Path(record["local_directory"]) / "output"}')
                 else:
-                    self.truba_dialog.job_list.sync_background()
-                    self.status.setText("See TRUBA jobs for this analysis. Results download automatically when connected.")
+                    self.truba_session.sync_background()
+                    self.status.setText("Track this job in TRUBA WORKS. Results download automatically when connected.")
                 return
-            auth = self.truba_dialog.analysis_auth()
-            if self.truba_dialog.desktop_monitor is not None and auth is None:
+            auth = self.truba_session.analysis_auth()
+            if auth is None:
                 from truba_shared_session import DISCONNECTED_MESSAGE
                 from ui_language import translate
 
@@ -3891,7 +3861,7 @@ class RustMechDialog(QDialog):
             self.status.setText(f"Forced Stop failed: {exc}")
             return
         self.analysis_job = None
-        self.truba_dialog.job_list.submitting = False
+        self.truba_session.submitting = False
         self.analysis_poll.stop()
         self.local_analysis_progress.refresh()
         self.force_stop_button.setEnabled(False)
@@ -3942,7 +3912,7 @@ class RustMechDialog(QDialog):
             self._show_analysis_progress(self.analysis_job)
             return
         job, self.analysis_job = self.analysis_job, None
-        self.truba_dialog.job_list.submitting = False
+        self.truba_session.submitting = False
         self.analysis_poll.stop()
         self.local_analysis_progress.refresh()
         self.force_stop_button.setEnabled(False)
@@ -3950,8 +3920,6 @@ class RustMechDialog(QDialog):
         try:
             folder = job.result()
         except Exception as exc:
-            if getattr(job, "background_submission", False) is True:
-                self.truba_job_monitor.submission_failed(exc)
             self.status.setText(f"Analysis failed: {exc}")
             self._update_status_visuals("error", "● FAILED", False)
         else:
@@ -3963,8 +3931,7 @@ class RustMechDialog(QDialog):
             if getattr(job, "background_submission", False) is True:
                 self._latest_background_analysis = folder["request_id"]
                 self._show_background_analysis(folder)
-                self.truba_dialog.job_list.refresh()
-                self.truba_dialog.job_list.sync_background()
+                self.truba_session.sync_background()
                 return
             if isinstance(folder, dict) and folder.get("operation") == "peridynamic_solve":
                 self._show_remote_analysis_result(folder)
@@ -4164,8 +4131,11 @@ class RustMechDialog(QDialog):
             dialog.reject()
         if self.esen_workspace is not None:
             self.esen_workspace.dispose()
-        self.truba_dialog.shutdown()
-        self.truba_job_monitor.close()
+        if self.sync_window is not None:
+            self.sync_window.shutdown()
+            self.sync_window.close()
+        self.remote_controller.resource_window.close()
+        self.truba_session.shutdown()
         self.debounce.stop()
         self.poll.stop()
         self.mesh_cancelled.set()
@@ -4220,7 +4190,7 @@ def main() -> int:
     configure_application(app)
     profiles = SolverProfileStore()
     settings = profiles.restore_workspace()
-    dialog = RustMechDialog(settings, solver_profile_store=profiles, use_desktop_session=True)
+    dialog = RustMechDialog(settings, solver_profile_store=profiles)
     try:
         dialog.exec()
     finally:

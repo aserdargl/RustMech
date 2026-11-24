@@ -105,24 +105,12 @@ QToolButton::menu-indicator, QPushButton::menu-indicator {
     image: url(@ASSETS@/spin-down-blue.svg); width: 9px; height: 9px;
     subcontrol-origin: padding; subcontrol-position: bottom right;
 }
-#trubaConnectBtn {
-    color: #FFFFFF; border: 1px solid #A6B8CA; border-radius: 4px; font-weight: 400;
-    background: #285EA6;
-}
-#trubaConnectBtn:hover { background: #245CA0; border-color: #163D70; }
-#trubaConnectBtn:pressed { background: #1B467D; }
-#trubaConnectBtn[trubaConnected="true"], #primaryLaunchBtn[trubaConnected="true"], #primaryLaunchBtn[trubaConnected="true"]:disabled {
+#primaryLaunchBtn[trubaConnected="true"], #primaryLaunchBtn[trubaConnected="true"]:disabled {
     color: #FFFFFF; border-color: #166534; font-weight: 400;
     background: #1C753E;
 }
-#trubaConnectBtn[trubaConnected="true"]:hover { color: #FFFFFF; background: #19733B; }
-#trubaConnectBtn[trubaConnected="true"]:pressed { color: #FFFFFF; background: #14532D; }
-#trubaConnectBtn:focus,
-#trubaConnectBtn[trubaConnected="true"]:focus { border: 2px solid #102A4C; }
-#trubaConnectBtn:disabled,
-#trubaConnectBtn[trubaConnected="true"]:disabled {
-    background: #E9EDF2; color: #526174; border: 1px solid #CBD5E1;
-}
+#primaryLaunchBtn[trubaConnected="true"]:hover { color: #FFFFFF; background: #19733B; }
+#primaryLaunchBtn[trubaConnected="true"]:pressed { color: #FFFFFF; background: #14532D; }
 QToolButton#headerMenu, QToolButton#cameraMenu { padding-right: 13px; }
 #workspaceCommandBar QToolButton#headerMenu { padding: 0 14px 0 5px; }
 #workspaceCommandBar QToolButton#headerMenu::menu-indicator { subcontrol-position: center right; }
@@ -180,14 +168,14 @@ QCheckBox::indicator:checked {
 QCheckBox::indicator:hover { border-color: #2563EB; }
 QCheckBox::indicator:disabled { background: #EBEBEB; border-color: #D6D6D6; }
 QCheckBox:focus { color: #404040; }
-QTableWidget, QTableView#esenActiveJobs, QListWidget, QTextEdit, QPlainTextEdit {
+QTableWidget, QTableView#esenActiveJobs, QDialog#trubaSyncWindow QTreeView, QListWidget, QTextEdit, QPlainTextEdit {
     background: #FFFFFF; alternate-background-color: #F8FAFC;
     color: #111827; border: 1px solid #AAAAAA; border-radius: 2px;
     gridline-color: #D6D6D6; selection-background-color: #E5E5E5;
     selection-color: #111827; font-size: 12px;
 }
 QTableWidget::item, QTableView#esenActiveJobs::item, QListWidget::item { padding: 1px 3px; border: none; }
-QTableWidget::item:selected, QTableView#esenActiveJobs::item:selected, QListWidget::item:selected {
+QTableWidget::item:selected, QTableView#esenActiveJobs::item:selected, QDialog#trubaSyncWindow QTreeView::item:selected, QListWidget::item:selected {
     background: #E5E5E5; color: #111827;
 }
 QHeaderView::section {

@@ -125,7 +125,7 @@ class SolverProfileTests(unittest.TestCase):
         QTest.keyClick(control.lineEdit(), Qt.Key.Key_Return)
         self.assertEqual(control.value(), 52)
         self.assertEqual(clicks.count(), 0)
-        self.assertFalse(dialog.truba_dialog.isVisible())
+        self.assertIsNone(dialog.sync_window)
         tolerance = dialog.kratos_panel.fields["kratos_absolute_tolerance"]
         tolerance.setFocus()
         tolerance.lineEdit().selectAll()
@@ -157,7 +157,7 @@ class SolverProfileTests(unittest.TestCase):
         QTest.keyClick(penalty.lineEdit(),Qt.Key.Key_Return)
         self.assertEqual(penalty.value(),25000.)
         self.assertEqual(clicks.count(),0)
-        self.assertFalse(dialog.truba_dialog.isVisible())
+        self.assertIsNone(dialog.sync_window)
         self.select(dialog,'ansys_mapdl')
         self.assertEqual(dialog.collect(),ansys)
 

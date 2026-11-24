@@ -34,7 +34,7 @@ def study(tmp_path, monkeypatch):
     context = RemoteContext(partition="hamsi", cores=56, memory_mb=136000, parallel_jobs=2)
     controller = MagicMock(requested=True, ready=True, closing=False, capabilities={"mesh_types": ["HEX8"]})
     controller.preferences = QSettings(str(tmp_path / "ui.ini"), QSettings.Format.IniFormat)
-    controller.window.truba_dialog = connection
+    controller.window.truba_session = connection
     controller.auth.return_value = None
     controller.require_convergence.return_value = context, auth
     parent = QWidget()

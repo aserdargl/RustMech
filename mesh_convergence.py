@@ -470,7 +470,7 @@ class MeshConvergenceWidget(QWidget):
         if self.remote_controller is not None:
             self.run_on_truba.toggled.connect(self._select_execution_target)
             self.remote_controller.changed.connect(self._solver_changed)
-            self.remote_controller.window.truba_dialog.connection_changed.connect(self._attach_saved_jobs)
+            self.remote_controller.window.truba_session.connection_changed.connect(self._attach_saved_jobs)
         self._configure_metrics()
         self._solver_changed()
         studies = self._refresh_saved_studies()
@@ -1154,7 +1154,7 @@ class MeshConvergenceWidget(QWidget):
         from convergence_history import saved_mesh_studies
 
         current = self.history_combo.currentData()
-        state_dir = self.remote_controller.window.truba_dialog.state_dir
+        state_dir = self.remote_controller.window.truba_session.state_dir
         if not isinstance(state_dir, Path):
             return {}
         studies = saved_mesh_studies(state_dir)

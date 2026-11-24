@@ -230,7 +230,6 @@ class MPMWorkspace(QWidget):
                 request = dict(operation='mpm_solve', settings=asdict(geometry), mpm=asdict(settings))
                 job = AnalysisProcess(run_remote_operation, request, context, remote_auth=auth)
                 self._track(job, 'Submitting MPM to TRUBA…')
-                controller.window.truba_job_monitor.start_submission()
             else:
                 if local_mpm_python() is None:
                     raise RuntimeError(MPM_INSTALL_REQUIRED)
@@ -261,8 +260,6 @@ class MPMWorkspace(QWidget):
             else:
                 self.load_directory(directory)
         except Exception as error:
-            if job.is_remote:
-                self.remote_controller.window.truba_job_monitor.submission_failed(error)
             self.status.setText(str(error)[-1700:])
         self.update_execution_availability()
 

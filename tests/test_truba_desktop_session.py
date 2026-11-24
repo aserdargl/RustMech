@@ -1,46 +1,37 @@
 """The desktop connection supplies an SSH handle with no stored credentials."""
 
+from stat import S_IFDIR, S_IFREG
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
 from PySide6.QtTest import QSignalSpy
+from PySide6.QtCore import QObject
 from PySide6.QtWidgets import QApplication
 
-from truba_connection import TrubaConnectionDialog
+from truba_sync import RemoteFileListing, TrubaSession
 from truba_desktop import DesktopStatus
 from truba_jobs import SSHJobs, connection
 from truba_remote import RemoteContext
 from truba_shared_session import DesktopSession, DesktopSSHClient
 
 
-def test_desktop_panel_uses_the_advertised_session_and_never_reads_credentials():
+def test_rustmech_uses_only_the_advertised_arf_session(tmp_path):
     app = QApplication.instance() or QApplication([])
-    with patch("truba_connection.CredentialStore") as credentials:
-        dialog = TrubaConnectionDialog(use_desktop_session=True)
+    owner = QObject()
+    with patch("truba_sync.state_directory", return_value=tmp_path):
+        client = TrubaSession(owner)
     try:
-        credentials.assert_not_called()
-        assert dialog.credentials is None
-        assert dialog.password.isHidden()
-        assert dialog.analysis_auth() is None
-        assert not dialog.start_saved_connection()
-        assert dialog.job_list.cancellation_auth() is None
-        opened = QSignalSpy(dialog.open_desktop_requested)
-        dialog.connect_button.click()
-        assert opened.count() == 1 and dialog.worker is None
-
+        assert client.analysis_auth() is None
+        changed = QSignalSpy(client.connection_changed)
         session = DesktopSession("tester", 10000, "a" * 64)
-        dialog._desktop_status_changed(DesktopStatus(session))
-        assert dialog.connected and dialog.analysis_auth() is session
-        assert "tester" in dialog.status.text()
-        assert dialog.worker is None
-        assert dialog.job_list.cancellation_auth() is session
-
-        dialog._desktop_status_changed(DesktopStatus(other_cluster=True))
-        assert not dialog.connected and dialog.analysis_auth() is None
-        assert dialog.job_list.cancellation_auth() is None
+        client._status_changed(DesktopStatus(session))
+        assert client.connected and client.analysis_auth() is session
+        client._status_changed(DesktopStatus(other_cluster=True))
+        assert not client.connected and client.analysis_auth() is None
+        assert [changed.at(i) for i in range(changed.count())] == [[True], [False]]
     finally:
-        dialog.shutdown()
-        dialog.close()
+        client.shutdown()
         app.processEvents()
 
 
@@ -56,3 +47,24 @@ def test_ssh_delegate_uses_desktop_session_even_for_old_winscp_records():
             connection(RemoteContext(transport="auto"))
         direct.assert_not_called()
         saved.assert_not_called()
+
+
+def test_sync_lists_only_the_selected_accounts_remote_job_directory():
+    session = DesktopSession("tester", 10000, "a" * 64)
+    folder = "/arf/scratch/tester/RustMech/" + "b" * 32
+    with patch("truba_sync.DesktopSSHClient") as desktop:
+        sftp = desktop.return_value.open_sftp.return_value.__enter__.return_value
+        sftp.listdir_attr.return_value = [
+            SimpleNamespace(filename="request.json", st_mode=S_IFREG),
+            SimpleNamespace(filename="output", st_mode=S_IFDIR),
+        ]
+        worker = RemoteFileListing(session, folder, None)
+        worker.run()
+        desktop.assert_called_once_with(session)
+        sftp.listdir_attr.assert_called_once_with(folder)
+        assert worker.files == [("output", True), ("request.json", False)]
+
+        invalid = RemoteFileListing(session, folder.replace("/tester/", "/other/"), None)
+        invalid.run()
+        assert invalid.files is None
+        sftp.listdir_attr.assert_called_once()

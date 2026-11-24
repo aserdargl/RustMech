@@ -18,24 +18,23 @@ class ParallelControlTests(unittest.TestCase):
 
     def test_parallel_and_renewal_preferences_restore_and_enter_never_allocates(self):
         controller = self.controller
-        panel = self.window.truba_dialog
+        panel = controller.resource_window
         panel.show()
         self.app.processEvents()
         field = controller.controls['parallel_jobs']
         self.assertEqual(field.height(), CONTROL_HEIGHT)
         self.assertLessEqual(field.width(), 100)
-        panel.language_manager.set_language('tr')
+        self.window.language_manager.set_language('tr')
         self.app.processEvents()
         self.assertEqual(controller.auto_renew.text(), 'Süre dolmadan yedek kaynak hazırla')
-        panel.language_manager.set_language('en')
+        self.window.language_manager.set_language('en')
         field.setValue(4)
         controller.auto_renew.setChecked(False)
-        with patch.object(controller, 'session_command') as allocate, patch.object(panel, 'start_connection') as connect:
+        with patch.object(controller, 'session_command') as allocate:
             field.setFocus()
             QTest.keyClick(field, Qt.Key.Key_Return)
             self.app.processEvents()
             allocate.assert_not_called()
-            connect.assert_not_called()
         with patch('remote_controller.fetch_catalog') as fetch:
             restored = RemoteController(self.window, self.preferences)
             try:

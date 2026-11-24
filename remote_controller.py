@@ -5,11 +5,11 @@ import json
 from threading import Event
 
 from PySide6.QtCore import QObject,QTimer,Signal,Qt
-from PySide6.QtWidgets import (QCheckBox,QFormLayout,QGridLayout,QGroupBox,QHBoxLayout,QLabel,
-                               QLineEdit,QPushButton,QVBoxLayout)
+from PySide6.QtWidgets import (QCheckBox,QDialog,QFormLayout,QGridLayout,QGroupBox,QHBoxLayout,QLabel,
+                               QLineEdit,QPushButton,QScrollArea,QVBoxLayout,QWidget)
 
 from truba_remote import RemoteContext,run_remote_job
-from studio_style import CompactSpinBox, configure_form, CompactComboBox, CompactDoubleSpinBox, CONTROL_HEIGHT
+from studio_style import CompactSpinBox, configure_form, CompactComboBox, CompactDoubleSpinBox, CONTROL_HEIGHT, STUDIO_STYLESHEET
 from truba_session import saved_session, create_session, refresh_session, release_session
 from truba_resources import (BASELINES, AUTO_QUEUES, candidates, fetch_catalog,
                              allocate_with_limits, automatic_context, convergence_context)
@@ -135,8 +135,8 @@ class RemoteController(QObject):
         for name,label in (("partition","Queue"),("account","Account"),
                            ("walltime","Wall time"),("cores","CPU cores"),("gpus","GPUs"),("memory_mb","RAM / GiB"),
                            ("parallel_jobs","Parallel analyses"),
-                           ("runtime_python","Runtime Python"),("python_module","Python module"),("foam_module","OpenCFD module"),
-                           ("winscp_site","WinSCP site (optional)")):
+                           ("runtime_python","Runtime Python"),("python_module","Python module"),
+                           ("foam_module","OpenCFD module")):
             if name in ("memory_mb", "cores", "gpus", "parallel_jobs"):
                 control = CompactDoubleSpinBox() if name == 'memory_mb' else CompactSpinBox()
                 control.setFixedWidth(88)
@@ -177,9 +177,8 @@ class RemoteController(QObject):
                 row.addStretch()
                 form.addRow(label, row)
             else:
-                target = advanced_form if name in ('runtime_python', 'python_module', 'foam_module', 'winscp_site') else form
+                target = advanced_form if name in ('runtime_python', 'python_module', 'foam_module') else form
                 target.addRow(label,control)
-        self.transport = defaults.transport
         layout.addLayout(form)
         self.auto_renew = QCheckBox('Prepare replacement resources near the time limit')
         self.auto_renew.setChecked(defaults.auto_renew)
@@ -247,6 +246,12 @@ class RemoteController(QObject):
         self.prepare.clicked.connect(lambda:self.refresh(True))
         self.recover.clicked.connect(window.retrieve_truba_job)
         self.stop.clicked.connect(self.cancelled_check)
+        self.study_name = QLineEdit()
+        self.study_name.setMaxLength(100)
+        self.study_name.setMaximumWidth(240)
+        self.study_name.setFixedHeight(CONTROL_HEIGHT)
+        self.study_name.setToolTip('Use the same work name to group multiple submissions.')
+        advanced_form.addRow("Work name for new jobs", self.study_name)
         advanced_layout.addLayout(buttons)
         self.status = QLabel("Local mode. Connecting alone does not move computations to TRUBA.")
         self.status.setWordWrap(True)
@@ -259,10 +264,26 @@ class RemoteController(QObject):
         panel.setObjectName("trubaRemoteControls")
         self.resource_panel = panel
         self.advanced_panel = advanced
-        window.truba_dialog.install_remote_sections(panel, advanced)
-        window.truba_dialog.connection_changed.connect(self.connection_changed)
-        window.truba_dialog.disconnect_requested.connect(self.disconnect)
-        window.truba_dialog.job_list.release_requested.connect(lambda: self.session_command('release'))
+        self.resource_window = QDialog(window)
+        self.resource_window.setObjectName("computeResources")
+        self.resource_window.setWindowTitle("Compute resources")
+        self.resource_window.setWindowFlag(Qt.WindowType.WindowMinimizeButtonHint)
+        self.resource_window.setWindowFlag(Qt.WindowType.WindowMaximizeButtonHint)
+        self.resource_window.setStyleSheet(STUDIO_STYLESHEET)
+        self.resource_window.resize(635, 700)
+        dialog_layout = QVBoxLayout(self.resource_window)
+        dialog_layout.setContentsMargins(8, 8, 8, 8)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        content = QWidget()
+        sections = QVBoxLayout(content)
+        sections.setContentsMargins(4, 4, 4, 4)
+        sections.addWidget(panel)
+        sections.addWidget(advanced)
+        sections.addStretch()
+        scroll.setWidget(content)
+        dialog_layout.addWidget(scroll)
+        window.truba_session.connection_changed.connect(self.connection_changed)
         self.session_timer = QTimer(self)
         self.session_timer.setInterval(250)
         self.session_timer.timeout.connect(self.poll_session)
@@ -274,19 +295,11 @@ class RemoteController(QObject):
         self.queue_hint.setAlignment(Qt.AlignmentFlag.AlignTop)
         self.session_status.setFixedHeight(36)
         self.session_status.setAlignment(Qt.AlignmentFlag.AlignTop)
-        window.truba_dialog.language_manager.changed.connect(self.fit_action_buttons)
+        window.language_manager.changed.connect(self.fit_action_buttons)
         self.fit_action_buttons()
-        dialog = window.truba_dialog
-        if not dialog.property('preferencesRestored'):
-            area = dialog.screen().availableGeometry()
-            content = dialog.settings_content.size()
-            dialog.resize(min(content.width() + 48, area.width() - 16),
-                          min(max(760, content.height() + 265), area.height() - 32))
-            dialog.jobs_splitter.setSizes([content.height() + 32, 135])
 
     def fit_action_buttons(self, *_):
-        dialog = self.window.truba_dialog
-        dialog.language_manager.localize_tree(dialog)
+        self.window.language_manager.localize_tree(self.resource_window)
         for group in ((self.allocate, self.session_refresh, self.session_release),
                       (self.check, self.prepare, self.recover, self.stop), (self.limits_button,)):
             for button in group:
@@ -294,7 +307,6 @@ class RemoteController(QObject):
             width = max(button.fontMetrics().horizontalAdvance(button.text()) + 24 for button in group)
             for button in group:
                 button.setFixedSize(width, CONTROL_HEIGHT)
-        dialog.fit_settings_content()
 
     @property
     def ready(self):
@@ -312,7 +324,7 @@ class RemoteController(QObject):
                                    self.session.get("state") == "ended" and self.session.get("job_id"))
         if active and 'context' in self.session:
             values.update({key: self.session['context'].get(key, values[key]) for key in values})
-        context = RemoteContext(**values,transport=self.transport,
+        context = RemoteContext(**values,
                                 session_id=str(self.session.get("job_id", "")) if active else "")
         if active and not context.session_id:
             raise RuntimeError("Resource submission is unconfirmed. Refresh the saved session first.")
@@ -529,7 +541,6 @@ class RemoteController(QObject):
         try:
             self.release_future = self.release_executor.submit(
                 release_while_busy, self.session, pending, allocating, self.auth())
-            self.window.truba_dialog.job_list.set_session_release_state(True, message)
             self.update_session_controls()
             self.session_status.setText(message)
             self.changed.emit()
@@ -553,7 +564,6 @@ class RemoteController(QObject):
                 message = 'Resource cancellation not confirmed: ' + str(error) + '. Reconnect and retry.'
             self.update_session_controls()
             self.session_status.setText(message)
-            self.window.truba_dialog.job_list.set_session_release_state(False, message)
             self.changed.emit()
             return
         if self.limits_future is not None and self.limits_future.done():
@@ -583,7 +593,6 @@ class RemoteController(QObject):
                 self.update_session_controls()
                 self.session_status.setText("Resource session: " + str(error))
             self.session_next_refresh = time.monotonic() + 5
-            self.window.truba_dialog.job_list.refresh()
             self.changed.emit()
         if (self.requested and self.session_watch and self.session and self.session.get('ready')
                 and self.session.get('state') == 'RUNNING' and self.future is None
@@ -596,7 +605,7 @@ class RemoteController(QObject):
             self.session_future = self.session_executor.submit(refresh_session,self.session,self.auth())
             self.session_action = "watch"
 
-    def auth(self): return self.window.truba_dialog.analysis_auth()
+    def auth(self): return self.window.truba_session.analysis_auth()
 
     def _save_context_preferences(self, context):
         # A running session has a concrete Slurm partition even when Auto was selected.
@@ -801,7 +810,7 @@ class RemoteController(QObject):
         candidates(context.partition, context.cores, context.memory_mb, context.walltime, self.queue_catalog)
         if capability == "kratos" and settings is not None:
             self._validate_kratos_request(settings, context)
-        study_name = self.window.truba_dialog.active_jobs.study_name.text().strip()
+        study_name = self.study_name.text().strip()
         return replace(context, study_name=study_name), auth
 
     def require_convergence(self, settings, *, max_jobs, walltime):
@@ -813,7 +822,7 @@ class RemoteController(QObject):
         context = replace(self.context(use_session=False), walltime=walltime)
         context = convergence_context(context, self.queue_catalog, settings.cores, max_jobs)
         self._validate_kratos_request(settings, context)
-        study_name = self.window.truba_dialog.active_jobs.study_name.text().strip()
+        study_name = self.study_name.text().strip()
         return replace(context, study_name=study_name), self.auth()
 
     def plan_convergence_script(self, settings, partition, level_count, memory_mb, walltime):
@@ -823,7 +832,7 @@ class RemoteController(QObject):
             replace(self.context(use_session=False), walltime=walltime),
             self.queue_catalog, partition, settings.cores, level_count, memory_mb)
         self._validate_kratos_request(settings, context)
-        study_name = self.window.truba_dialog.active_jobs.study_name.text().strip()
+        study_name = self.study_name.text().strip()
         return replace(context, study_name=study_name)
 
     def require_batch_queue(self, partition, settings):
@@ -866,7 +875,7 @@ class RemoteController(QObject):
             if settings.cores > context.cores:
                 raise RuntimeError("Solver CPU count exceeds the TRUBA allocation. Increase remote CPU cores or reduce solver cores.")
             self._validate_kratos_request(settings, context)
-        study_name = self.window.truba_dialog.active_jobs.study_name.text().strip()
+        study_name = self.study_name.text().strip()
         return replace(context, study_name=study_name), self.auth()
 
     @staticmethod

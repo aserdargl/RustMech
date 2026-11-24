@@ -1090,14 +1090,25 @@ Apply the selected structure and geometry settings to the 3D preview.|Seçili ya
 Save settings and start the selected solver.|Ayarları kaydedip seçili çözücüyü başlatın.
 Connect to TRUBA with your own username and password|Kendi kullanıcı adınız ve parolanızla TRUBA'ya bağlanın
 Connect to TRUBA with saved credentials|Kayıtlı bilgilerle TRUBA’ya bağlan
-TRUBA Settings|TRUBA Ayarları
 TRUBA Desktop session|TRUBA masaüstü oturumu
 Open TRUBA|TRUBA’yı aç
 Shared TRUBA ARF session · {username}|Paylaşılan TRUBA ARF oturumu · {username}
 Connect to TRUBA ARF in the TRUBA application first.|Önce TRUBA uygulamasında ARF’ye bağlanın.
 RustMech analyses use the TRUBA ARF cluster.|RustMech analizleri TRUBA ARF kümesini kullanır.
+View RustMech analysis files and synchronized results|RustMech analiz dosyalarını ve eşitlenen sonuçları görüntüle
+Resources…|Kaynaklar…
+Compute resources|Hesaplama kaynakları
+Local inputs|Yerel girdiler
+Analysis|Analiz
+TRUBA files|TRUBA dosyaları
+Local results|Yerel sonuçlar
+RustMech analyses|RustMech analizleri
+Track jobs in TRUBA WORKS.|İşleri TRUBA’nın WORKS sekmesinden takip edin.
+Connect in TRUBA.|TRUBA’da bağlanın.
+Connect with this job's account in TRUBA.|TRUBA’da bu işin hesabıyla bağlanın.
+TRUBA files could not be listed.|TRUBA dosyaları listelenemedi.
+Track this job in TRUBA WORKS. Results download automatically when connected.|Bu işi TRUBA’nın WORKS sekmesinden takip edin. Bağlantı kurulduğunda sonuçlar otomatik indirilir.
 Open the Connection tab in the TRUBA application|TRUBA uygulamasında Connection sekmesini aç
-Open RustMech's TRUBA analysis and connection settings|RustMech’in TRUBA analiz ve bağlantı ayarlarını aç
 Could not reach the running TRUBA application.|Çalışan TRUBA uygulamasına erişilemedi.
 The running TRUBA application did not respond.|Çalışan TRUBA uygulaması yanıt vermedi.
 Could not start the TRUBA application.|TRUBA uygulaması başlatılamadı.

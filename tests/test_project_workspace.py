@@ -74,7 +74,7 @@ class ProjectWorkspaceTests(unittest.TestCase):
         self.assertEqual(self.window.thermal_workspace.collect_thermal().solid_cp, 720)
         self.assertEqual(self.window.workspace_tabs.currentIndex(), 3)
         self.assertEqual(self.window.workspace_actions.checkedAction().data(), 3)
-        self.assertFalse(self.window.truba_dialog.isVisible())
+        self.assertIsNone(self.window.sync_window)
         self.assertEqual(self.controller.fingerprint(self.controller.capture()), self.controller.saved_snapshot)
 
     def test_save_roundtrip_and_stable_identity(self):
