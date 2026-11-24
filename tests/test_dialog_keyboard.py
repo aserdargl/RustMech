@@ -165,11 +165,15 @@ class DialogKeyboardTests(unittest.TestCase):
                                          + toolbar.frameWidth())
                         self.assertLessEqual(toolbar.minimumSizeHint().width(), toolbar.width())
                         menu = dialog.sidebar_toggle.menu()
+                        self.assertEqual(
+                            [action.text() for action in menu.actions()],
+                            ["Finite Element", "FFT Homogenization", "Material Point Method", "Peridynamics"],
+                        )
                         opened = QSignalSpy(menu.aboutToShow)
                         button_width = dialog.sidebar_toggle.width()
                         self.assertLess(button_width,
                             dialog.sidebar_toggle.fontMetrics().horizontalAdvance(
-                                "Geometry-trimmed voxel mesh") + 32)
+                                "Material Point Method") + 32)
                         for action in menu.actions():
                             QTimer.singleShot(30, menu.close)
                             QTest.mouseClick(dialog.sidebar_toggle, Qt.MouseButton.LeftButton)
@@ -178,7 +182,6 @@ class DialogKeyboardTests(unittest.TestCase):
                             self.app.processEvents()
                             label = action.text()
                             label = {
-                                "Geometry-trimmed voxel mesh": "Geo. Voxel",
                                 "FFT Homogenization": "FFT",
                                 "Material Point Method": "MPM",
                             }.get(label, label)
@@ -196,7 +199,7 @@ class DialogKeyboardTests(unittest.TestCase):
                         dialog.main_splitter.setSizes([0, sum(expected)])
                         menu.actions()[0].trigger()
                         self.assertEqual(dialog.main_splitter.sizes(), expected)
-                        dialog.setup_tabs.setCurrentIndex(2)
+                        dialog.setup_tabs.setCurrentIndex(dialog._fft_method_index)
                         dialog._show_geometry_workspace()
                         self.assertEqual(dialog.sidebar_toggle.text(), "Finite Element")
                     self.assertFalse(hasattr(dialog, "folder_batch_dialog"))

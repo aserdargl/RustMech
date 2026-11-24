@@ -1798,7 +1798,6 @@ class RustMechDialog(QDialog):
         self.method_names = ["Finite Element"]
         self.method_button_labels = self.method_names.copy()
         methods = (
-            ("Voxel", "Geo. Voxel", "Geometry-trimmed voxel mesh", "Clip boundary voxels against the reference geometry. Cut-cell element types, small cells and ANSYS compatibility require validation."),
             ("FFT", "FFT", "FFT Homogenization", "Effective stiffness from periodic unit-cell tests."),
             ("MPM", "MPM", "Material Point Method", "Large-deformation platen compression and impact."),
             ("Peridynamics", "Peridynamics", "Peridynamics", "Crack initiation and propagation in mechanical tests."),

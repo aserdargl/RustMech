@@ -505,7 +505,6 @@ Insufficient RAM. Further refinement stopped. Right-click the affected row to re
 Automatic|Otomatik
 Auto|Otomatik
 Auto (TPMS cells / Netgen)|Otomatik (TPMS hücreleri / Netgen)
-Geometry-trimmed voxels (HEX8)|Geometriye göre kırpılmış vokseller (HEX8)
 Voxel hexahedral (HEX20)|Voksel heksahedral (HEX20)
 Manual global sizes|Elle girilen genel boyutlar
 Starting mesh|Başlangıç ağı
@@ -1245,8 +1244,6 @@ Compression force|Basma kuvveti
 Voxel spacing|Voksel aralığı
 Solid fraction|Katı oranı
 Meshing method|Ağ oluşturma yöntemi
-Geometry-trimmed voxel mesh|Geometriye göre kırpılmış voksel ağı
-Geo. Voxel|Geo. Voksel
 Planned|Planlanıyor
 Material Point Method|Malzeme noktası yöntemi
 Peridynamics|Peridinamik
@@ -1271,7 +1268,6 @@ Sampling the periodic cell…|Periyodik hücre örnekleniyor…
 Crack initiation and propagation in mechanical tests.|Mekanik deneylerde çatlak başlangıcı ve ilerlemesi.
 Effective stiffness from periodic unit-cell tests.|Periyodik birim hücre deneylerinden etkin rijitlik.
 Large-deformation platen compression and impact.|Büyük deformasyonlu plaka basması ve darbe.
-Clip boundary voxels against the reference geometry. Cut-cell element types, small cells and ANSYS compatibility require validation.|Sınır voksellerini referans geometriye göre kırpar. Kesik hücre eleman türleri, küçük hücreler ve ANSYS uyumluluğu doğrulama gerektirir.
 Bilinear approximation: E, true yield stress and Eₜ. Choose the true stress–strain curve when measured hardening data is available.|Çift doğrulu yaklaşım: E, gerçek akma gerilmesi ve Eₜ. Ölçülmüş pekleşme verisi varsa gerçek gerilme–şekil değiştirme eğrisini seçin.
 Uses each geometry's selected variables. Without variables, only its reference case is generated.|Her geometrinin seçili değişkenlerini kullanır. Değişken yoksa yalnız referans deneyi oluşturulur.
 1 reference case|1 referans deneyi

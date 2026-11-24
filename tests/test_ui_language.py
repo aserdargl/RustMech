@@ -174,18 +174,18 @@ class LanguageTests(unittest.TestCase):
             self.assertGreaterEqual(window.folder_batch_button.width(),
                                     window.folder_batch_button.fontMetrics().horizontalAdvance('Toplu Analiz') + 8)
             methods = window.sidebar_toggle.menu().actions()
-            self.assertEqual(window.sidebar_toggle.text(), 'Sonlu Eleman')
-            self.assertEqual(window.sidebar_toggle.text(), methods[0].text())
-            methods[1].trigger()
-            self.assertEqual(window.sidebar_toggle.text(), 'Geo. Voksel')
-            self.assertEqual(methods[1].text(), 'Geometriye göre kırpılmış voksel ağı')
-            self.assertFalse(window.apply_button.isEnabled())
-            for index in (3, 4):
-                methods[index].trigger()
+            self.assertEqual(
+                [method.text() for method in methods],
+                ['Sonlu Eleman', 'FFT homojenleştirme', 'Malzeme noktası yöntemi', 'Peridinamik'],
+            )
+            finite_element, fft, *planned_methods = methods
+            self.assertEqual(window.sidebar_toggle.text(), finite_element.text())
+            for method in planned_methods:
+                method.trigger()
                 self.assertFalse(window.apply_button.isEnabled())
-            methods[2].trigger()
+            fft.trigger()
             self.assertEqual(window.sidebar_toggle.text(), 'FFT')
-            self.assertEqual(window.sidebar_toggle.accessibleName(), methods[2].text())
+            self.assertEqual(window.sidebar_toggle.accessibleName(), fft.text())
             self.assertEqual(len({button.size().toTuple() for button in toolbar_buttons}), 1)
             self.assertTrue(window.apply_button.isEnabled())
             with patch.object(window, '_start_fft') as start_fft:
@@ -196,7 +196,8 @@ class LanguageTests(unittest.TestCase):
             self.assertEqual(window.apply_button.text(), 'Analizi çalıştır')
             self.assertEqual(panel.connect_button.text(), 'Bağlan')
             self.assertEqual([panel.tabs.tabText(i) for i in range(panel.tabs.count())],
-                             ['Bağlantı', 'Aktif işler', 'Kuyruk durumu'])
+                             ['Bağlantı', 'Aktif işler'])
+            self.assertEqual(panel.queue_status_group.title(), 'Kuyruk durumu')
             self.assertEqual(window.remote_controller.resource_panel.title(), 'CPU, RAM ve kaynak oturumu')
             advanced = window.remote_controller.advanced_panel
             self.assertEqual(advanced.title(), 'Gelişmiş · Uzak çalışma ortamı')

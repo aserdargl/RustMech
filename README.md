@@ -619,7 +619,7 @@ ayrı entegrasyon kontrolleridir. Qt testleri, yerel DLL'ler ve bazı testler i�
 Git Bash gerekir; eksik isteğe bağlı bileşenlerin skip gerekçelerini sonuçta okuyun.
 
 Mekanik ayarlar menüsünde **Finite Element** ve **FFT Homogenization** çalışır.
-Kırpılmış voxel ağı, Material Point Method ve Peridynamics plan durumundadır.
+Material Point Method ve Peridynamics plan durumundadır.
 Teslim sırası ve doğrulama ölçütleri
 [mekanik yöntemlerin uygulama planında](MEKANIK_YONTEM_PLANI.md) yer alır.
 
@@ -1066,16 +1066,6 @@ projedeki `.venv` yoksa `../Gitterburg/.venv` ortamını kullanır:
 
 Bu paketler ANSYS kurulumu ve lisansının yanında gereklidir. `Build-Exe.ps1`,
 paketlerin yüklenebildiğini derlemeden önce kontrol eder.
-
-## Plan: geometri sınırına göre kırpılmış voxel mesh
-
-Hedef, voxel yüzeyindeki basamaklı
-çıkıntıları gerçek referans geometri sınırına göre kesmek. Tek bağlantılı
-elemanların silinmesi bu hedefi karşılamaz. Önce küçük bir örnekte kesilmiş
-hücrelerin eleman tipleri, çok küçük hücreler, hacim farkı ve ANSYS aktarımı
-değerlendirilecek. Saf HEX20 korunacaksa sınır düğümlerini yüzeye oturtma yolu
-ayrıca eleman bozulması açısından incelenecek. Deneme ve çözücüye alma koşulları
-[mekanik yöntemlerin uygulama planında](MEKANIK_YONTEM_PLANI.md) yer alır.
 
 ## Yön küpü
 
