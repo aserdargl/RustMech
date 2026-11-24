@@ -159,34 +159,45 @@ class LanguageTests(unittest.TestCase):
             self.assertEqual(mesh_size.text(), f'{before.mesh_resolution:.4f}')
             self.assertEqual(self.preferences.value('ui/meshDisplayDecimals', type=int), 4)
             normal_bounds = window.geometry()
-            navigation = (window.project_button, window.sidebar_toggle, window.workspace_button,
-                          window.doe_button, window.designs_button, window.folder_batch_button)
-            toolbar_buttons = (*navigation, *window.display_mode_buttons.buttons())
-            self.assertEqual([button.x() for button in navigation],
-                             sorted(button.x() for button in navigation))
-            self.assertEqual(len({button.size().toTuple() for button in toolbar_buttons}), 1)
+            groups = ((window.project_button, window.designs_button),
+                      (window.workspace_button, window.sidebar_toggle),
+                      (window.doe_button, window.folder_batch_button, window.esen_button),
+                      window.display_mode_buttons.buttons())
+
+            def assert_toolbar_layout():
+                for group in groups:
+                    self.assertEqual(len({button.size().toTuple() for button in group}), 1)
+                    for button in group:
+                        if button.isVisible():
+                            self.assertTrue(button.parentWidget().rect().contains(button.geometry()))
+                self.assertLess(window.project_button.width(), window.workspace_button.width())
+                self.assertLess(window.esen_button.geometry().right(), window.about_button.x())
+
+            assert_toolbar_layout()
             self.assertEqual(window.folder_batch_button.text(), 'Batch Analysis')
             self.manager.set_language('tr')
             self.app.processEvents()
             self.assertEqual(window._mesh_form.labelForField(window.mesh_precision).text(), 'Ağ ondalık hane sayısı')
             self.assertEqual(window.folder_batch_button.text(), 'Toplu Analiz')
-            self.assertEqual(len({button.size().toTuple() for button in toolbar_buttons}), 1)
+            assert_toolbar_layout()
             self.assertGreaterEqual(window.folder_batch_button.width(),
-                                    window.folder_batch_button.fontMetrics().horizontalAdvance('Toplu Analiz') + 8)
+                                    window.folder_batch_button.fontMetrics().horizontalAdvance('Toplu Analiz') + 16)
+            self.assertEqual(window.about_button.text(), 'Hakkında')
             methods = window.sidebar_toggle.menu().actions()
             self.assertEqual(
                 [method.text() for method in methods],
                 ['Sonlu Eleman', 'FFT homojenleştirme', 'Malzeme noktası yöntemi', 'Peridinamik'],
             )
-            finite_element, fft, *planned_methods = methods
+            finite_element, fft, *other_methods = methods
             self.assertEqual(window.sidebar_toggle.text(), finite_element.text())
-            for method in planned_methods:
+            for method in other_methods:
                 method.trigger()
-                self.assertFalse(window.apply_button.isEnabled())
+                self.assertEqual(window.setup_tabs.currentIndex(), method.data())
+                self.assertEqual(window.sidebar_toggle.accessibleName(), method.text())
             fft.trigger()
             self.assertEqual(window.sidebar_toggle.text(), 'FFT')
             self.assertEqual(window.sidebar_toggle.accessibleName(), fft.text())
-            self.assertEqual(len({button.size().toTuple() for button in toolbar_buttons}), 1)
+            assert_toolbar_layout()
             self.assertTrue(window.apply_button.isEnabled())
             with patch.object(window, '_start_fft') as start_fft:
                 window.apply_button.click()

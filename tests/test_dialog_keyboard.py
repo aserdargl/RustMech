@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 
 from PySide6.QtCore import QLocale, QSettings, QTimer, Qt
 from PySide6.QtTest import QTest, QSignalSpy
-from PySide6.QtWidgets import QApplication, QFrame, QPushButton, QWidget
+from PySide6.QtWidgets import QApplication, QPushButton, QWidget
 
 from model import Settings
 from nonlinear_compression import RustMechDialog
@@ -154,16 +154,17 @@ class DialogKeyboardTests(unittest.TestCase):
                         self.assertFalse(dialog.truba_dialog.isVisible())
                         self.assertIsNone(dialog.truba_dialog.process)
                         dialog.esen_workspace.close()
-                    for width in (1000, 1440):
+                    for width in (900, 1440):
                         dialog.resize(width, 800)
                         self.app.processEvents()
+                        self.assertEqual(dialog.width(), width)
                         dialog.main_splitter.setSizes([350, width - 350])
                         expected = dialog.main_splitter.sizes()
-                        toolbar = dialog.findChild(QFrame, "viewportToolbar")
-                        project_position = dialog.project_button.mapTo(toolbar, dialog.project_button.rect().topLeft())
-                        self.assertEqual(project_position.x(), toolbar.layout().contentsMargins().left()
-                                         + toolbar.frameWidth())
+                        toolbar = dialog.findChild(QWidget, "workspaceCommandBar")
+                        self.assertIs(dialog.project_button.parentWidget(), toolbar)
+                        self.assertEqual(dialog.project_button.x(), toolbar.layout().contentsMargins().left())
                         self.assertLessEqual(toolbar.minimumSizeHint().width(), toolbar.width())
+                        self.assertTrue(dialog.workspace_tabs.widget(0).isAncestorOf(dialog.display_mode_group))
                         menu = dialog.sidebar_toggle.menu()
                         self.assertEqual(
                             [action.text() for action in menu.actions()],

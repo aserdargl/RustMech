@@ -227,8 +227,8 @@ class DoEWindowTests(unittest.TestCase):
             self.app.processEvents()
             self.assertEqual(dialog.doe_button.text(), "DoE")
             navigation = dialog.doe_button.parentWidget().layout()
-            self.assertEqual(navigation.indexOf(dialog.doe_button),
-                             navigation.indexOf(dialog.workspace_button) + 1)
+            self.assertEqual(navigation.indexOf(dialog.folder_batch_button),
+                             navigation.indexOf(dialog.doe_button) + 1)
             self.assertFalse(dialog.doe_button.autoDefault())
             dialog.doe_button.click()
             self.assertTrue(dialog.doe_window.isVisible())

@@ -34,7 +34,6 @@ from PySide6.QtWidgets import (
     QDialog,
     QFormLayout,
     QFrame,
-    QGridLayout,
     QHBoxLayout,
     QLayout,
     QLabel,
@@ -47,6 +46,7 @@ from PySide6.QtWidgets import (
     QSizePolicy,
     QSplitter,
     QStyle,
+    QStylePainter,
     QTabBar,
     QTabWidget,
     QToolButton,
@@ -191,6 +191,22 @@ class NoWheelComboBox(CompactComboBox):
         event.ignore()
 
 
+class _ComputeStatusLabel(QLabel):
+    """Keep the toolbar height stable when the compute status gets longer."""
+
+    def minimumSizeHint(self):
+        hint = super().minimumSizeHint()
+        hint.setWidth(min(hint.width(), 75))
+        return hint
+
+    def paintEvent(self, event):
+        painter = QStylePainter(self)
+        bounds = self.contentsRect()
+        text = painter.fontMetrics().elidedText(self.text(), Qt.TextElideMode.ElideRight, bounds.width())
+        painter.drawItemText(bounds, self.alignment().value, self.palette(), self.isEnabled(),
+                             text, self.foregroundRole())
+
+
 def _build_fft_preview(settings: Settings, grid: int):
     from mesh_resources import require_memory
 
@@ -314,9 +330,7 @@ class RustMechDialog(QDialog):
         self.disposed = False
         self._mesh_convergence_dialog = None
 
-        self.setWindowTitle(
-            "RustMech | Nonlinear Compression",
-        )
+        self.setWindowTitle("RustMech")
         self.setWindowFlags(
             self.windowFlags()
             | Qt.WindowType.WindowMinimizeButtonHint
@@ -357,29 +371,42 @@ class RustMechDialog(QDialog):
         left.setContentsMargins(5, 0, 5, 4)
         left.setSpacing(2)
 
+        header = QFrame()
+        header.setObjectName("mainWorkspaceHeader")
+        header.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+        layout.addWidget(header)
+        header_layout = QVBoxLayout(header)
+        header_layout.setContentsMargins(8, 5, 8, 5)
+        header_layout.setSpacing(5)
+        context_row = QHBoxLayout()
+        context_row.setSpacing(8)
+        header_layout.addLayout(context_row)
+
+        self.brand_title_label = QLabel("Nonlinear Compression")
+        self.brand_title_label.setObjectName("brandTitle")
+        self.brand_title_label.setMinimumHeight(30)
+        unit_badge = QLabel("Units: mm  N  MPa")
+        unit_badge.setObjectName("unitBadge")
+        context_row.addWidget(self.brand_title_label)
+        context_row.addWidget(unit_badge)
+        context_row.addStretch()
+
         brand_card = QFrame()
         self.brand_header = brand_card
         brand_card.setObjectName("brandHeader")
         brand_card.setProperty('computeState', 'local')
         brand_content = QVBoxLayout(brand_card)
-        brand_content.setContentsMargins(10, 4, 10, 4)
+        brand_content.setContentsMargins(6, 2, 4, 2)
         brand_content.setSpacing(2)
         brand_layout = QHBoxLayout()
-        brand_layout.setSpacing(12)
+        brand_layout.setSpacing(5)
         brand_content.addLayout(brand_layout)
-        eyebrow = QLabel("RustMech")
-        eyebrow.setObjectName("brandEyebrow")
-        title = QLabel("Nonlinear Compression")
-        self.brand_title_label = title
-        title.setObjectName("brandTitle")
-        self.brand_subtitle_lbl = QLabel(self.solver_capabilities.display_name)
+        self.brand_subtitle_lbl = _ComputeStatusLabel(self.solver_capabilities.display_name)
         self.brand_subtitle_lbl.setObjectName("brandSubtitle")
-        unit_badge = QLabel("Units: mm  N  MPa")
-        unit_badge.setObjectName("unitBadge")
-        brand_layout.addWidget(eyebrow)
-        brand_layout.addWidget(title)
-        brand_layout.addStretch()
+        self.brand_subtitle_lbl.setTextFormat(Qt.TextFormat.PlainText)
+        self.brand_subtitle_lbl.setMaximumWidth(320)
         brand_layout.addWidget(self.brand_subtitle_lbl)
+        context_row.addWidget(brand_card)
         self.truba_dialog = TrubaConnectionDialog(self)
         self.truba_dialog.job_list.background_updated.connect(self._background_analysis_updated)
         from truba_job_list import TrubaJobMonitor
@@ -412,22 +439,13 @@ class RustMechDialog(QDialog):
         self.about_button = QPushButton("About")
         self.about_button.setObjectName("aboutBtn")
         self.about_button.clicked.connect(self.show_about)
-        workspace_buttons = QHBoxLayout()
-        workspace_buttons.setSpacing(6)
-        for button in (self.truba_button, self.truba_settings_button):
-            button.setFixedSize(94, CONTROL_HEIGHT)
-        self.about_button.setFixedSize(124, CONTROL_HEIGHT)
-        for button in (self.truba_button, self.truba_quick_connect, self.truba_settings_button,
-                       self.truba_job_monitor.button, self.about_button):
-            button.setAutoDefault(False)
-            button.setDefault(False)
-            workspace_buttons.addWidget(button)
-        brand_layout.addLayout(workspace_buttons)
-        brand_layout.addWidget(unit_badge)
+        compute_controls = (self.truba_button, self.truba_quick_connect, self.truba_settings_button,
+                            self.truba_job_monitor.button)
+        for button in compute_controls:
+            brand_layout.addWidget(button)
+        self._compute_commands = (self.truba_button, self.truba_settings_button)
         from ui_language import LanguageSelector
         self.language_selector = LanguageSelector(self.language_manager, self)
-        brand_layout.addWidget(self.language_selector)
-        layout.addWidget(brand_card)
 
         self.setup_tabs = QTabWidget()
         self.setup_tabs.setObjectName("setupTabs")
@@ -947,25 +965,12 @@ class RustMechDialog(QDialog):
         right.setContentsMargins(2, 0, 0, 0)
         right.setSpacing(2)
 
-        # One navigation row for workspaces, display modes and camera controls.
-        toolbar_frame = QFrame()
-        toolbar_frame.setObjectName("viewportToolbar")
-        toolbar_frame.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
-        toolbar = QGridLayout(toolbar_frame)
-        toolbar.setContentsMargins(5, 1, 5, 1)
-        toolbar.setHorizontalSpacing(6)
-        toolbar.setColumnStretch(0, 1)
-        toolbar.setColumnStretch(2, 1)
-        navigation_controls = QWidget()
-        navigation = QHBoxLayout(navigation_controls)
+        command_bar = QWidget()
+        command_bar.setObjectName("workspaceCommandBar")
+        navigation = QHBoxLayout(command_bar)
         navigation.setContentsMargins(0, 0, 0, 0)
-        navigation.setSpacing(2)
-        toolbar.addWidget(navigation_controls, 0, 0, Qt.AlignmentFlag.AlignLeft)
-        view_controls = QWidget()
-        view_toolbar = QHBoxLayout(view_controls)
-        view_toolbar.setContentsMargins(0, 0, 0, 0)
-        view_toolbar.setSpacing(2)
-        toolbar.addWidget(view_controls, 0, 2, Qt.AlignmentFlag.AlignRight)
+        navigation.setSpacing(5)
+        header_layout.addWidget(command_bar)
 
         from project_workspace import ProjectWorkspace
         self.project_workspace = ProjectWorkspace(self)
@@ -981,10 +986,10 @@ class RustMechDialog(QDialog):
         project_menu.addSeparator()
         project_menu.addAction("Export mechanical 3D results...", self.project_workspace.export_mechanical_3d)
         self.project_button.setMenu(project_menu)
-        navigation.addWidget(self.project_button)
 
         self.sidebar_toggle = QToolButton()
         self.sidebar_toggle.setObjectName("headerMenu")
+        self.sidebar_toggle.setProperty("contextSelector", True)
         self.sidebar_toggle.setToolTip("Select a method to open its settings")
         self.sidebar_toggle.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         self.methods_menu = QMenu(self.sidebar_toggle)
@@ -1000,11 +1005,10 @@ class RustMechDialog(QDialog):
         self.sidebar_toggle.setMenu(self.methods_menu)
         self.setup_tabs.currentChanged.connect(self._sync_settings_method)
         self._sync_settings_method(self.setup_tabs.currentIndex())
-        navigation.addWidget(self.sidebar_toggle)
 
         # Keep the indexed navigation model for existing integrations; expose
         # workspace selection through one compact menu instead of four tabs.
-        self.workspace_navigation = QTabBar(toolbar_frame)
+        self.workspace_navigation = QTabBar(command_bar)
         self.workspace_navigation.setObjectName("workspaceNavigation")
         self.workspace_navigation.setExpanding(False)
         self.workspace_navigation.setDrawBase(False)
@@ -1016,6 +1020,7 @@ class RustMechDialog(QDialog):
         self.workspace_navigation.hide()
         self.workspace_button = QToolButton()
         self.workspace_button.setObjectName("headerMenu")
+        self.workspace_button.setProperty("contextSelector", True)
         self.workspace_button.setText(workspace_names[0])
         self.workspace_button.setAccessibleName("Select workspace")
         self.workspace_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
@@ -1031,11 +1036,9 @@ class RustMechDialog(QDialog):
             action.setVisible(index != 1)
             action.triggered.connect(lambda checked=False, page=index: self.workspace_tabs.setCurrentIndex(page))
         self.workspace_button.setMenu(self.workspace_menu)
-        navigation.addWidget(self.workspace_button)
         self.doe_button = QPushButton("DoE")
         self.doe_button.setToolTip("Open Design of Experiments settings.")
         self.doe_button.clicked.connect(self._show_doe_workspace)
-        navigation.addWidget(self.doe_button)
         self.designs_button = QToolButton()
         self.designs_button.setObjectName("headerMenu")
         self.designs_button.setText("Designs")
@@ -1047,26 +1050,44 @@ class RustMechDialog(QDialog):
         designs_menu.addAction("Add current model to analysis queue", self._enqueue_current_model)
         designs_menu.addAction("Analysis queue...", self._show_analysis_queue)
         self.designs_button.setMenu(designs_menu)
-        navigation.addWidget(self.designs_button)
         self.folder_batch_button = QPushButton("Batch Analysis")
         self.folder_batch_button.setToolTip("Batch analysis from folder...")
         self.folder_batch_button.clicked.connect(self._show_folder_batch)
-        navigation.addWidget(self.folder_batch_button)
         self.esen_workspace = None
         self.esen_button = QPushButton("ESEN")
         self.esen_button.setToolTip("Open the LAMMPS workspace")
         self.esen_button.clicked.connect(self.show_esen_workspace)
-        navigation.addWidget(self.esen_button)
+        self._workspace_commands = (
+            (self.project_button, self.designs_button),
+            (self.workspace_button, self.sidebar_toggle),
+            (self.doe_button, self.folder_batch_button, self.esen_button),
+        )
+        for index, group in enumerate(self._workspace_commands):
+            if index:
+                divider = QFrame()
+                divider.setObjectName("workspaceCommandDivider")
+                divider.setFixedSize(1, 17)
+                navigation.addWidget(divider)
+            for button in group:
+                button.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+                navigation.addWidget(button)
+        navigation.addStretch()
+        navigation.addWidget(self.about_button)
+        navigation.addWidget(self.language_selector)
+        header_controls = (*compute_controls, *(button for group in self._workspace_commands for button in group),
+                           self.about_button, self.language_selector.combo)
+        for current, following in zip(header_controls, header_controls[1:]):
+            QWidget.setTabOrder(current, following)
 
         self.display_mode_group = QFrame()
-        self.display_mode_group.setObjectName("displayModeGroup")
+        self.display_mode_group.setObjectName("viewportToolbar")
         self.display_mode_group.setAccessibleName("3D display mode")
-        mode_layout = QHBoxLayout(self.display_mode_group)
-        mode_layout.setContentsMargins(3, 2, 3, 2)
-        mode_layout.setSpacing(5)
-        toolbar.addWidget(self.display_mode_group, 0, 1, Qt.AlignmentFlag.AlignCenter)
+        mode_layout = ActionFlowLayout(self.display_mode_group)
+        mode_layout.setContentsMargins(5, 3, 5, 3)
+        mode_layout.setSpacing(4)
+        right.addWidget(self.display_mode_group)
 
-        self.mode = NoWheelComboBox(toolbar_frame)
+        self.mode = NoWheelComboBox(self.display_mode_group)
         self.mode.setAccessibleName("3D display mode")
         self.mode.addItems(
             ["Smooth geometry", "FE mesh", "Smooth + FE overlay"]
@@ -1092,7 +1113,7 @@ class RustMechDialog(QDialog):
         self.show_platens_cb.setChecked(True)
         self.show_platens_cb.setCursor(Qt.CursorShape.PointingHandCursor)
         self.show_platens_cb.toggled.connect(self.render_preview)
-        view_toolbar.addWidget(self.show_platens_cb)
+        mode_layout.addWidget(self.show_platens_cb)
 
         self.result_preview_controls = QWidget()
         result_controls_layout = QHBoxLayout(self.result_preview_controls)
@@ -1445,7 +1466,6 @@ class RustMechDialog(QDialog):
         self._sync_workspace_context = sync_workspace_context
         self.workspace_tabs.currentChanged.connect(sync_workspace_context)
         self.workspace_tabs.tabBar().hide()
-        layout.addWidget(toolbar_frame)
         layout.addWidget(self.workspace_tabs, 1)
         layout.addWidget(self.status_banner)
         model_layout.addWidget(self.operation_progress)
@@ -1538,26 +1558,21 @@ class RustMechDialog(QDialog):
             self._update_fft_preview_summary()
         elif self.result_preview_field.currentData() is not None:
             self.render_preview()
-        menu_buttons = (
-            (self.project_button, (self.project_button.text(),)),
-            (self.sidebar_toggle, tuple(translate(name) for name in self.method_button_labels)),
-            (self.workspace_button, tuple(action.text() for action in self.workspace_menu.actions()
-                                          if action.isVisible())),
-            (self.designs_button, (self.designs_button.text(),)),
-        )
-        command_buttons = (self.doe_button, self.folder_batch_button, self.esen_button,
-                           *self.display_mode_buttons.buttons())
-        # Allow for the menu arrow and the shared 2 px focus border.
-        width = max(
-            max(button.fontMetrics().horizontalAdvance(label) + 18
-                for button, labels in menu_buttons for label in labels),
-            max(button.fontMetrics().horizontalAdvance(button.text()) + 8 for button in command_buttons),
-        )
-        for button, _ in menu_buttons:
-            button.setFixedSize(width, CONTROL_HEIGHT)
-        for button in command_buttons:
-            button.setProperty("managesLocalizedWidth", True)
-            button.setFixedSize(width, CONTROL_HEIGHT)
+        selector_labels = {
+            self.sidebar_toggle: tuple(translate(name) for name in self.method_button_labels),
+            self.workspace_button: tuple(action.text() for action in self.workspace_menu.actions()
+                                         if action.isVisible()),
+        }
+        for group in (*self._workspace_commands, self._compute_commands, (self.about_button,),
+                      self.display_mode_buttons.buttons()):
+            # Fit the longest translated label, including room for focus and menu arrows.
+            width = max(button.fontMetrics().horizontalAdvance(label)
+                        + (24 if isinstance(button, QToolButton) else 16)
+                        for button in group
+                        for label in selector_labels.get(button, (button.text(),)))
+            for button in group:
+                button.setProperty("managesLocalizedWidth", True)
+                button.setFixedSize(width, CONTROL_HEIGHT)
         # Allow the shared button face's focus border to grow by 1 px on each side.
         width = max(button.sizeHint().width() for button in self._analysis_action_buttons) + 2
         for button in self._analysis_action_buttons:
@@ -1658,7 +1673,6 @@ class RustMechDialog(QDialog):
         if label is not None:label.setText('Specimen height' if active else 'Cube size')
         if self.workspace_tabs.currentIndex()==0:
             self.brand_title_label.setText('Nonlinear Compression' if not active else f'Standard {kind(settings).title()}')
-            self.setWindowTitle('RustMech | '+self.brand_title_label.text())
 
     def _select_execution_target(self, _index):
         self.remote_controller.toggle.setChecked(self.execution_target.currentData() == "truba")

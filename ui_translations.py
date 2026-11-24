@@ -358,6 +358,8 @@ Import geometry for flow / thermal...|Akış / termal için geometri içe aktar.
 Use for flow / thermal|Akış / termal için kullan
 Transient water + specimen heat transfer|Zamana bağlı su + numune ısı transferi
 Project|Proje
+About|Hakkında
+About RustMech|RustMech hakkında
 Analysis project|Analiz projesi
 Open project...|Proje aç...
 Save project|Projeyi kaydet

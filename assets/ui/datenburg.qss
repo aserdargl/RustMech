@@ -14,13 +14,19 @@ QDialog#rustMechWindow { background: #F5F5F3; }
 QLabel { background: transparent; border: none; }
 QLabel:disabled { color: #808080; }
 #brandHeader {
-    background: #F5F5F3; border: 1px solid #D1D1D1; border-radius: 3px;
+    background: #E5ECF4; border: 1px solid #D5DBE2; border-radius: 5px;
 }
+#mainWorkspaceHeader {
+    margin: 4px 4px 2px; background: #FCFCFB; border: 1px solid #D5DBE2; border-radius: 7px;
+}
+#workspaceCommandDivider { background: #D5DBE2; border: none; }
 #brandHeader[computeState="ready"], #brandHeader[computeState="allocated"] { background: #E7F3E8; border-color: #329447; }
 #brandHeader[computeState="pending"] { background: #FFF4CE; border-color: #C8A044; }
-#brandEyebrow { color: #18212F; font-size: 15px; font-weight: 400; }
-#brandTitle { color: #243B53; font-size: 13px; font-weight: 400; }
-#brandSubtitle, #unitBadge { color: #334155; font-size: 12px; font-weight: 400; }
+#brandTitle {
+    background: #BFDBFE; border: 1px solid #2563EB; border-radius: 6px;
+    color: #0F172A; font-size: 14px; padding: 0 6px;
+}
+#brandSubtitle, #unitBadge { color: #475569; font-size: 12px; }
 #trubaConnectionBadge { color: #475569; background: #EEF2F6; border-radius: 4px; margin: 5px 0; padding: 2px 9px; }
 #trubaConnectionBadge[state="connected"] { color: #FFFFFF; background: #166534; }
 #trubaConnectionBadge[state="disconnected"] { color: #FFFFFF; background: #B91C1C; }
@@ -118,6 +124,9 @@ QToolButton::menu-indicator, QPushButton::menu-indicator {
     background: #E9EDF2; color: #526174; border: 1px solid #CBD5E1;
 }
 QToolButton#headerMenu, QToolButton#cameraMenu { padding-right: 13px; }
+#workspaceCommandBar QToolButton#headerMenu { padding: 0 14px 0 5px; }
+#workspaceCommandBar QToolButton#headerMenu::menu-indicator { subcontrol-position: center right; }
+#workspaceCommandBar QToolButton[contextSelector="true"]:enabled:!pressed { background: #E5ECF4; }
 /* Datenburg Overlay/GraphCalc edit section: a caption above a thin frame. */
 QGroupBox#materialGroup {
     background: #FFFFFF; border: 1px solid #D6D6D6; border-radius: 2px;
@@ -300,7 +309,6 @@ QTabBar::tab:selected { background: #BFDBFE; border-color: #2563EB; border-botto
 
 /* GraphCalc Edit is the sole cross-application reference. */
 QDialog#rustMechWindow, QMainWindow#doeStudioWindow, #sidebarPanel, #scrollFields, #doeWorkspace { background: #F5F5F3; }
-#brandHeader { background: #BFDBFE; border: 1px solid #2563EB; border-radius: 6px; }
 QGroupBox { background: #FFFFFF; border: 1px solid #D5DBE2; border-radius: 7px; }
 QLineEdit { background: #FFFFFF; border-color: #CBD5E1; border-radius: 4px; }
 QLineEdit:hover { border-color: #93C5FD; }
