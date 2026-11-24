@@ -14,7 +14,8 @@ import uuid
 
 import paramiko
 from truba_credentials import CredentialStore, state_directory
-from truba_ssh import HOST, RemoteAuth, ssh_connection
+from truba_ssh import HOST, RemoteAuth, execute_ssh_command, ssh_connection
+from truba_shared_session import DISCONNECTED_MESSAGE, DesktopSession
 
 SAFE_NAME = re.compile(r"^[A-Za-z0-9_.-]+$")
 SLURM_TERMINAL_STATES = {
@@ -246,14 +247,13 @@ class SSHJobs:
         with self.connect() as client:
             with client.open_sftp() as sftp:
                 if not resume or not record.get("job_id"):
-                    _,out,err=client.exec_command("mkdir -p -- "+shlex.quote(remote+"/staging"))
-                    if out.channel.recv_exit_status():
+                    status, _, _ = execute_ssh_command(client, "mkdir -p -- " + shlex.quote(remote + "/staging"))
+                    if status:
                         raise RuntimeError("Could not create the TRUBA job directory")
                     for name in ("mesh_input.npz","model.mdpa","input.json","ProjectParameters.json","materials.json","kratos_driver.py","kratos_self_contact.py","run.slurm","monitor.sh"):
                         if name=='kratos_self_contact.py' and not (local/name).exists():continue
                         sftp.put(str(local/name),remote+"/staging/"+name)
-                _,out,err=client.exec_command("bash -lc "+shlex.quote("cd "+shlex.quote(remote)+" && { if [ ! -s job.id ] && [ ! -d submission.lock ]; then cp staging/* .; fi; bash monitor.sh; }"))
-                for line in out:
+                def update_record(line):
                     if line.startswith("RUSTMECH_JOB_ID="):
                         value=line.strip().split("=",1)[1]
                         if not value.isdigit():
@@ -262,10 +262,12 @@ class SSHJobs:
                     elif line.startswith("RUSTMECH_STATE="):
                         record["state"]=line.strip().split("=",1)[1]
                     else:
-                        continue
+                        return
                     for path in record_paths:
                         write_record(path,record)
-                if out.channel.recv_exit_status():
+                command = "cd " + shlex.quote(remote) + " && { if [ ! -s job.id ] && [ ! -d submission.lock ]; then cp staging/* .; fi; bash monitor.sh; }"
+                status, _, _ = execute_ssh_command(client, "bash -lc " + shlex.quote(command), on_line=update_record)
+                if status:
                     raise RuntimeError("TRUBA job submission or monitoring failed; the job record can be resumed.")
                 results=local/"results"
                 results.mkdir(exist_ok=True)
@@ -279,8 +281,8 @@ class SSHJobs:
     def cancel(self,record):
         with self.connect() as client:
             command = cancellation_script(record, self.username)
-            _,out,err=client.exec_command("bash -lc "+shlex.quote(command))
-            if out.channel.recv_exit_status():
+            status, _, _ = execute_ssh_command(client, "bash -lc " + shlex.quote(command))
+            if status:
                 raise RuntimeError("TRUBA cancellation failed; reconnect and retry using the job record.")
 
 
@@ -330,15 +332,13 @@ def validated_remote_path(path,username):
 
 
 def connection(settings, auth=None, record=None):
-    mode=record.get("transport") if record else settings.truba_transport
-    if mode in ("auto","ssh"):
-        auth=auth or get_auth()
-        if auth:
-            return SSHJobs(auth)
-        if mode == "ssh":
-            raise RuntimeError("Connect through the RustMech TRUBA panel before starting analysis.")
-    if mode in ("auto","winscp"):
+    mode = record.get("transport") if record else settings.truba_transport
+    if isinstance(auth, DesktopSession) or (auth and mode in ("auto", "ssh")):
+        return SSHJobs(auth)
+    if mode == "winscp":
         return WinSCPJobs(record.get("winscp_site","") if record else settings.truba_winscp_site)
+    if mode in ("auto", "ssh"):
+        raise ConnectionError(DISCONNECTED_MESSAGE)
     raise ValueError("Unsupported TRUBA transport")
 
 

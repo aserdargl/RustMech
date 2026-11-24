@@ -17,7 +17,7 @@ from model import FEMesh,Settings,settings_from_dict
 from kratos_export import export_kratos
 from kratos_backend import KratosBackend,KratosResults
 from solver_api import AnalysisRequest
-from truba_jobs import run_remote
+from truba_jobs import get_auth, run_remote
 
 
 def slotted_mesh(tetra=False):
@@ -108,7 +108,7 @@ if __name__=='__main__':
         record=json.loads(args.resume.read_text());folder=Path(record['local_directory'])
         settings=settings_from_dict(json.loads((folder/'input.json').read_text())['settings'])
         mesh=SimpleNamespace(grid=pv.read(folder/'submitted_mesh.vtu'))
-        result=KratosBackend(marker=ROOT/'build/self-contact-remote-job.json').resume(AnalysisRequest(settings,mesh,folder))
+        result=KratosBackend(auth=get_auth(),marker=ROOT/'build/self-contact-remote-job.json').resume(AnalysisRequest(settings,mesh,folder))
         if result.error:raise RuntimeError(result.error)
     else:
         folder=ROOT/'build/self-contact-cases'/(args.mode+'-'+datetime.now().strftime('%Y%m%d_%H%M%S_%f'))
@@ -121,7 +121,7 @@ if __name__=='__main__':
             path.write_text(json.dumps(data))
         (ROOT/'build/self-contact-current.json').write_text(json.dumps({'folder':str(folder)}))
         if args.remote:
-            run_remote(settings,folder,marker=ROOT/'build/self-contact-remote-job.json')
+            run_remote(settings,folder,auth=get_auth(),marker=ROOT/'build/self-contact-remote-job.json')
         else:
             with (folder/'driver.log').open('w') as log:
                 process=subprocess.run([str(ROOT/'build/kratos-validation/Scripts/python.exe'),'kratos_driver.py'],cwd=folder,

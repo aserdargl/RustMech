@@ -1091,6 +1091,11 @@ Save settings and start the selected solver.|Ayarları kaydedip seçili çözüc
 Connect to TRUBA with your own username and password|Kendi kullanıcı adınız ve parolanızla TRUBA'ya bağlanın
 Connect to TRUBA with saved credentials|Kayıtlı bilgilerle TRUBA’ya bağlan
 TRUBA Settings|TRUBA Ayarları
+TRUBA Desktop session|TRUBA masaüstü oturumu
+Open TRUBA|TRUBA’yı aç
+Shared TRUBA ARF session · {username}|Paylaşılan TRUBA ARF oturumu · {username}
+Connect to TRUBA ARF in the TRUBA application first.|Önce TRUBA uygulamasında ARF’ye bağlanın.
+RustMech analyses use the TRUBA ARF cluster.|RustMech analizleri TRUBA ARF kümesini kullanır.
 Open the Connection tab in the TRUBA application|TRUBA uygulamasında Connection sekmesini aç
 Open RustMech's TRUBA analysis and connection settings|RustMech’in TRUBA analiz ve bağlantı ayarlarını aç
 Could not reach the running TRUBA application.|Çalışan TRUBA uygulamasına erişilemedi.

@@ -371,7 +371,7 @@ class TrubaJobList(QGroupBox):
 
     def cancellation_auth(self):
         auth = self.dialog.analysis_auth()
-        if auth is not None:
+        if auth is not None or self.dialog.credentials is None:
             return auth
         # Merely reading credentials does not connect. Only an explicit Cancel
         # opens a channel, so a lost panel connection cannot lock out recovery.

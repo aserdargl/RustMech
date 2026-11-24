@@ -232,6 +232,8 @@ class RustMechDialog(QDialog):
         preview_builder=build_preview,
         solver_capabilities: SolverCapabilities = MAPDL_CAPABILITIES,
         solver_profile_store=None,
+        *,
+        use_desktop_session=False,
     ):
         app_inst = QApplication.instance()
         if app_inst is not None:
@@ -408,7 +410,8 @@ class RustMechDialog(QDialog):
         self.brand_subtitle_lbl.setMaximumWidth(320)
         brand_layout.addWidget(self.brand_subtitle_lbl)
         context_row.addWidget(brand_card)
-        self.truba_dialog = TrubaConnectionDialog(self)
+        self.truba_dialog = TrubaConnectionDialog(self, use_desktop_session=use_desktop_session)
+        self.truba_dialog.open_desktop_requested.connect(self._open_truba_desktop)
         self.truba_dialog.job_list.background_updated.connect(self._background_analysis_updated)
         from truba_job_list import TrubaJobMonitor
         self.truba_job_monitor = TrubaJobMonitor(self, self.truba_dialog.job_list)
@@ -428,6 +431,7 @@ class RustMechDialog(QDialog):
             "network-connect", self.style().standardIcon(QStyle.StandardPixmap.SP_DriveNetIcon)))
         self.truba_quick_connect.setAccessibleName("Connect to TRUBA with saved credentials")
         self.truba_quick_connect.clicked.connect(self._connect_to_truba_with_saved_credentials)
+        self.truba_quick_connect.setHidden(use_desktop_session)
         self.truba_quick_status = QLabel()
         self.truba_quick_status.setObjectName("mutedHintLabel")
         self.truba_quick_status.setTextFormat(Qt.TextFormat.PlainText)
@@ -1556,6 +1560,7 @@ class RustMechDialog(QDialog):
         self.language_manager.changed.connect(self._refresh_ui_language)
         self._refresh_ui_language()
         self.setMinimumWidth(max(900, self.minimumSizeHint().width()))
+        self.truba_dialog.start_desktop_monitor()
         QTimer.singleShot(0, self.start_preview)
 
     def _refresh_ui_language(self, *_):
@@ -1814,6 +1819,10 @@ class RustMechDialog(QDialog):
         self.truba_settings_button.setProperty("trubaConnected", connected)
         self.truba_settings_button.style().unpolish(self.truba_settings_button)
         self.truba_settings_button.style().polish(self.truba_settings_button)
+        if self.truba_dialog.desktop_monitor is not None:
+            self.truba_button.setProperty("trubaConnected", connected)
+            self.truba_button.style().unpolish(self.truba_button)
+            self.truba_button.style().polish(self.truba_button)
         self._update_remote_banner()
 
     def _add_setup_page(self, title: str) -> QVBoxLayout:
@@ -3779,11 +3788,17 @@ class RustMechDialog(QDialog):
                     self.truba_dialog.job_list.sync_background()
                     self.status.setText("See TRUBA jobs for this analysis. Results download automatically when connected.")
                 return
+            auth = self.truba_dialog.analysis_auth()
+            if self.truba_dialog.desktop_monitor is not None and auth is None:
+                from truba_shared_session import DISCONNECTED_MESSAGE
+                from ui_language import translate
+
+                raise ConnectionError(translate(DISCONNECTED_MESSAGE))
             if record.get("kind")=="rustmech_remote":
                 from truba_remote import retrieve_remote_operation
-                self.analysis_job=AnalysisProcess(retrieve_remote_operation,filename,remote_auth=self.truba_dialog.analysis_auth())
+                self.analysis_job=AnalysisProcess(retrieve_remote_operation,filename,remote_auth=auth)
             else:
-                self.analysis_job=AnalysisProcess(run_resume_analysis,filename,remote_auth=self.truba_dialog.analysis_auth())
+                self.analysis_job=AnalysisProcess(run_resume_analysis,filename,remote_auth=auth)
         except Exception as error:
             QMessageBox.warning(self,"TRUBA job",str(error))
             return
@@ -4205,7 +4220,7 @@ def main() -> int:
     configure_application(app)
     profiles = SolverProfileStore()
     settings = profiles.restore_workspace()
-    dialog = RustMechDialog(settings, solver_profile_store=profiles)
+    dialog = RustMechDialog(settings, solver_profile_store=profiles, use_desktop_session=True)
     try:
         dialog.exec()
     finally:

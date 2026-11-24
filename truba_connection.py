@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (QApplication, QCheckBox, QDialog, QFormLayout, QF
 from studio_style import CONTROL_HEIGHT, STUDIO_STYLESHEET
 from truba_client import TrubaSession
 from truba_credentials import CredentialStore, state_directory
+from truba_desktop import DesktopSessionMonitor, DesktopStatus
 from truba_ssh import HOST
 
 
@@ -100,14 +101,17 @@ class TrubaConnectionDialog(QDialog):
     connection_changed = Signal(bool)
     connection_ui_changed = Signal()
     disconnect_requested = Signal()
+    open_desktop_requested = Signal()
 
     def analysis_auth(self):
+        if self.desktop_monitor is not None:
+            return self.desktop_status.session
         worker = self.worker
         if self.connected and worker is not None:
             return worker.auth
         return None
 
-    def __init__(self, parent=None, *, credential_store=None):
+    def __init__(self, parent=None, *, credential_store=None, use_desktop_session=False):
         super().__init__(parent)
         self.setWindowTitle("TRUBA connection")
         self.setObjectName("trubaConnectionDialog")
@@ -122,8 +126,11 @@ class TrubaConnectionDialog(QDialog):
         self.worker = None
         self.connected = False
         self.stopping = False
+        self.desktop_status = DesktopStatus()
+        self.desktop_monitor = DesktopSessionMonitor(self) if use_desktop_session else None
         self.state_dir = state_directory()
-        self.credentials = credential_store if credential_store is not None else CredentialStore()
+        self.credentials = None if use_desktop_session else (
+            credential_store if credential_store is not None else CredentialStore())
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 6)
         layout.setSpacing(6)
@@ -221,12 +228,23 @@ class TrubaConnectionDialog(QDialog):
         # viewports scroll instead of squeezing, wrapping or relocating fields.
         self.settings_scroll.setWidget(self.settings_content)
         self._remote_sections = []
-        self.fit_settings_content()
         self.resize(940, 590)
-        self.connect_button.clicked.connect(self.start_connection)
-        self.disconnect_button.clicked.connect(self.stop_connection)
-        self._restore_saved_credentials()
-        self._update_controls()
+        if use_desktop_session:
+            for index in range(fields.rowCount()):
+                fields.setRowVisible(index, False)
+            self.remember.hide()
+            hint.hide()
+            self.disconnect_button.hide()
+            account.setTitle("TRUBA Desktop session")
+            self.connect_button.setText("Open TRUBA")
+            self.connect_button.clicked.connect(self.open_desktop_requested)
+            self._desktop_status_changed(self.desktop_status)
+        else:
+            self.connect_button.clicked.connect(self.start_connection)
+            self.disconnect_button.clicked.connect(self.stop_connection)
+            self._restore_saved_credentials()
+            self._update_controls()
+        self.fit_settings_content()
         self.language_manager.changed.connect(self._language_changed)
         from truba_job_list import TrubaJobList
         from truba_active_jobs import TrubaActiveJobs
@@ -256,6 +274,32 @@ class TrubaConnectionDialog(QDialog):
         from operation_progress import OperationProgress
         self.operation_progress = OperationProgress(self, provider=self._operation_state)
         layout.addWidget(self.operation_progress)
+
+    def start_desktop_monitor(self):
+        if self.desktop_monitor is not None:
+            self.desktop_monitor.updated.connect(self._desktop_status_changed)
+            self.desktop_monitor.start()
+
+    def _desktop_status_changed(self, status):
+        self.desktop_status = status
+        self.connected = status.session is not None
+        self._set_desktop_status_text()
+        self.connection_changed.emit(self.connected)
+        self.connection_ui_changed.emit()
+
+    def _set_desktop_status_text(self):
+        from ui_language import translate
+
+        status = self.desktop_status
+        if self.connected:
+            self.status.setText(translate("Shared TRUBA ARF session · {username}").format(
+                username=status.session.username))
+            self._set_connection_badge(translate("Connected"), "connected")
+        else:
+            message = ("RustMech analyses use the TRUBA ARF cluster." if status.other_cluster else
+                       "Connect to TRUBA ARF in the TRUBA application first.")
+            self.status.setText(translate(message))
+            self._set_connection_badge(translate("Disconnected"), "disconnected")
 
     def _update_queue_status_visibility(self, _index):
         self.queue_status_group.setVisible(self.tabs.currentWidget() is self.settings_scroll)
@@ -289,13 +333,16 @@ class TrubaConnectionDialog(QDialog):
 
     def _language_changed(self, *_):
         self.language_manager.localize_tree(self)
+        if self.desktop_monitor is not None:
+            self._set_desktop_status_text()
         self.fit_settings_content()
 
     def fit_settings_content(self):
         """Size the shared, non-reflowing canvas when sections are installed."""
         self.settings_content.ensurePolished()
         # Resolve compact action sizes before calculating the form minimum.
-        buttons = (self.connect_button, self.disconnect_button)
+        buttons = (self.connect_button,) if self.desktop_monitor is not None else (
+            self.connect_button, self.disconnect_button)
         button_width = max(132, *(button.fontMetrics().horizontalAdvance(button.text()) + 28 for button in buttons))
         for button in buttons:
             button.setFixedSize(button_width, CONTROL_HEIGHT)
@@ -353,6 +400,8 @@ class TrubaConnectionDialog(QDialog):
         return True
 
     def start_saved_connection(self):
+        if self.desktop_monitor is not None:
+            return False
         if self.worker is not None or self.connected:
             return False
         if not self._restore_saved_credentials(required=True):
@@ -362,7 +411,7 @@ class TrubaConnectionDialog(QDialog):
         return True
 
     def start_connection(self):
-        if self.worker is not None:
+        if self.desktop_monitor is not None or self.worker is not None:
             return
         username, password = self.username.text().strip(), self.password.text()
         if not username or not password:
@@ -472,6 +521,8 @@ class TrubaConnectionDialog(QDialog):
             worker.deleteLater()
 
     def shutdown(self):
+        if self.desktop_monitor is not None:
+            self.desktop_monitor.stop()
         self.job_list.shutdown()
         self.stop_connection()
         self.active_jobs.shutdown()

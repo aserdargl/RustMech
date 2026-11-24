@@ -18,7 +18,7 @@ from uuid import uuid4
 from paramiko import SSHException
 
 from remote_operations import BATCH_INPUT_DIRECTORY, batch_geometry_name
-from truba_ssh import active_session_client
+from truba_ssh import active_session_client, execute_ssh_command
 
 
 SYNC_TEMP_FILE = re.compile(r"\.rustmech-(?:upload-[0-9a-f]{32}|download-[a-z0-9_]{8})\.part")
@@ -422,9 +422,8 @@ def _remote_digests(auth, paths):
     for batch in batched(paths, 16):
         command = "sha256sum --zero -- " + shlex.join(batch)
         try:
-            _, stdout, _ = active_session_client(auth).exec_command(command, timeout=120)
-            output = stdout.read()
-            if stdout.channel.recv_exit_status() != 0:
+            status, output, _ = execute_ssh_command(active_session_client(auth), command, timeout=120)
+            if status != 0:
                 continue
         except (SSHException, OSError, EOFError):
             break

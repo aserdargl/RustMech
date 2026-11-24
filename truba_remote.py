@@ -149,11 +149,13 @@ class RemoteTransport:
 
     def command(self,script,*,timeout=60):
         if isinstance(self.delegate,SSHJobs):
+            from truba_ssh import execute_ssh_command
+
             with self.delegate.connect() as client:
-                _,out,err = client.exec_command(f"{_COMMAND_SHELL} -c "+shlex.quote(script),timeout=timeout)
-                data = out.read().decode(errors="replace")
-                error = err.read().decode(errors="replace").strip()
-                status = out.channel.recv_exit_status()
+                status, data, error = execute_ssh_command(client, f"{_COMMAND_SHELL} -c " + shlex.quote(script),
+                                                          timeout=timeout)
+                data = data.decode(errors="replace")
+                error = error.decode(errors="replace").strip()
                 if status:
                     detail = error or data.strip()
                     suffix = f": {detail[-1500:]}" if detail else ""

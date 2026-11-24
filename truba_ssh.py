@@ -10,6 +10,7 @@ from threading import RLock
 
 import paramiko
 from truba_credentials import state_directory
+from truba_shared_session import DesktopSession, DesktopSSHClient
 
 HOST = "172.16.6.15"
 
@@ -41,6 +42,8 @@ def unregister_session(username, client):
 
 def active_session_client(auth):
     """Return the connection panel's authenticated client without opening SSH."""
+    if isinstance(auth, DesktopSession):
+        return DesktopSSHClient(auth)
     with _lock:
         cached = _sessions.get(auth.username)
         if cached and cached[0] == auth.password and not cached[2]:
@@ -60,6 +63,9 @@ def close_owned_sessions():
 
 @contextmanager
 def ssh_connection(auth):
+    if isinstance(auth, DesktopSession):
+        yield DesktopSSHClient(auth)
+        return
     # Serialize authentication, while allowing independent SSH channels for
     # cancellation during a large SFTP download. Never replay failed exchanges.
     with _lock:
@@ -101,3 +107,18 @@ def ssh_connection(auth):
 
 
 atexit.register(close_owned_sessions)
+
+
+def execute_ssh_command(client, command, *, timeout=None, on_line=None):
+    if isinstance(client, DesktopSSHClient):
+        return client.execute(command, timeout=timeout, on_line=on_line)
+    options = {} if timeout is None else {"timeout": timeout}
+    _, stdout, stderr = client.exec_command(command, **options)
+    if on_line is None:
+        data = stdout.read()
+    else:
+        for line in stdout:
+            on_line(line)
+        data = b""
+    error = stderr.read() if stderr is not None else b""
+    return stdout.channel.recv_exit_status(), data, error
