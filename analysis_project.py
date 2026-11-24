@@ -15,10 +15,11 @@ from uuid import uuid4
 from flow_analysis import FlowSettings
 from thermal_analysis import ThermalSettings
 from model import GEOMETRY_FIELDS, MATERIAL_FIELDS, Settings, settings_from_dict
+from mpm_analysis import MPMSettings
 
 FORMAT = "rustmech-project"
 SCHEMA_VERSION = 1
-PHYSICS = ("mechanical", "flow", "thermal", "cht")
+PHYSICS = ("mechanical", "flow", "thermal", "cht", "mpm")
 UNITS = {"geometry": "mm", "mechanical": "mm-N-MPa", "thermal": "SI; temperature inputs degC", "flow": "SI"}
 
 
@@ -142,6 +143,26 @@ class AnalysisProject:
         thermal["solid_material_card"] = solid.get("card",thermal.get("solid_material_card"))
         return settings, decoded["flow"], decoded["cht"], decode_settings(ThermalSettings, thermal)
 
+    def capture_mpm(self, settings):
+        config = asdict(settings)
+        self.materials["mpm-solid"] = {"kind": "solid", "units": "SI", "properties": {
+            "young_modulus": config.pop("young_mpa") * 1e6, "poisson_ratio": config.pop("poisson_ratio"),
+            "density": config.pop("density_kg_m3"),
+        }}
+        prior = self.studies.get("mpm", {})
+        self.studies["mpm"] = {"physics": "mpm", "geometry": "specimen", "config": config,
+                              "materials": {"solid": "mpm-solid"}, "boundaries": {},
+                              "results": prior.get("results", [])}
+
+    def mpm_settings(self):
+        if "mpm" not in self.studies:
+            return MPMSettings()
+        study = self.studies["mpm"]
+        material = self.materials[study["materials"]["solid"]]["properties"]
+        values = dict(study["config"], young_mpa=material["young_modulus"] / 1e6,
+                      poisson_ratio=material["poisson_ratio"], density_kg_m3=material["density"])
+        return decode_settings(MPMSettings, values)
+
     def to_dict(self):
         return {"format": FORMAT, "schema_version": SCHEMA_VERSION, "units": dict(UNITS), **asdict(self)}
 
@@ -198,6 +219,7 @@ class AnalysisProject:
             raise ValueError("Active study is missing.")
         try:
             project.workspace_settings()
+            project.mpm_settings()
         except (KeyError, TypeError) as error:
             raise ValueError("Incomplete workspace configuration.") from error
         return project

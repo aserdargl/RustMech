@@ -21,9 +21,10 @@ OPERATIONS = {
     'doe_mesh': 'DOE mesh generation', 'doe_solve': 'DOE analysis',
     'flow_export': 'Flow export', 'flow_solve': 'Flow analysis',
     'thermal_export': 'Thermal export', 'thermal_solve': 'Thermal analysis',
+    'mpm_solve': 'MPM compression',
 }
 TERMINAL = SLURM_TERMINAL_STATES | {'DOWNLOADED', 'RELEASED', 'ENDED'}
-MONITORED_ANALYSES = {'mechanical', 'fft_solve', 'peridynamic_solve', 'flow_solve', 'thermal_solve',
+MONITORED_ANALYSES = {'mechanical', 'fft_solve', 'peridynamic_solve', 'flow_solve', 'thermal_solve', 'mpm_solve',
                       'convergence_level', 'doe_solve'}
 
 

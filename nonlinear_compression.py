@@ -346,6 +346,7 @@ class RustMechDialog(QDialog):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
+        self.mpm_workspace_index = None
         self.workspace_tabs = QTabWidget()
         self.workspace_tabs.setObjectName("workspaceTabs")
         # Hidden DoE pages must not impose their preferred height on the model view.
@@ -1012,7 +1013,7 @@ class RustMechDialog(QDialog):
         self.workspace_navigation.setObjectName("workspaceNavigation")
         self.workspace_navigation.setExpanding(False)
         self.workspace_navigation.setDrawBase(False)
-        workspace_names = ("Mechanic", "Experiments (DoE)", "Flow CFD", "Thermal CHT")
+        workspace_names = ("Mechanic", "Experiments (DoE)", "Flow CFD", "Thermal CHT", "MPM")
         for name in workspace_names:
             self.workspace_navigation.addTab(name)
         self.workspace_navigation.currentChanged.connect(self.workspace_tabs.setCurrentIndex)
@@ -1430,6 +1431,9 @@ class RustMechDialog(QDialog):
         from thermal_workspace import ThermalWorkspace
         self.thermal_workspace = ThermalWorkspace(self.collect, self, preferences=self.solver_profile_store.settings,viewport_factory=create_preview_viewport)
         self.workspace_tabs.addTab(self.thermal_workspace, "&Thermal (CHT)")
+        from mpm_workspace import MPMWorkspace
+        self.mpm_workspace = MPMWorkspace(self.collect, self, self.solver_profile_store.settings)
+        self.mpm_workspace_index = self.workspace_tabs.addTab(self.mpm_workspace, "MPM")
         def sync_workspace_context(index):
             if index == 1:
                 self.workspace_tabs.setCurrentIndex(0)
@@ -1438,12 +1442,16 @@ class RustMechDialog(QDialog):
             self.workspace_button.setText(workspace_names[index])
             self.workspace_actions.actions()[index].setChecked(True)
             flow_active = index in (2,3)
+            mpm_active = index == self.mpm_workspace_index
+            independent = flow_active or mpm_active
             for button in self._analysis_action_buttons:
-                button.setVisible(not flow_active)
+                button.setVisible(not independent)
             self._show_analysis_blocker()
             fft_selected = self.setup_tabs.currentIndex() == self._fft_method_index
             peridynamic_selected = self.setup_tabs.currentIndex() == self._peridynamic_method_index
-            if flow_active:
+            if mpm_active:
+                title = "MPM TPMS Compression"
+            elif flow_active:
                 title = "Transient Heat Transfer" if index == 3 else "Isothermal Flow"
             elif peridynamic_selected:
                 title = "Peridynamic TPMS Compression"
@@ -1456,13 +1464,13 @@ class RustMechDialog(QDialog):
                                             else self._local_workspace_solver_name())
             if remote is not None:
                 self._update_remote_banner()
-            self.sidebar_toggle.setVisible(not flow_active)
-            mesh_preview = not flow_active and not (fft_selected or peridynamic_selected)
+            self.sidebar_toggle.setVisible(not independent)
+            mesh_preview = not independent and not (fft_selected or peridynamic_selected)
             self.display_mode_group.setVisible(mesh_preview)
             self.show_platens_cb.setVisible(mesh_preview)
             self._sync_preview_readout()
-            self.fft_preview_summary.setVisible(fft_selected)
-            camera_controls.setVisible(not flow_active)
+            self.fft_preview_summary.setVisible(not independent and fft_selected)
+            camera_controls.setVisible(not independent)
         self._sync_workspace_context = sync_workspace_context
         self.workspace_tabs.currentChanged.connect(sync_workspace_context)
         self.workspace_tabs.tabBar().hide()
@@ -1535,6 +1543,7 @@ class RustMechDialog(QDialog):
         self.remote_controller = RemoteController(self,self.solver_profile_store.settings)
         self.flow_workspace.remote_controller = self.remote_controller
         self.thermal_workspace.remote_controller = self.remote_controller
+        self.mpm_workspace.remote_controller = self.remote_controller
         self.doe_studio.remote_controller = self.remote_controller
         self.remote_controller.mode_changed.connect(self._remote_mode_changed)
         self.remote_controller.changed.connect(self._remote_state_changed)
@@ -1589,6 +1598,7 @@ class RustMechDialog(QDialog):
         self.thermal_workspace.size_action_buttons()
         if figure is not None:
             self.language_manager.localize_figure(figure)
+        self.language_manager.localize_figure(self.mpm_workspace.figure)
 
     def _test_profile_changed(self, *_):
         from standard_tests import apply_profile
@@ -1706,6 +1716,7 @@ class RustMechDialog(QDialog):
         self._sync_solver_ui()
         self.flow_workspace.update_execution_availability()
         self.thermal_workspace.update_execution_availability()
+        self.mpm_workspace.update_execution_availability()
         self.refresh_validity()
         if controller.requested:
             self.brand_subtitle_lbl.setText("TRUBA · remote compute")
@@ -2095,6 +2106,8 @@ class RustMechDialog(QDialog):
                     self._showing_peridynamic_preview = False
 
     def _local_workspace_solver_name(self):
+        if self.workspace_tabs.currentIndex() == self.mpm_workspace_index:
+            return "Kratos · MPM"
         if self.workspace_tabs.currentIndex() in (2, 3):
             return "OpenFOAM · WSL"
         if self.setup_tabs.currentIndex() == self._fft_method_index:
@@ -3899,7 +3912,9 @@ class RustMechDialog(QDialog):
             return
         idle = self.analysis_job is None and self.future is None
         if result is not None:
-            payload, _ = result
+            payload, directory = result
+            if payload.get("operation") == "mpm_solve" and self.mpm_workspace.job is None:
+                self._load_remote_mpm(Path(directory) / "output")
             if payload.get("operation") in ("mechanical", "fft_solve", "peridynamic_solve"):
                 self._show_remote_analysis_result(payload, record, announce=idle)
         elif idle and self._latest_background_analysis == record.get("request_id"):
@@ -3949,6 +3964,8 @@ class RustMechDialog(QDialog):
                 elif operation.startswith("flow_"):
                     self.flow_workspace.load_directory(directory)
                     self.workspace_tabs.setCurrentIndex(2)
+                elif operation == "mpm_solve":
+                    self._load_remote_mpm(directory, open_workspace=True)
                 elif operation in ("probe","prepare"):
                     self.status.setText(f"Remote runtime report retrieved: {directory}. Check capabilities for the current configuration before computing.")
                 elif operation=="preview":
@@ -3970,6 +3987,15 @@ class RustMechDialog(QDialog):
                     self.status.setText(f"TRUBA results retrieved: {directory}")
                 if operation!="mechanical": return
             self._show_completed_analysis(folder)
+
+    def _load_remote_mpm(self, directory, *, open_workspace=False):
+        try:
+            self.mpm_workspace.load_directory(directory)
+        except (OSError, ValueError, KeyError, TypeError) as error:
+            self.mpm_workspace.status.setText(str(error))
+            self.status.setText(f"Cannot open MPM result: {error}")
+        if open_workspace:
+            self.workspace_tabs.setCurrentIndex(self.mpm_workspace_index)
 
     def _show_remote_analysis_result(self, result, record=None, *, announce=True, open_workspace=False):
         folder = result["run_folder"]
@@ -4046,7 +4072,7 @@ class RustMechDialog(QDialog):
             jobs.append(job)
             self.analysis_job = None
             self.analysis_poll.stop()
-        for workspace in (self.flow_workspace, self.thermal_workspace):
+        for workspace in (self.flow_workspace, self.thermal_workspace, self.mpm_workspace):
             if getattr(workspace.job, 'is_remote', False) is True:
                 jobs.append(workspace.job)
                 workspace.job = None
@@ -4149,6 +4175,7 @@ class RustMechDialog(QDialog):
             self.flow_workspace.dispose()
         if hasattr(self, "thermal_workspace"):
             self.thermal_workspace.dispose()
+        self.mpm_workspace.dispose()
         self.executor.shutdown(wait=False, cancel_futures=True)
         self._fft_preview_executor.shutdown(wait=False, cancel_futures=True)
         if hasattr(self.plotter, "_camera_transition"):

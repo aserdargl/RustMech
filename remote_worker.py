@@ -55,6 +55,7 @@ def probe(request,missing=False):
                         mesh_types=[],reasons={},hostname=socket.gethostname(),python=sys.executable,
                         foam_version=os.environ.get("WM_PROJECT_VERSION",""))
     capabilities["packages"] = {}
+    capabilities["mpm"] = False
     if missing:
         capabilities["reasons"]["mesh"] = "Remote runtime is not installed. Use Prepare remote runtime."
         return capabilities
@@ -76,6 +77,18 @@ def probe(request,missing=False):
     except Exception as error:
         capabilities["reasons"]["mesh"] = f"Mesh runtime unavailable: {_exception_detail(error)}"
         return capabilities
+    if full or operation == 'mpm_solve':
+        try:
+            from local_kratos import MPM_PACKAGE, VERSION
+            if importlib.metadata.version(MPM_PACKAGE) != VERSION:
+                raise RuntimeError(f'{MPM_PACKAGE} {VERSION} is required.')
+            importlib.import_module('KratosMultiphysics.MPMApplication')
+            capabilities['packages'][MPM_PACKAGE] = VERSION
+            capabilities['mpm'] = True
+        except Exception as error:
+            capabilities['reasons']['mpm'] = f'Kratos MPM unavailable: {error}. Use Prepare remote runtime.'
+        if not full:
+            return capabilities
     if full or operation == 'peridynamic_solve':
         try:
             importlib.import_module('peridynamic_analysis')
@@ -242,6 +255,19 @@ def _run_operation(request,output):
         errors = KRATOS_CAPABILITIES.validate(settings)
         if errors:
             raise ValueError("\n".join(errors))
+    if operation == 'mpm_solve':
+        from mpm_analysis import CURVE_NAME, PARTICLES_NAME, SUMMARY_NAME, MPMSettings, execute_mpm
+
+        case = Path.cwd() / 'solver_case'
+        try:
+            execute_mpm(settings, MPMSettings(**request['mpm']), case, remote=True, on_progress=_stage)
+        finally:
+            log = case / 'mpm_solver.log'
+            if log.is_file():
+                shutil.copy2(log, output / log.name)
+        for name in (CURVE_NAME, PARTICLES_NAME, SUMMARY_NAME):
+            shutil.copy2(case / name, output / name)
+        return dict(case='.', remote_solver_case=str(case.resolve()))
     if operation == 'fft_solve':
         from damask_fft import run_periodic_fft
         case = Path.cwd() / 'solver_case'

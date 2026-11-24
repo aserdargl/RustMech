@@ -2,6 +2,36 @@
 from setup_help import GEOMETRY_HELP
 
 _TEXT = '''
+MPM TPMS Compression|MPM ile TPMS Basma
+Uses the TPMS from Model. The lower platen is fixed and the upper platen moves along −Z.|Model sekmesindeki TPMS kullanılır. Alt plaka sabittir ve üst plaka −Z yönünde hareket eder.
+Loading and discretization|Yükleme ve ayrıklaştırma
+Platen travel|Plaka stroku
+Loading time|Yükleme süresi
+Background cell size|Arka plan hücre boyutu
+Points per cell axis|Hücre ekseni başına nokta
+MPM solid material|MPM katı malzemesi
+Young’s modulus|Young modülü
+Copy Model properties|Model özelliklerini kopyala
+Compressible Neo-Hookean material. Frictionless penalty contact at both platens.|Sıkıştırılabilir Neo-Hookean malzeme. İki plakada da sürtünmesiz ceza teması.
+Run MPM|MPM’yi çalıştır
+Open MPM result…|MPM sonucunu aç…
+Open MPM result|MPM sonucunu aç
+Install local Kratos MPM|Yerel Kratos MPM’yi kur
+Force–displacement curve|Kuvvet–yer değiştirme eğrisi
+Platen reaction / N|Plaka reaksiyonu / N
+Upper platen|Üst plaka
+Lower platen|Alt plaka
+Run MPM or open a saved result to view the force–displacement curve.|Kuvvet–yer değiştirme eğrisi için MPM’yi çalıştırın veya kayıtlı bir sonucu açın.
+Install the local Kratos MPM runtime from the MPM workspace.|Yerel Kratos MPM çalışma ortamını MPM sekmesinden kurun.
+Connect to TRUBA and prepare its Kratos MPM runtime.|TRUBA’ya bağlanın ve Kratos MPM çalışma ortamını hazırlayın.
+Installing local Kratos MPM…|Yerel Kratos MPM kuruluyor…
+Local Kratos MPM is ready.|Yerel Kratos MPM hazır.
+Copied the Model elastic properties into MPM.|Model elastik özellikleri MPM’ye kopyalandı.
+Submitting MPM to TRUBA…|MPM işi TRUBA’ya gönderiliyor…
+Preparing MPM compression…|MPM basma analizi hazırlanıyor…
+MPM operation stopped.|MPM işlemi durduruldu.
+{name} · {points:,} points · peak upper reaction {force:.5g} N|{name} · {points:,} nokta · tepe üst plaka reaksiyonu {force:.5g} N
+Maximum platen overlap {overlap:.4g} mm · background cell {cell:.4g} mm|En büyük plaka örtüşmesi {overlap:.4g} mm · arka plan hücresi {cell:.4g} mm
 Peridynamic TPMS Compression|TPMS Peridinamik Basma
 Brittle fracture in TPMS compression.|TPMS basma altında gevrek kırılma.
 TPMS type|TPMS türü

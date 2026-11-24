@@ -21,7 +21,7 @@ class ProjectWorkspace:
     def busy(self):
         w = self.window
         return (w.analysis_job is not None or w.future is not None
-                or any(area.job is not None for area in (w.flow_workspace, w.thermal_workspace))
+                or any(area.job is not None for area in (w.flow_workspace, w.thermal_workspace, w.mpm_workspace))
                 or any(getattr(area, "_active_mode", None) is not None
                        for area in (w.doe_studio, w.analysis_queue_widget) if area is not None))
 
@@ -31,8 +31,10 @@ class ProjectWorkspace:
             spin.interpretText()
         project = AnalysisProject.capture(w.collect(), w.flow_workspace.collect(),
                     w.thermal_workspace.collect(), w.thermal_workspace.collect_thermal(), self.project)
-        project.active_study = {2: "flow", 3: "cht"}.get(w.workspace_tabs.currentIndex(), "mechanical")
-        for kind, area in (("flow", w.flow_workspace), ("cht", w.thermal_workspace)):
+        project.capture_mpm(w.mpm_workspace.collect())
+        project.active_study = {2: "flow", 3: "cht", w.mpm_workspace_index: "mpm"}.get(
+            w.workspace_tabs.currentIndex(), "mechanical")
+        for kind, area in (("flow", w.flow_workspace), ("cht", w.thermal_workspace), ("mpm", w.mpm_workspace)):
             if area.display_directory:
                 path = str(Path(area.display_directory).resolve())
                 results = project.studies[kind]["results"]
@@ -136,7 +138,9 @@ class ProjectWorkspace:
                                for side,combo in w.platen_contact_combos.items())):
             if combo.findData(value) < 0:
                 raise ValueError(f"Unsupported mechanical setting: {value}")
-        return settings, flow, cht_flow, thermal
+        mpm = project.mpm_settings()
+        w.mpm_workspace.validate_settings(mpm)
+        return settings, flow, cht_flow, thermal, mpm
 
     def open_path(self, path):
         if self.busy():
@@ -149,13 +153,13 @@ class ProjectWorkspace:
         try:
             self._apply(*values, active=project.active_study)
         except Exception:
-            self._apply(*before.workspace_settings(), active=before.active_study)
+            self._apply(*before.workspace_settings(), before.mpm_settings(), active=before.active_study)
             raise
         self.project, self.path = project, Path(path)
         self.saved_snapshot = self.fingerprint(self.capture())
         self.window.status.setText("Project opened. Use Apply to preview; run analysis explicitly.")
 
-    def _apply(self, settings, flow, cht_flow, thermal, *, active):
+    def _apply(self, settings, flow, cht_flow, thermal, mpm, *, active):
         w = self.window
         widgets = w.findChildren(QWidget)
         blocked = [(widget, widget.blockSignals(True)) for widget in widgets]
@@ -201,7 +205,9 @@ class ProjectWorkspace:
             for key, control in area.thermal_controls.items():
                 control.setValue(getattr(thermal, key))
             area.solid_material_card = thermal.solid_material_card
-            w.workspace_tabs.setCurrentIndex({"flow": 2, "cht": 3}.get(active, 0))
+            w.mpm_workspace.apply_settings(mpm)
+            w.mpm_workspace.clear_result()
+            w.workspace_tabs.setCurrentIndex({"flow": 2, "cht": 3, "mpm": w.mpm_workspace_index}.get(active, 0))
             w.workspace_navigation.setCurrentIndex(w.workspace_tabs.currentIndex())
         finally:
             for widget, previous in blocked:
@@ -212,6 +218,7 @@ class ProjectWorkspace:
         w._sync_workspace_context(w.workspace_tabs.currentIndex())
         w.flow_workspace.inputs_changed()
         w.thermal_workspace.inputs_changed()
+        w.mpm_workspace.save_preferences()
 
     def open(self):
         try:

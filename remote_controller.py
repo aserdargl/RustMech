@@ -624,6 +624,7 @@ class RemoteController(QObject):
         return bool(window.analysis_job or getattr(window.doe_studio,"_active_future",None) or
                     getattr(getattr(window, 'analysis_queue_widget', None), '_active_future', None) or
                     window.flow_workspace.job or window.thermal_workspace.job or
+                    getattr(getattr(window, 'mpm_workspace', None), 'running_analysis', False) or
                     (convergence is not None and convergence.study.future is not None))
 
     def set_enabled(self,enabled, *, force=False):
@@ -761,7 +762,7 @@ class RemoteController(QObject):
             self.owner = json.loads((directory/"remote_job.json").read_text())["username"]
             active = [label for key,label in (("mesh","Mesh"),("kratos","Kratos mechanics"),("damask","DAMASK FFT"),
                                              ("peridynamics","Peridynamics"),("flow","OpenFOAM CFD"),
-                                             ("thermal","OpenFOAM CHT")) if self.capabilities.get(key)]
+                                             ("thermal","OpenFOAM CHT"),("mpm","Kratos MPM")) if self.capabilities.get(key)]
             reasons = self.capabilities.get("reasons",{})
             self.status.setText("Available: "+(", ".join(active) if active else "none")+".\n"+
                                 "\n".join(f"{key}: {value}" for key,value in reasons.items() if not self.capabilities.get(key)))
@@ -883,7 +884,7 @@ class RemoteController(QObject):
     def analysis_solver_enabled(self, identifier):
         if self.ready:
             return self.solver_enabled(identifier)
-        return identifier in ("kratos", "damask", "peridynamics", "flow", "thermal") and self.auth() is not None
+        return identifier in ("kratos", "damask", "peridynamics", "flow", "thermal", "mpm") and self.auth() is not None
 
     def convergence_solver_enabled(self, identifier):
         return identifier == "kratos" and (not self.ready or self.solver_enabled(identifier))

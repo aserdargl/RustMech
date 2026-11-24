@@ -54,7 +54,8 @@ stage 'Installing Python and solver packages (first setup may take several minut
   'matplotlib>=3.9,<4' 'PySide6>=6.8,<7' 'pyvistaqt>=0.11,<0.12' 'paramiko>=4,<5' \
   'KratosMultiphysics==10.4.4' 'KratosStructuralMechanicsApplication==10.4.4' \
   'KratosContactStructuralMechanicsApplication==10.4.4' \
-  'KratosConstitutiveLawsApplication==10.4.4' 'KratosLinearSolversApplication==10.4.4'
+  'KratosConstitutiveLawsApplication==10.4.4' 'KratosLinearSolversApplication==10.4.4' \
+  'KratosMPMApplication==10.4.4'
 export CARGO_HOME="$environment/cargo" RUSTUP_HOME="$environment/rustup"
 stage 'Preparing Rust compiler'
 if [ ! -x "$CARGO_HOME/bin/cargo" ]; then

@@ -23,9 +23,11 @@ OPERATIONS = {
     "fft_solve": "damask", "peridynamic_solve": "peridynamics",
     "flow_export": "mesh", "flow_solve": "flow",
     "thermal_export": "mesh", "thermal_solve": "thermal",
+    "mpm_solve": "mpm",
 }
 
 ANALYSIS_OPERATIONS = frozenset({
+    "mpm_solve",
     "mechanical", "fft_solve", "peridynamic_solve", "flow_solve", "thermal_solve", "doe_solve", "convergence_level",
 })
 

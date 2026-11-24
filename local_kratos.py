@@ -10,6 +10,8 @@ import sys
 
 VERSION = "10.4.4"
 INSTALL_REQUIRED = "Install local Kratos from the Kratos settings before running this analysis."
+MPM_INSTALL_REQUIRED = "Install the local Kratos MPM runtime from the MPM workspace."
+MPM_PACKAGE = "KratosMPMApplication"
 PACKAGES = (
     "KratosMultiphysics",
     "KratosStructuralMechanicsApplication",
@@ -38,6 +40,13 @@ def local_kratos_python():
         python = directory / "Scripts" / "python.exe"
         if python.is_file() and (directory / "rustmech-ready").is_file():
             return python
+    return None
+
+
+def local_mpm_python():
+    python = local_kratos_python()
+    if python is not None and (runtime_directory() / "rustmech-mpm-ready").is_file():
+        return python
     return None
 
 
@@ -82,7 +91,7 @@ def _find_python():
     raise RuntimeError("Install 64-bit Python 3.14 from python.org, then retry Kratos installation.")
 
 
-def install_local_kratos():
+def install_local_kratos(include_mpm=False):
     """Install binary wheels and publish readiness only after the import check."""
     if os.name != "nt":
         raise RuntimeError("Local Kratos installation is supported on Windows.")
@@ -92,32 +101,43 @@ def install_local_kratos():
     directory.mkdir(parents=True, exist_ok=True)
     python = directory / "Scripts" / "python.exe"
     ready = directory / "rustmech-ready"
-    log_path = directory / "install.log"
+    mpm_ready = directory / "rustmech-mpm-ready"
+    log_path = directory / ("install-mpm.log" if include_mpm else "install.log")
     with (directory / "install.lock").open("a+b") as lock:
         try:
             msvcrt.locking(lock.fileno(), msvcrt.LK_NBLCK, 1)
         except OSError as error:
             raise RuntimeError("Another RustMech window is installing local Kratos.") from error
 
-        if not ready.is_file() or not python.is_file():
+        base_missing = not ready.is_file() or not python.is_file()
+        if base_missing:
             ready.unlink(missing_ok=True)
+            mpm_ready.unlink(missing_ok=True)
+        if base_missing or (include_mpm and not mpm_ready.is_file()):
+            packages = (*PACKAGES, MPM_PACKAGE) if include_mpm else PACKAGES
+            probe = PROBE
+            if include_mpm:
+                probe += f"; assert version({MPM_PACKAGE!r}) == {VERSION!r}; import KratosMultiphysics.MPMApplication"
             with log_path.open("w", encoding="utf-8") as log, system_dll_search():
-                for command in (
-                    [*_find_python(), "-I", "-m", "venv", str(directory)],
+                commands = [[*_find_python(), "-I", "-m", "venv", str(directory)]] if base_missing else []
+                commands.extend((
                     [str(python), "-I", "-m", "pip", "--isolated", "install", "--index-url",
                      "https://pypi.org/simple", "--disable-pip-version-check", "--only-binary=:all:",
                      "--timeout", "30", "--retries", "2", "numpy",
-                     *(f"{package}=={VERSION}" for package in PACKAGES)],
+                     *(f"{package}=={VERSION}" for package in packages)],
                     [str(python), "-I", "-m", "pip", "check"],
-                    [str(python), "-I", "-c", PROBE],
-                ):
+                    [str(python), "-I", "-c", probe],
+                ))
+                for command in commands:
                     result = subprocess.run(command, stdout=log, stderr=subprocess.STDOUT,
                                             creationflags=subprocess.CREATE_NO_WINDOW, timeout=900)
                     if result.returncode != 0:
                         raise RuntimeError(f"Kratos installation failed. See {log_path}")
-            temporary = ready.with_suffix(".tmp")
-            temporary.write_text(VERSION, encoding="utf-8")
-            temporary.replace(ready)
+            markers = (ready, mpm_ready) if include_mpm else (ready,)
+            for marker in markers:
+                temporary = marker.with_suffix(".tmp")
+                temporary.write_text(VERSION, encoding="utf-8")
+                temporary.replace(marker)
     return str(python)
 
 
