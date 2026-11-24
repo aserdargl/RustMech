@@ -618,8 +618,8 @@ komutun parçası değildir. Gerçek MAPDL, WSL/OpenFOAM ve Linux işçi doğrul
 ayrı entegrasyon kontrolleridir. Qt testleri, yerel DLL'ler ve bazı testler için
 Git Bash gerekir; eksik isteğe bağlı bileşenlerin skip gerekçelerini sonuçta okuyun.
 
-Mekanik ayarlar menüsünde **Finite Element** ve **FFT Homogenization** çalışır.
-Material Point Method ve Peridynamics plan durumundadır.
+Mekanik ayarlar menüsünde **Finite Element**, **FFT Homogenization** ve
+**Peridinamik TPMS basma** çalışır.
 Teslim sırası ve doğrulama ölçütleri
 [mekanik yöntemlerin uygulama planında](MEKANIK_YONTEM_PLANI.md) yer alır.
 
@@ -654,6 +654,23 @@ girdileri mühendislik kayma şekil değiştirmesidir. Boşluk, seçilen oranla
 ölçeklenen yumuşak bir elastik fazdır. Raporlamadan önce sonucun ızgara
 yoğunluğuna ve boşluk rijitliğine duyarlılığını değerlendirin. Yakınsamayan
 veya iptal edilen koşulda etkin rijitlik CSV'si yayımlanmaz.
+
+### Peridinamik TPMS basma ve kırılma
+
+**Mekanik → Peridinamik** sayfasında TPMS türünü, morfolojiyi, numune boyutunu,
+periyodu ve katı oranını seçin. Katı malzemenin elastisite modülünü ve kritik
+bağ uzamasını girin. Parçacık sayısı, ufuk, basma yüzdesi ve adım sayısı çözümü
+belirler. **Analizi çalıştır** yerel işlemi başlatır veya TRUBA hesaplama modu
+açıksa işi Slurm'a gönderir.
+
+Sonuçlarda yük adımını değiştirerek 3B bağ hasarını ve üst plaka kuvvetini birlikte
+inceleyin. **Katmana göre hasar** grafiği katmanların başlangıç yüksekliğine göre
+hasar geçmişini gösterir. Sonuç klasöründe VTP kareleri ve her iki grafik için
+CSV bulunur. Dengeye ulaşmayan son adım kısmi olarak işaretlenir.
+
+Model izotropik ve gevrektir. Poisson oranı 0,25, temas sürtünmesizdir. Kritik
+bağ uzamasını ve parçacık çözünürlüğünü deney verileriyle doğrulayın.
+**Kırılma yöntemleri planı** aynı sayfada açılır. [TPMS kırılma ve çökme yol haritası](assets/help/tpms_fracture_roadmap.md)
 
 ## Windows'ta yerel Kratos
 

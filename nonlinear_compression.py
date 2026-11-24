@@ -67,6 +67,8 @@ from setup_help import GEOMETRY_HELP
 from truba_connection import TrubaConnectionDialog
 from truba_desktop import open_truba_desktop
 from window_state import show_restored_window
+from peridynamic_analysis import run_local_compression, validate_compression
+from peridynamic_workspace import PeridynamicResults, PeridynamicSettingsPanel
 from kratos_settings import KratosSettingsPanel
 from local_kratos import INSTALL_REQUIRED, local_kratos_python
 from solver_profiles import SolverProfileStore, profile_values
@@ -262,6 +264,9 @@ class RustMechDialog(QDialog):
         self._mesh_requested = False
         self._analysis_after_mesh = None
         self._fft_method_index = None
+        self._peridynamic_method_index = None
+        self._peridynamic_preview_folder = None
+        self._showing_peridynamic_preview = False
         self.controls = {}
         self.solver_profile_store = solver_profile_store if solver_profile_store is not None else SolverProfileStore()
         self._persist_solver_profiles = solver_profile_store is not None
@@ -1356,6 +1361,10 @@ class RustMechDialog(QDialog):
         self.preview_splitter.setSizes([800, 32])
         right.addWidget(self.result_preview_controls, 0, Qt.AlignmentFlag.AlignLeft)
         right.addWidget(self.preview_splitter, 1)
+        preferences = self.solver_profile_store.settings if self._persist_solver_profiles else None
+        self.peridynamic_results = PeridynamicResults(preferences)
+        self.peridynamic_results.step_changed.connect(self._update_peridynamic_preview)
+        right.addWidget(self.peridynamic_results)
         self.preview_error_details = QPlainTextEdit()
         self.preview_error_details.setObjectName("previewErrorDetails")
         self.preview_error_details.setAccessibleName("Preview error details")
@@ -1412,8 +1421,11 @@ class RustMechDialog(QDialog):
                 button.setVisible(not flow_active)
             self._show_analysis_blocker()
             fft_selected = self.setup_tabs.currentIndex() == self._fft_method_index
+            peridynamic_selected = self.setup_tabs.currentIndex() == self._peridynamic_method_index
             if flow_active:
                 title = "Transient Heat Transfer" if index == 3 else "Isothermal Flow"
+            elif peridynamic_selected:
+                title = "Peridynamic TPMS Compression"
             else:
                 title = "FFT Homogenization" if fft_selected else "Nonlinear Compression"
             self.brand_title_label.setText(title)
@@ -1424,8 +1436,9 @@ class RustMechDialog(QDialog):
             if remote is not None:
                 self._update_remote_banner()
             self.sidebar_toggle.setVisible(not flow_active)
-            self.display_mode_group.setVisible(not flow_active and not fft_selected)
-            self.show_platens_cb.setVisible(not flow_active and not fft_selected)
+            mesh_preview = not flow_active and not (fft_selected or peridynamic_selected)
+            self.display_mode_group.setVisible(mesh_preview)
+            self.show_platens_cb.setVisible(mesh_preview)
             self._sync_preview_readout()
             self.fft_preview_summary.setVisible(fft_selected)
             camera_controls.setVisible(not flow_active)
@@ -1800,7 +1813,7 @@ class RustMechDialog(QDialog):
         methods = (
             ("FFT", "FFT", "FFT Homogenization", "Effective stiffness from periodic unit-cell tests."),
             ("MPM", "MPM", "Material Point Method", "Large-deformation platen compression and impact."),
-            ("Peridynamics", "Peridynamics", "Peridynamics", "Crack initiation and propagation in mechanical tests."),
+            ("Peridynamics", "Peridynamics", "Peridynamics", "Brittle fracture in TPMS compression."),
         )
         for tab, button_label, name, description in methods:
             self.method_names.append(name)
@@ -1810,7 +1823,7 @@ class RustMechDialog(QDialog):
             heading = QLabel(name)
             heading.setObjectName("sectionSubheader")
             heading.setWordWrap(True)
-            hint = QLabel(description if tab == "FFT" else f"Planned\n{description}")
+            hint = QLabel(description if tab in ("FFT", "Peridynamics") else f"Planned\n{description}")
             hint.setObjectName("mutedHintLabel")
             hint.setWordWrap(True)
             fields.addWidget(heading)
@@ -1819,6 +1832,12 @@ class RustMechDialog(QDialog):
                 self._fft_method_index = self.setup_tabs.count() - 1
                 self._add_fft_geometry_controls(fields, settings)
                 self._add_fft_controls(fields)
+            elif tab == "Peridynamics":
+                self._peridynamic_method_index = self.setup_tabs.count() - 1
+                preferences = self.solver_profile_store.settings if self._persist_solver_profiles else None
+                self.peridynamic_settings = PeridynamicSettingsPanel(settings, preferences)
+                self.peridynamic_settings.changed.connect(self.refresh_validity)
+                fields.addWidget(self.peridynamic_settings)
             fields.addStretch()
 
     def _add_fft_geometry_controls(self, fields, settings: Settings) -> None:
@@ -2043,24 +2062,31 @@ class RustMechDialog(QDialog):
         if hasattr(self, "remote_controller"):
             was_fft = not self.fft_preview_summary.isHidden()
             is_fft = index == self._fft_method_index
+            peridynamic = index == self._peridynamic_method_index
             if index != 0:
                 self._analysis_after_mesh = None
             if self.workspace_tabs.currentIndex() == 0:
                 self._sync_workspace_context(0)
             self.refresh_validity()
-            if was_fft != is_fft:
+            if was_fft != is_fft or peridynamic or self._showing_peridynamic_preview:
                 self._fft_preview_size = None
-                if is_fft or self.preview is not None or self.result_preview_field.currentData() is not None:
+                if (is_fft or peridynamic or self.preview is not None
+                        or self.result_preview_field.currentData() is not None):
                     self.render_preview(reset=True)
                 else:
                     self.plotter.clear()
                     self.plotter.render()
+                if not peridynamic:
+                    self._peridynamic_preview_folder = None
+                    self._showing_peridynamic_preview = False
 
     def _local_workspace_solver_name(self):
         if self.workspace_tabs.currentIndex() in (2, 3):
             return "OpenFOAM · WSL"
         if self.setup_tabs.currentIndex() == self._fft_method_index:
             return "DAMASK · FFT"
+        if self.setup_tabs.currentIndex() == self._peridynamic_method_index:
+            return "Peridynamics · PMB"
         return self.solver_capabilities.display_name
 
     def _update_status_visuals(
@@ -2838,6 +2864,13 @@ class RustMechDialog(QDialog):
                 except (ValueError, RuntimeError) as error:
                     fft_errors.append(str(error))
             blockers = fft_errors
+        elif method == self._peridynamic_method_index:
+            blockers = validate_compression(*self.peridynamic_settings.inputs())
+            if remote:
+                try:
+                    controller.require_analysis("peridynamics")
+                except (ValueError, RuntimeError) as error:
+                    blockers.append(str(error))
         elif method != 0:
             blockers = ["The selected analysis method is not available."]
         else:
@@ -2864,6 +2897,12 @@ class RustMechDialog(QDialog):
             ready_text = "Ready to submit DAMASK FFT to TRUBA." if remote_fft else "Ready to run local DAMASK FFT."
             self.status.setText("\n".join(fft_errors) if fft_errors else ready_text)
             state, badge = ("error", "● VALIDATION ERROR") if fft_errors else ("ready", "● READY TO SOLVE")
+            self._update_status_visuals(state, badge, False)
+            return
+        if method == self._peridynamic_method_index:
+            ready = "Ready to submit TPMS compression to TRUBA." if remote else "Ready to run local TPMS compression."
+            self.status.setText("\n".join(blockers) if blockers else ready)
+            state, badge = ("error", "● VALIDATION ERROR") if blockers else ("ready", "● READY TO SOLVE")
             self._update_status_visuals(state, badge, False)
             return
         if method != 0:
@@ -3171,12 +3210,41 @@ class RustMechDialog(QDialog):
 
     def _sync_preview_readout(self, *_):
         fft_selected = self.setup_tabs.currentIndex() == self._fft_method_index
+        peridynamic = self.setup_tabs.currentIndex() == self._peridynamic_method_index
         has_results = self._result_preview_folder is not None
-        self.result_preview_controls.setVisible(has_results and not fft_selected)
-        model_view = not fft_selected and self.result_preview_field.currentData() is None
+        self.result_preview_controls.setVisible(has_results and not (fft_selected or peridynamic))
+        self.peridynamic_results.setVisible(peridynamic and self.peridynamic_results.folder is not None)
+        model_view = not (fft_selected or peridynamic) and self.result_preview_field.currentData() is None
         self.mesh_kpis.setVisible(model_view)
         self._mesh_details_action.setVisible(model_view)
         self.telemetry_details.setVisible(model_view and self._mesh_details_action.isChecked())
+
+    def _update_peridynamic_preview(self):
+        if self.setup_tabs.currentIndex() == self._peridynamic_method_index:
+            self.render_preview()
+
+    def _render_peridynamic_preview(self, reset):
+        from ui_language import translate
+
+        self._showing_peridynamic_preview = True
+        camera = self.plotter.camera_position
+        self.plotter.clear()
+        self.fragment_status.hide()
+        self.plotter.set_background("#f0f0f0", top="#ffffff")
+        results = self.peridynamic_results
+        if results.folder is None:
+            self.plotter.render()
+            return
+        try:
+            frame = pv.read(results.frame_path())
+            self.plotter.add_mesh(frame, scalars="Damage", clim=(0, 1), cmap="YlOrRd",
+                                  style="points", point_size=6, render_points_as_spheres=True,
+                                  scalar_bar_args={"title": translate("Bond damage")})
+            self._finish_preview_view(camera, reset or results.folder != self._peridynamic_preview_folder)
+            self._peridynamic_preview_folder = results.folder
+        except (OSError, ValueError, RuntimeError) as error:
+            self.status.setText(f"Cannot display this result: {error}")
+            self.plotter.render()
 
     def _render_result_preview(self, field, reset):
         from ui_language import translate
@@ -3216,6 +3284,9 @@ class RustMechDialog(QDialog):
         self._sync_preview_readout()
         if self.setup_tabs.currentIndex() == self._fft_method_index:
             self._render_fft_preview(reset)
+            return
+        if self.setup_tabs.currentIndex() == self._peridynamic_method_index:
+            self._render_peridynamic_preview(reset)
             return
         field = self.result_preview_field.currentData()
         if field is not None:
@@ -3559,6 +3630,9 @@ class RustMechDialog(QDialog):
         if self.setup_tabs.currentIndex() == self._fft_method_index:
             self._start_fft(self._fft_settings(settings))
             return
+        if self.setup_tabs.currentIndex() == self._peridynamic_method_index:
+            self._start_peridynamic_compression()
+            return
         if not self.remote_controller.requested and self.preview.mesh is None:
             self._analysis_after_mesh = settings
             self._mesh_requested = True
@@ -3632,6 +3706,28 @@ class RustMechDialog(QDialog):
         preferences.setValue("fft/distribution", self.fft_distribution.text())
         preferences.sync()
 
+    def _start_peridynamic_compression(self):
+        settings, options = self.peridynamic_settings.inputs()
+        try:
+            if self.remote_controller.requested:
+                from truba_remote import submit_remote_analysis
+
+                context, auth = self.remote_controller.require_analysis("peridynamics")
+                request = dict(operation="peridynamic_solve", settings=asdict(settings), options=asdict(options))
+                self.analysis_job = AnalysisProcess(submit_remote_analysis, request, context, remote_auth=auth)
+                self.truba_dialog.job_list.submitting = True
+                self.truba_job_monitor.start_submission()
+            else:
+                self.analysis_job = AnalysisProcess(run_local_compression, settings, options)
+        except (OSError, ValueError, RuntimeError) as error:
+            self.status.setText(str(error))
+            self._update_status_visuals("error", "● FAILED", False)
+            return
+        self.peridynamic_settings.save()
+        self.refresh_validity()
+        self.force_stop_button.setEnabled(True)
+        self.analysis_poll.start()
+
     def retrieve_truba_job(self):
         if self.analysis_job is not None or self.remote_controller.future is not None:
             QMessageBox.information(self,"TRUBA job","Wait for the current operation to finish, or stop it first.")
@@ -3648,7 +3744,7 @@ class RustMechDialog(QDialog):
                     result = json.loads((Path(record["local_directory"]) / "output" / "result.json").read_text(encoding="utf-8"))
                     from truba_remote import _rebase_paths
                     result = _rebase_paths(Path(record["local_directory"]), result)
-                    if result.get("operation") in ("mechanical", "fft_solve"):
+                    if result.get("operation") in ("mechanical", "fft_solve", "peridynamic_solve"):
                         self._show_remote_analysis_result(result, record, open_workspace=True)
                     else:
                         self.status.setText(f'TRUBA results retrieved: {Path(record["local_directory"]) / "output"}')
@@ -3694,6 +3790,15 @@ class RustMechDialog(QDialog):
         from ui_language import translate
 
         fft_selected = self.setup_tabs.currentIndex() == self._fft_method_index
+        if self.setup_tabs.currentIndex() == self._peridynamic_method_index:
+            results = self.peridynamic_results
+            if results.folder is None:
+                QMessageBox.information(self, translate("Result"), translate("No completed analysis results found."))
+            elif open_folder:
+                results.open_folder()
+            else:
+                self.render_preview()
+            return
         folder = self.fft_result_folder if fft_selected else self._latest_mechanical_result()
         if folder is None or not folder.is_dir():
             QMessageBox.information(self, translate("Result"), translate("No completed analysis results found."))
@@ -3781,7 +3886,7 @@ class RustMechDialog(QDialog):
         idle = self.analysis_job is None and self.future is None
         if result is not None:
             payload, _ = result
-            if payload.get("operation") in ("mechanical", "fft_solve"):
+            if payload.get("operation") in ("mechanical", "fft_solve", "peridynamic_solve"):
                 self._show_remote_analysis_result(payload, record, announce=idle)
         elif idle and self._latest_background_analysis == record.get("request_id"):
             self._show_background_analysis(record)
@@ -3817,6 +3922,9 @@ class RustMechDialog(QDialog):
                 self.truba_dialog.job_list.refresh()
                 self.truba_dialog.job_list.sync_background()
                 return
+            if isinstance(folder, dict) and folder.get("operation") == "peridynamic_solve":
+                self._show_remote_analysis_result(folder)
+                return
             if isinstance(folder,dict) and folder.get("remote_retrieval"):
                 result = folder["result"]
                 directory = Path(folder["directory"])/"output"
@@ -3842,7 +3950,7 @@ class RustMechDialog(QDialog):
                         self.status.setText(f"TRUBA preview retrieved: {directory}")
                 elif operation=="mechanical":
                     folder = result["run_folder"]
-                elif operation=="fft_solve":
+                elif operation in ("fft_solve", "peridynamic_solve"):
                     self._show_remote_analysis_result(result, open_workspace=True)
                 else:
                     self.status.setText(f"TRUBA results retrieved: {directory}")
@@ -3851,6 +3959,27 @@ class RustMechDialog(QDialog):
 
     def _show_remote_analysis_result(self, result, record=None, *, announce=True, open_workspace=False):
         folder = result["run_folder"]
+        if result.get("operation") == "peridynamic_solve":
+            try:
+                self.peridynamic_results.load(folder)
+            except (OSError, ValueError, KeyError, TypeError) as error:
+                if announce:
+                    self.status.setText(f"Analysis failed: {error}")
+                    self._update_status_visuals("error", "● FAILED", False)
+                return
+            if open_workspace:
+                self._select_settings_method(self._peridynamic_method_index)
+            if announce:
+                if self.peridynamic_results.report["state"] == "complete":
+                    self.status.setText(f"Analysis completed. Results: {folder}")
+                    self._update_status_visuals("ready", "● COMPLETED", False)
+                else:
+                    from ui_language import translate
+
+                    message = translate("TPMS compression stopped before convergence. Partial results: {folder}")
+                    self.status.setText(message.format(folder=folder))
+                    self._update_status_visuals("pending", "● PARTIAL RESULTS", False)
+            return
         if result.get("operation") == "fft_solve":
             folder = Path(folder)
             try:
@@ -3957,6 +4086,7 @@ class RustMechDialog(QDialog):
             self.solver_profile_store.save_workspace(draft)
             self.solver_profile_store.save(self._active_solver_id, profile_values(draft))
             self._save_fft_preferences()
+            self.peridynamic_settings.save()
         from concurrent.futures import wait
         detached = self._detach_remote_jobs()
         if getattr(self, "_preview_is_remote", False) and self.future is not None:

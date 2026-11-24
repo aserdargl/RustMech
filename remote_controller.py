@@ -759,7 +759,9 @@ class RemoteController(QObject):
             self.capabilities = result["capabilities"]
             import json
             self.owner = json.loads((directory/"remote_job.json").read_text())["username"]
-            active = [label for key,label in (("mesh","Mesh"),("kratos","Kratos mechanics"),("damask","DAMASK FFT"),("flow","OpenFOAM CFD"),("thermal","OpenFOAM CHT")) if self.capabilities.get(key)]
+            active = [label for key,label in (("mesh","Mesh"),("kratos","Kratos mechanics"),("damask","DAMASK FFT"),
+                                             ("peridynamics","Peridynamics"),("flow","OpenFOAM CFD"),
+                                             ("thermal","OpenFOAM CHT")) if self.capabilities.get(key)]
             reasons = self.capabilities.get("reasons",{})
             self.status.setText("Available: "+(", ".join(active) if active else "none")+".\n"+
                                 "\n".join(f"{key}: {value}" for key,value in reasons.items() if not self.capabilities.get(key)))
@@ -881,7 +883,7 @@ class RemoteController(QObject):
     def analysis_solver_enabled(self, identifier):
         if self.ready:
             return self.solver_enabled(identifier)
-        return identifier in ("kratos", "damask", "flow", "thermal") and self.auth() is not None
+        return identifier in ("kratos", "damask", "peridynamics", "flow", "thermal") and self.auth() is not None
 
     def convergence_solver_enabled(self, identifier):
         return identifier == "kratos" and (not self.ready or self.solver_enabled(identifier))

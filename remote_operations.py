@@ -20,13 +20,13 @@ OPERATIONS = {
     "probe": "mesh", "prepare": "mesh",
     "preview": "mesh", "surface": "mesh", "doe_mesh": "mesh",
     "mechanical": "kratos", "convergence_level": "kratos", "doe_solve": "kratos",
-    "fft_solve": "damask",
+    "fft_solve": "damask", "peridynamic_solve": "peridynamics",
     "flow_export": "mesh", "flow_solve": "flow",
     "thermal_export": "mesh", "thermal_solve": "thermal",
 }
 
 ANALYSIS_OPERATIONS = frozenset({
-    "mechanical", "fft_solve", "flow_solve", "thermal_solve", "doe_solve", "convergence_level",
+    "mechanical", "fft_solve", "peridynamic_solve", "flow_solve", "thermal_solve", "doe_solve", "convergence_level",
 })
 
 

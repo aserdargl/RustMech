@@ -1,5 +1,7 @@
 # Mekanik yöntemlerin uygulama planı
 
+TPMS basma, gevrek kırılma ve diğer çökme yöntemleri için [TPMS kırılma ve çökme yol haritası](assets/help/tpms_fracture_roadmap.md) güncel kapsamı ve doğrulama adımlarını içerir.
+
 19 Kasım 2026. Mekanik çalışma alanında Finite Element, MAPDL ve Kratos üzerinden çalışır. FFT Homogenization için periyodik TPMS ve kafes hücrelerini çözen yerel DAMASK bağlantısı eklendi. Kullanım ve çıktı biçimi [README](README.md#damask-ile-fft-homojenizasyonu) içinde açıklanıyor. Material Point Method ve Peridynamics sıradaki teslimlerdir. TRUBA ve DoE desteği, her yöntemin iş ve sonuç biçimi yerelde doğrulandıktan sonra eklenebilir.
 
 ## Teslim sırası

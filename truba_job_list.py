@@ -17,12 +17,13 @@ OPERATIONS = {
     'preview': 'Mesh preview', 'surface': 'Surface generation',
     'mechanical': 'Mechanical analysis', 'convergence_level': 'Mesh convergence',
     'fft_solve': 'FFT Homogenization',
+    'peridynamic_solve': 'Peridynamic TPMS compression',
     'doe_mesh': 'DOE mesh generation', 'doe_solve': 'DOE analysis',
     'flow_export': 'Flow export', 'flow_solve': 'Flow analysis',
     'thermal_export': 'Thermal export', 'thermal_solve': 'Thermal analysis',
 }
 TERMINAL = SLURM_TERMINAL_STATES | {'DOWNLOADED', 'RELEASED', 'ENDED'}
-MONITORED_ANALYSES = {'mechanical', 'fft_solve', 'flow_solve', 'thermal_solve',
+MONITORED_ANALYSES = {'mechanical', 'fft_solve', 'peridynamic_solve', 'flow_solve', 'thermal_solve',
                       'convergence_level', 'doe_solve'}
 
 

@@ -51,7 +51,7 @@ def probe(request,missing=False):
     full = operation in ('probe', 'prepare')
     mechanics = operation in ('mechanical', 'convergence_level', 'doe_solve')
     tetra = request.get('settings', {}).get('mesh_type') in ('TET4', 'TET10') and operation != 'surface'
-    capabilities = dict(mesh=False,netgen=False,kratos=False,damask=False,flow=False,thermal=False,ansys_mapdl=False,
+    capabilities = dict(mesh=False,netgen=False,kratos=False,damask=False,peridynamics=False,flow=False,thermal=False,ansys_mapdl=False,
                         mesh_types=[],reasons={},hostname=socket.gethostname(),python=sys.executable,
                         foam_version=os.environ.get("WM_PROJECT_VERSION",""))
     capabilities["packages"] = {}
@@ -76,6 +76,14 @@ def probe(request,missing=False):
     except Exception as error:
         capabilities["reasons"]["mesh"] = f"Mesh runtime unavailable: {_exception_detail(error)}"
         return capabilities
+    if full or operation == 'peridynamic_solve':
+        try:
+            importlib.import_module('peridynamic_analysis')
+            capabilities['peridynamics'] = True
+        except ImportError as error:
+            capabilities['reasons']['peridynamics'] = f"Peridynamic solver unavailable: {error}."
+        if not full:
+            return capabilities
     if full or operation == 'fft_solve':
         try:
             from damask_fft import damask_grid_executable
@@ -245,6 +253,11 @@ def _run_operation(request,output):
             for path in case.glob(pattern):
                 shutil.copy2(path, folder / path.name)
         return dict(run_folder=str(folder.resolve()), remote_solver_case=str(case.resolve()))
+    if operation == 'peridynamic_solve':
+        from peridynamic_analysis import CompressionOptions, run_compression
+        folder = run_compression(settings, CompressionOptions(**request['options']), output / 'peridynamics',
+                                 on_progress=lambda message, *_: _stage(message))
+        return dict(run_folder=folder)
     if settings.mesh_type not in capabilities["mesh_types"] and operation not in ("surface","flow_export","flow_solve","thermal_export","thermal_solve"):
         raise RuntimeError(f"Remote mesher does not support {settings.mesh_type} in this environment.")
     if operation=="preview":

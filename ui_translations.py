@@ -2,6 +2,40 @@
 from setup_help import GEOMETRY_HELP
 
 _TEXT = '''
+Peridynamic TPMS Compression|TPMS Peridinamik Basma
+Brittle fracture in TPMS compression.|TPMS basma altında gevrek kırılma.
+TPMS type|TPMS türü
+Specimen size / mm|Numune boyutu / mm
+TPMS period / mm|TPMS periyodu / mm
+Solid fraction / %|Katı oranı / %
+Elastic modulus / MPa|Elastisite modülü / MPa
+Particles per axis|Eksen başına parçacık
+Horizon / spacing|Ufuk / aralık
+Critical bond stretch / %|Kritik bağ uzaması / %
+Compression / %|Basma / %
+Load increments|Yük adımı sayısı
+Brittle model · Poisson ratio 0.25 · frictionless contact. Calibrate the critical stretch for the material before comparing loads with experiments.|Gevrek model · Poisson oranı 0,25 · sürtünmesiz temas. Yükleri deneyle karşılaştırmadan önce kritik uzamayı malzeme için kalibre edin.
+Fracture methods roadmap|Kırılma yöntemleri planı
+Load step|Yük adımı
+Result chart|Sonuç grafiği
+Force–displacement|Kuvvet–deplasman
+Damage by layer|Katmana göre hasar
+Mean bond damage / %|Ortalama bağ hasarı / %
+Open result folder|Sonuç klasörünü aç
+Compression displacement / mm|Basma deplasmanı / mm
+Top platen force / N|Üst plaka kuvveti / N
+Bond damage|Bağ hasarı
+Stopped before convergence|Yakınsama sağlanmadan durdu
+Unconverged step|Yakınsamayan adım
+Ready to run local TPMS compression.|Yerel TPMS basma analizi çalıştırılabilir.
+Ready to submit TPMS compression to TRUBA.|TPMS basma işi TRUBA'ya gönderilebilir.
+Peridynamic compression requires an analytic TPMS specimen.|Peridinamik basma için analitik TPMS numunesi gerekir.
+Use at least eight particle intervals per TPMS period.|TPMS periyodu başına en az sekiz parçacık aralığı kullanın.
+● PARTIAL RESULTS|● KISMİ SONUÇ
+Peridynamics · PMB|Peridinamik · PMB
+Sampling TPMS particles…|TPMS parçacıkları örnekleniyor…
+Building peridynamic bonds…|Peridinamik bağlar oluşturuluyor…
+Peridynamic results saved.|Peridinamik sonuçlar kaydedildi.
 MD Preparation|MD Hazırlama
 Saved MD plans|Kayıtlı MD planları
 Add package…|Paket ekle…
@@ -1579,6 +1613,13 @@ TEMPLATES = {
     'Available: {value}': 'Kullanılabilir: {value}',
     'Standard {kind}': 'Standart {kind}',
     'RustMech | {title}': 'RustMech | {title}',
+    'Spacing {spacing} mm · Horizon {horizon} mm': 'Aralık {spacing} mm · Ufuk {horizon} mm',
+    '{geometry} · {size} mm · {particles} particles · peak {peak} N': '{geometry} · {size} mm · {particles} parçacık · tepe kuvveti {peak} N',
+    '{travel} mm · {force} N · {broken} broken bonds · max damage {damage}': '{travel} mm · {force} N · {broken} kopan bağ · en yüksek hasar {damage}',
+    'TPMS compression stopped before convergence. Partial results: {folder}': 'TPMS basma analizi yakınsama sağlanmadan durdu. Kısmi sonuçlar {folder}',
+    'First bond failure {force} N at {travel} mm': 'İlk bağ kopması {travel} mm deplasmanda {force} N',
+    'layer {layer} mean damage {damage}': 'katman {layer} ortalama hasarı {damage}',
+    'Layer {value}': 'Katman {value}',
     '{id} added to the analysis queue. Analysis has not started.': '{id} analiz kuyruğuna eklendi. Analiz başlamadı.',
     'LHS: {count} samples per structure with variables. Each range is sampled across its full span; Levels is not used.': 'LHS: Değişkenli yapı başına {count} örnek. Her aralığın tamamı örneklenir; seviye sayısı kullanılmaz.',
     'Every combination of the evenly spaced values is generated. Selected structure: {expression} = {count} experiments. Min 20, Max 40, Levels 3 → 20, 30, 40.': 'Eşit aralıklı değerlerin tüm birleşimleri oluşturulur. Seçili yapı: {expression} = {count} deney. Min 20, Maks 40, Seviye 3 → 20, 30, 40.',
