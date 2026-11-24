@@ -619,9 +619,19 @@ ayrı entegrasyon kontrolleridir. Qt testleri, yerel DLL'ler ve bazı testler i�
 Git Bash gerekir; eksik isteğe bağlı bileşenlerin skip gerekçelerini sonuçta okuyun.
 
 Mekanik ayarlar menüsünde **Finite Element**, **FFT Homogenization** ve
-**Peridinamik TPMS basma** çalışır.
+**Peridinamik TPMS basma** çalışır. Aynı menüde **Material Point Method**
+seçimi, çalışma alanı menüsündeki **MPM** ile aynı ekranı açar.
 Teslim sırası ve doğrulama ölçütleri
 [mekanik yöntemlerin uygulama planında](MEKANIK_YONTEM_PLANI.md) yer alır.
+
+### MPM ile TPMS basma
+
+Model’de oluşturulan 3B TPMS numunesi iki sürtünmesiz rijit plaka arasında
+basılır. MPM ekranında üst plakanın strokunu, yükleme süresini, arka plan
+hücresini ve Neo-Hookean malzeme özelliklerini ayarlayın. Analiz yerel Kratos
+MPM ortamında veya TRUBA’da çalışır. Sonuç ekranı iki plakanın
+kuvvet–yer değiştirme eğrisini gösterir. Sonuç klasöründe eğrinin CSV dosyası
+ve son adımdaki 3B parçacık alanlarının VTP dosyası bulunur.
 
 ### DAMASK ile FFT homojenizasyonu
 
@@ -1098,7 +1108,7 @@ Ana ekran açık renkli Precision Light tasarımına geçirildi. Solda Geometry,
 Material ve Analysis sekmeleri, ortada geniş 3B önizleme, altta tek satır ağ
 bilgileri bulunur. Geometry / FE mesh / Overlay düğmeleri mevcut gerçek
 geometriyi görüntüler. Kamera yönleri, perspektif ve ayrıntılı mesh bilgileri
-View menüsündedir. Mesh Convergence ve DoE işlevleri korunur. Planlanan
+View menüsündedir. Mesh Convergence ve DoE işlevleri korunur. Mekanik
 yöntemlere, üzerinde seçili yöntem adı yazan menüden erişilir.
 
 Arayüz yoğunluğu kompakt tutulur: kontroller 25 px, form satır araları 2 px,

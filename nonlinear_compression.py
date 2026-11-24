@@ -24,7 +24,7 @@ import numpy as np
 import pyvista as pv
 from studio_style import CompactSpinBox, CompactComboBox
 from PySide6.QtCore import QSignalBlocker, QSize, QTimer, Qt, QUrl
-from PySide6.QtGui import QActionGroup, QDesktopServices, QFontDatabase, QIcon
+from PySide6.QtGui import QAction, QActionGroup, QDesktopServices, QFontDatabase, QIcon
 from PySide6.QtWidgets import (
     QAbstractSpinBox,
     QApplication,
@@ -994,12 +994,15 @@ class RustMechDialog(QDialog):
             action.setChecked(index == 0)
             self.method_actions.addAction(action)
             action.triggered.connect(lambda checked=False, page=index: self._select_settings_method(page))
+        self.mpm_method_action = QAction("Material Point Method", self.methods_menu)
+        self.mpm_method_action.triggered.connect(lambda: self.workspace_tabs.setCurrentIndex(self.mpm_workspace_index))
+        self.methods_menu.insertAction(self.method_actions.actions()[self._peridynamic_method_index], self.mpm_method_action)
         self.sidebar_toggle.setMenu(self.methods_menu)
         self.setup_tabs.currentChanged.connect(self._sync_settings_method)
         self._sync_settings_method(self.setup_tabs.currentIndex())
 
         # Keep the indexed navigation model for existing integrations; expose
-        # workspace selection through one compact menu instead of four tabs.
+        # workspace selection through one compact menu.
         self.workspace_navigation = QTabBar(command_bar)
         self.workspace_navigation.setObjectName("workspaceNavigation")
         self.workspace_navigation.setExpanding(False)
@@ -1823,7 +1826,6 @@ class RustMechDialog(QDialog):
         self.method_button_labels = self.method_names.copy()
         methods = (
             ("FFT", "FFT", "FFT Homogenization", "Effective stiffness from periodic unit-cell tests."),
-            ("MPM", "MPM", "Material Point Method", "Large-deformation platen compression and impact."),
             ("Peridynamics", "Peridynamics", "Peridynamics", "Brittle fracture in TPMS compression."),
         )
         for tab, button_label, name, description in methods:
@@ -1834,7 +1836,7 @@ class RustMechDialog(QDialog):
             heading = QLabel(name)
             heading.setObjectName("sectionSubheader")
             heading.setWordWrap(True)
-            hint = QLabel(description if tab in ("FFT", "Peridynamics") else f"Planned\n{description}")
+            hint = QLabel(description)
             hint.setObjectName("mutedHintLabel")
             hint.setWordWrap(True)
             fields.addWidget(heading)
@@ -2919,7 +2921,7 @@ class RustMechDialog(QDialog):
             self._update_status_visuals(state, badge, False)
             return
         if method != 0:
-            self.status.setText("Planned")
+            self.status.setText(blockers[0])
             self._update_status_visuals("pending", "● SOLVER INACTIVE", False)
             return
         if errors or mesh_errors:

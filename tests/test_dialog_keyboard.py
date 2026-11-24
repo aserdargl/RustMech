@@ -173,11 +173,15 @@ class DialogKeyboardTests(unittest.TestCase):
                             self.assertEqual(dialog.main_splitter.sizes(), expected)
                             action.trigger()
                             self.app.processEvents()
+                            if action is dialog.mpm_method_action:
+                                self.assertIs(dialog.workspace_tabs.currentWidget(), dialog.mpm_workspace)
+                                self.assertTrue(dialog.workspace_actions.actions()[dialog.mpm_workspace_index].isChecked())
+                                self.assertTrue(dialog.mpm_workspace.run_button.isVisible())
+                                self.assertIsNone(dialog.mpm_workspace.job)
+                                dialog.workspace_actions.actions()[0].trigger()
+                                continue
                             label = action.text()
-                            label = {
-                                "FFT Homogenization": "FFT",
-                                "Material Point Method": "MPM",
-                            }.get(label, label)
+                            label = "FFT" if label == "FFT Homogenization" else label
                             self.assertEqual(dialog.sidebar_toggle.text(), label)
                             self.assertEqual(dialog.sidebar_toggle.accessibleName(), action.text())
                             self.assertEqual(dialog.setup_tabs.currentIndex(), action.data())

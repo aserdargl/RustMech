@@ -1325,7 +1325,6 @@ Compression force|Basma kuvveti
 Voxel spacing|Voksel aralığı
 Solid fraction|Katı oranı
 Meshing method|Ağ oluşturma yöntemi
-Planned|Planlanıyor
 Material Point Method|Malzeme noktası yöntemi
 Peridynamics|Peridinamik
 FFT Homogenization|FFT homojenleştirme
@@ -1348,7 +1347,6 @@ Enter a WSL distribution for DAMASK.|DAMASK için WSL dağıtım adını girin.
 Sampling the periodic cell…|Periyodik hücre örnekleniyor…
 Crack initiation and propagation in mechanical tests.|Mekanik deneylerde çatlak başlangıcı ve ilerlemesi.
 Effective stiffness from periodic unit-cell tests.|Periyodik birim hücre deneylerinden etkin rijitlik.
-Large-deformation platen compression and impact.|Büyük deformasyonlu plaka basması ve darbe.
 Bilinear approximation: E, true yield stress and Eₜ. Choose the true stress–strain curve when measured hardening data is available.|Çift doğrulu yaklaşım: E, gerçek akma gerilmesi ve Eₜ. Ölçülmüş pekleşme verisi varsa gerçek gerilme–şekil değiştirme eğrisini seçin.
 Uses each geometry's selected variables. Without variables, only its reference case is generated.|Her geometrinin seçili değişkenlerini kullanır. Değişken yoksa yalnız referans deneyi oluşturulur.
 1 reference case|1 referans deneyi
