@@ -21,7 +21,6 @@ Result chart|Sonuç grafiği
 Force–displacement|Kuvvet–deplasman
 Damage by layer|Katmana göre hasar
 Mean bond damage / %|Ortalama bağ hasarı / %
-Open result folder|Sonuç klasörünü aç
 Compression displacement / mm|Basma deplasmanı / mm
 Top platen force / N|Üst plaka kuvveti / N
 Bond damage|Bağ hasarı

@@ -25,6 +25,7 @@ class PeridynamicSettingsPanel(QWidget):
     def __init__(self, model, preferences):
         super().__init__()
         self.preferences = preferences
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
         default = Settings()
         defaults = dict(
             structure_name=model.structure_name if model.structure_name in TPMS_FUNCTIONS else default.structure_name,
@@ -43,6 +44,19 @@ class PeridynamicSettingsPanel(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(4)
+        self.plan_button = QPushButton("Fracture methods roadmap")
+        self.plan_button.setAutoDefault(False)
+        self.plan_button.setCheckable(True)
+        layout.addWidget(self.plan_button, alignment=Qt.AlignmentFlag.AlignLeft)
+        plan = QTextBrowser()
+        plan.setMinimumHeight(240)
+        plan.setOpenExternalLinks(True)
+        plan_path = Path(__file__).resolve().parent / "assets" / "help" / "tpms_fracture_roadmap.md"
+        plan.setMarkdown(plan_path.read_text(encoding="utf-8"))
+        plan.hide()
+        self.plan_button.toggled.connect(plan.setVisible)
+        layout.addWidget(plan)
+
         form = QFormLayout()
         configure_form(form)
         layout.addLayout(form)
@@ -88,25 +102,12 @@ class PeridynamicSettingsPanel(QWidget):
 
         self.spacing = QLabel()
         self.spacing.setWordWrap(True)
-        layout.addWidget(self.spacing)
+        layout.addWidget(self.spacing, alignment=Qt.AlignmentFlag.AlignTop)
         limitation = QLabel("Brittle model · Poisson ratio 0.25 · frictionless contact. "
                             "Calibrate the critical stretch for the material before comparing loads with experiments.")
         limitation.setObjectName("mutedHintLabel")
         limitation.setWordWrap(True)
-        layout.addWidget(limitation)
-
-        self.plan_button = QPushButton("Fracture methods roadmap")
-        self.plan_button.setAutoDefault(False)
-        self.plan_button.setCheckable(True)
-        layout.addWidget(self.plan_button, alignment=Qt.AlignmentFlag.AlignLeft)
-        plan = QTextBrowser()
-        plan.setMinimumHeight(240)
-        plan.setOpenExternalLinks(True)
-        plan_path = Path(__file__).resolve().parent / "assets" / "help" / "tpms_fracture_roadmap.md"
-        plan.setMarkdown(plan_path.read_text(encoding="utf-8"))
-        plan.hide()
-        self.plan_button.toggled.connect(plan.setVisible)
-        layout.addWidget(plan)
+        layout.addWidget(limitation, alignment=Qt.AlignmentFlag.AlignTop)
         self.changed.connect(self.update_spacing)
         self.update_spacing()
 
@@ -162,7 +163,8 @@ class PeridynamicResults(QWidget):
         self.summary = QLabel()
         self.summary.setWordWrap(True)
         bar.addWidget(self.summary, 1)
-        self.folder_button = QPushButton("Open result folder")
+        self.folder_button = QPushButton("Open folder")
+        self.folder_button.setMinimumWidth(76)
         self.folder_button.setAutoDefault(False)
         self.folder_button.clicked.connect(self.open_folder)
         bar.addWidget(self.folder_button)
