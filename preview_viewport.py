@@ -9,6 +9,11 @@ from scipy.spatial.transform import Rotation, Slerp
 
 CAMERA_MOTION_FACTOR = 6.0
 MESH_PREVIEW_ACTOR = "mesh_preview"
+ORIENTATION_RIGHT_INSET = 2
+
+
+def orientation_cube_size(viewport):
+    return max(1, min(72, viewport.width() - ORIENTATION_RIGHT_INSET, viewport.height() // 5))
 
 
 class _PreviewInteractor(QtInteractor):
@@ -130,6 +135,12 @@ class _OrientationCubeControls(QObject):
         self.press = None
         self.dragging = False
 
+    def resize_marker(self, viewport):
+        width, height = max(1, viewport.width()), max(1, viewport.height())
+        size = orientation_cube_size(viewport)
+        right = max(size, width - ORIENTATION_RIGHT_INSET)
+        self.marker.SetViewport((right - size) / width, 1 - size / height, right / width, 1)
+
     def _pick_direction(self, position):
         window = self.plotter.render_window
         width, height = window.GetSize()
@@ -168,6 +179,8 @@ class _OrientationCubeControls(QObject):
 
     def eventFilter(self, watched, event):
         kind = event.type()
+        if kind in (QEvent.Type.Resize, QEvent.Type.Show):
+            self.resize_marker(watched)
         if kind in (QEvent.Type.MouseButtonPress, QEvent.Type.Close, QEvent.Type.Wheel):
             if hasattr(self.plotter, "_camera_transition"):
                 self.plotter._camera_transition.stop()
@@ -229,6 +242,7 @@ def create_preview_viewport(
 
 def _create_orientation_cube(plotter):
     """A native VTK orientation marker, independent of the bottom-left axes."""
+    from vtkmodules.vtkFiltersSources import vtkSuperquadricSource
     from vtkmodules.vtkInteractionWidgets import vtkOrientationMarkerWidget
     from vtkmodules.vtkRenderingAnnotation import vtkAnnotatedCubeActor
     from vtkmodules.vtkRenderingCore import vtkActor, vtkPolyDataMapper, vtkPropAssembly
@@ -241,10 +255,17 @@ def _create_orientation_cube(plotter):
         for side in ("Plus", "Minus"):
             getattr(cube, f"Get{axis}{side}FaceProperty")().SetColor(0.84, 0.89, 0.96)
     cube.GetTextEdgesProperty().SetColor(0.15, 0.22, 0.34)
-    cube.GetCubeProperty().SetColor(0.64, 0.71, 0.81)
-    cube.GetCubeProperty().EdgeVisibilityOn()
-    cube.GetCubeProperty().SetEdgeColor(0.18, 0.27, 0.40)
-    cube.GetCubeProperty().SetLineWidth(1.5)
+    cube.SetCubeVisibility(False)
+    shell = vtkSuperquadricSource()
+    shell.SetPhiRoundness(0.07)
+    shell.SetThetaRoundness(0.07)
+    shell.SetPhiResolution(64)
+    shell.SetThetaResolution(64)
+    shell_mapper = vtkPolyDataMapper()
+    shell_mapper.SetInputConnection(shell.GetOutputPort())
+    shell_actor = vtkActor()
+    shell_actor.SetMapper(shell_mapper)
+    shell_actor.GetProperty().SetColor(0.64, 0.71, 0.81)
     # Match the visible face/edge/corner bands to _pick_direction's 0.32 cutoff.
     points, lines = [], []
     for normal_axis in range(3):
@@ -255,7 +276,7 @@ def _create_orientation_cube(plotter):
                     start, end = np.zeros(3), np.zeros(3)
                     start[normal_axis] = end[normal_axis] = side * 0.501
                     start[fixed_axis] = end[fixed_axis] = band
-                    start[along_axis], end[along_axis] = -0.5, 0.5
+                    start[along_axis], end[along_axis] = -0.46, 0.46
                     index = len(points)
                     points.extend((start, end))
                     lines.extend((2, index, index + 1))
@@ -268,16 +289,17 @@ def _create_orientation_cube(plotter):
     borders.GetProperty().SetLineWidth(1.5)
     borders.GetProperty().LightingOff()
     marker = vtkPropAssembly()
+    marker.AddPart(shell_actor)
     marker.AddPart(cube)
     marker.AddPart(borders)
     widget = vtkOrientationMarkerWidget()
     widget.SetOrientationMarker(marker)
     widget.SetInteractor(plotter.iren.interactor)
     widget.SetCurrentRenderer(plotter.renderer)
-    widget.SetViewport(0.90, 0.84, 0.99, 0.99)
+    plotter._orientation_controls = _OrientationCubeControls(plotter, widget)
+    plotter._orientation_controls.resize_marker(plotter.interactor)
     widget.SetEnabled(1)
     widget.InteractiveOff()
-    plotter._orientation_controls = _OrientationCubeControls(plotter, widget)
     plotter.interactor.installEventFilter(plotter._orientation_controls)
     plotter.interactor.setMouseTracking(True)
     plotter.interactor.setToolTip(

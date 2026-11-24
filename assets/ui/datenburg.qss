@@ -20,6 +20,7 @@ QLabel:disabled { color: #808080; }
     margin: 4px 4px 2px; background: #FCFCFB; border: 1px solid #D5DBE2; border-radius: 7px;
 }
 #workspaceCommandDivider { background: #D5DBE2; border: none; }
+#workspaceCommandBar { background: #FCFCFB; }
 #brandHeader[computeState="ready"], #brandHeader[computeState="allocated"] { background: #E7F3E8; border-color: #329447; }
 #brandHeader[computeState="pending"] { background: #FFF4CE; border-color: #C8A044; }
 #brandTitle {
@@ -238,8 +239,11 @@ QProgressBar#operationProgressBar { color: #0F172A; background: #E9EDF2; }
 QProgressBar#operationProgressBar::chunk { background: #16A34A; border-radius: 1px; }
 QToolTip { background: #FFFFFF; color: #111827; border: 1px solid #B8B8B8; padding: 4px 6px; }
 
-/* Expanded View controls below the orientation marker. */
-#cameraToolbar { background: #F5F5F3; border: 1px solid #CBD5E1; border-radius: 4px; }
+/* Camera and display controls below the orientation marker. */
+#cameraToolbar { background: #F5F5F3; }
+#cameraViewGroup, #cameraDisplayModes {
+    background: #F5F5F3; border: 1px solid #CBD5E1; border-radius: 4px;
+}
 #cameraToolbar QToolButton { padding: 0; }
 #cameraToolbar QToolButton:focus { padding: 0; }
 #cameraToolbar QToolButton::menu-indicator { image: none; width: 0; height: 0; }

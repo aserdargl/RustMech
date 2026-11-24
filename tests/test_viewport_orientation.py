@@ -2,7 +2,7 @@
 
 import unittest
 from itertools import product
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import numpy as np
 import pyvista as pv
@@ -154,6 +154,59 @@ class OrientationTests(unittest.TestCase):
                 dialog.reset_view()
                 self.assertTrue(dialog.plotter.camera.parallel_projection)
                 self.assertTrue(dialog.orthographic_button.isChecked())
+            finally:
+                dialog.close()
+
+    def test_display_mode_buttons_share_the_right_edge_below_the_camera_controls(self):
+        from model import Settings
+        from nonlinear_compression import RustMechDialog
+
+        start_preview = Mock()
+        with patch.object(RustMechDialog, "start_preview", lambda self: start_preview()):
+            dialog = RustMechDialog(Settings())
+            try:
+                dialog.show()
+                viewport = dialog.plotter.interactor
+                toolbar = dialog.camera_toolbar
+                for width, height in ((1440, 900), (900, 600)):
+                    dialog.resize(width, height)
+                    QTest.qWait(100)
+                    marker = dialog.plotter.orientation_cube.GetViewport()
+                    self.assertAlmostEqual((1 - marker[2]) * viewport.width(), 2)
+                    self.assertLessEqual((marker[2] - marker[0]) * viewport.width(), 72.1)
+                    self.assertLessEqual((1 - marker[1]) * viewport.height(), toolbar.y())
+                    self.assertEqual(viewport.width() - toolbar.geometry().right() - 1, 2)
+                    self.assertTrue(viewport.rect().contains(toolbar.geometry()))
+
+                command_bar = dialog.findChild(QWidget, "workspaceCommandBar")
+                for button in (dialog.project_button, dialog.doe_button, dialog.truba_button, dialog.about_button):
+                    self.assertIs(button.parentWidget(), command_bar)
+                    self.assertEqual(button.geometry().center().y(), dialog.truba_button.geometry().center().y())
+                modes = dialog.display_mode_buttons
+                group = toolbar.display_modes
+                camera_group = toolbar.findChild(QFrame, "cameraViewGroup")
+                camera_button = camera_group.findChild(QToolButton)
+                self.assertTrue(group.isVisible())
+                self.assertGreater(group.y(), camera_group.geometry().bottom())
+                self.assertEqual(modes.checkedId(), 0)
+                start_preview.reset_mock()
+                for index in (1, 2, 0):
+                    button = modes.button(index)
+                    self.assertIs(button.parentWidget(), group)
+                    self.assertEqual(button.mapTo(toolbar, QPoint()).x(), camera_button.mapTo(toolbar, QPoint()).x())
+                    self.assertEqual(button.toolButtonStyle(), Qt.ToolButtonStyle.ToolButtonIconOnly)
+                    self.assertFalse(button.icon().isNull())
+                    self.assertTrue(button.accessibleName())
+                    self.assertTrue(button.toolTip())
+                    QTest.mouseClick(button, Qt.MouseButton.LeftButton)
+                    self.assertEqual(dialog.mode.currentIndex(), index)
+                    self.assertEqual(modes.checkedId(), index)
+                self.assertEqual(start_preview.call_count, 2)
+                dialog.mode.setCurrentIndex(2)
+                self.assertEqual(modes.checkedId(), 2)
+                modes.button(2).setFocus()
+                QTest.keyClick(modes.button(2), Qt.Key.Key_Up)
+                self.assertEqual(dialog.mode.currentIndex(), 1)
             finally:
                 dialog.close()
 

@@ -377,7 +377,7 @@ class RustMechDialog(QDialog):
         header.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
         layout.addWidget(header)
         header_layout = QVBoxLayout(header)
-        header_layout.setContentsMargins(8, 5, 8, 5)
+        header_layout.setContentsMargins(3, 4, 3, 4)
         header_layout.setSpacing(5)
         context_row = QHBoxLayout()
         context_row.setSpacing(8)
@@ -426,8 +426,6 @@ class RustMechDialog(QDialog):
         self.about_button.setObjectName("aboutBtn")
         self.about_button.clicked.connect(self.show_about)
         self._compute_commands = (self.truba_button, self.sync_button)
-        for button in self._compute_commands:
-            brand_layout.addWidget(button)
         from ui_language import LanguageSelector
         self.language_selector = LanguageSelector(self.language_manager, self)
 
@@ -949,12 +947,21 @@ class RustMechDialog(QDialog):
         right.setContentsMargins(2, 0, 0, 0)
         right.setSpacing(2)
 
+        command_scroll = QScrollArea()
+        command_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        command_scroll.setWidgetResizable(True)
+        command_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        command_scroll.setFixedHeight(CONTROL_HEIGHT)
+        command_scroll.horizontalScrollBar().rangeChanged.connect(
+            lambda _, maximum: command_scroll.setFixedHeight(CONTROL_HEIGHT + (6 if maximum else 0))
+        )
         command_bar = QWidget()
         command_bar.setObjectName("workspaceCommandBar")
         navigation = QHBoxLayout(command_bar)
         navigation.setContentsMargins(0, 0, 0, 0)
-        navigation.setSpacing(5)
-        header_layout.addWidget(command_bar)
+        navigation.setSpacing(2)
+        command_scroll.setWidget(command_bar)
+        header_layout.insertWidget(0, command_scroll)
 
         from project_workspace import ProjectWorkspace
         self.project_workspace = ProjectWorkspace(self)
@@ -1056,22 +1063,16 @@ class RustMechDialog(QDialog):
                 button.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
                 navigation.addWidget(button)
         navigation.addStretch()
+        for button in self._compute_commands:
+            navigation.addWidget(button)
         navigation.addWidget(self.about_button)
         navigation.addWidget(self.language_selector)
-        header_controls = (*self._compute_commands, *(button for group in self._workspace_commands for button in group),
-                           self.about_button, self.language_selector.combo)
+        header_controls = (*(button for group in self._workspace_commands for button in group),
+                           *self._compute_commands, self.about_button, self.language_selector.combo)
         for current, following in zip(header_controls, header_controls[1:]):
             QWidget.setTabOrder(current, following)
 
-        self.display_mode_group = QFrame()
-        self.display_mode_group.setObjectName("viewportToolbar")
-        self.display_mode_group.setAccessibleName("3D display mode")
-        mode_layout = ActionFlowLayout(self.display_mode_group)
-        mode_layout.setContentsMargins(5, 3, 5, 3)
-        mode_layout.setSpacing(4)
-        right.addWidget(self.display_mode_group)
-
-        self.mode = NoWheelComboBox(self.display_mode_group)
+        self.mode = NoWheelComboBox(preview_tab)
         self.mode.setAccessibleName("3D display mode")
         self.mode.addItems(
             ["Smooth geometry", "FE mesh", "Smooth + FE overlay"]
@@ -1080,24 +1081,12 @@ class RustMechDialog(QDialog):
         self.mode.currentIndexChanged.connect(self._display_mode_changed)
         # Retain the mode model for existing render/preview integrations.
         self.mode.hide()
-        self.display_mode_buttons = QButtonGroup(self.display_mode_group)
-        for index, text in enumerate(("Geometry", "FE Mesh", "Overlay")):
-            button = QPushButton(text)
-            button.setCheckable(True)
-            button.setToolTip(self.mode.itemText(index))
-            self.display_mode_buttons.addButton(button, index)
-            mode_layout.addWidget(button)
-        self.display_mode_buttons.button(self.mode.currentIndex()).setChecked(True)
-        self.display_mode_buttons.idClicked.connect(lambda _: self.workspace_tabs.setCurrentIndex(0))
-        self.display_mode_buttons.idClicked.connect(self._select_model_view)
-        self.mode.currentIndexChanged.connect(lambda index: self.display_mode_buttons.button(index).setChecked(True))
 
         self.show_platens_cb = QCheckBox("Show platens")
         self.show_platens_cb.setObjectName("legendPlatenPill")
         self.show_platens_cb.setChecked(True)
         self.show_platens_cb.setCursor(Qt.CursorShape.PointingHandCursor)
         self.show_platens_cb.toggled.connect(self.render_preview)
-        mode_layout.addWidget(self.show_platens_cb)
 
         self.result_preview_controls = QWidget()
         result_controls_layout = QHBoxLayout(self.result_preview_controls)
@@ -1132,7 +1121,7 @@ class RustMechDialog(QDialog):
         # 3D Interactive Viewport Container
         viewport_container = QFrame()
         viewport_container.setObjectName("viewportContainer")
-        viewport_container.setMinimumSize(120, 80)
+        viewport_container.setMinimumSize(120, 124)
         viewport_container.setSizePolicy(
             QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored
         )
@@ -1216,7 +1205,11 @@ class RustMechDialog(QDialog):
             card_layout.addWidget(v_lbl)
             kpi_row.addWidget(card, 0, Qt.AlignmentFlag.AlignLeft)
             self._kpi_labels[key] = v_lbl
-        bottom_telemetry_layout.addWidget(self.mesh_kpis, alignment=Qt.AlignmentFlag.AlignLeft)
+        telemetry_row = QHBoxLayout()
+        telemetry_row.setSpacing(4)
+        telemetry_row.addWidget(self.mesh_kpis, 1)
+        telemetry_row.addWidget(self.show_platens_cb, 0, Qt.AlignmentFlag.AlignRight)
+        bottom_telemetry_layout.addLayout(telemetry_row)
         self.fft_preview_summary = QLabel()
         self.fft_preview_summary.setObjectName("statsReadout")
         self.fft_preview_summary.setTextFormat(Qt.TextFormat.PlainText)
@@ -1243,6 +1236,16 @@ class RustMechDialog(QDialog):
         self._mesh_details_action.setCheckable(True)
         self._mesh_details_action.toggled.connect(self._sync_preview_readout)
         camera_controls.add_camera_action(self._mesh_details_action, "diagnostics")
+        self.display_mode_group = camera_controls.display_modes
+        self.display_mode_buttons = QButtonGroup(self.display_mode_group)
+        display_modes = (("geometry", "Geometry"), ("mesh", "FE Mesh"), ("overlay", "Overlay"))
+        for index, (kind, name) in enumerate(display_modes):
+            button = camera_controls.add_display_mode(kind, name, self.mode.itemText(index))
+            self.display_mode_buttons.addButton(button, index)
+        self.display_mode_buttons.button(self.mode.currentIndex()).setChecked(True)
+        self.display_mode_buttons.idClicked.connect(lambda _: self.workspace_tabs.setCurrentIndex(0))
+        self.display_mode_buttons.idClicked.connect(self._select_model_view)
+        self.mode.currentIndexChanged.connect(lambda index: self.display_mode_buttons.button(index).setChecked(True))
         camera_controls.attach(self.plotter.interactor)
         self._kpi_labels["spacing"].parentWidget().hide()
 
@@ -1456,7 +1459,7 @@ class RustMechDialog(QDialog):
                 self._update_remote_banner()
             self.sidebar_toggle.setVisible(not independent)
             mesh_preview = not independent and not (fft_selected or peridynamic_selected)
-            self.display_mode_group.setVisible(mesh_preview)
+            camera_controls.show_display_modes(mesh_preview)
             self.show_platens_cb.setVisible(mesh_preview)
             self._sync_preview_readout()
             self.fft_preview_summary.setVisible(not independent and fft_selected)
@@ -1563,10 +1566,10 @@ class RustMechDialog(QDialog):
                                          if action.isVisible()),
         }
         for group in (*self._workspace_commands, self._compute_commands, (self.about_button,),
-                      (self.compute_resources_button,), self.display_mode_buttons.buttons()):
+                      (self.compute_resources_button,)):
             # Fit the longest translated label, including room for focus and menu arrows.
             width = max(button.fontMetrics().horizontalAdvance(label)
-                        + (24 if isinstance(button, QToolButton) else 16)
+                        + (23 if isinstance(button, QToolButton) else 16)
                         for button in group
                         for label in selector_labels.get(button, (button.text(),)))
             for button in group:
