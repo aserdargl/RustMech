@@ -1026,6 +1026,13 @@ Apply the selected structure and geometry settings to the 3D preview.|Seçili ya
 Save settings and start the selected solver.|Ayarları kaydedip seçili çözücüyü başlatın.
 Connect to TRUBA with your own username and password|Kendi kullanıcı adınız ve parolanızla TRUBA'ya bağlanın
 Connect to TRUBA with saved credentials|Kayıtlı bilgilerle TRUBA’ya bağlan
+TRUBA Settings|TRUBA Ayarları
+Open the Connection tab in the TRUBA application|TRUBA uygulamasında Connection sekmesini aç
+Open RustMech's TRUBA analysis and connection settings|RustMech’in TRUBA analiz ve bağlantı ayarlarını aç
+Could not reach the running TRUBA application.|Çalışan TRUBA uygulamasına erişilemedi.
+The running TRUBA application did not respond.|Çalışan TRUBA uygulaması yanıt vermedi.
+Could not start the TRUBA application.|TRUBA uygulaması başlatılamadı.
+TRUBA.exe was not found. Set TRUBA_DESKTOP_EXE to its full path.|TRUBA.exe bulunamadı. TRUBA_DESKTOP_EXE değişkenine dosyanın tam yolunu girin.
 Open Design of Experiments settings.|Deney tasarımı ayarlarını açın.
 Select settings method|Ayar yöntemini seçin
 Select workspace|Çalışma alanını seçin

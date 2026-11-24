@@ -65,6 +65,7 @@ from studio_style import (ActionFlowLayout, CompactDoubleSpinBox, CONTROL_HEIGHT
 from sidebar_splitter import SidebarSplitter
 from setup_help import GEOMETRY_HELP
 from truba_connection import TrubaConnectionDialog
+from truba_desktop import open_truba_desktop
 from window_state import show_restored_window
 from kratos_settings import KratosSettingsPanel
 from local_kratos import INSTALL_REQUIRED, local_kratos_python
@@ -378,12 +379,16 @@ class RustMechDialog(QDialog):
         self.truba_dialog.job_list.background_updated.connect(self._background_analysis_updated)
         from truba_job_list import TrubaJobMonitor
         self.truba_job_monitor = TrubaJobMonitor(self, self.truba_dialog.job_list)
-        self.truba_button = QPushButton("TRUBA")
-        self.truba_button.setObjectName("trubaConnectBtn")
-        self.truba_button.setProperty("trubaConnected", False)
-        self.truba_button.setToolTip("Connect to TRUBA with your own username and password")
-        self.truba_button.clicked.connect(lambda: show_restored_window(self.truba_dialog))
-        self.truba_dialog.connection_changed.connect(self._update_truba_button)
+        self.truba_button = QPushButton("HPC")
+        self.truba_button.setObjectName("primaryLaunchBtn")
+        self.truba_button.setToolTip("Open the Connection tab in the TRUBA application")
+        self.truba_button.clicked.connect(self._open_truba_desktop)
+        self.truba_settings_button = QPushButton("TRUBA Settings")
+        self.truba_settings_button.setObjectName("trubaConnectBtn")
+        self.truba_settings_button.setProperty("trubaConnected", False)
+        self.truba_settings_button.setToolTip("Open RustMech's TRUBA analysis and connection settings")
+        self.truba_settings_button.clicked.connect(lambda: show_restored_window(self.truba_dialog))
+        self.truba_dialog.connection_changed.connect(self._update_truba_settings_button)
         self.truba_quick_connect = QPushButton(self)
         self.truba_quick_connect.setFixedSize(CONTROL_HEIGHT, CONTROL_HEIGHT)
         self.truba_quick_connect.setIcon(QIcon.fromTheme(
@@ -404,9 +409,11 @@ class RustMechDialog(QDialog):
         self.about_button.clicked.connect(self.show_about)
         workspace_buttons = QHBoxLayout()
         workspace_buttons.setSpacing(6)
-        for button in (self.truba_button, self.about_button):
-            button.setFixedSize(124, CONTROL_HEIGHT)
-        for button in (self.truba_button, self.truba_quick_connect, self.truba_job_monitor.button, self.about_button):
+        for button in (self.truba_button, self.truba_settings_button):
+            button.setFixedSize(94, CONTROL_HEIGHT)
+        self.about_button.setFixedSize(124, CONTROL_HEIGHT)
+        for button in (self.truba_button, self.truba_quick_connect, self.truba_settings_button,
+                       self.truba_job_monitor.button, self.about_button):
             button.setAutoDefault(False)
             button.setDefault(False)
             workspace_buttons.addWidget(button)
@@ -1757,11 +1764,18 @@ class RustMechDialog(QDialog):
         self.truba_quick_status.show()
         self.truba_dialog.start_saved_connection()
 
-    def _update_truba_button(self, connected: bool) -> None:
-        self.truba_button.setText("Connected" if connected else "TRUBA")
-        self.truba_button.setProperty("trubaConnected", connected)
-        self.truba_button.style().unpolish(self.truba_button)
-        self.truba_button.style().polish(self.truba_button)
+    def _open_truba_desktop(self):
+        from ui_language import translate
+
+        try:
+            open_truba_desktop()
+        except OSError as error:
+            QMessageBox.warning(self, "HPC", translate(str(error)))
+
+    def _update_truba_settings_button(self, connected: bool) -> None:
+        self.truba_settings_button.setProperty("trubaConnected", connected)
+        self.truba_settings_button.style().unpolish(self.truba_settings_button)
+        self.truba_settings_button.style().polish(self.truba_settings_button)
         self._update_remote_banner()
 
     def _add_setup_page(self, title: str) -> QVBoxLayout:

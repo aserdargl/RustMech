@@ -71,13 +71,17 @@ class RemoteModeUiTests(unittest.TestCase):
         self.controller.changed.emit()
         self.app.processEvents()
 
-    def test_startup_and_opening_panel_never_enable_or_connect(self):
+    def test_startup_and_hpc_launch_never_enable_or_connect(self):
         self.assertFalse(self.controller.requested)
-        with patch.object(self.window.truba_dialog,"start_connection") as connect,patch.object(self.controller,"refresh") as refresh:
+        with patch.object(self.window.truba_dialog,"start_connection") as connect, \
+                patch.object(self.controller,"refresh") as refresh, \
+                patch("nonlinear_compression.open_truba_desktop") as open_desktop:
             self.window.truba_button.click()
             self.app.processEvents()
+            open_desktop.assert_called_once_with()
             connect.assert_not_called()
             refresh.assert_not_called()
+        self.assertFalse(self.window.truba_dialog.isVisible())
         self.assertFalse(self.controller.toggle.isChecked())
         field=self.controller.controls["cores"]
         field.setFocus()
@@ -807,15 +811,15 @@ class RemoteModeUiTests(unittest.TestCase):
         self.app.processEvents()
         self.assertEqual(panel.frameGeometry(),expected)
 
-    def test_truba_button_reopens_maximized_panel_with_saved_normal_bounds(self):
+    def test_truba_settings_reopens_maximized_panel_with_saved_normal_bounds(self):
         panel = self.window.truba_dialog
-        self.window.truba_button.click()
+        self.window.truba_settings_button.click()
         self.app.processEvents()
         normal = panel.geometry()
         panel.showMaximized()
         self.app.processEvents()
         panel.hide()
-        self.window.truba_button.click()
+        self.window.truba_settings_button.click()
         self.app.processEvents()
         self.assertTrue(panel.isMaximized())
         panel.showNormal()
