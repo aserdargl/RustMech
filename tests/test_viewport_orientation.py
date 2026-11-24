@@ -8,7 +8,7 @@ import numpy as np
 import pyvista as pv
 from PySide6.QtCore import QPoint, Qt
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QFrame, QToolButton, QWidget
+from PySide6.QtWidgets import QApplication, QFrame, QScrollArea, QToolButton, QWidget
 
 from preview_viewport import align_camera, create_preview_viewport
 
@@ -168,7 +168,8 @@ class OrientationTests(unittest.TestCase):
                 dialog.show()
                 viewport = dialog.plotter.interactor
                 toolbar = dialog.camera_toolbar
-                for width, height in ((1440, 900), (900, 600)):
+                camera_group = toolbar.findChild(QScrollArea, "cameraViewGroup")
+                for width, height, scrolls in ((1440, 900, False), (900, 600, True), (1440, 900, False)):
                     dialog.resize(width, height)
                     QTest.qWait(100)
                     marker = dialog.plotter.orientation_cube.GetViewport()
@@ -177,6 +178,10 @@ class OrientationTests(unittest.TestCase):
                     self.assertLessEqual((1 - marker[1]) * viewport.height(), toolbar.y())
                     self.assertEqual(viewport.width() - toolbar.geometry().right() - 1, 2)
                     self.assertTrue(viewport.rect().contains(toolbar.geometry()))
+                    self.assertEqual(camera_group.verticalScrollBar().maximum() > 0, scrolls)
+                    for button in camera_group.findChildren(QToolButton):
+                        x = button.mapTo(camera_group, QPoint()).x()
+                        self.assertEqual(x, camera_group.width() - x - button.width())
 
                 command_bar = dialog.findChild(QWidget, "workspaceCommandBar")
                 for button in (dialog.project_button, dialog.doe_button, dialog.truba_button, dialog.about_button):
@@ -184,8 +189,6 @@ class OrientationTests(unittest.TestCase):
                     self.assertEqual(button.geometry().center().y(), dialog.truba_button.geometry().center().y())
                 modes = dialog.display_mode_buttons
                 group = toolbar.display_modes
-                camera_group = toolbar.findChild(QFrame, "cameraViewGroup")
-                camera_button = camera_group.findChild(QToolButton)
                 self.assertTrue(group.isVisible())
                 self.assertGreater(group.y(), camera_group.geometry().bottom())
                 self.assertEqual(modes.checkedId(), 0)
@@ -193,7 +196,6 @@ class OrientationTests(unittest.TestCase):
                 for index in (1, 2, 0):
                     button = modes.button(index)
                     self.assertIs(button.parentWidget(), group)
-                    self.assertEqual(button.mapTo(toolbar, QPoint()).x(), camera_button.mapTo(toolbar, QPoint()).x())
                     self.assertEqual(button.toolButtonStyle(), Qt.ToolButtonStyle.ToolButtonIconOnly)
                     self.assertFalse(button.icon().isNull())
                     self.assertTrue(button.accessibleName())

@@ -63,15 +63,15 @@ class CameraToolbar(QFrame):
         self._camera_scroll.setObjectName("cameraViewGroup")
         self._camera_scroll.setWidgetResizable(True)
         self._camera_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        # Keep the buttons aligned with the display group when a scrollbar appears.
         self._camera_scroll.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
         self._camera_panel = QFrame()
         self._camera_panel.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
         self.column = QVBoxLayout(self._camera_panel)
-        self.column.setContentsMargins(3, 3, 3, 3)
+        self.column.setContentsMargins(0, 3, 0, 3)
         self.column.setSpacing(2)
         self.column.setAlignment(Qt.AlignmentFlag.AlignTop)
         self._camera_scroll.setWidget(self._camera_panel)
+        self._camera_scroll.verticalScrollBar().rangeChanged.connect(self._balance_camera_margins)
         self._stack.addWidget(self._camera_scroll)
 
         self.display_modes = QFrame(self)
@@ -83,28 +83,34 @@ class CameraToolbar(QFrame):
         self._stack.addWidget(self.display_modes)
 
     def add_camera_action(self, action, kind):
-        button = self._add_button(self.column, kind)
+        button = self._add_button(self.column, kind, Qt.AlignmentFlag.AlignHCenter)
         action.setIcon(button.icon())
         button.setDefaultAction(action)
         button.setAccessibleName(action.text())
 
     def add_display_mode(self, kind, name, tooltip):
-        button = self._add_button(self._mode_column, kind)
+        button = self._add_button(self._mode_column, kind, Qt.AlignmentFlag.AlignRight)
         button.setCheckable(True)
         button.setAccessibleName(name)
         button.setToolTip(tooltip)
         button.installEventFilter(self)
         return button
 
-    def _add_button(self, layout, kind):
+    def _add_button(self, layout, kind, alignment):
         button = QToolButton()
         button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
         button.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         button.setIcon(camera_icon(kind))
         button.setIconSize(QSize(20, 20))
         button.setFixedSize(30, CONTROL_HEIGHT)
-        layout.addWidget(button, 0, Qt.AlignmentFlag.AlignRight)
+        layout.addWidget(button, 0, alignment)
         return button
+
+    def _balance_camera_margins(self, minimum, maximum):
+        # Mirror the left scrollbar's gutter so the buttons stay centered in the frame.
+        scrollbar = self._camera_scroll.verticalScrollBar()
+        right_margin = scrollbar.sizeHint().width() if maximum > minimum else 0
+        self.column.setContentsMargins(0, 3, right_margin, 3)
 
     def show_display_modes(self, visible):
         self.display_modes.setVisible(visible)
