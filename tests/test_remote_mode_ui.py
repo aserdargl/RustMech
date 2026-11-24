@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import MagicMock,patch
 
-from PySide6.QtCore import QCoreApplication,QEvent,QSettings,Qt
+from PySide6.QtCore import QCoreApplication,QEvent,QPoint,QSettings,Qt
 from PySide6.QtGui import QTextCursor
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication,QWidget,QMessageBox,QScrollArea,QSplitter
@@ -85,6 +85,29 @@ class RemoteModeUiTests(unittest.TestCase):
         field.setFocus()
         QTest.keyClick(field,Qt.Key.Key_Return)
         self.assertFalse(self.controller.requested)
+
+    def test_fft_status_stays_with_the_workspace_context(self):
+        window = self.window
+        window.setup_tabs.setCurrentIndex(window._fft_method_index)
+        label = window.brand_subtitle_lbl
+        self.assertEqual(label.text(), "DAMASK · FFT")
+
+        for language in ("en", "tr"):
+            window.language_manager.set_language(language)
+            for width in (900, 1440):
+                with self.subTest(language=language, width=width):
+                    window.resize(width, 780)
+                    self.app.processEvents()
+                    title = window.brand_title_label.mapTo(window, QPoint())
+                    badge = window.brand_header.mapTo(window, QPoint())
+                    hpc = window.truba_button.mapTo(window, QPoint())
+                    hpc_bottom = hpc.y() + window.truba_button.height()
+                    self.assertTrue(label.isVisible())
+                    self.assertTrue(window.truba_button.isVisible())
+                    self.assertGreater(badge.x(), title.x() + window.brand_title_label.width())
+                    self.assertLessEqual(badge.x() + window.brand_header.width(), hpc.x())
+                    self.assertGreaterEqual(badge.y(), hpc_bottom)
+                    self.assertGreaterEqual(label.width(), label.fontMetrics().horizontalAdvance(label.text()))
 
     def test_preview_failure_details_are_selectable_even_when_completion_is_immediate(self):
         from mesh_engine import preview_key

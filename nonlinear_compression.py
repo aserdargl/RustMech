@@ -202,6 +202,7 @@ class _ComputeStatusLabel(QLabel):
     def paintEvent(self, event):
         painter = QStylePainter(self)
         bounds = self.contentsRect()
+        painter.setClipRect(bounds)
         text = painter.fontMetrics().elidedText(self.text(), Qt.TextElideMode.ElideRight, bounds.width())
         painter.drawItemText(bounds, self.alignment().value, self.palette(), self.isEnabled(),
                              text, self.foregroundRole())
@@ -390,7 +391,6 @@ class RustMechDialog(QDialog):
         unit_badge.setObjectName("unitBadge")
         context_row.addWidget(self.brand_title_label)
         context_row.addWidget(unit_badge)
-        context_row.addStretch()
 
         brand_card = QFrame()
         self.brand_header = brand_card
@@ -408,6 +408,7 @@ class RustMechDialog(QDialog):
         self.brand_subtitle_lbl.setMaximumWidth(320)
         brand_layout.addWidget(self.brand_subtitle_lbl)
         context_row.addWidget(brand_card)
+        context_row.addStretch()
         self.truba_session = TrubaSession(self)
         self.truba_session.background_updated.connect(self._background_analysis_updated)
         self.truba_session.connection_changed.connect(self._update_hpc_button)
