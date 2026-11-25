@@ -10,10 +10,29 @@ from PySide6.QtCore import QObject
 from PySide6.QtWidgets import QApplication
 
 from truba_sync import RemoteFileListing, TrubaSession
-from truba_desktop import DesktopStatus
+from truba_desktop import CONNECT_TRUBA, SHOW_CONNECTION, DesktopStatus, connect_truba_desktop, open_truba_desktop
 from truba_jobs import SSHJobs, connection
 from truba_remote import RemoteContext
 from truba_shared_session import DesktopSession, DesktopSSHClient
+
+
+@pytest.mark.parametrize(("launch", "command"), (
+    (open_truba_desktop, SHOW_CONNECTION),
+    (connect_truba_desktop, CONNECT_TRUBA),
+))
+@pytest.mark.parametrize("running", [False, True])
+def test_desktop_requests_keep_show_and_connect_separate(tmp_path, monkeypatch, launch, command, running):
+    executable = tmp_path / "TRUBA.exe"
+    executable.touch()
+    monkeypatch.setenv("TRUBA_DESKTOP_EXE", str(executable))
+    with patch("truba_desktop._request_running_desktop", return_value=running) as send, \
+            patch("truba_desktop.QProcess.startDetached", return_value=(True, 123)) as start:
+        launch()
+    send.assert_called_once_with(command)
+    if running:
+        start.assert_not_called()
+    else:
+        start.assert_called_once_with(str(executable), [command], str(tmp_path))
 
 
 def test_rustmech_uses_only_the_advertised_arf_session(tmp_path):

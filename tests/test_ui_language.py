@@ -161,7 +161,8 @@ class LanguageTests(unittest.TestCase):
             normal_bounds = window.geometry()
             commands = (window.project_button, window.designs_button, window.workspace_button,
                         window.sidebar_toggle, window.doe_button, window.folder_batch_button,
-                        window.esen_button, window.truba_button, window.sync_button, window.about_button)
+                        window.esen_button, window.truba_button, window.truba_connect_button,
+                        window.sync_button, window.about_button)
 
             def assert_toolbar_layout():
                 self.assertEqual(len({button.size().toTuple() for button in commands}), 1)

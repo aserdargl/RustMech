@@ -86,6 +86,18 @@ class RemoteModeUiTests(unittest.TestCase):
         QTest.keyClick(field,Qt.Key.Key_Return)
         self.assertFalse(self.controller.requested)
 
+    def test_connect_button_requests_truba_connection_without_switching_execution_target(self):
+        window = self.window
+        with patch("nonlinear_compression.connect_truba_desktop") as connect, \
+                patch("nonlinear_compression.open_truba_desktop") as open_desktop:
+            connect.assert_not_called()
+            window.truba_button.click()
+            connect.assert_not_called()
+            window.truba_connect_button.click()
+            connect.assert_called_once_with()
+            open_desktop.assert_called_once_with()
+        self.assertFalse(self.controller.requested)
+
     def test_dropdown_width_is_shared_across_workspace_tabs(self):
         from studio_style import COMBO_WIDTH, CompactComboBox
 
@@ -872,8 +884,10 @@ class RemoteModeUiTests(unittest.TestCase):
         self.enable()
         self.window.truba_session._status_changed(DesktopStatus(session))
         self.assertTrue(self.window.truba_button.property("trubaConnected"))
+        self.assertFalse(self.window.truba_connect_button.isEnabled())
         self.window.truba_session._status_changed(DesktopStatus())
         self.assertFalse(self.window.truba_button.property("trubaConnected"))
+        self.assertTrue(self.window.truba_connect_button.isEnabled())
         self.assertTrue(self.controller.requested)
         self.assertFalse(self.controller.session_watch)
         self.assertIsNone(self.controller.capabilities)

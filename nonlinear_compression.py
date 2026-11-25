@@ -67,7 +67,7 @@ from studio_style import (ActionFlowLayout, CompactDoubleSpinBox, CONTROL_HEIGHT
 from sidebar_splitter import SidebarSplitter
 from setup_help import GEOMETRY_HELP
 from truba_sync import TrubaSession, TrubaSyncWindow
-from truba_desktop import open_truba_desktop
+from truba_desktop import connect_truba_desktop, open_truba_desktop
 from window_state import show_restored_window
 from peridynamic_analysis import run_local_compression, validate_compression
 from peridynamic_workspace import PeridynamicResults, PeridynamicSettingsPanel
@@ -426,6 +426,10 @@ class RustMechDialog(QDialog):
         self.truba_button.setAutoDefault(False)
         self.truba_button.setToolTip("Open the Connection tab in the TRUBA application")
         self.truba_button.clicked.connect(self._open_truba_desktop)
+        self.truba_connect_button = _WorkspaceCommandButton("Connect")
+        self.truba_connect_button.setAutoDefault(False)
+        self.truba_connect_button.setToolTip("Connect to TRUBA using the saved VPN profile and SSH account")
+        self.truba_connect_button.clicked.connect(self._connect_truba_desktop)
         self.sync_window = None
         self.sync_button = _WorkspaceCommandButton("SYNC")
         self.sync_button.setObjectName("secondaryActionBtn")
@@ -435,7 +439,7 @@ class RustMechDialog(QDialog):
         self.about_button = _WorkspaceCommandButton("About")
         self.about_button.setObjectName("aboutBtn")
         self.about_button.clicked.connect(self.show_about)
-        self._compute_commands = (self.truba_button, self.sync_button)
+        self._compute_commands = (self.truba_button, self.truba_connect_button, self.sync_button)
         from ui_language import LanguageSelector
         self.language_selector = LanguageSelector(self.language_manager, self)
 
@@ -1585,6 +1589,7 @@ class RustMechDialog(QDialog):
             self.sidebar_toggle: tuple(translate(name) for name in self.method_button_labels),
             self.workspace_button: tuple(action.text() for action in self.workspace_menu.actions()
                                          if action.isVisible()),
+            self.truba_connect_button: (translate("Connect"), translate("Connected")),
         }
         commands = (*(button for group in self._workspace_commands for button in group),
                     *self._compute_commands, self.about_button)
@@ -1826,7 +1831,17 @@ class RustMechDialog(QDialog):
         self.truba_button.setProperty("trubaConnected", connected)
         self.truba_button.style().unpolish(self.truba_button)
         self.truba_button.style().polish(self.truba_button)
+        self.truba_connect_button.setText("Connected" if connected else "Connect")
+        self.truba_connect_button.setEnabled(not connected)
         self._update_remote_banner()
+
+    def _connect_truba_desktop(self):
+        from ui_language import translate
+
+        try:
+            connect_truba_desktop()
+        except OSError as error:
+            QMessageBox.warning(self, "HPC", translate(str(error)))
 
     def _add_setup_page(self, title: str) -> QVBoxLayout:
         scroll = QScrollArea()

@@ -1,4 +1,4 @@
-"""Open the independent TRUBA desktop app without starting a cluster connection."""
+"""Open the TRUBA desktop or explicitly ask it to connect."""
 
 import ctypes
 from dataclasses import dataclass
@@ -18,6 +18,7 @@ from truba_shared_session import DesktopSession
 
 
 SHOW_CONNECTION = "--show-connection"
+CONNECT_TRUBA = "--connect-truba"
 REPLY_TIMEOUT_MS = 250
 
 
@@ -31,7 +32,7 @@ def _desktop_server_name():
     return f"TRUBA.Desktop.{user_key}"
 
 
-def _show_running_desktop():
+def _request_running_desktop(command):
     socket = QLocalSocket()
     socket.connectToServer(_desktop_server_name())
     try:
@@ -48,11 +49,13 @@ def _show_running_desktop():
         if sys.platform == "win32":
             # The foreground RustMech window can grant this instance permission to activate.
             ctypes.windll.user32.AllowSetForegroundWindow(int(process_id))
-        socket.write(f"{SHOW_CONNECTION}\n".encode("ascii"))
+        socket.write(f"{command}\n".encode("ascii"))
         socket.flush()
         if not socket.canReadLine():
             socket.waitForReadyRead(REPLY_TIMEOUT_MS)
         if bytes(socket.readLine(16)) != b"ok\n":
+            if command == CONNECT_TRUBA:
+                raise OSError("TRUBA Desktop does not support one-click connection. Restart it with the updated version.")
             raise OSError("The running TRUBA application did not respond.")
         return True
     finally:
@@ -60,7 +63,15 @@ def _show_running_desktop():
 
 
 def open_truba_desktop():
-    if _show_running_desktop():
+    _request_desktop(SHOW_CONNECTION)
+
+
+def connect_truba_desktop():
+    _request_desktop(CONNECT_TRUBA)
+
+
+def _request_desktop(command):
+    if _request_running_desktop(command):
         return
     app_directory = Path(sys.executable if getattr(sys, "frozen", False) else __file__).resolve().parent
     configured = os.environ.get("TRUBA_DESKTOP_EXE")
@@ -74,7 +85,7 @@ def open_truba_desktop():
         if not executable.is_absolute() or not executable.is_file():
             continue
         with system_dll_search():
-            started, _ = QProcess.startDetached(str(executable), [SHOW_CONNECTION], str(executable.parent))
+            started, _ = QProcess.startDetached(str(executable), [command], str(executable.parent))
         if not started:
             raise OSError("Could not start the TRUBA application.")
         return

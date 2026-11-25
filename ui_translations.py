@@ -1116,6 +1116,8 @@ Connect with this job's account in TRUBA.|TRUBA’da bu işin hesabıyla bağlan
 TRUBA files could not be listed.|TRUBA dosyaları listelenemedi.
 Track this job in TRUBA WORKS. Results download automatically when connected.|Bu işi TRUBA’nın WORKS sekmesinden takip edin. Bağlantı kurulduğunda sonuçlar otomatik indirilir.
 Open the Connection tab in the TRUBA application|TRUBA uygulamasında Connection sekmesini aç
+Connect to TRUBA using the saved VPN profile and SSH account|Kayıtlı VPN profili ve SSH hesabıyla TRUBA’ya bağlan
+TRUBA Desktop does not support one-click connection. Restart it with the updated version.|TRUBA Desktop tek tıkla bağlantıyı desteklemiyor. Güncel sürümüyle yeniden başlatın.
 Could not reach the running TRUBA application.|Çalışan TRUBA uygulamasına erişilemedi.
 The running TRUBA application did not respond.|Çalışan TRUBA uygulaması yanıt vermedi.
 Could not start the TRUBA application.|TRUBA uygulaması başlatılamadı.
