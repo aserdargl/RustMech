@@ -1332,9 +1332,6 @@ class RustMechDialog(QDialog):
             *(self._analysis_progress_counts if self.analysis_job is not None else (None, None)),
         ), bar_at_end=True)
         self.local_analysis_progress.bar.setToolTip("Percentage of completed analysis stages")
-        progress_policy = self.local_analysis_progress.sizePolicy()
-        progress_policy.setRetainSizeWhenHidden(False)
-        self.local_analysis_progress.setSizePolicy(progress_policy)
         status_layout.addWidget(self.local_analysis_progress, 1)
         self._analysis_action_buttons = (
             cancel, self.apply_button, self.result_button, self.force_stop_button,
@@ -1363,6 +1360,11 @@ class RustMechDialog(QDialog):
             ),
             self.status.text(),
         ))
+        # Progress rows should only take up space while visible.
+        for progress in (self.local_analysis_progress, self.operation_progress):
+            policy = progress.sizePolicy()
+            policy.setRetainSizeWhenHidden(False)
+            progress.setSizePolicy(policy)
         self.mesh_progress = self.operation_progress.bar
         self.cancel_mesh_button = QPushButton("Cancel meshing")
         self.cancel_mesh_button.setObjectName("secondaryActionBtn")
