@@ -69,15 +69,17 @@ def structure_choices(operation):
             for name in ALL_STRUCTURES_BY_FAMILY[family]]
 
 
-def numeric_levels(first, last, count):
-    if last <= first:
-        raise ValueError("The upper bound must exceed the lower bound.")
-    values = [first + (last - first) * i / (count - 1) for i in range(count)]
-    values[0], values[-1] = first, last
-    if type(first) is int:
-        values = [round(value) for value in values]
-    if len(set(values)) != count:
-        raise ValueError("The range is too small for this number of distinct levels.")
+def explicit_numbers(text, number_type, minimum, maximum):
+    # A semicolon also allows decimal commas, e.g. "0,5; 1,25".
+    tokens = text.replace(",", ".").split(";") if ";" in text else text.split(",")
+    try:
+        values = [number_type(token.strip()) for token in tokens]
+    except ValueError:
+        raise ValueError("Enter whole numbers." if number_type is int else "Enter numeric values.") from None
+    if any(not minimum <= value <= maximum for value in values):
+        raise ValueError(f"Enter values between {minimum:g} and {maximum:g}.")
+    if len(set(values)) != len(values):
+        raise ValueError("Each level must be distinct.")
     return values
 
 

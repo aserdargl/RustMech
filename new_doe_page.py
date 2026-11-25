@@ -8,9 +8,9 @@ from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt, QTimer, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDoubleSpinBox,
                                QHBoxLayout, QLabel, QLineEdit, QMenu, QPushButton, QSpinBox,
-                               QTableView, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
+                               QStackedWidget, QTableView, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
 
-from new_doe_operations import (MAX_ROWS, OPERATIONS, launch, matrix, numeric_levels,
+from new_doe_operations import (OPERATIONS, explicit_numbers, launch, matrix,
                                 parameters, snapshot, structure_choices, validate)
 from studio_style import COMBO_WIDTH, CompactComboBox, CompactDoubleSpinBox, CompactSpinBox
 from ui_language import translate, turkish
@@ -92,7 +92,7 @@ class Factor:
                             if source.itemData(i) is not None and source.model().item(i).isEnabled()]
         elif type(value) is bool:
             self.choices = [("True", True), ("False", False)]
-        self.numeric = type(value) in (int, float)
+        self.numeric = not self.choices and type(value) in (int, float)
         self.optional_number = value is None and key in ("minimum_substeps", "maximum_substeps", "stl_resolution")
         if self.choices:
             self.fixed = CompactComboBox()
@@ -114,15 +114,33 @@ class Factor:
             self.first = number(initial, source)
             self.initial_display = self.first.value()
             self.last = number(initial, source)
-            self.levels = CompactSpinBox()
-            self.levels.setRange(2, MAX_ROWS)
-            self.levels.setValue(2)
+            self.mode = CompactComboBox()
+            self.mode.addItem("Min / max", "bounds")
+            self.mode.addItem("Value list", "list")
+            self.selection = QLineEdit()
+            self.selection.setPlaceholderText("16, 24, 40" if type(initial) is int else "0.5, 1, 2.5")
+            self.selection.setToolTip("Separate values with commas. For decimal commas, use a semicolon between values.")
+            self.selection.setAccessibleName(self.label + " " + translate("Value list"))
+            self.selection.textChanged.connect(changed)
             self.fixed = self.first
             if self.optional_number:
                 self.fixed = QLineEdit("null")
                 self.fixed.textChanged.connect(changed)
-            self.extra = [self.last, self.levels]
-            for box in (self.first, self.last, self.levels):
+            self.lower_cell = QStackedWidget()
+            self.lower_cell.addWidget(self.first)
+            if self.optional_number:
+                self.lower_cell.addWidget(self.fixed)
+            self.lower_blank = QWidget()
+            self.lower_cell.addWidget(self.lower_blank)
+            self.upper_cell = QStackedWidget()
+            self.upper_cell.addWidget(self.last)
+            self.upper_cell.addWidget(self.selection)
+            self.upper_blank = QWidget()
+            self.upper_cell.addWidget(self.upper_blank)
+            self.extra = [self.upper_cell, self.mode]
+            self.mode.currentIndexChanged.connect(lambda: self.toggle(self.variable.isChecked()))
+            self.mode.currentIndexChanged.connect(changed)
+            for box in (self.first, self.last):
                 box.valueChanged.connect(changed)
         else:
             self.fixed = QLineEdit(display(value))
@@ -135,14 +153,9 @@ class Factor:
         for i, widget in enumerate(self.extra, 3):
             table.setCellWidget(row, i, widget)
             widget.setEnabled(False)
-        if self.optional_number:
-            wrapper = QWidget()
-            layout = QHBoxLayout(wrapper)
-            layout.setContentsMargins(0, 0, 0, 0)
-            layout.addWidget(self.fixed)
-            layout.addWidget(self.first)
-            table.setCellWidget(row, 2, wrapper)
-            self.first.hide()
+        if self.numeric or self.optional_number:
+            table.setCellWidget(row, 2, self.lower_cell)
+            self.toggle(False)
         else:
             table.setCellWidget(row, 2, self.fixed)
         self.variable.toggled.connect(self.toggle)
@@ -156,9 +169,10 @@ class Factor:
         for widget in self.extra:
             widget.setEnabled(enabled)
         self.fixed.setEnabled(self.numeric or not enabled)
-        if self.optional_number:
-            self.fixed.setVisible(not enabled)
-            self.first.setVisible(enabled)
+        if self.numeric or self.optional_number:
+            listed = enabled and self.mode.currentData() == "list"
+            self.lower_cell.setCurrentWidget(self.lower_blank if listed else self.first if enabled else self.fixed)
+            self.upper_cell.setCurrentWidget(self.selection if listed else self.last if enabled else self.upper_blank)
 
     def levels_for_matrix(self):
         varying = self.variable.isChecked()
@@ -166,7 +180,13 @@ class Factor:
             values = ([a.data() for a in self.menu.actions() if a.isChecked()]
                       if varying else [self.fixed.currentData()])
         elif (self.numeric or self.optional_number) and varying:
-            values = numeric_levels(self.first.value(), self.last.value(), self.levels.value())
+            if self.mode.currentData() == "list":
+                values = explicit_numbers(self.selection.text(), type(self.first.value()),
+                                          self.first.minimum(), self.first.maximum())
+            else:
+                if self.last.value() <= self.first.value():
+                    raise ValueError("The upper bound must exceed the lower bound.")
+                values = [self.first.value(), self.last.value()]
         elif self.numeric:
             value = self.first.value()
             values = [self.value if value == self.initial_display else value]
@@ -251,7 +271,7 @@ class NewDoePage(QWidget):
         self.reload = QPushButton("Read workspace settings")
         bar.addWidget(self.reload)
         bar.addStretch()
-        self.inputs = self.table(["Parameter", "Variable", "Fixed / minimum", "Maximum / values", "Levels"])
+        self.inputs = self.table(["Parameter", "Variable", "Fixed / minimum", "Maximum / values", "Input mode"])
         layout.addWidget(self.inputs, 3)
         buttons = QHBoxLayout()
         layout.addLayout(buttons)
@@ -319,6 +339,7 @@ class NewDoePage(QWidget):
                 self.factors.append(Factor(self.inputs, row, path, value, sources.get(path[-1]), op, self.invalidate))
             self.inputs.resizeColumnsToContents()
             self.inputs.setColumnWidth(2, max(self.inputs.columnWidth(2), COMBO_WIDTH + 6))
+            self.inputs.setColumnWidth(4, COMBO_WIDTH + 6)
             self.loaded = True
         except Exception as error:
             self.status.setText(str(error))

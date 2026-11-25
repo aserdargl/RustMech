@@ -1332,6 +1332,10 @@ Voxels per axis|Eksen başına voksel
 Read workspace settings|Ana ekrandaki ayarları al
 Create matrix|Matris oluştur
 Fixed / minimum|Sabit / alt sınır
+Min / max|Min / maks
+Value list|Değer listesi
+Input mode|Giriş biçimi
+Separate values with commas. For decimal commas, use a semicolon between values.|Değerleri virgülle ayırın. Ondalık virgül kullanırken değerleri noktalı virgülle ayırın.
 Maximum / values|Üst sınır / değerler
 Select values|Değerleri seç
 Variable|Değişken

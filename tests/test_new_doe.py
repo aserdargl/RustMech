@@ -40,17 +40,28 @@ class NewDoeTests(unittest.TestCase):
         grid.variable.setChecked(True)
         grid.first.setValue(16)
         grid.last.setValue(32)
-        grid.levels.setValue(3)
         cell = factors["cell_size"]
         cell.variable.setChecked(True)
         cell.first.setValue(2)
         cell.last.setValue(4)
         page.create()
         self.assertEqual([(r["grid"], r["settings"]["size"]) for r in page.rows],
-                         [(g, s) for g in (16, 24, 32) for s in (2, 4)])
+                         [(g, s) for g in (16, 32) for s in (2, 4)])
+        grid.mode.setCurrentIndex(grid.mode.findData("list"))
+        self.assertFalse(page.run.isEnabled())
+        grid.selection.setText("32, 17, 24")
+        page.create()
+        self.assertEqual([(r["grid"], r["settings"]["size"]) for r in page.rows],
+                         [(g, s) for g in (32, 17, 24) for s in (2, 4)])
+        cell.mode.setCurrentIndex(cell.mode.findData("list"))
+        cell.selection.setText("1,25; 3,5")
+        page.create()
+        self.assertEqual([r["settings"]["size"] for r in page.rows], [1.25, 3.5] * 3)
         self.assertTrue(all(r["void_ratio"] == self.window.fft_void_ratio.value() for r in page.rows))
         self.assertFalse(self.window.doe_studio.rows)
-        cell.last.setValue(5)
+        grid.selection.setText("16, 24.5")
+        page.create()
+        self.assertFalse(page.rows)
         self.assertFalse(page.run.isEnabled())
 
     def test_two_peridynamic_runs_save_separate_results(self):
@@ -85,8 +96,8 @@ class NewDoeTests(unittest.TestCase):
         page = self.page()
         grid = next(f for f in page.factors if f.path == ("grid",))
         grid.variable.setChecked(True)
-        grid.last.setValue(grid.first.value() + 4)
-        grid.levels.setValue(3)
+        grid.mode.setCurrentIndex(grid.mode.findData("list"))
+        grid.selection.setText("16, 24, 40")
         page.create()
         failed, active = Mock(), Mock()
         failed.done.return_value = True
