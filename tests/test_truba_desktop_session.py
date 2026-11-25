@@ -25,6 +25,7 @@ def test_desktop_requests_keep_show_and_connect_separate(tmp_path, monkeypatch, 
     executable = tmp_path / "TRUBA.exe"
     executable.touch()
     monkeypatch.setenv("TRUBA_DESKTOP_EXE", str(executable))
+    monkeypatch.delenv("TRUBA_DESKTOP_SOURCE", raising=False)
     with patch("truba_desktop._request_running_desktop", return_value=running) as send, \
             patch("truba_desktop.QProcess.startDetached", return_value=(True, 123)) as start:
         launch()
@@ -33,6 +34,28 @@ def test_desktop_requests_keep_show_and_connect_separate(tmp_path, monkeypatch, 
         start.assert_not_called()
     else:
         start.assert_called_once_with(str(executable), [command], str(tmp_path))
+
+
+@pytest.mark.parametrize("explicit_source", [False, True])
+def test_desktop_starts_truba_source_with_its_own_python(tmp_path, monkeypatch, explicit_source):
+    rustmech = tmp_path / "RustMech"
+    source = tmp_path / ("truba project" if explicit_source else "TRUBA")
+    python = source / ".venv" / "Scripts" / "pythonw.exe"
+    python.parent.mkdir(parents=True)
+    python.touch()
+    script = source / "main.py"
+    script.touch()
+    (rustmech / "TRUBA.exe").parent.mkdir()
+    (rustmech / "TRUBA.exe").touch()
+    monkeypatch.setattr("truba_desktop.__file__", str(rustmech / "truba_desktop.py"))
+    monkeypatch.delenv("TRUBA_DESKTOP_EXE", raising=False)
+    monkeypatch.delenv("TRUBA_DESKTOP_SOURCE", raising=False)
+    if explicit_source:
+        monkeypatch.setenv("TRUBA_DESKTOP_SOURCE", str(source))
+    with patch("truba_desktop._request_running_desktop", return_value=False), \
+            patch("truba_desktop.QProcess.startDetached", return_value=(True, 123)) as start:
+        connect_truba_desktop()
+    start.assert_called_once_with(str(python), [str(script), CONNECT_TRUBA], str(source))
 
 
 def test_rustmech_uses_only_the_advertised_arf_session(tmp_path):

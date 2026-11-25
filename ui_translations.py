@@ -1121,6 +1121,7 @@ TRUBA Desktop does not support one-click connection. Restart it with the updated
 Could not reach the running TRUBA application.|Çalışan TRUBA uygulamasına erişilemedi.
 The running TRUBA application did not respond.|Çalışan TRUBA uygulaması yanıt vermedi.
 Could not start the TRUBA application.|TRUBA uygulaması başlatılamadı.
+TRUBA source needs an absolute folder containing main.py and .venv/Scripts/pythonw.exe.|TRUBA kaynağı için main.py ve .venv/Scripts/pythonw.exe dosyalarını içeren klasörün tam yolunu kullanın.
 TRUBA.exe was not found. Set TRUBA_DESKTOP_EXE to its full path.|TRUBA.exe bulunamadı. TRUBA_DESKTOP_EXE değişkenine dosyanın tam yolunu girin.
 Open Design of Experiments settings.|Deney tasarımı ayarlarını açın.
 Select settings method|Ayar yöntemini seçin

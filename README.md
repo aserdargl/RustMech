@@ -26,6 +26,13 @@ TRUBA bağlantısı, TET4/TET10 ağ üretimi ve ANSYS MAPDL için sırasıyla
 `requirements-truba.txt`, `requirements-tet10.txt` ve `requirements-mapdl.txt`
 dosyalarını `python -m pip install -r` ile yükleyin.
 
+RustMech’i kaynak koddan çalıştırırken **HPC** ve **Connect**, komşu
+`TRUBA` klasöründeki `main.py` dosyasını TRUBA’nın kendi Windows sanal
+ortamıyla başlatır. Kaynak klasörü başka bir konumdaysa
+`TRUBA_DESKTOP_SOURCE` değişkenine klasörün tam yolunu yazın. İki düğme de
+TRUBA zaten açıksa mevcut oturumu kullanır. **HPC** ayarları açar,
+**Connect** kayıtlı VPN ve SSH ayarlarıyla bağlantıyı başlatır.
+
 ## Windows kurulum dosyasını derleme
 
 Derleme ortamında PyInstaller ile temel, TET4/TET10, TRUBA ve MAPDL
@@ -103,7 +110,7 @@ Her çalıştırmada ESEN girdilerin bir kopyasını saklar.
 - **Bu bilgisayar** hedefi için `lmp` ve birden çok MPI süreci kullanıyorsanız
   LAMMPS derlemesiyle uyumlu `mpiexec` gerekir. ESEN, Windows'ta MS-MPI'yi arar.
   Farklı bir kurulum kullanıyorsanız program ve başlatıcı alanlarına tam yollarını yazın.
-- **TRUBA** hedefi için RustMech'in **TRUBA** düğmesiyle bağlanın. Kuyruğu, hesabı,
+- **TRUBA** hedefi için RustMech’te **Connect** düğmesiyle bağlanın. Kuyruğu, hesabı,
   bellek ve süreyi, MPI süreç sayısını ve LAMMPS modülünü kontrol edin. ESEN ilk
   sürümde tek düğümlü CPU işi gönderir. Kişisel bir Linux kurulumu için modül
   alanını boş bırakıp çalıştırılabilir dosyanın yolunu girebilirsiniz. Betikte
@@ -351,18 +358,14 @@ açık yardımcı pencereleri, menüleri, açıklamaları ve sonuç grafiklerini
 başlıklarını da günceller; sayısal girdiler, çözücü kimlikleri ve kayıtlı plan
 verileri değişmez.
 
-TRUBA penceresinde **Bağlantı**, **Kaynaklar** ve **Gelişmiş** sekmeleri
-kimlik bilgilerini, kaynak oturumunu ve uzak çalışma ortamını ayrı sunar.
-Pencereyi açmak veya dil değiştirmek bağlantı, kaynak tahsisi ya da analiz
-başlatmaz. Bağlantı **Bağlan**, hesaplama modu ve kaynak tahsisi kendi açık
-eylemleriyle başlatılır. Pencerenin konumu, boyutu ve büyütülmüş durumu korunur.
+**HPC**, TRUBA Desktop’taki bağlantı ayarlarını açar. **Connect**, kayıtlı VPN
+profili ve SSH hesabıyla oturum açar. Bağlantı açıkken TRUBA penceresi
+kapatıldığında uygulama sistem tepsisinde çalışmaya devam eder.
 
-`truba_client.TrubaSession`, bağlantı ve sunucu kimliği doğrulamasını Qt'den
-bağımsız yürütür. Çağıran uygulama `known_hosts` dosyasının dizinini ve durum,
-parmak izi ve hata geri çağrılarını sağlar. Bağlantı açıkken `session.auth`
-değerini `truba_ssh.ssh_connection` işlevine vererek aynı süreçte komut ve
-SFTP aktarımı için mevcut SSH oturumunu kullanabilir. RustMech analiz isteklerinin
-Slurm'a gönderimi ve sonuçların alınması `truba_remote` üzerinden yürür.
+VPN profili ve SSH kimlik bilgileri TRUBA Desktop’ta yönetilir. RustMech,
+aynı Windows hesabındaki TRUBA Desktop oturumunu yerel bağlantı üzerinden
+kullanır. Analizlerin Slurm’a gönderimi ve sonuçların alınması
+`truba_remote` üzerinden yürür.
 
 ## Gitterburg Tasarim Havuzu
 

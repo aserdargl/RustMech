@@ -73,8 +73,29 @@ def connect_truba_desktop():
 def _request_desktop(command):
     if _request_running_desktop(command):
         return
-    app_directory = Path(sys.executable if getattr(sys, "frozen", False) else __file__).resolve().parent
+    executable, arguments, directory = _desktop_launch_command(command)
+    with system_dll_search():
+        started, _ = QProcess.startDetached(str(executable), arguments, str(directory))
+    if not started:
+        raise OSError("Could not start the TRUBA application.")
+
+
+def _desktop_launch_command(command):
+    frozen = getattr(sys, "frozen", False)
+    app_directory = Path(sys.executable if frozen else __file__).resolve().parent
     configured = os.environ.get("TRUBA_DESKTOP_EXE")
+    source = os.environ.get("TRUBA_DESKTOP_SOURCE")
+    # Use the neighboring source checkout during development, with its own
+    # Python environment. Installed RustMech uses the companion app by default.
+    if source or (not frozen and not configured):
+        directory = Path(source).expanduser() if source else app_directory.parent / "TRUBA"
+        script = directory / "main.py"
+        if source or script.is_file():
+            python = directory / ".venv" / "Scripts" / "pythonw.exe"
+            if not directory.is_absolute() or not script.is_file() or not python.is_file():
+                raise OSError("TRUBA source needs an absolute folder containing main.py and .venv/Scripts/pythonw.exe.")
+            return python, [str(script), command], directory
+
     candidates = (Path(configured).expanduser(),) if configured else (
         app_directory / "TRUBA.exe",
         app_directory.parent / "TRUBA" / "TRUBA.exe",
@@ -82,13 +103,8 @@ def _request_desktop(command):
         *(parent / "TRUBA" / "dist" / "TRUBA.exe" for parent in app_directory.parents[:3]),
     )
     for executable in candidates:
-        if not executable.is_absolute() or not executable.is_file():
-            continue
-        with system_dll_search():
-            started, _ = QProcess.startDetached(str(executable), [command], str(executable.parent))
-        if not started:
-            raise OSError("Could not start the TRUBA application.")
-        return
+        if executable.is_absolute() and executable.is_file():
+            return executable, [command], executable.parent
     raise OSError("TRUBA.exe was not found. Set TRUBA_DESKTOP_EXE to its full path.")
 
 
