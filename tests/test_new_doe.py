@@ -26,6 +26,48 @@ class NewDoeTests(unittest.TestCase):
         self.assertLess(studio.capture_plan()["selection"]["tab"], 5)
         return page
 
+    def test_legacy_integer_specimen_size_exposes_three_decimal_axes(self):
+        from new_doe_operations import parameters, snapshot
+        base = snapshot(self.window, "flow_solve")
+        base["settings"]["size"] = 8
+        del base["settings"]["size_x"], base["settings"]["size_y"]
+        fields = dict(parameters(base))
+        for key in ("size_x", "size_y", "size"):
+            value = fields["settings", key]
+            self.assertIs(type(value), float)
+            self.assertEqual(value, 8.0)
+
+    def test_each_structure_family_can_sweep_each_outer_axis(self):
+        page = self.page()
+        for index in range(page.operation.count()):
+            page.operation.setCurrentIndex(index)
+            self.assertTrue(page.loaded, page.status.text())
+            fields = {f.path: f for f in page.factors}
+            structure = fields["settings", "structure_name"]
+            axes = [fields["settings", key] for key in ("size_x", "size_y", "size")]
+            lengths = (6, 9, 12)
+            fields["settings", "cell_size"].fixed.setValue(3)
+            if page.operation.currentData() == "peridynamic_solve":
+                fields["options", "resolution"].fixed.setValue(48)
+            for axis, length in zip(axes, lengths):
+                axis.fixed.setValue(length)
+            for family in range(structure.family.count()):
+                structure.family.setCurrentIndex(family)
+                for direction, axis in enumerate(axes):
+                    with self.subTest(operation=page.operation.currentText(),
+                                      family=structure.family.currentText(), axis=axis.label):
+                        axis.variable.setChecked(True)
+                        axis.first.setValue(lengths[direction])
+                        axis.last.setValue(lengths[direction] + 3)
+                        page.create()
+                        self.assertEqual(len(page.rows), 2, page.status.text())
+                        for level, row in enumerate(page.rows):
+                            expected = list(lengths)
+                            expected[direction] += 3 * level
+                            self.assertEqual([row["settings"][f.path[-1]] for f in axes], expected)
+                            self.assertEqual(row["settings"]["structure_family"], structure.family.currentData())
+                        axis.variable.setChecked(False)
+
     def test_operation_inputs_and_fft_factorial_matrix(self):
         from new_doe_operations import snapshot
         page = self.page()

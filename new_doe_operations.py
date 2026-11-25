@@ -62,9 +62,13 @@ def parameters(request):
     for key in keys:
         if key in ("size_x", "size_y"):
             continue
-        if key == "size" and request["settings"].get("size_x") is not None:
-            for axis in ("size_x", "size_y"):
-                yield ("settings", axis), request["settings"][axis]
+        if key == "size":
+            geometry = request["settings"]
+            if not geometry.get("imported_geometry_path") and geometry.get("test_profile", "custom") == "custom":
+                for axis in ("size_x", "size_y", "size"):
+                    length = geometry.get(axis)
+                    yield ("settings", axis), float(geometry["size"] if length is None else length)
+                continue
         if key != "structure_family":  # The structure selector includes its family.
             yield ("settings", key), request["settings"][key]
 

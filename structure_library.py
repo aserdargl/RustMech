@@ -735,7 +735,6 @@ def evaluate_priority_field(
     )
     morphology = getattr(settings, "tpms_morphology", "sheet") or "sheet"
     cell_size = float(getattr(settings, "cell_size", 3.0))
-    size = float(getattr(settings, "size", 6.0))
     seed = int(getattr(settings, "random_seed", 42))
 
     if family == "tpms":
@@ -762,7 +761,9 @@ def evaluate_priority_field(
             return -dist
         return dist
 
-    # Porous family
+    # Crop the reference field to the physical specimen. Using only its height
+    # would clamp samples along longer axes at the edge of the reference grid.
+    size = max(getattr(settings, "dimensions", (getattr(settings, "size", 6.0),)))
     if name in ("Voronoi Cell", "Advanced Voronoi"):
         gap = _evaluate_voronoi(
             x, y, z, size, cell_size, seed, advanced=(name == "Advanced Voronoi")

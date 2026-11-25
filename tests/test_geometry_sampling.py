@@ -38,6 +38,22 @@ class GeometrySamplingTests(unittest.TestCase):
             self.assertEqual(load_settings(path), settings)
             self.assertNotIn("surface_resolution", path.read_text())
 
+    def test_rectangular_porous_field_and_threshold_use_the_full_reference_domain(self):
+        for name in ("Stochastic Foam", "Voronoi Cell"):
+            with self.subTest(name=name):
+                box = Settings(size_x=8, size_y=6, size=3, cell_size=2,
+                               structure_family="porous", structure_name=name)
+                cube = replace(box, size_x=None, size_y=None, size=8)
+                x = np.linspace(4, 7, 20)
+                field = evaluate_priority_field(box, x, np.array(4.5), np.array(1.5))
+                np.testing.assert_allclose(field, evaluate_priority_field(cube, x, np.array(4.5), np.array(1.5)))
+                self.assertGreater(np.ptp(field), 0)
+                axes = [(np.arange(101) + .5) * length / 101 for length in box.dimensions]
+                samples = evaluate_priority_field(box, axes[0][:, None, None],
+                                                  axes[1][None, :, None], axes[2][None, None, :])
+                self.assertAlmostEqual(mesh_engine.geometry_threshold(box),
+                                       np.quantile(samples, box.solid_fraction / 100))
+
     def test_sampling_tracks_feature_scale_without_using_mesh_settings(self):
         settings = Settings()
         thin = replace(settings, solid_fraction=10)

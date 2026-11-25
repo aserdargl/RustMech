@@ -69,8 +69,10 @@ def field_sources(host, op):
                     young_modulus=material.controls["young_modulus"] if material.stress_unit.currentData() == 1 else None,
                     **host.fft_outer_sizes)
     if op == "peridynamic_solve":
-        return host.peridynamic_settings.controls
-    sources = dict(host.controls, tpms_morphology=host.morphology_combo,
+        controls = host.peridynamic_settings.controls
+        return dict(controls, size_x=controls["size"], size_y=controls["size"])
+    sources = dict(host.controls, size_x=host.controls["size"], size_y=host.controls["size"],
+                   tpms_morphology=host.morphology_combo,
                    test_profile=host.test_profile_combo, specimen_architecture=host.architecture_combo)
     if op == "mechanical":
         sources.update(host.kratos_panel.fields)

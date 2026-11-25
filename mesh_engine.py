@@ -53,7 +53,7 @@ def _surface_threshold_for_settings(
     fraction: float,
 ) -> float:
     probe_settings = Settings(
-        size=dimensions[2],
+        size_x=dimensions[0], size_y=dimensions[1], size=dimensions[2],
         cell_size=period,
         solid_fraction=fraction,
         structure_family=structure_family,
