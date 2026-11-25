@@ -344,7 +344,7 @@ class NewDoeTests(unittest.TestCase):
             self.assertEqual(page.sheet.states, ["Failed", "Completed"])
             self.assertFalse(page.timer.isActive())
 
-    def test_separate_jobs_send_one_experiment_at_a_time_with_distinct_job_ids(self):
+    def test_separate_jobs_queue_before_completion_and_finish_out_of_order(self):
         page = self.page()
         grid = next(f for f in page.factors if f.path == ("grid",))
         grid.variable.setChecked(True)
@@ -352,34 +352,55 @@ class NewDoeTests(unittest.TestCase):
         grid.last.setValue(24)
         page.create()
         root = Path(self.temp.name)
-        jobs = [Mock(), Mock()]
+        records = []
+        def submit(row, case, controller):
+            index = row["experiment_index"]
+            self.assertIs(controller, self.controller)
+            self.assertEqual(row["experiment_count"], 2)
+            self.assertNotIn("experiment_rows", row)
+            folder = case / "truba"
+            folder.mkdir()
+            record = dict(request_id=f"request-{index}", job_id=str(70 + index), state="submitted",
+                          local_directory=str(folder))
+            (folder / "remote_job.json").write_text(json.dumps(record))
+            records.append(record)
+            job = Mock()
+            job.remote_status.return_value = record
+            job.result.return_value = record
+            job.done.return_value = True  # Slurm accepted the job; analysis is still queued.
+            return job
+
         with patch("doe_studio.results_directory", return_value=root), \
                 patch.object(self.controller, "auth", return_value=object()), \
-                patch("new_doe_page.launch", side_effect=jobs) as launch:
+                patch("new_doe_page.launch", side_effect=submit), \
+                patch("new_doe_page.monotonic", return_value=0) as clock:
             page.run.menu().actions()[2].trigger()
-            for i, job in enumerate(jobs, 1):
-                job.remote_status.return_value = dict(job_id=str(70 + i), state="RUNNING")
-                job.done.return_value = False
-                page.advance()
-                self.assertIn(f"#{70 + i}", page.status.text())
-                self.assertIn(f"{i}/2", page.status.text())
-                self.assertEqual(launch.call_count, i)
-                row, directory, controller = launch.call_args.args
-                self.assertIs(controller, self.controller)
-                self.assertEqual((row["experiment_index"], row["experiment_count"]), (i, 2))
-                self.assertNotIn("experiment_rows", row)
-                job.done.return_value = True
-                job.result.return_value = str(directory)
-                page.advance()
-                record = json.loads((directory / "experiment.json").read_text())
-                self.assertEqual(record["slurm_job_id"], str(70 + i))
+            page.advance()
+            page.advance()
+            self.assertEqual(len(records), 2)
+            self.assertTrue(page.timer.isActive())
+            self.assertEqual(page.sheet.states, ["Queued", "Queued"])
+            for index, state in enumerate(("RUNNING|None", "downloaded")):
+                record = records[index]
+                record["state"] = state
+                (Path(record["local_directory"]) / "remote_job.json").write_text(json.dumps(record))
+            clock.return_value = 3
+            page.advance()
+            self.assertEqual(page.sheet.states, ["Running", "Completed"])
+            records[0]["state"] = "downloaded"
+            (Path(records[0]["local_directory"]) / "remote_job.json").write_text(json.dumps(records[0]))
+            clock.return_value = 6
+            page.advance()
             self.assertFalse(page.timer.isActive())
-            self.assertEqual(page.sheet.states, ["Completed", "Completed"])
+            for record in records:
+                saved = json.loads((Path(record["local_directory"]).parent / "experiment.json").read_text())
+                self.assertEqual(saved["slurm_job_id"], record["job_id"])
+                self.assertEqual(saved["state"], "Completed")
 
     def test_truba_uses_selected_operation_and_downloads_into_the_row(self):
         from new_doe_operations import OPERATIONS, launch, snapshot
         from remote_operations import OPERATIONS as capabilities
-        from truba_remote import run_remote_operation
+        from truba_remote import run_remote_operation, submit_remote_analysis
 
         directory = Path(self.temp.name) / "row_00001"
         controller = Mock()
@@ -394,4 +415,8 @@ class NewDoeTests(unittest.TestCase):
                     self.assertEqual(controller.require_analysis.call_args.args[0], capabilities[op])
                     self.assertTrue(controller.require_analysis.call_args.kwargs["explicit_target"])
                     worker.assert_called_with(run_remote_operation, request, "context", remote_auth="auth",
+                                              remote_options={"directory": directory / "truba"})
+                    row = dict(request, experiment_index=1, experiment_count=2)
+                    launch(row, directory, controller)
+                    worker.assert_called_with(submit_remote_analysis, row, "context", remote_auth="auth",
                                               remote_options={"directory": directory / "truba"})

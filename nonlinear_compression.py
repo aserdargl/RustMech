@@ -3921,6 +3921,8 @@ class RustMechDialog(QDialog):
     def _background_analysis_updated(self, record, result):
         if self.disposed:
             return
+        if record.get("experiment_index") and record.get("background"):
+            return
         idle = self.analysis_job is None and self.future is None
         if result is not None:
             payload, directory = result

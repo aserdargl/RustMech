@@ -278,6 +278,34 @@ class RemoteProtocolTests(unittest.TestCase):
         script = (directory / record["script_name"]).read_text()
         self.assertIn(f"#SBATCH --job-name={analysis_code(record)}-DoE-2-of-3", script)
 
+    def test_separate_doe_submissions_do_not_wait_and_download_into_their_own_rows(self):
+        from truba_remote import submit_remote_analysis
+
+        records = []
+        command = FakeTransport.command
+        def submit(transport, script):
+            self.assertNotIn("RUSTMECH_QUEUE", script)
+            return command(transport, script)
+
+        with patch.object(FakeTransport, "command", submit):
+            for index in (1, 2):
+                case = self.root / f"row_{index:05d}"
+                case.mkdir()
+                (case / "experiment.json").write_text(json.dumps({"experiment": index}))
+                request = dict(operation="fft_solve", settings=asdict(Settings()), grid=16,
+                               experiment_index=index, experiment_count=2)
+                records.append(submit_remote_analysis(request, RemoteContext(session_id="321"),
+                                                      directory=case / "truba"))
+        self.assertNotEqual(records[0]["job_id"], records[1]["job_id"])
+        self.assertTrue(all(record["background"] and record["state"] == "submitted" for record in records))
+        for record in reversed(records):
+            result, folder = sync_background_analysis(record, None)
+            self.assertEqual(result["request_id"], record["request_id"])
+            manifest = json.loads((folder.parent / "experiment.json").read_text())
+            self.assertEqual(manifest["state"], "Completed")
+            self.assertEqual(manifest["slurm_job_id"], record["job_id"])
+            self.assertEqual(Path(manifest["results"]), folder / "output")
+
     def test_submission_download_checksum_and_resume_do_not_resubmit(self):
         result,directory = run_remote_job(dict(operation="probe"),RemoteContext(),directory=self.root/"job")
         self.assertTrue(result["capabilities"]["mesh"])

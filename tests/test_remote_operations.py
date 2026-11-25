@@ -77,7 +77,7 @@ class RemoteOperationTests(unittest.TestCase):
         context = RemoteContext(session_id='123')
         with patch('truba_remote.run_remote_job') as submit:
             self.assertIs(submit_remote_analysis(request, context, 'auth', 'marker'), submit.return_value)
-        submit.assert_called_once_with(request, replace(context, session_id=''), 'auth', 'marker', submit_only=True)
+        submit.assert_called_once_with(request, replace(context, session_id=''), 'auth', 'marker', submit_only=True, directory=None)
 
     def test_fft_worker_exports_small_results_without_finite_element_meshing(self):
         settings = Settings(mesh_type='TET10')

@@ -1,6 +1,8 @@
 """Independent operation-specific experiment planner in the DoE window."""
+from collections import deque
 import csv
 import json
+from time import monotonic
 from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
@@ -364,6 +366,9 @@ class NewDoePage(QWidget):
         self.rows = []
         self.factors = []
         self.job = self.directory = None
+        self.submitted_rows = {}
+        self.pending_checks = deque()
+        self.separate_remote = False
         self.loaded = False
         self.timer = QTimer(self, interval=200)
         self.timer.timeout.connect(self.advance)
@@ -678,7 +683,11 @@ class NewDoePage(QWidget):
             remote = controller.requested
         self.controller = controller if remote else None
         self.grouped_remote = remote and not separate
+        self.separate_remote = remote and separate
+        self.submitted_rows.clear()
+        self.pending_checks.clear()
         self.remote_id = None
+        self.stop_requested = False
         if remote:
             if controller.auth() is None:
                 self.status.setText(translate("Connect to TRUBA, then run the matrix again."))
@@ -721,15 +730,16 @@ class NewDoePage(QWidget):
             widget.setEnabled(not busy)
         self.stop.setEnabled(busy)
 
-    def record(self, state, **details):
-        self.sheet.set_state(self.index, state, str(details.get("error", details.get("results", ""))))
-        data = dict(experiment=self.index + 1, state=state, execution_target="truba" if self.controller else "local",
-                    inputs=self.rows[self.index], **details)
-        if self.remote_id:
+    def record(self, state, *, index=None, **details):
+        index = self.index if index is None else index
+        case = self.directory / f"row_{index + 1:05d}"
+        self.sheet.set_state(index, state, str(details.get("error", details.get("results", ""))))
+        data = dict(experiment=index + 1, state=state, execution_target="truba" if self.controller else "local",
+                    inputs=self.rows[index], **details)
+        if self.remote_id and not self.separate_remote:
             data["slurm_job_id"] = self.remote_id
-        temporary = self.case / "experiment.tmp"
-        temporary.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
-        temporary.replace(self.case / "experiment.json")
+        from truba_jobs import write_record
+        write_record(case / "experiment.json", data)
 
     def finish_remote(self, state, message):
         for index in range(len(self.rows)):
@@ -778,11 +788,66 @@ class NewDoePage(QWidget):
             self.failures += state == "Failed"
         self.finish(f"{len(self.rows)} experiments finished · {self.failures} failed.")
 
+    def update_submitted_row(self, record):
+        request_id = record.get("request_id")
+        if request_id not in self.submitted_rows:
+            return
+        from truba_job_list import terminal_record
+
+        index = self.submitted_rows[request_id]
+        state = record.get("state", "")
+        job_id = record.get("job_id")
+        details = {"slurm_job_id": job_id} if job_id else {}
+        if state == "downloaded":
+            self.record("Completed", index=index, results=str(Path(record["local_directory"]) / "output"), **details)
+        elif terminal_record(record):
+            self.failures += 1
+            self.record("Stopped" if state.lower() == "cancelled" else "Failed", index=index, error=state, **details)
+        else:
+            label = "Running" if state.startswith("RUNNING") else "Queued"
+            detail = f"TRUBA #{job_id or '…'} · {state}"
+            if self.sheet.details.get(index) != detail:
+                self.record(label, index=index, **details)
+                self.sheet.set_state(index, label, detail)
+            return
+        del self.submitted_rows[request_id]
+
+    def track_submission(self, record):
+        self.submitted_rows[record["request_id"]] = self.index
+        # A fast job can finish between the submission reply and this UI tick.
+        path = self.case / "truba" / "remote_job.json"
+        if path.is_file():
+            record = json.loads(path.read_text(encoding="utf-8"))
+        self.update_submitted_row(record)
+        self.pending_checks.append((monotonic() + 2, record["request_id"]))
+
+    def refresh_submitted_rows(self):
+        # SSH polling and result downloads are owned by TrubaSession. Read only
+        # durable local snapshots here, including cancellations from the Jobs panel.
+        now = monotonic()
+        for _ in range(min(16, len(self.pending_checks))):
+            due, request_id = self.pending_checks[0]
+            if due > now:
+                break
+            self.pending_checks.popleft()
+            if request_id not in self.submitted_rows:
+                continue
+            index = self.submitted_rows[request_id]
+            path = self.directory / f"row_{index + 1:05d}" / "truba" / "remote_job.json"
+            if path.is_file():
+                self.update_submitted_row(json.loads(path.read_text(encoding="utf-8")))
+            if request_id in self.submitted_rows:
+                self.pending_checks.append((now + 2, request_id))
+
     def advance(self):
+        if self.stop_requested:
+            return
         if self.grouped_remote:
             self.advance_remote()
             return
         try:
+            if self.separate_remote:
+                self.refresh_submitted_rows()
             if self.job is not None:
                 if self.controller is not None:
                     self.show_remote_progress()
@@ -793,21 +858,36 @@ class NewDoePage(QWidget):
                     result = job.result()
                     if result is None:
                         raise RuntimeError("Solver returned without results.")
-                    path = result["directory"] if isinstance(result, dict) else str(result)
+                    if self.separate_remote:
+                        self.track_submission(result)
+                    else:
+                        path = result["directory"] if isinstance(result, dict) else str(result)
                 except Exception as error:
-                    self.failures += 1
-                    self.record("Failed", error=str(error))
+                    durable = self.case / "truba" / "remote_job.json"
+                    saved = json.loads(durable.read_text(encoding="utf-8")) if self.separate_remote and durable.is_file() else {}
+                    if saved.get("submission_attempted"):
+                        self.track_submission(saved)
+                    else:
+                        self.failures += 1
+                        self.record("Failed", error=str(error))
                 else:
-                    self.record("Completed", results=path)
+                    if not self.separate_remote:
+                        self.record("Completed", results=path)
                 self.index += 1
             if self.index == len(self.rows):
+                if self.submitted_rows:
+                    self.status.setText(f"TRUBA · {len(self.submitted_rows)} / {len(self.rows)} " + translate("jobs pending or running"))
+                    return
                 self.finish(f"{self.index} experiments finished · {self.failures} failed.")
                 return
             self.case = self.directory / f"row_{self.index + 1:05d}"
             self.case.mkdir()
             self.remote_id = None
-            self.record("Running")
-            self.status.setText(f"Running experiment {self.index + 1} / {len(self.rows)}")
+            self.record("Submitting" if self.separate_remote else "Running")
+            if self.separate_remote:
+                self.status.setText(f"TRUBA · {translate('Submitting')} · DoE {self.index + 1}/{len(self.rows)}")
+            else:
+                self.status.setText(f"Running experiment {self.index + 1} / {len(self.rows)}")
             try:
                 row = self.rows[self.index]
                 if self.controller is not None:
@@ -826,24 +906,24 @@ class NewDoePage(QWidget):
         self.status.setText(message)
 
     def detach_remote(self):
-        if self.job is None or not self.job.is_remote:
-            return None
-        job, self.job = self.job, None
-        if self.grouped_remote:
+        if self.separate_remote and self.timer.isActive():
+            # Slurm and the durable background monitor now own every accepted job.
+            first_unsent = self.index + (1 if self.job is not None else 0)
+            for i in range(first_unsent, len(self.rows)):
+                self.sheet.set_state(i, "Skipped")
+            self.submitted_rows.clear()
+            self.finish(translate("Remote experiment detached."))
+        elif self.job is not None and self.job.is_remote:
             self.finish_remote("Detached", translate("Remote experiment detached."))
         else:
-            self.finish(translate("Remote experiment detached."))
-            for index in range(self.index + 1, len(self.rows)):
-                self.sheet.set_state(index, "Skipped")
-            try:
-                self.record("Detached", remote_job=job.remote_status())
-            except OSError as error:
-                self.status.setText(str(error))
+            return None
+        job, self.job = self.job, None
         return job
 
     def cancel(self):
         if not self.timer.isActive():
             return
+        self.stop_requested = self.separate_remote
         if self.job is not None:
             try:
                 self.job.force_stop()
@@ -858,6 +938,23 @@ class NewDoePage(QWidget):
                 self.record("Stopped")
             except OSError as error:
                 self.finish(str(error))
+                return
+        if self.separate_remote:
+            from truba_jobs import cancel_remote
+            for i in range(self.index, len(self.rows)):
+                if self.sheet.states[i] == "Queued":
+                    self.sheet.set_state(i, "Skipped")
+            self.index = len(self.rows)
+            errors = []
+            for index in list(self.submitted_rows.values()):
+                path = self.directory / f"row_{index + 1:05d}" / "truba" / "remote_job.json"
+                try:
+                    cancel_remote(path, self.controller.auth())
+                    self.update_submitted_row(json.loads(path.read_text(encoding="utf-8")))
+                except Exception as error:
+                    errors.append(str(error))
+            if errors:
+                self.status.setText(errors[0])
                 return
         for i in range(self.index, len(self.rows)):
             if self.sheet.states[i] == "Queued":

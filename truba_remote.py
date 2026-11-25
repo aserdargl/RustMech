@@ -16,21 +16,22 @@ import tarfile
 from threading import Lock
 import time
 import uuid
+from weakref import WeakValueDictionary
 
 from remote_operations import ANALYSIS_OPERATIONS
 from truba_jobs import (HOST, SAFE_NAME, SLURM_TERMINAL_STATES, SSHJobs, WinSCPJobs, connection, job_record_lock,
                         validated_remote_path, write_record, cancel_remote)
 from truba_credentials import state_directory
 
-_convergence_followers = {}
+_job_followers = WeakValueDictionary()
 
 # Controller commands use the SSH environment without interactive startup files.
 _COMMAND_SHELL = "env -u BASH_ENV TERM=dumb bash --noprofile --norc"
 
 
-def _convergence_poll_lock(record):
+def _job_poll_lock(record):
     with job_record_lock:
-        return _convergence_followers.setdefault(record["local_directory"], Lock())
+        return _job_followers.setdefault(record["local_directory"], Lock())
 
 
 @dataclass(frozen=True)
@@ -373,6 +374,22 @@ def _rebase_paths(directory,result, *, rewrite_summaries=True):
     return result
 
 
+def _save_doe_row_result(record, directory, stage):
+    if not record.get("background") or not record.get("experiment_index"):
+        return
+    if stage != "downloaded" and stage.upper().partition("|")[0] not in SLURM_TERMINAL_STATES:
+        return
+    manifest = directory.parent / "experiment.json"
+    if manifest.is_file():
+        row = json.loads(manifest.read_text(encoding="utf-8"))
+        row["slurm_job_id"] = record.get("job_id")
+        if stage == "downloaded":
+            row.update(state="Completed", results=str(directory / "output"))
+        else:
+            row.update(state="Stopped" if stage.upper().startswith("CANCELLED") else "Failed", error=stage)
+        write_record(manifest, row)
+
+
 def run_remote_job(request,context,auth=None,marker=None,*,directory=None,resume_record=None,on_progress=None,cancelled=None,
                    submit_only=False, poll_once=False, detach_requested=None):
     from remote_operations import batch_geometry_name, required_capability
@@ -473,6 +490,7 @@ def run_remote_job(request,context,auth=None,marker=None,*,directory=None,resume
                 from concurrent.futures import CancelledError
                 raise CancelledError
             record["state"] = stage
+            _save_doe_row_result(record, directory, stage)
             _write_paths(paths,record)
         if on_progress: on_progress("TRUBA · "+stage)
     code = analysis_code(record)
@@ -770,9 +788,10 @@ def run_remote_operation(request,context,remote_auth=None,job_marker=None,*,dire
 run_remote_operation.remote_job_target = True
 
 
-def submit_remote_analysis(request, context, remote_auth=None, job_marker=None):
+def submit_remote_analysis(request, context, remote_auth=None, job_marker=None, *, directory=None):
     # Interactive mechanics and FFT keep their own independent Slurm allocation.
-    return run_remote_job(request, replace(context, session_id=""), remote_auth, job_marker, submit_only=True)
+    return run_remote_job(request, replace(context, session_id=""), remote_auth, job_marker, submit_only=True,
+                          directory=directory)
 submit_remote_analysis.remote_job_target = True
 submit_remote_analysis.remote_submit_target = True
 
@@ -785,12 +804,18 @@ run_remote_mechanics.remote_submit_target = True
 
 
 def sync_background_analysis(record, auth):
-    if record.get("operation") != "convergence_level":
+    doe_row = record.get("background") and record.get("experiment_index")
+    if record.get("operation") != "convergence_level" and not doe_row:
         return run_remote_job({}, RemoteContext(**record["context"]), auth, resume_record=record, poll_once=True)
-    lock = _convergence_poll_lock(record)
+    lock = _job_poll_lock(record)
     if not lock.acquire(blocking=False):
         return None
     try:
+        if doe_row:
+            latest = json.loads((Path(record["local_directory"]) / "remote_job.json").read_text(encoding="utf-8"))
+            if latest["state"] == "downloaded" or latest["state"].upper().partition("|")[0] in SLURM_TERMINAL_STATES:
+                return None
+            record = latest
         return run_remote_job({}, RemoteContext(**record["context"]), auth, resume_record=record, poll_once=True)
     finally:
         lock.release()
@@ -872,7 +897,7 @@ def resume_convergence_levels(record_path, remote_auth=None, job_marker=None):
         raise ValueError('A confirmed Slurm mesh convergence job is required.')
     directory = Path(record['local_directory'])
     request = json.loads((directory / 'request.json').read_text(encoding='utf-8'))
-    with _convergence_poll_lock(record):
+    with _job_poll_lock(record):
         record = json.loads(Path(record_path).read_text(encoding='utf-8'))
         result, directory = run_remote_job({}, RemoteContext(**record['context']), remote_auth, job_marker,
                                            resume_record=record)
