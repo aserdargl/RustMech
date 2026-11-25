@@ -43,7 +43,7 @@ class NewDoeTests(unittest.TestCase):
         grid.first.setValue(16)
         grid.last.setValue(32)
         for axis in ("size_x", "size_y", "size"):
-            factors[axis].first.setValue(12)
+            factors[axis].fixed.setValue(12)
         cell = factors["cell_size"]
         cell.variable.setChecked(True)
         cell.first.setValue(2)
@@ -68,26 +68,71 @@ class NewDoeTests(unittest.TestCase):
         self.assertFalse(page.rows)
         self.assertFalse(page.run.isEnabled())
 
+    def test_fft_geometry_and_material_controls_are_local_to_doe(self):
+        from material_catalog import builtin_materials
+        from window_caption import CAPTION_PROPERTY
+
+        page = self.page()
+        self.assertEqual(self.window.property(CAPTION_PROPERTY).height(), 25)
+        self.assertEqual(page.window().property(CAPTION_PROPERTY).height(), 25)
+        fields = {factor.path[-1]: factor for factor in page.factors}
+        structure = fields["structure_name"]
+        starting_structure = structure.fixed.currentData()
+        structure.family.setCurrentIndex(structure.family.findData("lattice"))
+        self.assertNotEqual(structure.fixed.currentData(), starting_structure)
+        self.assertEqual(self.window.fft_structure_combo.currentData(), starting_structure)
+        structure.family.setCurrentIndex(structure.family.findData("tpms"))
+
+        card = next(entry.card() for entry in builtin_materials() if entry.kind == "solid")
+        original = self.window.fft_material_editor.material_settings()
+        page.apply_fft_material(card)
+        modulus = fields["young_modulus"]
+        modulus.variable.setChecked(True)
+        modulus.first.setValue(1000)
+        modulus.last.setValue(2000)
+        page.create()
+        self.assertEqual([row["settings"]["young_modulus"] for row in page.rows], [1000, 2000])
+        self.assertTrue(all(row["settings"]["material_name"] == card.name for row in page.rows))
+        self.assertEqual(self.window.fft_material_editor.material_settings(), original)
+        modulus.variable.setChecked(False)
+        page.create()
+        self.assertEqual(len(page.rows), 1)
+        self.assertEqual(page.rows[0]["settings"]["young_modulus"], modulus.fixed.value())
+
+        period = fields["cell_size"]
+        period.variable.setChecked(True)
+        period.first.setValue(2)
+        period.last.setValue(4)
+        page.create()
+        self.assertEqual(
+            [tuple(row["settings"][axis] for axis in ("size_x", "size_y", "size")) for row in page.rows],
+            [(2, 2, 2), (4, 4, 4)],
+        )
+
     def test_grouped_drafts_build_geometry_only_on_apply(self):
         page = self.page()
         fields = {f.path[-1]: f for f in page.factors}
-        fields["cell_size"].first.setValue(1)
-        fields["size_x"].first.setValue(6)
-        fields["size_y"].first.setValue(3)
+        fields["cell_size"].fixed.setValue(1)
+        fields["size_x"].fixed.setValue(6)
+        fields["size_y"].fixed.setValue(3)
         cell = fields["size"]
         geometry = page.sections["Structure / Dimensions"]
         fft = page.sections["FFT Homogenization"]
         with patch.object(self.window, "_show_doe_bounds") as preview:
-            self.assertTrue(cell.first.isVisible())
-            cell.first.setValue(2)
+            self.assertTrue(cell.fixed.isVisible())
+            cell.fixed.setValue(2)
             cell.variable.setChecked(True)
             cell.last.setValue(4)
-            QTest.mouseClick(fft, Qt.MouseButton.LeftButton, pos=fft.header_rect().center())
             self.assertTrue(fft.content.isVisible())
+            self.assertFalse(cell.fixed.isEnabled())
+            self.assertTrue(page.variations.isRowHidden(fields["grid"].variation_row))
+            page.input_tabs.setCurrentWidget(page.variations)
             self.assertTrue(cell.first.isVisible())
+            self.assertFalse(page.variations.isRowHidden(cell.variation_row))
+            page.input_tabs.setCurrentWidget(page.inputs)
             geometry.setFocus()
             QTest.keyClick(geometry, Qt.Key.Key_Space)
-            self.assertFalse(cell.first.isVisible())
+            self.assertFalse(cell.fixed.isVisible())
             self.assertTrue(fft.content.isVisible())
             preview.assert_not_called()
             page.apply_button.click()
@@ -95,7 +140,7 @@ class NewDoeTests(unittest.TestCase):
             self.assertFalse(page.rows)
             page.create()
             QTest.keyClick(geometry, Qt.Key.Key_Space)
-            self.assertTrue(cell.first.isVisible())
+            self.assertTrue(cell.fixed.isVisible())
             self.assertEqual((cell.first.value(), cell.last.value()), (2, 4))
             self.assertEqual(len(page.rows), 2)
             page.preview.selectRow(1)
@@ -107,8 +152,8 @@ class NewDoeTests(unittest.TestCase):
         page = self.page()
         page.operation.setCurrentIndex(page.operation.findData("peridynamic_solve"))
         fields = {f.path[-1]: f for f in page.factors}
-        fields["resolution"].first.setValue(12)
-        fields["cell_size"].first.setValue(6)
+        fields["resolution"].fixed.setValue(12)
+        fields["cell_size"].fixed.setValue(6)
         increments = next(f for f in page.factors if f.path[-1] == "increments")
         increments.variable.setChecked(True)
         increments.first.setValue(2)

@@ -2,20 +2,25 @@
 import csv
 import json
 from datetime import datetime
+from pathlib import Path
 from uuid import uuid4
 
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt, QTimer, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDoubleSpinBox,
                                QHBoxLayout, QLabel, QLineEdit, QMenu, QPushButton, QScrollArea, QSpinBox,
-                               QStackedWidget, QTableView, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
+                               QStackedWidget, QTabWidget, QTableView, QTableWidget, QTableWidgetItem,
+                               QVBoxLayout, QWidget)
 
 from new_doe_operations import (OPERATIONS, explicit_numbers, launch, matrix,
                                 parameters, snapshot, structure_choices, validate)
-from studio_style import COMBO_WIDTH, CompactComboBox, CompactDoubleSpinBox, CompactSpinBox, SidebarGroupBox
+from structure_library import ALL_STRUCTURES_BY_FAMILY, STRUCTURE_FAMILIES
+from studio_style import (COMBO_WIDTH, CONTROL_HEIGHT, CompactComboBox, CompactDoubleSpinBox,
+                          CompactSpinBox, SidebarGroupBox)
 from ui_language import translate, turkish
 from model import CONTACT_NUMERICAL_FIELDS, GEOMETRY_FIELDS, MATERIAL_FIELDS, settings_from_dict, validate_geometry
 
+FFT_OUTER_AXES = ("size_x", "size_y", "size")
 LABELS = {"grid": "Voxels per axis", "void_ratio": "Void / solid stiffness", "distribution": "WSL distribution",
           "structure_name": "Structure family / type", "tpms_morphology": "Morphology",
           "young_modulus": "Young’s modulus (MPa)", "cell_size": "Cell size (mm)",
@@ -23,7 +28,7 @@ LABELS = {"grid": "Voxels per axis", "void_ratio": "Void / solid stiffness", "di
           "size": "Outer Z (mm)", "material_card": "Material card"}
 
 
-def parameter_group(path):
+def parameter_group(path, op):
     key = path[-1]
     if path[0] == "settings":
         if key in ("test_profile", "specimen_architecture", "core_fraction"):
@@ -33,7 +38,7 @@ def parameter_group(path):
         if key in GEOMETRY_FIELDS:
             return "Structure / Dimensions"
         if key in MATERIAL_FIELDS:
-            return "Solid material"
+            return "Solid phase material" if op == "fft_solve" else "Solid material"
         if key.startswith("kratos_"):
             return "Kratos · nonlinear solution"
         if key.startswith(("bottom_platen", "top_platen", "self_")) or "contact" in key or key in CONTACT_NUMERICAL_FIELDS:
@@ -56,8 +61,13 @@ def parameter_group(path):
 
 def field_sources(host, op):
     if op == "fft_solve":
+        material = host.fft_material_editor
         return dict(host.fft_outer_sizes, grid=host.fft_grid, void_ratio=host.fft_void_ratio, cell_size=host.fft_cell_size,
-                    solid_fraction=host.fft_solid_fraction, tpms_morphology=host.fft_morphology_combo)
+                    solid_fraction=host.fft_solid_fraction, tpms_morphology=host.fft_morphology_combo,
+                    distribution=host.fft_distribution, material_name=material.name,
+                    poisson_ratio=material.controls["poisson_ratio"],
+                    young_modulus=material.controls["young_modulus"] if material.stress_unit.currentData() == 1 else None,
+                    **host.fft_outer_sizes)
     if op == "peridynamic_solve":
         return host.peridynamic_settings.controls
     sources = dict(host.controls, tpms_morphology=host.morphology_combo,
@@ -77,7 +87,8 @@ def field_sources(host, op):
     else:
         ws = host.flow_workspace if op == "flow_solve" else host.thermal_workspace
         sources.update(ws.controls, mesh_method=ws.mesh_method, channel_shape=ws.channel_shape,
-                       turbulence=ws.model)
+                       turbulence=ws.model, distribution=ws.distribution, foam_bashrc=ws.bashrc,
+                       empty_pipe=ws.empty, allow_bypass=ws.allow_bypass)
         sources.update(getattr(ws, "thermal_controls", {}))
     return sources
 
@@ -90,18 +101,28 @@ def number(value, source):
     integer = type(value) is int
     box = CompactSpinBox() if integer else CompactDoubleSpinBox()
     if isinstance(source, (QSpinBox, QDoubleSpinBox)):
+        if isinstance(source, QDoubleSpinBox):
+            box.setDecimals(source.decimals())
         box.setRange(min(value, source.minimum()), max(value, source.maximum()))
         box.setSingleStep(source.singleStep())
+        box.setSpecialValueText(source.specialValueText())
     else:
         bound = 2147483647 if integer else max(1e15, abs(value))
         box.setRange(-bound, bound)
     box.setFixedWidth(110)
+    box.setKeyboardTracking(False)
     box.setValue(value)
     return box
 
 
+def text_field(value=""):
+    field = QLineEdit(value)
+    field.setFixedHeight(CONTROL_HEIGHT)
+    return field
+
+
 class Factor:
-    def __init__(self, table, row, path, value, source, op, changed):
+    def __init__(self, table, row, variations, variation_row, path, value, source, op, changed):
         self.value = value
         self.path = path
         key = path[-1]
@@ -114,9 +135,12 @@ class Factor:
                 if label is not None:
                     self.label = label.text()
         table.setItem(row, 0, QTableWidgetItem(self.label))
+        variations.setItem(variation_row, 0, QTableWidgetItem(self.label))
         self.variable = QCheckBox()
         self.variable.setAccessibleName(self.label + " variable")
-        table.setCellWidget(row, 1, self.variable)
+        table.setCellWidget(row, 2, self.variable)
+        self.variations = variations
+        self.variation_row = variation_row
         self.choices = []
         if key == "structure_name":
             self.choices = structure_choices(op)
@@ -127,9 +151,11 @@ class Factor:
             self.choices = [("True", True), ("False", False)]
         self.numeric = not self.choices and type(value) in (int, float)
         self.optional_number = value is None and key in ("minimum_substeps", "maximum_substeps", "stl_resolution")
+        self.levels_seeded = False
         if self.choices:
             self.fixed = CompactComboBox()
             self.selection = QPushButton("Select values")
+            self.selection.setFixedHeight(CONTROL_HEIGHT)
             self.menu = QMenu(self.selection)
             self.selection.setMenu(self.menu)
             for title, data in self.choices:
@@ -145,52 +171,50 @@ class Factor:
         elif self.numeric or self.optional_number:
             initial = value if self.numeric else (0.1 if key == "stl_resolution" else 1)
             self.first = number(initial, source)
-            self.initial_display = self.first.value()
             self.last = number(initial, source)
             self.mode = CompactComboBox()
             self.mode.addItem("Min / max", "bounds")
             self.mode.addItem("Value list", "list")
-            self.selection = QLineEdit()
+            self.selection = text_field()
             self.selection.setPlaceholderText("16, 24, 40" if type(initial) is int else "0.5, 1, 2.5")
             self.selection.setToolTip("Separate values with commas. For decimal commas, use a semicolon between values.")
             self.selection.setAccessibleName(self.label + " " + translate("Value list"))
             self.selection.textChanged.connect(changed)
-            self.fixed = self.first
-            if self.optional_number:
-                self.fixed = QLineEdit("null")
+            if self.numeric:
+                self.fixed = number(initial, source)
+                self.initial_display = self.fixed.value()
+                self.fixed.valueChanged.connect(changed)
+            else:
+                self.fixed = text_field("null")
                 self.fixed.textChanged.connect(changed)
             self.lower_cell = QStackedWidget()
             self.lower_cell.addWidget(self.first)
-            if self.optional_number:
-                self.lower_cell.addWidget(self.fixed)
             self.lower_blank = QWidget()
             self.lower_cell.addWidget(self.lower_blank)
             self.upper_cell = QStackedWidget()
             self.upper_cell.addWidget(self.last)
             self.upper_cell.addWidget(self.selection)
-            self.upper_blank = QWidget()
-            self.upper_cell.addWidget(self.upper_blank)
-            self.extra = [self.upper_cell, self.mode]
+            self.extra = [self.lower_cell, self.upper_cell, self.mode]
             self.mode.currentIndexChanged.connect(lambda: self.toggle(self.variable.isChecked()))
             self.mode.currentIndexChanged.connect(changed)
             for box in (self.first, self.last):
                 box.valueChanged.connect(changed)
         else:
-            self.fixed = QLineEdit(display(value))
+            self.fixed = text_field(display(value))
             self.fixed.textChanged.connect(changed)
-            self.selection = QLineEdit()
+            self.selection = text_field()
             self.selection.setPlaceholderText('["value 1", "value 2"]')
             self.selection.setToolTip("Enter the levels as a JSON list.")
             self.selection.textChanged.connect(changed)
             self.extra = [self.selection]
-        for i, widget in enumerate(self.extra, 3):
-            table.setCellWidget(row, i, widget)
-            widget.setEnabled(False)
-        if self.numeric or self.optional_number:
-            table.setCellWidget(row, 2, self.lower_cell)
-            self.toggle(False)
-        else:
-            table.setCellWidget(row, 2, self.fixed)
+        first_column = 1 if self.numeric or self.optional_number else 2
+        for i, widget in enumerate(self.extra, first_column):
+            variations.setCellWidget(variation_row, i, widget)
+        self.fixed_panel = self.fixed
+        if key == "structure_name":
+            self.add_structure_family(value)
+        table.setCellWidget(row, 1, self.fixed_panel)
+        self.toggle(False)
         self.variable.toggled.connect(self.toggle)
         self.variable.toggled.connect(changed)
         for editor in (self.fixed, *self.extra):
@@ -199,13 +223,49 @@ class Factor:
                 editor.setAutoDefault(False)
 
     def toggle(self, enabled):
-        for widget in self.extra:
-            widget.setEnabled(enabled)
-        self.fixed.setEnabled(self.numeric or not enabled)
+        self.variations.setRowHidden(self.variation_row, not enabled)
+        self.fixed_panel.setEnabled(not enabled)
+        if enabled and not self.levels_seeded:
+            if self.choices:
+                for action in self.menu.actions():
+                    action.setChecked(action.data() == self.fixed.currentData())
+            elif self.numeric:
+                self.first.setValue(self.fixed.value())
+                self.last.setValue(self.fixed.value())
+            self.levels_seeded = True
         if self.numeric or self.optional_number:
-            listed = enabled and self.mode.currentData() == "list"
-            self.lower_cell.setCurrentWidget(self.lower_blank if listed else self.first if enabled else self.fixed)
-            self.upper_cell.setCurrentWidget(self.selection if listed else self.last if enabled else self.upper_blank)
+            listed = self.mode.currentData() == "list"
+            self.lower_cell.setCurrentWidget(self.lower_blank if listed else self.first)
+            self.upper_cell.setCurrentWidget(self.selection if listed else self.last)
+
+    def add_structure_family(self, value):
+        names = {name for _, name in self.choices}
+        self.family = CompactComboBox()
+        self.family.setAccessibleName("Structure family")
+        self.fixed.setAccessibleName("Structure type")
+        for family, members in ALL_STRUCTURES_BY_FAMILY.items():
+            if names.intersection(members):
+                self.family.addItem(STRUCTURE_FAMILIES[family], family)
+                if value in members:
+                    self.family.setCurrentIndex(self.family.count() - 1)
+        self.fixed_panel = QWidget()
+        controls = QHBoxLayout(self.fixed_panel)
+        controls.setContentsMargins(0, 0, 0, 0)
+        controls.setSpacing(3)
+        controls.addWidget(self.family)
+        controls.addWidget(self.fixed)
+        controls.addStretch()
+        self.family.currentIndexChanged.connect(self.update_structure_choices)
+        self.update_structure_choices()
+
+    def update_structure_choices(self):
+        previous = self.fixed.currentData()
+        choices = ALL_STRUCTURES_BY_FAMILY[self.family.currentData()]
+        self.fixed.clear()
+        for label, name in self.choices:
+            if name in choices:
+                self.fixed.addItem(label.split(" / ", 1)[-1], name)
+        self.fixed.setCurrentIndex(max(0, self.fixed.findData(previous)))
 
     def levels_for_matrix(self):
         varying = self.variable.isChecked()
@@ -221,7 +281,7 @@ class Factor:
                     raise ValueError("The upper bound must exceed the lower bound.")
                 values = [self.first.value(), self.last.value()]
         elif self.numeric:
-            value = self.first.value()
+            value = self.fixed.value()
             values = [self.value if value == self.initial_display else value]
         elif varying:
             values = json.loads(self.selection.text())
@@ -314,8 +374,13 @@ class NewDoePage(QWidget):
         bar.addStretch()
         self.inputs = QScrollArea()
         self.inputs.setWidgetResizable(True)
+        self.input_tabs = QTabWidget()
+        self.input_tabs.addTab(self.inputs, "Analysis settings")
+        self.variations = self.table(["Parameter", "Lower bound", "Maximum / values", "Input mode"])
+        self.variations.setAccessibleName("Variable settings")
+        self.input_tabs.addTab(self.variations, "Variable settings")
         self.sections = {}
-        layout.addWidget(self.inputs, 3)
+        layout.addWidget(self.input_tabs, 3)
         buttons = QHBoxLayout()
         layout.insertLayout(1, buttons)
         for name, title, callback in (("generate", "Create matrix", self.create), ("run", "Run", self.start),
@@ -389,6 +454,8 @@ class NewDoePage(QWidget):
         expanded = {title: not section.content.isHidden() for title, section in self.sections.items()}
         self.sections.clear()
         self.factors.clear()
+        self.input_tabs.setCurrentWidget(self.inputs)
+        self.variations.setRowCount(0)
         panel = QWidget()
         stack = QVBoxLayout(panel)
         stack.setContentsMargins(2, 2, 2, 2)
@@ -401,32 +468,68 @@ class NewDoePage(QWidget):
             sources = field_sources(self.host, op)
             groups = {"Structure / Dimensions": []}
             fields = list(parameters(self.base))
+            if op == "fft_solve":
+                # The workspace uses zero to display "1 cell", even though
+                # its solver snapshot always contains resolved dimensions.
+                fields = [(path, sources[path[-1]].value() if path[-1] in FFT_OUTER_AXES else value)
+                          for path, value in fields]
+            variation_rows = {path: index for index, (path, _) in enumerate(fields)}
+            self.variations.setRowCount(len(fields))
             for path, value in fields:
-                groups.setdefault(parameter_group(path), []).append((path, value))
-            factors = {}
+                groups.setdefault(parameter_group(path, op), []).append((path, value))
+            factors, tables = {}, []
+            button_width = self.button_width
             for title, members in groups.items():
                 section = SidebarGroupBox(title)
                 self.sections[title] = section
                 stack.addWidget(section)
                 body = QVBoxLayout(section.content)
                 body.setContentsMargins(2, 0, 2, 1)
-                table = self.table(["Parameter", "Variable", "Fixed / minimum", "Maximum / values", "Input mode"])
+                if title == "Solid phase material":
+                    actions = QHBoxLayout()
+                    width = button_width or max(self.fontMetrics().horizontalAdvance(translate(label))
+                                                for label in ("Library", "Load")) + 26
+                    for label, callback in (("Library", self.open_fft_material_library),
+                                            ("Load", self.load_fft_material)):
+                        button = QPushButton(label)
+                        button.setAutoDefault(False)
+                        button.setProperty("managesLocalizedWidth", True)
+                        button.setFixedWidth(width)
+                        button.clicked.connect(callback)
+                        actions.addWidget(button)
+                    actions.addStretch()
+                    body.addLayout(actions)
+                table = self.table(["Parameter", "Fixed value", "Variable"])
+                tables.append(table)
                 body.addWidget(table)
                 table.setRowCount(len(members))
                 for row, (path, value) in enumerate(members):
-                    factors[path] = Factor(table, row, path, value, sources.get(path[-1]), op, self.invalidate)
+                    factors[path] = Factor(table, row, self.variations, variation_rows[path], path, value,
+                                           sources.get(path[-1]), op, self.invalidate)
                 table.ensurePolished()
                 table.resizeColumnsToContents()
-                table.setColumnWidth(2, max(table.columnWidth(2), COMBO_WIDTH + 6))
-                table.setColumnWidth(4, COMBO_WIDTH + 6)
+                width = max((factors[path].fixed_panel.sizeHint().width() for path, _ in members),
+                            default=COMBO_WIDTH)
+                table.setColumnWidth(1, max(table.columnWidth(1), width + 6))
                 table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
                 table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+                section.set_expanded(expanded.get(title, op == "fft_solve" or title == "Structure / Dimensions"))
+            widths = [max(table.columnWidth(column) for table in tables) for column in range(3)]
+            for table in tables:
+                for column, width in enumerate(widths):
+                    table.setColumnWidth(column, width)
                 frame = 2 * table.frameWidth()
-                table.setMinimumWidth(table.horizontalHeader().length() + frame)
+                table.setMinimumWidth(sum(widths) + frame)
                 table.setFixedHeight(table.horizontalHeader().sizeHint().height() + table.verticalHeader().length() + frame)
-                section.set_expanded(expanded.get(title, title == "Structure / Dimensions"))
             # Keep matrix combinations and CSV columns in the operation's parameter order.
             self.factors = [factors[path] for path, _ in fields]
+            self.variations.setColumnWidth(0, max(
+                [100, *(self.fontMetrics().horizontalAdvance(translate(f.label)) + 18 for f in self.factors)]))
+            for column, width in ((1, 116), (2, max(180, button_width + 4)), (3, COMBO_WIDTH + 6)):
+                self.variations.setColumnWidth(column, width)
+            for button in self.variations.findChildren(QPushButton):
+                button.setProperty("managesLocalizedWidth", True)
+                button.setFixedWidth(button_width or button.sizeHint().width())
             if self.button_width:
                 for button in panel.findChildren(QPushButton):
                     button.setProperty("managesLocalizedWidth", True)
@@ -437,6 +540,48 @@ class NewDoePage(QWidget):
             self.loaded = False
         self.generate.setEnabled(self.loaded)
         self.apply_button.setEnabled(self.loaded)
+
+    def open_fft_material_library(self):
+        from material_library_dialog import MaterialLibraryDialog
+        from window_state import show_restored_window
+
+        if not hasattr(self, "fft_material_library"):
+            self.fft_material_library = MaterialLibraryDialog(
+                self, required=("young_modulus", "poisson_ratio"))
+            self.fft_material_library.material_added.connect(self.apply_fft_material)
+        show_restored_window(self.fft_material_library)
+
+    def load_fft_material(self):
+        from file_dialog import QFileDialog
+        from material_library import read_material_card
+
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Load material", str(Path(__file__).resolve().parent / "materials"),
+            "Material card (*.json *.csv)")
+        if path:
+            try:
+                self.apply_fft_material(read_material_card(path))
+            except (OSError, TypeError, ValueError) as error:
+                self.status.setText(str(error))
+
+    def apply_fft_material(self, card):
+        if self.operation.currentData() != "fft_solve" or self.timer.isActive():
+            return
+        values = card.evaluate(293.15, ("young_modulus", "poisson_ratio"))
+        fields = {factor.path[-1]: factor for factor in self.factors}
+        fields["material_name"].fixed.setText(card.name)
+        fields["material_card"].fixed.setText(display(card.to_dict()))
+        fields["young_modulus"].fixed.setValue(values["young_modulus"] / 1e6)
+        fields["poisson_ratio"].fixed.setValue(values["poisson_ratio"])
+
+    def experiments(self, dimensions):
+        for request in matrix(self.base, dimensions):
+            if request["operation"] == "fft_solve":
+                settings = request["settings"]
+                for key in FFT_OUTER_AXES:
+                    if settings[key] == 0:
+                        settings[key] = settings["cell_size"]
+            yield request
 
     def apply_geometry(self):
         selected = self.preview.currentIndex()
@@ -456,7 +601,7 @@ class NewDoePage(QWidget):
                         else:
                             value = factor.levels_for_matrix()[0]
                         dimensions[factor.path] = [value]
-                request = next(matrix(self.base, dimensions))
+                request = next(self.experiments(dimensions))
             except (TypeError, ValueError) as error:
                 self.status.setText(f"{factor.label}: {error}")
                 return
@@ -478,7 +623,7 @@ class NewDoePage(QWidget):
                 except (ValueError, TypeError) as error:
                     raise ValueError(f"{factor.label}: {error}") from error
             rows = []
-            for row in matrix(self.base, dimensions):
+            for row in self.experiments(dimensions):
                 try:
                     validate(row)
                 except (ValueError, TypeError) as error:
@@ -522,7 +667,7 @@ class NewDoePage(QWidget):
         self.advance()
 
     def lock(self, busy):
-        for widget in (self.operation, self.reload, self.inputs, self.apply_button, self.generate, self.run):
+        for widget in (self.operation, self.reload, self.input_tabs, self.apply_button, self.generate, self.run):
             widget.setEnabled(not busy)
         self.stop.setEnabled(busy)
 

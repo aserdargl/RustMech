@@ -449,6 +449,10 @@ Add Variable|Değişken ekle
 Fixed|Sabit
 Move to fixed|Sabitlere taşı
 Fixed value|Sabit değer
+Analysis settings|Analiz ayarları
+Variable settings|Değişken ayarları
+Lower bound|Alt sınır
+Material card|Malzeme kartı
 + Value column|+ Değer sütunu
 - Last column|- Son sütun
 Build matrix|Matrisi oluştur
