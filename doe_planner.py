@@ -130,7 +130,7 @@ class SimpleDoEPlanner(QWidget):
         s.library_btn = QPushButton('Geometry library')
         s.library_btn.clicked.connect(s._open_geometry_library)
         advanced_layout.addRow(s.library_btn)
-        self.tabs.addTab(advanced, 'Mesh / analysis settings')
+        self.tabs.addTab(advanced, 'Mesh')
         ml = QWidget()
         ml_layout = QFormLayout(ml)
         ml_layout.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.FieldsStayAtSizeHint)
@@ -145,7 +145,7 @@ class SimpleDoEPlanner(QWidget):
         s.generate_ml_btn.clicked.connect(s.generate_ml_table)
         s.ml_count_spin.valueChanged.connect(s._refresh_plan)
         ml_layout.addRow(s.generate_ml_btn)
-        self.tabs.addTab(ml, 'Machine learning')
+        self.tabs.addTab(ml, 'DeepLearning')
         s._size_action_group(s.generate_ml_btn, s.preview_bounds_btn)
 
         # Compatibility with existing model-transfer actions.

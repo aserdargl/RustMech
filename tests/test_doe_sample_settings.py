@@ -21,7 +21,7 @@ class SampleSettingsTests(unittest.TestCase):
     def test_names_combinations_transfer_and_export(self):
         _, studio = self.window()
         page = studio.sample_settings
-        self.assertEqual(studio.settings_tabs.tabText(4), 'Sample Settings')
+        self.assertEqual(studio.settings_tabs.tabText(4), 'Settings')
         for key in ('structure_name', 'cell_size', 'solid_fraction'):
             page.add_field(key)
         batch = page.batch

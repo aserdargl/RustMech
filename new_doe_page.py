@@ -19,11 +19,11 @@ from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDoubleS
 from new_doe_operations import (OPERATIONS, explicit_numbers, launch, matrix, matrix_request,
                                 parameters, snapshot, structure_choices, validate)
 from structure_library import ALL_STRUCTURES_BY_FAMILY, STRUCTURE_FAMILIES
-from studio_style import (COMBO_WIDTH, CONTROL_HEIGHT, ActionFlowLayout, CompactComboBox, NumericLineEdit,
+from studio_style import (COMBO_WIDTH, CONTROL_HEIGHT, CompactComboBox, NumericLineEdit,
                           SidebarGroupBox)
 from window_state import show_restored_window
 from ui_language import translate, turkish
-from model import CONTACT_NUMERICAL_FIELDS, GEOMETRY_FIELDS, MATERIAL_FIELDS, settings_from_dict, validate_geometry
+from model import CONTACT_NUMERICAL_FIELDS, GEOMETRY_FIELDS, MATERIAL_FIELDS
 
 NUMBER_WIDTH = 110
 CONTROL_GAP = 3
@@ -474,6 +474,7 @@ class NewDoePage(QWidget):
         self._draft_timer = QTimer(self, interval=300, singleShot=True)
         self._draft_timer.timeout.connect(self.save_draft)
         self.rows = []
+        self.matrix_current = False
         self.factors = []
         self.job = self.directory = None
         self.truba_jobs_window = None
@@ -487,18 +488,14 @@ class NewDoePage(QWidget):
         layout.setContentsMargins(2, 1, 2, 1)
         layout.setSpacing(2)
         bar = QHBoxLayout()
+        bar.setSpacing(4)
         layout.addLayout(bar)
         self.operation = CompactComboBox()
         for title, op in OPERATIONS.items():
             self.operation.addItem(title, op)
-        bar.addWidget(QLabel("Analysis"))
+        self.operation.setAccessibleName("Analysis")
+        self.operation.setCurrentIndex(self.operation.findData("fft_solve"))
         bar.addWidget(self.operation)
-        self.apply_button = QPushButton("Apply")
-        self.apply_button.setAutoDefault(False)
-        self.apply_button.setToolTip("Generate the selected experiment geometry, or the first geometry in the draft.")
-        self.apply_button.clicked.connect(self.apply_geometry)
-        bar.addWidget(self.apply_button)
-        bar.addStretch()
         self.inputs = QScrollArea()
         self.inputs.setWidgetResizable(True)
         self.input_tabs = QTabWidget()
@@ -509,24 +506,37 @@ class NewDoePage(QWidget):
         self.variations.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         self.input_tabs.addTab(self.variations, "Variable settings")
         self.sections = {}
-        buttons = ActionFlowLayout()
-        layout.addLayout(buttons)
-        for name, title, callback in (("generate", "Create matrix", self.create), ("run", "Run", None),
-                                      ("stop", "Stop", self.cancel), ("open", "Results folder", self.open_results)):
-            button = QPushButton(title)
+        self.run = QPushButton("Run")
+        menu = QMenu(self.run)
+        menu.addAction("Run locally", lambda: self.start(remote=False))
+        menu.addAction("Run on TRUBA as one job", lambda: self.start(remote=True))
+        menu.addAction("Run on TRUBA as separate jobs", lambda: self.start(remote=True, separate=True))
+        self.run.setMenu(menu)
+        self.stop = QPushButton("Stop")
+        self.stop.clicked.connect(self.cancel)
+        self.open = QPushButton("Results")
+        self.open.setToolTip("Results folder")
+        self.open.clicked.connect(self.open_results)
+        self.commands = (self.run, self.stop, self.open)
+        for button in self.commands:
             button.setAutoDefault(False)
-            if callback is None:
-                menu = QMenu(button)
-                menu.addAction("Run locally", lambda: self.start(remote=False))
-                menu.addAction("Run on TRUBA as one job", lambda: self.start(remote=True))
-                menu.addAction("Run on TRUBA as separate jobs", lambda: self.start(remote=True, separate=True))
-                button.setMenu(menu)
-            else:
-                button.clicked.connect(callback)
-            buttons.addWidget(button)
-            setattr(self, name, button)
-        self.commands = (self.apply_button, self.generate, self.run, self.stop, self.open)
-        self.button_width = 0
+            button.setProperty("managesLocalizedWidth", True)
+            button.setFixedHeight(CONTROL_HEIGHT)
+            bar.addWidget(button)
+        bar.addStretch()
+
+        settings_panel = QWidget()
+        settings_layout = QVBoxLayout(settings_panel)
+        settings_layout.setContentsMargins(0, 0, 0, 0)
+        settings_layout.setSpacing(2)
+        settings_layout.addWidget(self.input_tabs, 1)
+        self.apply_button = QPushButton("Apply")
+        self.apply_button.setFixedHeight(CONTROL_HEIGHT)
+        self.apply_button.setAutoDefault(False)
+        self.apply_button.setProperty("managesLocalizedWidth", True)
+        self.apply_button.setEnabled(False)
+        self.apply_button.clicked.connect(self.create)
+        settings_layout.addWidget(self.apply_button, alignment=Qt.AlignmentFlag.AlignLeft)
         self._nav_sizes = []
         matrix_panel = QWidget()
         matrix_layout = QVBoxLayout(matrix_panel)
@@ -549,7 +559,7 @@ class NewDoePage(QWidget):
         self.splitter.setObjectName("newDoeSettingsAndMatrix")
         self.splitter.setHandleWidth(7)
         self.splitter.setChildrenCollapsible(False)
-        self.splitter.addWidget(self.input_tabs)
+        self.splitter.addWidget(settings_panel)
         self.splitter.addWidget(matrix_panel)
         self.splitter.setStretchFactor(1, 1)
         self.splitter.setSizes([350, 600])
@@ -570,13 +580,12 @@ class NewDoePage(QWidget):
         self.open.setEnabled(False)
         if host is None:
             self.operation.setEnabled(False)
-            self.generate.setEnabled(False)
-            self.apply_button.setEnabled(False)
         if self.preferences is not None:
             last_operation = self.preferences.value("doe/lastOperation", "", type=str)
             index = self.operation.findData(last_operation)
             if index >= 0:
                 self.operation.setCurrentIndex(index)
+        self.operation.currentIndexChanged.connect(self.size_operation)
         self.operation.currentIndexChanged.connect(self.load)
 
     def size_navigation(self, navigation, active):
@@ -586,18 +595,15 @@ class NewDoePage(QWidget):
                 self._nav_sizes = [(button, button.minimumWidth(), button.maximumWidth(),
                                     button.property("managesLocalizedWidth")) for button in nav]
             widths = []
-            for button in (*nav, *self.commands):
+            for button in nav:
                 button.ensurePolished()
                 padding = 26 + (12 if button.menu() else 0)
                 widths.extend(button.fontMetrics().horizontalAdvance(text) + padding
                               for text in (button.text(), turkish(button.text())))
-            widths.extend(self.apply_button.fontMetrics().horizontalAdvance(text) + 26
-                          for text in ("Select values", turkish("Select values")))
-            self.button_width = max(widths)
-            variable_buttons = self.variations.findChildren(QPushButton)
-            for button in (*nav, *self.commands, *variable_buttons):
+            width = max(widths)
+            for button in nav:
                 button.setProperty("managesLocalizedWidth", True)
-                button.setFixedWidth(self.button_width)
+                button.setFixedWidth(width)
         else:
             for button, low, high, managed in self._nav_sizes:
                 button.setMinimumWidth(low)
@@ -619,14 +625,29 @@ class NewDoePage(QWidget):
 
     def showEvent(self, event):
         super().showEvent(event)
+        self.size_operation()
+        command_width = max(button.fontMetrics().horizontalAdvance(label)
+                            + (24 if button.menu() else 16)
+                            for button in self.commands
+                            for label in (button.text(), turkish(button.text())))
+        for button in self.commands:
+            button.setFixedWidth(command_width)
+        apply_width = max(self.apply_button.fontMetrics().horizontalAdvance(text)
+                          for text in ("Apply", turkish("Apply"))) + 16
+        self.apply_button.setFixedWidth(apply_width)
         if self.host is not None and not self.loaded:
             self.load()
 
+    def size_operation(self):
+        title = self.operation.currentText()
+        width = max(self.operation.fontMetrics().horizontalAdvance(label)
+                    for label in (title, turkish(title))) + 24
+        self.operation.setFixedWidth(width)
+
     def invalidate(self, *_):
-        self.rows = []
-        self.sheet.reset([], [])
+        self.matrix_current = False
         self.run.setEnabled(False)
-        self.status.setText("Choose variable parameters and their levels, then create the matrix.")
+        self.status.setText("Press Apply to create the experiment matrix.")
 
     def inputs_changed(self, *_):
         if self.loaded:
@@ -654,6 +675,8 @@ class NewDoePage(QWidget):
             return
         self.save_draft(commit=True)
         self.loaded = False
+        self.rows = []
+        self.sheet.reset([], [])
         self.invalidate()
         expanded = {title: not section.content.isHidden() for title, section in self.sections.items()}
         self.sections.clear()
@@ -686,7 +709,6 @@ class NewDoePage(QWidget):
             for path, value in fields:
                 groups.setdefault(parameter_group(path, op), []).append((path, value))
             factors = {}
-            button_width = self.button_width
             for title, members in groups.items():
                 section = SidebarGroupBox(title)
                 self.sections[title] = section
@@ -730,10 +752,15 @@ class NewDoePage(QWidget):
                 section.set_expanded(expanded.get(title, op == "fft_solve" or title == "Structure / Dimensions"))
             # Keep matrix combinations and CSV columns in the operation's parameter order.
             self.factors = [factors[path] for path, _ in fields]
-            self.variations.setColumnWidth(1, max(2 * NUMBER_WIDTH + CONTROL_GAP, button_width) + 4)
+            values_width = 2 * NUMBER_WIDTH + CONTROL_GAP
             for button in self.variations.findChildren(QPushButton):
+                button.ensurePolished()
+                width = max(button.fontMetrics().horizontalAdvance(label)
+                            for label in ("Select values", turkish("Select values"))) + 28
                 button.setProperty("managesLocalizedWidth", True)
-                button.setFixedWidth(button_width or button.sizeHint().width())
+                button.setFixedWidth(width)
+                values_width = max(values_width, width)
+            self.variations.setColumnWidth(1, values_width + 4)
             self.loaded = True
             self._loaded_operation = op
             if self.preferences is not None:
@@ -741,7 +768,6 @@ class NewDoePage(QWidget):
         except Exception as error:
             self.status.setText(str(error))
             self.loaded = False
-        self.generate.setEnabled(self.loaded)
         self.apply_button.setEnabled(self.loaded)
 
     def open_fft_material_library(self):
@@ -777,37 +803,11 @@ class NewDoePage(QWidget):
         fields["young_modulus"].fixed.setValue(values["young_modulus"] / 1e6)
         fields["poisson_ratio"].fixed.setValue(values["poisson_ratio"])
 
-    def apply_geometry(self):
-        selected = self.preview.currentIndex()
-        if self.rows:
-            index = selected.row() if selected.isValid() else 0
-            request = self.rows[index]
-            label = f"Experiment {index + 1}"
-        else:
-            # Preview one geometry without generating a matrix or requiring solver inputs.
-            dimensions = {}
-            try:
-                for factor in self.factors:
-                    if factor.path[0] == "settings" and factor.path[-1] in GEOMETRY_FIELDS:
-                        if ((factor.numeric or factor.optional_number) and factor.variable.isChecked()
-                                and factor.mode.currentData() == "bounds"):
-                            value = factor.first.value()
-                        else:
-                            value = factor.levels_for_matrix()[0]
-                        dimensions[factor.path] = [value]
-                request = next(matrix(self.base, dimensions))
-            except (TypeError, ValueError) as error:
-                self.status.setText(f"{factor.label}: {error}")
-                return
-            label = "Geometry preview"
-        settings = settings_from_dict(request["settings"])
-        errors = validate_geometry(settings, include_mesh=False)
-        if errors:
-            self.status.setText("\n".join(errors))
-            return
-        self.host._show_doe_bounds("DoE", {label: settings})
-
     def create(self):
+        if not self.loaded or self.timer.isActive():
+            return
+        for field in self.input_tabs.findChildren(NumericLineEdit):
+            field.interpretText()
         self.invalidate()
         dimensions = {}
         try:
@@ -831,12 +831,13 @@ class NewDoePage(QWidget):
         for i, factor in enumerate(self.sheet.columns, 1):
             width = max(self.fontMetrics().horizontalAdvance(label) for label in (factor.label, turkish(factor.label)))
             self.preview.setColumnWidth(i, max(100, width + 20))
+        self.matrix_current = True
         self.run.setEnabled(True)
         self.status.setText(f"{len(rows)} experiments ready.")
 
     def start(self, *, remote=None, separate=False):
         from doe_studio import results_directory
-        if not self.rows or self.timer.isActive():
+        if not self.matrix_current or not self.rows or self.timer.isActive():
             return
         controller = self.host.remote_controller
         if remote is None:
@@ -895,8 +896,9 @@ class NewDoePage(QWidget):
             show_restored_window(self.truba_jobs_window)
 
     def lock(self, busy):
-        for widget in (self.operation, self.input_tabs, self.apply_button, self.generate, self.run):
+        for widget in (self.operation, self.input_tabs, self.apply_button):
             widget.setEnabled(not busy)
+        self.run.setEnabled(not busy and self.matrix_current)
         self.stop.setEnabled(busy)
 
     def record(self, state, *, index=None, **details):

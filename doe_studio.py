@@ -737,11 +737,11 @@ class DoEStudioWidget(TrubaParallelMixin, QWidget):
         self.new_doe = NewDoePage(self._operation_host, self._preferences)
         self.planner.tabs.insertTab(0, self.new_doe, "DoE")
         self.planner.tabs.setCurrentWidget(self.new_doe)
-        self._matrix_tab = self.planner.tabs.addTab(bottom_panel, "Experiment matrix")
+        self._matrix_tab = self.planner.tabs.addTab(bottom_panel, "DoE2")
         self._legacy_plan_tab = self._matrix_tab
         from doe_sample_settings import SampleSettingsPage
         self.sample_settings = SampleSettingsPage(self)
-        self.planner.tabs.addTab(self.sample_settings, "Sample Settings")
+        self.planner.tabs.addTab(self.sample_settings, "Settings")
 
         def select_page(index):
             legacy = self.planner.tabs.widget(index) is not self.new_doe
