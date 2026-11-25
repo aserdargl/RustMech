@@ -4,7 +4,7 @@ import unittest
 from unittest.mock import patch
 from datetime import datetime, timezone
 
-from truba_resources import (BASELINES, candidates, parse_catalog, allocate_with_limits, automatic_context,
+from truba_resources import (BASELINES, candidates, parse_catalog, allocate_with_limits, analysis_submission_context, automatic_context,
                              convergence_context, planned_convergence_context,
                              test_submission as validate_submission)
 from truba_remote import RemoteContext, slurm_script
@@ -103,13 +103,29 @@ class QueuePolicyTests(unittest.TestCase):
     def test_single_convergence_level_uses_full_node_in_both_submission_paths(self):
         context = RemoteContext(partition='barbun', cores=20, memory_mb=128 * 1024)
         catalog = dict(BASELINES)
-        for live_max in (40, 32):
-            catalog['barbun'] = replace(BASELINES['barbun'], max_cpus=live_max)
-            auto = convergence_context(context, catalog, solver_cpus=16, max_jobs=1)
-            planned = planned_convergence_context(context, catalog, 'barbun', 16, 1, context.memory_mb)
-            for script in (auto, planned):
-                self.assertEqual((script.cores, script.memory_mb, script.parallel_jobs),
-                                 (live_max, context.memory_mb, 1))
+        auto = convergence_context(context, catalog, solver_cpus=16, max_jobs=1)
+        planned = planned_convergence_context(context, catalog, 'barbun', 16, 1, context.memory_mb)
+        for script in (auto, planned):
+            self.assertEqual((script.cores, script.memory_mb, script.parallel_jobs),
+                             (40, context.memory_mb, 1))
+        catalog['barbun'] = replace(BASELINES['barbun'], max_cpus=32)
+        with self.assertRaises(ValueError):
+            convergence_context(context, catalog, solver_cpus=16, max_jobs=1)
+        with self.assertRaises(ValueError):
+            planned_convergence_context(context, catalog, 'barbun', 16, 1, context.memory_mb)
+
+    def test_analysis_respects_queue_cpu_steps_and_live_ram_limits(self):
+        orfoz = RemoteContext(partition='orfoz', cores=57, memory_mb=150000)
+        plan = analysis_submission_context(orfoz)
+        self.assertEqual((plan.cores, plan.memory_mb), (112, 150000))
+        plan = analysis_submission_context(replace(orfoz, cores=56, memory_mb=64000))
+        self.assertEqual((plan.cores, plan.memory_mb), (112, 131072))
+        hamsi = RemoteContext(partition='hamsi', cores=40, memory_mb=64000)
+        catalog = {**BASELINES, 'hamsi': replace(BASELINES['hamsi'], max_memory_mb=120000)}
+        with self.assertRaisesRegex(ValueError, 'hamsi cannot fit 128 GiB'):
+            analysis_submission_context(hamsi, catalog)
+        plan = analysis_submission_context(replace(hamsi, partition='auto'), catalog)
+        self.assertEqual((plan.partition, plan.cores, plan.memory_mb), ('barbun', 40, 131072))
 
     def test_convergence_preserves_requested_time_and_checks_live_queue_limit(self):
         catalog = dict(BASELINES)

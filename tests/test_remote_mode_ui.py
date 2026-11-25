@@ -1087,7 +1087,7 @@ class RemoteModeUiTests(unittest.TestCase):
         with patch("mesh_convergence.AnalysisProcess", return_value=job) as submit:
             study.script_add.click()
             self.assertEqual(study.script_preview.rowCount(), 2)
-            self.assertEqual(study.script_preview.item(0, 4).text(), "60.00")
+            self.assertEqual(study.script_preview.item(0, 4).text(), "64.00")
             study.run_on_truba.click()
             self.assertTrue(study.script_plan_panel.isVisible())
             self.assertEqual(study.script_preview.rowCount(), 2)
@@ -1127,14 +1127,14 @@ class RemoteModeUiTests(unittest.TestCase):
             menu.close()
             self.assertEqual(study.script_preview.rowCount(), 2)
             study.script_add.click()
-            self.assertEqual(study.script_preview.item(0, 4).text(), "40.00")
+            self.assertEqual(study.script_preview.item(0, 4).text(), "42.67")
             submit.assert_not_called()
             study.run_button.click()
         submit.assert_called_once()
         target, levels, context, *_ = submit.call_args.args
         self.assertIs(target, run_remote_level_group)
         self.assertEqual((len(levels), context.partition, context.cores, context.memory_mb),
-                         (3, "hamsi", 56, 120 * 1024))
+                         (3, "hamsi", 56, 128 * 1024))
         self.assertEqual(context.walltime, "02:00:00")
         self.assertEqual(study.results.rowCount(), 3)
         study.force_stop()

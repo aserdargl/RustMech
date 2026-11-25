@@ -243,7 +243,7 @@ class RemoteProtocolTests(unittest.TestCase):
                 record = json.loads((folder / "remote_job.json").read_text())
                 self.assertEqual(record["state"], "OUT_OF_MEMORY")
                 self.assertEqual(record["slurm_status"], accounting)
-                self.assertEqual(record["failure_memory_mb"], 68000)
+                self.assertEqual(record["failure_memory_mb"], 131072)
 
     def test_new_doe_matrix_uploads_one_request_to_one_slurm_job(self):
         from new_doe_operations import matrix_request
@@ -256,14 +256,21 @@ class RemoteProtocolTests(unittest.TestCase):
                 return progress.pop()
             return command(transport, script)
 
+        context = RemoteContext(partition="hamsi", cores=40, memory_mb=64000)
         with patch.object(FakeTransport, "command", poll), patch("truba_remote.time.sleep"):
-            _, folder = run_remote_job(matrix_request(rows), RemoteContext(), directory=self.root / "matrix")
+            _, folder = run_remote_job(matrix_request(rows), context, directory=self.root / "matrix")
         transport, = FakeTransport.instances
         self.assertEqual(transport.submissions, 1)
         self.assertEqual(transport.put_names.count("request.json"), 1)
         self.assertEqual(transport.request["experiment_rows"], json.loads(json.dumps(rows)))
         from truba_job_list import job_description
         record = json.loads((folder / "remote_job.json").read_text())
+        script = (folder / record["script_name"]).read_text()
+        self.assertIn("#SBATCH --partition=hamsi\n", script)
+        self.assertIn("#SBATCH --cpus-per-task=56\n", script)
+        self.assertIn("#SBATCH --mem=131072M\n", script)
+        self.assertEqual((transport.request["remote_context"]["cores"],
+                          transport.request["remote_context"]["memory_mb"]), (56, 131072))
         self.assertEqual(record["experiment_count"], 3)
         self.assertEqual(record["experiment_index"], 2)
         self.assertIn("DoE 2/3", job_description(record))
@@ -277,6 +284,16 @@ class RemoteProtocolTests(unittest.TestCase):
         self.assertIn("DoE 2/3", job_description(record))
         script = (directory / record["script_name"]).read_text()
         self.assertIn(f"#SBATCH --job-name={analysis_code(record)}-DoE-2-of-3", script)
+
+    def test_doe_rejects_a_request_that_cannot_fit_the_selected_queue(self):
+        request = dict(operation="fft_solve", settings=asdict(Settings()), grid=16,
+                       experiment_index=1, experiment_count=1)
+        directory = self.root / "oversized"
+        with self.assertRaisesRegex(ValueError, "hamsi cannot fit 256 GiB"):
+            run_remote_job(request, RemoteContext(partition="hamsi", cores=40, memory_mb=256 * 1024),
+                           directory=directory, submit_only=True)
+        self.assertFalse(directory.exists())
+        self.assertEqual(FakeTransport.instances, [])
 
     def test_separate_doe_submissions_do_not_wait_and_download_into_their_own_rows(self):
         from truba_remote import submit_remote_analysis
@@ -371,7 +388,8 @@ class RemoteProtocolTests(unittest.TestCase):
                 script = directory / record['script_name']
                 self.assertIn(script.name, FakeTransport.instances[-1].put_names)
                 if operation == 'doe_solve':
-                    self.assertIn('#SBATCH --cpus-per-task=20', script.read_text())
+                    self.assertIn('#SBATCH --cpus-per-task=40\n', script.read_text())
+                    self.assertIn('#SBATCH --mem=131072M\n', script.read_text())
                 records.append(record)
         self.assertEqual(len({record['job_id'] for record in records}), 6)
         self.assertEqual(len({record['script_name'] for record in records}), 6)

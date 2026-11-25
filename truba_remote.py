@@ -303,16 +303,12 @@ def request_resources(context, operation):
 
 
 def _standalone_analysis_context(context, operation):
-    if operation == 'doe_solve' and context.parallel_jobs > 1:
-        from truba_resources import BASELINES, candidates
+    from truba_resources import analysis_submission_context
 
+    if operation == 'doe_solve' and context.parallel_jobs > 1:
         cpus, memory = request_resources(context, operation)
-        queues = candidates(context.partition, context.cores, context.memory_mb, context.walltime)
-        limits = [BASELINES[name] for name in queues.split(',')]
-        cpus = max(cpus, *(limit.min_cpus for limit in limits))
-        memory = min(memory, *(limit.memory_ceiling(cpus) for limit in limits))
-        context = replace(context, partition=queues, cores=cpus, memory_mb=memory, parallel_jobs=1)
-    return replace(context, session_id='')
+        context = replace(context, cores=cpus, memory_mb=memory, parallel_jobs=1)
+    return analysis_submission_context(context)
 
 
 class SlurmOutOfMemory(RuntimeError):
@@ -394,11 +390,11 @@ def run_remote_job(request,context,auth=None,marker=None,*,directory=None,resume
                    submit_only=False, poll_once=False, detach_requested=None):
     from remote_operations import batch_geometry_name, required_capability
     study_name = context.study_name
+    context.validate()
     if not resume_record:
         required_capability(request)
         if request['operation'] in ANALYSIS_OPERATIONS:
             context = _standalone_analysis_context(context, request['operation'])
-    context.validate()
     if context.session_id and not resume_record and request.get('operation') == 'doe_mesh':
         from truba_handover import context_for_request
         context = context_for_request(context, auth, cancelled=cancelled, marker=marker, on_progress=on_progress)
@@ -499,6 +495,12 @@ def run_remote_job(request,context,auth=None,marker=None,*,directory=None,resume
     staging_phase = None
     try:
         if not poll_once and (not resume_record or not record.get("job_id")):
+            if resume_record and record.get('operation') in ANALYSIS_OPERATIONS:
+                from truba_resources import analysis_submission_context
+
+                if analysis_submission_context(context) != context:
+                    raise ValueError('The saved Slurm request has obsolete CPU or RAM settings. '
+                                     'Check TRUBA for an existing job before submitting a new request.')
             staging_phase = "Preparing local Slurm script"
             if resume_record: request = json.loads((directory/"request.json").read_text())
             (directory/script_name).write_text(slurm_script(context,transport.username,request),encoding="utf-8",newline="\n")

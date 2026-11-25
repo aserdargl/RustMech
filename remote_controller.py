@@ -12,7 +12,8 @@ from truba_remote import RemoteContext,run_remote_job
 from studio_style import CompactSpinBox, configure_form, CompactComboBox, CompactDoubleSpinBox, CONTROL_HEIGHT, STUDIO_STYLESHEET
 from truba_session import saved_session, create_session, refresh_session, release_session
 from truba_resources import (BASELINES, AUTO_QUEUES, candidates, fetch_catalog,
-                             allocate_with_limits, automatic_context, convergence_context)
+                             allocate_with_limits, analysis_submission_context, automatic_context,
+                             convergence_context)
 
 
 DEFAULT_SESSION_WALLTIME = '04:00:00'
@@ -790,7 +791,8 @@ class RemoteController(QObject):
     def require_analysis(self, capability, settings=None, *, explicit_target=False):
         """Use the verified workflow when available, or submit to Slurm directly."""
         if self.ready:
-            return self._require(capability, settings, explicit_target=explicit_target)
+            context, auth = self._require(capability, settings, explicit_target=explicit_target)
+            return analysis_submission_context(context, self.queue_catalog), auth
         if self.closing:
             raise RuntimeError("RustMech is closing.")
         if not (self.requested or explicit_target):
@@ -800,13 +802,10 @@ class RemoteController(QObject):
             raise RuntimeError("Connect to TRUBA to submit the analysis.")
         context = self.context(use_session=False)
         cores = settings.cores if capability == "kratos" and settings is not None else context.cores
-        if context.gpus:
-            raise ValueError("TRUBA analyses require a CPU queue.")
-        if context.partition == "auto":
-            context = automatic_context(context, self.queue_catalog, min_cpus=cores)
-        elif cores > context.cores:
+        if context.partition != "auto" and cores > context.cores:
             raise ValueError("Solver CPU count exceeds the TRUBA request. Increase remote CPU cores or reduce solver cores.")
-        candidates(context.partition, context.cores, context.memory_mb, context.walltime, self.queue_catalog)
+        context = analysis_submission_context(replace(context, cores=max(context.cores, cores)),
+                                              self.queue_catalog)
         if capability == "kratos" and settings is not None:
             self._validate_kratos_request(settings, context)
         study_name = self.study_name.text().strip()
@@ -858,18 +857,11 @@ class RemoteController(QObject):
         if partition is not None:
             from truba_remote import request_resources
 
-            baseline = BASELINES[partition]
-            live_limits = self.queue_catalog.get(partition, baseline)
-            minimum_cores = max(settings.cores, baseline.min_cpus, live_limits.min_cpus)
-            maximum_cores = min(baseline.max_cpus, live_limits.max_cpus)
             _, memory = request_resources(context, 'doe_solve')
-            memory = max(memory, live_limits.min_memory_mb or 1)
-            cores = next((count for count in range(minimum_cores, maximum_cores + 1)
-                          if memory <= min(baseline.memory_ceiling(count), live_limits.memory_ceiling(count))),
-                         minimum_cores)
-            candidates(partition, cores, memory, context.walltime)
-            candidates(partition, cores, memory, context.walltime, self.queue_catalog)
-            context = replace(context, partition=partition, cores=cores, memory_mb=memory, gpus=0, session_id='')
+            context = analysis_submission_context(
+                replace(context, partition=partition, cores=settings.cores, memory_mb=memory, gpus=0,
+                        parallel_jobs=1),
+                self.queue_catalog)
         if settings is not None and capability=="kratos":
             if settings.cores > context.cores:
                 raise RuntimeError("Solver CPU count exceeds the TRUBA allocation. Increase remote CPU cores or reduce solver cores.")
