@@ -70,7 +70,7 @@ def apply_profile(settings, identifier):
 
 def nominal_volume(settings):
     p = profile(settings)
-    return float(np.prod(p.dimensions)) if p else settings.size**3
+    return float(np.prod(p.dimensions)) if p else float(np.prod(settings.dimensions))
 
 
 def profile_report(settings):

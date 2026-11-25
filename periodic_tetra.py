@@ -18,6 +18,11 @@ class PeriodicUnavailable(ValueError):
 
 
 def period_count(settings):
+    if settings.rectangular:
+        ratios = np.asarray(settings.dimensions) / settings.cell_size
+        if not has_repeating_cell(settings) or np.min(ratios) < 1 or not np.allclose(ratios, np.rint(ratios), rtol=0, atol=1e-9):
+            raise PeriodicUnavailable("outer dimensions must contain whole periods")
+        return tuple(np.rint(ratios).astype(int))
     ratio = settings.size / settings.cell_size
     count = int(round(ratio))
     if not has_repeating_cell(settings) or count < 2 or not np.isclose(ratio, count, rtol=0, atol=1e-9):
@@ -115,11 +120,12 @@ def _cell(settings, threshold, on_progress):
 
 
 def tile_cell(cell, period, count, on_progress=None):
-    require_memory(count ** 3 * (cell.n_points * 96 + cell.n_cells * 512),
+    counts = (count,) * 3 if isinstance(count, int) else count
+    require_memory(int(np.prod(counts)) * (cell.n_points * 96 + cell.n_cells * 512),
                    "Periodic mesh replication and connectivity")
     if on_progress:
-        on_progress(f'Replicating and welding {count}×{count}×{count} cells…')
-    offsets = np.array(list(product(range(count), repeat=3))) * period
+        on_progress(f'Replicating and welding {counts[0]}×{counts[1]}×{counts[2]} cells…')
+    offsets = np.array(list(product(*(range(n) for n in counts)))) * period
     points = (np.asarray(cell.points)[None, :, :] + offsets[:, None, :]).reshape(-1, 3)
     corners = np.asarray(cell.cell_connectivity).reshape(-1, 4)
     cells = (corners[None, :, :] + np.arange(len(offsets))[:, None, None] * cell.n_points).reshape(-1, 4)
@@ -142,7 +148,7 @@ def tile_cell(cell, period, count, on_progress=None):
     p = np.asarray(boundary.points)
     f = boundary.faces.reshape(-1, 4)[:, 1:]
     for axis in range(3):
-        for index in range(1, count):
+        for index in range(1, counts[axis]):
             if np.any(np.all(np.abs(p[f, axis] - index * period) <= tolerance * 10, axis=1)):
                 raise PeriodicUnavailable('an unmatched triangle remains at a cell interface')
     return grid

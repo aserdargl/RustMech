@@ -114,7 +114,7 @@ class FlowSettings:
                 raise ValueError(f"{name} must be finite.")
         if self.section_length_mm < 0:
             raise ValueError("Section length must be positive, or zero for the Model cube length.")
-        if not self.empty_pipe and not self.allow_bypass and max(self.cross_section) > specimen.size + 1e-9:
+        if not self.empty_pipe and not self.allow_bypass and any(a > b + 1e-9 for a, b in zip(self.cross_section, specimen.dimensions[:2])):
             raise ValueError("Channel section exceeds specimen cube size; enable intentional bypass to leave gaps.")
         if self.turbulence not in ("laminar", "kOmegaSST"):
             raise ValueError("Unsupported flow model.")
@@ -144,13 +144,13 @@ def build_flow_grid(specimen, flow, *, inspection=False):
     h = flow.cell_size_mm
     nx, ny = (math.ceil(value/h) for value in (width, height))
     length = flow.section_length(specimen)
-    x = np.linspace((specimen.size-width)/2, (specimen.size+width)/2, nx+1)
-    y = np.linspace((specimen.size-height)/2, (specimen.size+height)/2, ny+1)
+    x = np.linspace((specimen.dimensions[0]-width)/2, (specimen.dimensions[0]+width)/2, nx+1)
+    y = np.linspace((specimen.dimensions[1]-height)/2, (specimen.dimensions[1]+height)/2, ny+1)
     zparts = [np.linspace(a, b, math.ceil((b-a)/h)+1) for a,b in
               ((-flow.inlet_length_mm, 0), (0, length), (length, length+flow.outlet_length_mm))]
     z = np.concatenate([zparts[0], zparts[1][1:], zparts[2][1:]])
     xc, yc, zc = (x[:-1]+x[1:])/2, (y[:-1]+y[1:])/2, (z[:-1]+z[1:])/2
-    radius = (xc[:,None]-specimen.size/2)**2 + (yc[None,:]-specimen.size/2)**2
+    radius = (xc[:,None]-specimen.dimensions[0]/2)**2 + (yc[None,:]-specimen.dimensions[1]/2)**2
     section = radius < (width/2)**2 if flow.channel_shape == "cylinder" else np.ones((nx, ny), dtype=bool)
     fluid = np.broadcast_to(section[:,:,None], (nx,ny,len(zc))).copy()
     solid = np.zeros_like(fluid)
@@ -254,11 +254,11 @@ def export_geometry_inspection(specimen, flow, directory):
         surface = make_surface(specimen)
         audit, annotated = audit_surface(surface,flow.cell_size_mm,progress=report_analysis_step)
         rotation,centre = specimen_transform(specimen,flow)
-        annotated.points = (annotated.points-specimen.size/2) @ rotation.T + centre
+        annotated.points = (annotated.points-np.asarray(specimen.dimensions)/2) @ rotation.T + centre
         for check in (audit["intersection"],audit.get("chords")):
             if check:
                 for marker in check["markers"]:
-                    marker["centre_mm"] = ((np.asarray(marker["centre_mm"])-specimen.size/2) @ rotation.T+centre).tolist()
+                    marker["centre_mm"] = ((np.asarray(marker["centre_mm"])-np.asarray(specimen.dimensions)/2) @ rotation.T+centre).tolist()
         annotated.save(directory/"surface_audit.vtp")
         metadata["surface_audit"] = audit
         if audit["intersection"]["status"] == "invalid":
@@ -287,8 +287,8 @@ def sample_channel_solid(specimen, flow, points_mm):
     Changing section length clips the specimen; it never stretches its cells.
     """
     rotation,centre = specimen_transform(specimen,flow)
-    local = (np.asarray(points_mm)-centre) @ rotation + specimen.size/2
-    envelope = ((local >= 0) & (local <= specimen.size)).all(axis=1)
+    local = (np.asarray(points_mm)-centre) @ rotation + np.asarray(specimen.dimensions)/2
+    envelope = ((local >= 0) & (local <= specimen.dimensions)).all(axis=1)
     solid = np.zeros(len(local), dtype=bool)
     if envelope.any():
         p = local[envelope]
@@ -309,8 +309,8 @@ def specimen_transform(specimen, flow):
                             flow.specimen_rotation_z_deg])
     cx, sx, cy, sy, cz, sz = np.cos(ax), np.sin(ax), np.cos(ay), np.sin(ay), np.cos(az), np.sin(az)
     rotation = np.array([[cz,-sz,0],[sz,cz,0],[0,0,1]]) @ np.array([[cy,0,sy],[0,1,0],[-sy,0,cy]]) @ np.array([[1,0,0],[0,cx,-sx],[0,sx,cx]])
-    centre = np.array([specimen.size/2+flow.specimen_offset_x_mm,
-                       specimen.size/2+flow.specimen_offset_y_mm,
+    centre = np.array([specimen.dimensions[0]/2+flow.specimen_offset_x_mm,
+                       specimen.dimensions[1]/2+flow.specimen_offset_y_mm,
                        flow.section_length(specimen)/2+flow.specimen_offset_z_mm])
     return rotation,centre
 

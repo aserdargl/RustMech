@@ -168,7 +168,7 @@ def export_geometry(
     surface.save(geometry / "gyroid.stl")
     from standard_tests import fixture_surfaces, profile_report
     bottom_platen, top_platen = (fixture_surfaces(settings) if settings.test_profile != 'custom' else
-        make_compression_platens(settings.size, 0.0, surface.bounds[:4] if settings.imported_geometry_path else None))
+        make_compression_platens(settings.size, 0.0, surface.bounds[:4] if settings.rectangular or settings.imported_geometry_path else None))
     bottom_platen.save(geometry / "bottom_platen.stl")
     top_platen.save(geometry / "top_platen.stl")
     quality, report = mesh_quality(mesh.grid)
@@ -192,7 +192,7 @@ def export_geometry(
             "solve_errors": mesh.solve_errors,
             "smooth_volume_fraction_percent": 100
             * surface.volume
-            / (np.prod(np.asarray(surface.bounds).reshape(3, 2)[:, 1] - np.asarray(surface.bounds).reshape(3, 2)[:, 0]) if settings.imported_geometry_path or settings.test_profile != 'custom' else settings.size**3),
+            / (np.prod(np.asarray(surface.bounds).reshape(3, 2)[:, 1] - np.asarray(surface.bounds).reshape(3, 2)[:, 0]) if settings.imported_geometry_path or settings.test_profile != 'custom' else np.prod(settings.dimensions)),
         }
     )
     quality.save(target / "mesh.vtu")
@@ -391,8 +391,8 @@ def export_graphs(
     work = np.r_[
         0.0, np.cumsum((force[1:] + force[:-1]) * np.diff(x) / 2000)
     ]
-    area_mm2 = float(settings.size**2)
-    nominal_vol_mm3 = float(settings.size**3)
+    area_mm2 = float(np.prod(settings.dimensions[:2]))
+    nominal_vol_mm3 = float(np.prod(settings.dimensions))
     if settings.imported_geometry_path:
         bounds = (mesh.grid.bounds if mesh is not None else make_surface(settings).bounds)
         area_mm2 = float((bounds[1]-bounds[0]) * (bounds[3]-bounds[2]))

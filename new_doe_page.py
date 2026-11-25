@@ -19,7 +19,8 @@ from model import CONTACT_NUMERICAL_FIELDS, GEOMETRY_FIELDS, MATERIAL_FIELDS, se
 LABELS = {"grid": "Voxels per axis", "void_ratio": "Void / solid stiffness", "distribution": "WSL distribution",
           "structure_name": "Structure family / type", "tpms_morphology": "Morphology",
           "young_modulus": "Young’s modulus (MPa)", "cell_size": "Cell size (mm)",
-          "solid_fraction": "Solid fraction (%)", "size": "Specimen size (mm)"}
+          "solid_fraction": "Solid fraction (%)", "size_x": "Outer X (mm)", "size_y": "Outer Y (mm)",
+          "size": "Outer Z (mm)", "material_card": "Material card"}
 
 
 def parameter_group(path):
@@ -55,7 +56,7 @@ def parameter_group(path):
 
 def field_sources(host, op):
     if op == "fft_solve":
-        return dict(grid=host.fft_grid, void_ratio=host.fft_void_ratio, cell_size=host.fft_cell_size,
+        return dict(host.fft_outer_sizes, grid=host.fft_grid, void_ratio=host.fft_void_ratio, cell_size=host.fft_cell_size,
                     solid_fraction=host.fft_solid_fraction, tpms_morphology=host.fft_morphology_combo)
     if op == "peridynamic_solve":
         return host.peridynamic_settings.controls
@@ -293,8 +294,8 @@ class NewDoePage(QWidget):
         self.timer = QTimer(self, interval=200)
         self.timer.timeout.connect(self.advance)
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(4, 3, 4, 3)
-        layout.setSpacing(3)
+        layout.setContentsMargins(2, 1, 2, 1)
+        layout.setSpacing(2)
         bar = QHBoxLayout()
         layout.addLayout(bar)
         self.operation = CompactComboBox()
@@ -308,6 +309,7 @@ class NewDoePage(QWidget):
         self.apply_button.clicked.connect(self.apply_geometry)
         bar.addWidget(self.apply_button)
         self.reload = QPushButton("Read workspace settings")
+        self.reload.setAutoDefault(False)
         bar.addWidget(self.reload)
         bar.addStretch()
         self.inputs = QScrollArea()
@@ -315,7 +317,7 @@ class NewDoePage(QWidget):
         self.sections = {}
         layout.addWidget(self.inputs, 3)
         buttons = QHBoxLayout()
-        layout.addLayout(buttons)
+        layout.insertLayout(1, buttons)
         for name, title, callback in (("generate", "Create matrix", self.create), ("run", "Run", self.start),
                                       ("stop", "Stop", self.cancel), ("open", "Results folder", self.open_results)):
             button = QPushButton(title)
@@ -323,12 +325,8 @@ class NewDoePage(QWidget):
             button.clicked.connect(callback)
             buttons.addWidget(button)
             setattr(self, name, button)
-        actions = (self.generate, self.run, self.stop, self.open)
-        width = max(self.fontMetrics().horizontalAdvance(label) + 24 for button in actions
-                    for label in (button.text(), turkish(button.text())))
-        for button in actions:
-            button.setProperty("managesLocalizedWidth", True)
-            button.setFixedWidth(width)
+        self.commands = (self.apply_button, self.reload, self.generate, self.run, self.stop, self.open)
+        self.button_width = 0
         buttons.addStretch()
         self.preview = QTableView()
         self.preview.setAlternatingRowColors(True)
@@ -345,6 +343,23 @@ class NewDoePage(QWidget):
         self.open.setEnabled(False)
         self.operation.currentIndexChanged.connect(self.load)
         self.reload.clicked.connect(self.load)
+
+    def size_navigation(self, navigation, active):
+        nav = navigation.findChildren(QPushButton)
+        if active:
+            self._nav_sizes = [(b, b.minimumWidth(), b.maximumWidth(), b.property("managesLocalizedWidth")) for b in nav]
+            titles = [b.text() for b in (*nav, *self.commands)] + ["Select values"]
+            self.button_width = max(self.fontMetrics().horizontalAdvance(text) + 26
+                                    for title in titles for text in (title, turkish(title)))
+            for button in (*nav, *self.findChildren(QPushButton)):
+                button.setProperty("managesLocalizedWidth", True)
+                button.setFixedWidth(self.button_width)
+        else:
+            for button, low, high, managed in getattr(self, "_nav_sizes", ()):
+                button.setMinimumWidth(low)
+                button.setMaximumWidth(high)
+                button.setProperty("managesLocalizedWidth", managed)
+            self._nav_sizes = []
 
     @staticmethod
     def table(headers):
@@ -365,6 +380,7 @@ class NewDoePage(QWidget):
     def invalidate(self, *_):
         self.rows = []
         self.sheet.reset([], [])
+        self.preview.hide()
         self.run.setEnabled(False)
         self.status.setText("Choose variable parameters and their levels, then create the matrix.")
 
@@ -411,6 +427,10 @@ class NewDoePage(QWidget):
                 section.set_expanded(expanded.get(title, title == "Structure / Dimensions"))
             # Keep matrix combinations and CSV columns in the operation's parameter order.
             self.factors = [factors[path] for path, _ in fields]
+            if self.button_width:
+                for button in panel.findChildren(QPushButton):
+                    button.setProperty("managesLocalizedWidth", True)
+                    button.setFixedWidth(self.button_width)
             self.loaded = True
         except Exception as error:
             self.status.setText(str(error))
@@ -469,6 +489,7 @@ class NewDoePage(QWidget):
             return
         self.rows = rows
         self.sheet.reset(rows, self.factors)
+        self.preview.show()
         for i, factor in enumerate(self.sheet.columns, 1):
             width = max(self.fontMetrics().horizontalAdvance(label) for label in (factor.label, turkish(factor.label)))
             self.preview.setColumnWidth(i, max(100, width + 20))

@@ -178,6 +178,9 @@ class SurfacePreviewUITests(unittest.TestCase):
         solid[2, 4, 6] = True
         with patch('nonlinear_compression.sample_periodic_cell', return_value=solid):
             outline, surface, count = _build_fft_preview(self.settings, 8)
+        with patch('nonlinear_compression.sample_periodic_cell', return_value=solid):
+            box, _, _ = _build_fft_preview(replace(self.settings, size_x=3, size_y=6, size=9), 8)
+        np.testing.assert_allclose(box.bounds, [0, 3, 0, 6, 0, 9])
         self.assertEqual(count, 1)
         self.assertEqual(surface.n_cells, 6)
         np.testing.assert_allclose(surface.bounds, np.array([2, 3, 4, 5, 6, 7]) / 8)
@@ -314,7 +317,10 @@ class SurfacePreviewUITests(unittest.TestCase):
                     QTest.keyClicks(cell_size, '4.5')
                     QTest.keyClick(cell_size, Qt.Key.Key_Return)
                     process.assert_not_called()
+                    window.fft_outer_sizes['size_x'].setValue(9)
+                    window.fft_outer_sizes['size_y'].setValue(13.5)
                     preview_request = window._fft_preview_request
+                    self.assertEqual(preview_request[1].dimensions, (9, 13.5, 4.5))
                     fe_draft = window.collect()
                     self.assertEqual((fe_draft.cell_size, fe_draft.solid_fraction), (3, 30))
                     self.assertEqual(fe_draft.structure_family, 'tpms')
@@ -335,6 +341,7 @@ class SurfacePreviewUITests(unittest.TestCase):
                 self.assertEqual(restored.fft_family_combo.currentData(), 'lattice')
                 self.assertEqual(restored.fft_structure_combo.currentData(), name)
                 self.assertEqual((restored.fft_cell_size.value(), restored.fft_solid_fraction.value()), (4.5, 42))
+                self.assertEqual(restored._fft_settings(fe_settings).dimensions, (9, 13.5, 4.5))
                 self.assertEqual(restored.collect().cell_size, fe_settings.cell_size)
             finally:
                 restored.close()

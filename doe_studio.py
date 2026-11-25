@@ -723,8 +723,9 @@ class DoEStudioWidget(TrubaParallelMixin, QWidget):
                 legacy = index != independent_tab
                 if legacy:
                     self._legacy_plan_tab = index
-                for control in (self.open_plan_btn, self.save_plan_btn, self.plan_file_label):
+                for control in (self.open_plan_btn, self.save_plan_btn, self.planner.plan_status_bar):
                     control.setVisible(legacy)
+                self.new_doe.size_navigation(self.planner.navigation, not legacy)
 
             self.planner.tabs.currentChanged.connect(select_page)
         self.planner.navigation.add_tabs(self.planner.tabs)

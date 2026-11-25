@@ -18,7 +18,7 @@ import numpy as np
 from analysis_process import AnalysisProcess, report_analysis_step
 from mesh_resources import require_memory
 from model import ROOT, validate_geometry, write_json
-from periodic_sampling import has_repeating_cell, sample_priority_grid
+from periodic_sampling import has_repeating_cell, sample_box
 
 
 COMPONENTS = ("xx", "yy", "zz", "yz", "xz", "xy")
@@ -123,11 +123,21 @@ def validate_periodic_fft(settings):
     if settings.imported_geometry_path or settings.test_profile != "custom" or not has_repeating_cell(settings):
         return ["FFT requires a procedural periodic TPMS or lattice cell."]
     errors = validate_geometry(settings, include_mesh=False)
+    if not errors and (settings.size_x is not None or settings.size_y is not None):
+        periods = np.asarray(settings.dimensions) / settings.cell_size
+        if not np.allclose(periods, np.rint(periods), rtol=0, atol=1e-8) or np.any(periods < 1 - 1e-8):
+            errors.append("For periodic FFT, each outer dimension must be a whole multiple of the cell period.")
     if not np.isfinite(settings.young_modulus) or settings.young_modulus <= 0:
         errors.append("FFT requires a positive Young's modulus.")
     if not -1 < settings.poisson_ratio < 0.5:
         errors.append("FFT requires a Poisson ratio between -1 and 0.5.")
     return errors
+
+
+def fft_dimensions(settings):
+    if settings.size_x is None and settings.size_y is None:
+        return (settings.cell_size,) * 3
+    return settings.dimensions
 
 
 def sample_periodic_cell(settings, grid):
@@ -137,9 +147,10 @@ def sample_periodic_cell(settings, grid):
     require_memory(grid**3 * 5, "DAMASK voxel sampling")
     from mesh_engine import geometry_threshold
 
-    axis = (np.arange(grid) + 0.5) * (settings.cell_size / grid)
-    field = sample_priority_grid(settings, axis, dtype=np.float32,
-                                 threshold=geometry_threshold(settings))
+    lengths = fft_dimensions(settings)
+    axes = [(np.arange(grid) + 0.5) * (length / grid) for length in lengths]
+    field = sample_box(settings, axes, dtype=np.float32,
+                       threshold=geometry_threshold(settings))
     return field < 0
 
 
@@ -151,7 +162,9 @@ def run_periodic_fft(settings, grid, void_ratio, distribution, folder, *, on_pro
             raise ValueError("\n".join(errors))
         on_progress("Sampling the periodic cell…")
         solid = sample_periodic_cell(settings, grid)
-        return solve_cell(solid, settings.cell_size, settings.young_modulus,
+        lengths = fft_dimensions(settings)
+        size_mm = lengths[0] if len(set(lengths)) == 1 else lengths
+        return solve_cell(solid, size_mm, settings.young_modulus,
                           settings.poisson_ratio, void_ratio, distribution, folder,
                           settings_snapshot=asdict(settings), on_progress=on_progress)
     except Exception as exc:
@@ -175,12 +188,12 @@ def solve_cell(solid, size_mm, young_mpa, poisson, void_ratio, distribution, fol
     _validate_grid(grid)
     if not solid.any():
         raise ValueError("The FFT grid contains no solid voxels. Increase the grid resolution.")
-    if not 0 < void_ratio < 1 or not np.isfinite(size_mm) or size_mm <= 0:
+    if not 0 < void_ratio < 1 or not np.all(np.isfinite(size_mm)) or np.any(np.asarray(size_mm) <= 0):
         raise ValueError("A positive cell size and a void stiffness ratio between 0 and 1 are required.")
     if not np.isfinite(young_mpa) or young_mpa <= 0 or not -1 < poisson < 0.5:
         raise ValueError("Invalid isotropic elastic constants.")
     folder = Path(folder)
-    _write_geometry(folder / "cell.vti", solid, size_mm * 1e-3)
+    _write_geometry(folder / "cell.vti", solid, np.asarray(size_mm) * 1e-3)
     _write_material(folder / "material.yaml", young_mpa * 1e6, poisson, void_ratio, solid.all())
     (folder / "numerics.yaml").write_text(
         "solver:\n  grid:\n    FFTW_plan_mode: FFTW_ESTIMATE\n"
@@ -256,7 +269,7 @@ def _write_geometry(path, solid, size_m):
     require_memory(solid.size * 24, "DAMASK geometry export")
     n = solid.shape[0]
     extent = f"0 {n} 0 {n} 0 {n}"
-    spacing = " ".join([str(size_m / n)] * 3)
+    spacing = " ".join(str(length / n) for length in np.broadcast_to(size_m, (3,)))
     materials = (~solid).astype("<i4").tobytes(order="F")
     binary = base64.b64encode(struct.pack("<I", len(materials)) + materials).decode("ascii")
     path.write_text(

@@ -33,6 +33,8 @@ def snapshot(host, operation):
     elif operation == "mpm_solve":
         request["mpm"] = asdict(host.mpm_workspace.collect())
     request["settings"] = asdict(settings)
+    if not settings.imported_geometry_path and settings.test_profile == "custom":
+        request["settings"].update(size_x=settings.dimensions[0], size_y=settings.dimensions[1])
     return request
 
 
@@ -43,7 +45,7 @@ def parameters(request):
     if op == "mechanical":
         keys = [key for key in request["settings"] if not key.startswith("truba_")]
     elif op == "fft_solve":
-        keys = ("structure_name", "tpms_morphology", "cell_size", "solid_fraction",
+        keys = ("structure_name", "tpms_morphology", "size", "cell_size", "solid_fraction",
                 "material_name", "material_card", "young_modulus", "poisson_ratio")
     elif op == "peridynamic_solve":
         keys = ("structure_name", "tpms_morphology", "size", "cell_size", "solid_fraction", "young_modulus")
@@ -58,6 +60,11 @@ def parameters(request):
         else:
             yield (key,), value
     for key in keys:
+        if key in ("size_x", "size_y"):
+            continue
+        if key == "size" and request["settings"].get("size_x") is not None:
+            for axis in ("size_x", "size_y"):
+                yield ("settings", axis), request["settings"][axis]
         if key != "structure_family":  # The structure selector includes its family.
             yield ("settings", key), request["settings"][key]
 
@@ -99,8 +106,6 @@ def matrix(base, dimensions):
             if settings["structure_name"] in names:
                 settings["structure_family"] = family
                 break
-        if request["operation"] == "fft_solve":
-            settings["size"] = settings["cell_size"]
         yield request
 
 

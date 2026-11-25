@@ -24,7 +24,7 @@ class DoEBoundaryPreview(QDialog):
         self.resize(840, 660)
         self.setMinimumSize(540, 440)
         self._cases = list(cases.values())
-        extent = max((case.size for case in self._cases if not validate_geometry(case, include_mesh=False)), default=1.0)
+        extent = max((max(case.dimensions) for case in self._cases if not validate_geometry(case, include_mesh=False)), default=1.0)
         self._comparison_bounds = (0.0, extent) * 3
         self._surface_builder = surface_builder
         self._detach_requested = detach_requested
@@ -131,7 +131,7 @@ class DoEBoundaryPreview(QDialog):
         settings = self._cases[index]
         self.case_selector.setToolTip(self.case_selector.currentText())
         name = settings.imported_geometry_name or settings.structure_name
-        dimensions = f"Size {settings.size:g} mm"
+        dimensions = " × ".join(f"{v:g}" for v in settings.dimensions) + " mm (X × Y × Z)"
         if not settings.imported_geometry_path and settings.specimen_architecture != "solid":
             dimensions += f"   ·   Cell {settings.cell_size:g} mm   ·   Density {settings.solid_fraction:g}%"
         self.details.setText(f"{name}   ·   {dimensions}")

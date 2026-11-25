@@ -35,7 +35,7 @@ HEX_EDGES = (
 TET_EDGES = ((0, 1), (1, 2), (2, 0), (0, 3), (1, 3), (2, 3))
 NUMERIC_GEOMETRY_FIELDS = ("size", "cell_size", "solid_fraction")
 GEOMETRY_FIELDS = (
-    "stl_resolution",
+    "size_x", "size_y", "stl_resolution",
     "test_profile", "specimen_architecture", "core_fraction",
     "imported_geometry_path",
     "imported_geometry_name",
@@ -171,6 +171,19 @@ class Settings:
     imported_geometry_name: str = ""
     imported_geometry_role: str = "compression"
 
+    # Older settings describe a cube. The existing size field is the loading height (Z).
+    size_x: float | None = None
+    size_y: float | None = None
+
+    @property
+    def dimensions(self):
+        return (self.size if self.size_x is None else self.size_x,
+                self.size if self.size_y is None else self.size_y, self.size)
+
+    @property
+    def rectangular(self):
+        return any(length != self.size for length in self.dimensions[:2])
+
     @property
     def substep_limits(self) -> tuple[int, int]:
         """Preserve the automatic-step bounds of files saved before explicit limits."""
@@ -214,6 +227,10 @@ def validate_geometry(settings: Settings, *, include_mesh: bool = True) -> list[
     points retain the full validation by default.
     """
     from standard_tests import validate_profile, profile
+    if any(v is not None and (not is_finite_number(v) or v <= 0) for v in (settings.size_x, settings.size_y)):
+        return ["Specimen X, Y and Z dimensions must be positive finite lengths."]
+    if settings.rectangular and (settings.imported_geometry_path or settings.test_profile != "custom"):
+        return ["Imported and standard specimens use their prescribed dimensions."]
     errors = validate_profile(settings, include_mesh=include_mesh)
     if settings.stl_resolution is not None and (
         not is_finite_number(settings.stl_resolution) or settings.stl_resolution <= 0
@@ -292,10 +309,10 @@ def validate_geometry(settings: Settings, *, include_mesh: bool = True) -> list[
     if settings.cell_size > settings.size:
         errors.append("Period / characteristic size must not exceed cube size.")
     if include_mesh and settings.mesh_type not in TETRAHEDRAL_MESH_TYPES:
-        n = int(np.ceil(settings.size / settings.mesh_resolution))
-        if n < 4:
+        divisions = np.ceil(np.asarray(settings.dimensions) / settings.mesh_resolution)
+        if min(divisions) < 4:
             errors.append("FE mesh requires at least 4 subdivisions per axis.")
-        count = round(n**3 * settings.solid_fraction / 100)
+        count = round(float(np.prod(divisions)) * settings.solid_fraction / 100)
         if count < 1:
             errors.append("FE mesh requires at least one solid element.")
     elif include_mesh and settings.local_mesh_size > settings.mesh_resolution:

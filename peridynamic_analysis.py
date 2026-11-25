@@ -209,7 +209,7 @@ def _write_csv(path, rows):
 def run_compression(settings, options, folder=None, *, on_progress=report_analysis_step):
     """Compute displacements, compressive reactions and the irreversible bond damage."""
     from mesh_engine import geometry_threshold
-    from periodic_sampling import sample_priority_grid
+    from periodic_sampling import sample_box
 
     errors = validate_compression(settings, options)
     if errors:
@@ -217,11 +217,16 @@ def run_compression(settings, options, folder=None, *, on_progress=report_analys
     settings = replace(settings, poisson_ratio=POISSON_RATIO, material_model="linear_elastic", hardening_curve=())
     n = options.resolution
     spacing = settings.size / n
-    axis = np.arange(n) + 0.5
+    lengths = np.asarray(settings.dimensions)
+    counts = np.maximum(1, np.rint(lengths / spacing).astype(int))
+    if counts.max() > 72:
+        raise ValueError("Use at most 72 particle intervals along each specimen axis.")
+    steps = lengths / counts
+    axes = [(np.arange(count) + 0.5) * step for count, step in zip(counts, steps)]
     on_progress("Sampling TPMS particles…", 0, options.increments)
     threshold = geometry_threshold(settings)
-    grid = sample_priority_grid(settings, axis * spacing, dtype=np.float32, threshold=threshold) < 0
-    points = np.argwhere(grid).astype(float) + 0.5
+    grid = sample_box(settings, axes, dtype=np.float32, threshold=threshold) < 0
+    points = (np.argwhere(grid) + 0.5) * (steps / spacing)
     on_progress("Building peridynamic bonds…", 0, options.increments)
     left, right, length, weight = _bonds(points, options.horizon_ratio, settings, spacing, threshold)
     if not len(left):
@@ -236,7 +241,7 @@ def run_compression(settings, options, folder=None, *, on_progress=report_analys
     layer = np.floor(points[:, 2] * spacing / settings.cell_size).astype(np.int32)
     layers = np.unique(layer)
     layer_indices = [np.flatnonzero(layer == value) for value in layers]
-    force_scale = settings.young_modulus * spacing ** 2
+    force_scale = settings.young_modulus * steps[0] * steps[1]
     if folder is None:
         run_id = f"{datetime.now():%Y%m%d_%H%M%S}_{uuid4().hex[:8]}"
         folder = ROOT / "HumanResults" / f"Peridynamics_{run_id}"

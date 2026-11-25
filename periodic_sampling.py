@@ -87,6 +87,24 @@ def _sample_blocks(settings, axis, output, threshold):
                 ) - threshold
 
 
+def sample_box(settings, axes, *, dtype=np.float64, threshold=0.0):
+    """Sample physical X/Y/Z coordinates in bounded blocks, preserving the TPMS period."""
+    x, y, z = axes
+    if np.array_equal(x, y) and np.array_equal(y, z):
+        return sample_priority_grid(settings, x, dtype=dtype, threshold=threshold)
+    shape = tuple(map(len, axes))
+    require_memory(int(np.prod(shape)) * np.dtype(dtype).itemsize, "Rectangular geometry sampling")
+    output = np.empty(shape, dtype=dtype)
+    width = max(1, int(SAMPLE_BUDGET ** (1 / 3)))
+    for i in range(0, len(x), width):
+        for j in range(0, len(y), width):
+            for k in range(0, len(z), width):
+                output[i:i+width, j:j+width, k:k+width] = evaluate_priority_field(
+                    settings, x[i:i+width, None, None], y[None, j:j+width, None],
+                    z[None, None, k:k+width]) - threshold
+    return output
+
+
 def sample_priority_grid(settings, axis, *, dtype=np.float64, threshold=0.0):
     """Keep the requested grid and boundary; reuse only grid-aligned periods.
 

@@ -56,7 +56,7 @@ from PySide6.QtWidgets import (
 
 from analysis_process import AnalysisProcess, run_single_analysis, run_resume_analysis
 from damask_fft import (
-    COMPONENTS, MIN_GRID, DamaskAnalysisProcess, sample_periodic_cell,
+    COMPONENTS, MIN_GRID, DamaskAnalysisProcess, fft_dimensions, sample_periodic_cell,
     validate_periodic_fft,
 )
 from studio_style import (ActionFlowLayout, CompactDoubleSpinBox, CONTROL_HEIGHT, STUDIO_STYLESHEET,
@@ -210,8 +210,8 @@ def _build_fft_preview(settings: Settings, grid: int):
     solid_count = int(np.count_nonzero(solid))
     # Allow for VTK's intermediate hexahedra, points and extracted faces.
     require_memory(solid.size * 16 + solid_count * 384, "DAMASK voxel preview")
-    spacing = settings.cell_size / grid
-    image = pv.ImageData(dimensions=(grid + 1,) * 3, spacing=(spacing,) * 3)
+    spacing = tuple(length / grid for length in fft_dimensions(settings))
+    image = pv.ImageData(dimensions=(grid + 1,) * 3, spacing=spacing)
     image.cell_data["solid"] = solid.ravel(order="F").astype(np.uint8)
     # Keep the exposed voxel faces, including the walls of open pores.
     surface = image.threshold(0.5, scalars="solid").extract_surface(
@@ -1849,6 +1849,8 @@ class RustMechDialog(QDialog):
             fields.addStretch()
 
     def _add_fft_geometry_controls(self, fields, settings: Settings) -> None:
+        from ui_language import translate
+
         defaults = Settings()
         if self._persist_solver_profiles:
             preferences = self.solver_profile_store.settings
@@ -1904,6 +1906,19 @@ class RustMechDialog(QDialog):
                         stepper_with_unit(control, unit))
             control.valueChanged.connect(self.refresh_validity)
 
+        self.fft_outer_sizes = {}
+        for axis, key in zip("XYZ", ("size_x", "size_y", "size")):
+            control = NoWheelDoubleSpinBox()
+            control.setDecimals(3)
+            control.setRange(0, 1_000_000)
+            control.setSingleStep(0.5)
+            control.setSpecialValueText(translate("1 cell"))
+            if self._persist_solver_profiles:
+                control.setValue(float(preferences.value(f"fft/outer{axis}", 0, type=float)))
+            self.fft_outer_sizes[key] = control
+            form.addRow(field_label(f"Outer {axis} (mm)", control), control)
+            control.valueChanged.connect(self.refresh_validity)
+
         def family_changed():
             family = self.fft_family_combo.currentData()
             self._populate_structure_items(family, combo=self.fft_structure_combo)
@@ -1921,6 +1936,8 @@ class RustMechDialog(QDialog):
             structure_family=family,
             structure_name=self.fft_structure_combo.currentData(),
             tpms_morphology=self.fft_morphology_combo.currentData() if family == "tpms" else "sheet",
+            **{key: control.value() or self.fft_cell_size.value()
+               for key, control in self.fft_outer_sizes.items()},
             cell_size=self.fft_cell_size.value(),
             solid_fraction=self.fft_solid_fraction.value(),
         )
@@ -2027,7 +2044,7 @@ class RustMechDialog(QDialog):
         values.update(material_model="linear_elastic", hardening_curve=())
         geometry = self._fft_geometry_values()
         return replace(
-            settings, **geometry, **values, size=geometry["cell_size"], stl_resolution=None,
+            settings, **geometry, **values, stl_resolution=None,
             imported_geometry_path="", imported_geometry_name="", imported_geometry_role="compression",
             test_profile="custom", specimen_architecture="solid", core_fraction=100.0,
             random_seed=Settings().random_seed,
@@ -3147,7 +3164,7 @@ class RustMechDialog(QDialog):
     def _request_fft_preview(self, settings, *, valid):
         grid = self.fft_grid.value()
         key = (grid, settings.structure_family, settings.structure_name, settings.tpms_morphology,
-               settings.cell_size, settings.solid_fraction) if valid else None
+               settings.cell_size, settings.dimensions, settings.solid_fraction) if valid else None
         old_key = self._fft_preview_request[0] if self._fft_preview_request else None
         if key != old_key:
             self._fft_preview_request = (key, settings, grid) if valid else None
@@ -3195,7 +3212,8 @@ class RustMechDialog(QDialog):
             total = grid ** 3
             ratio = self.fft_void_ratio.value()
             young_modulus = self.fft_material_editor.numeric_values()["young_modulus"]
-            text = (f"{grid} × {grid} × {grid} · Voxel spacing: {settings.cell_size / grid:.4g} mm\n"
+            spacing = " × ".join(f"{length / grid:.4g}" for length in fft_dimensions(settings))
+            text = (f"{grid} × {grid} × {grid} · Voxel spacing: {spacing} mm\n"
                     f"Solid voxels: {count:,} ({count / total:.1%}) · Void voxels: {total - count:,}\n"
                     f"Void stiffness: {ratio * 100:.5g}% of solid · Void E: {ratio * young_modulus:.5g} MPa")
         self.fft_preview_summary.setText(translate(text))
@@ -3214,7 +3232,7 @@ class RustMechDialog(QDialog):
         if count:
             self.plotter.add_mesh(surface, color="#60a5fa", show_edges=True,
                                   edge_color="#334155", smooth_shading=False, name="fft_solid_voxels")
-        cell_size = self._fft_preview_request[1].cell_size
+        cell_size = fft_dimensions(self._fft_preview_request[1])
         self._finish_preview_view(camera, reset or cell_size != self._fft_preview_size)
         self._fft_preview_size = cell_size
 
@@ -3705,6 +3723,8 @@ class RustMechDialog(QDialog):
 
     def _save_fft_preferences(self):
         preferences = self.solver_profile_store.settings
+        for axis, control in zip("XYZ", self.fft_outer_sizes.values()):
+            preferences.setValue(f"fft/outer{axis}", control.value())
         preferences.setValue("fft/geometry", json.dumps(self._fft_geometry_values()))
         material = self.fft_material_editor.material_settings()
         preferences.setValue("fft/solidMaterial", json.dumps(

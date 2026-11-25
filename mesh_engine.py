@@ -15,7 +15,7 @@ from skimage.measure import marching_cubes
 from model import DERIVED_SOLID_MESH_TYPES, FEMesh, Settings, TETRAHEDRAL_MESH_TYPES, require_geometry
 from rust_mesh import build_hex_grid, largest_triangle_surface, select_voxels
 from structure_library import evaluate_priority_field
-from periodic_sampling import sample_priority_grid
+from periodic_sampling import sample_box, sample_priority_grid
 from mesh_resources import require_memory
 from tetrahedral_mesh import generate_tetrahedral_mesh
 
@@ -48,12 +48,12 @@ def _surface_threshold_for_settings(
     structure_name: str,
     tpms_morphology: str,
     random_seed: int,
-    size: float,
+    dimensions: tuple,
     period: float,
     fraction: float,
 ) -> float:
     probe_settings = Settings(
-        size=size,
+        size=dimensions[2],
         cell_size=period,
         solid_fraction=fraction,
         structure_family=structure_family,
@@ -61,12 +61,12 @@ def _surface_threshold_for_settings(
         tpms_morphology=tpms_morphology,
         random_seed=random_seed,
     )
-    axis = (np.arange(101) + 0.5) * size / 101
+    x, y, z = [(np.arange(101) + 0.5) * length / 101 for length in dimensions]
     field = evaluate_priority_field(
         probe_settings,
-        axis[:, None, None],
-        axis[None, :, None],
-        axis[None, None, :],
+        x[:, None, None],
+        y[None, :, None],
+        z[None, None, :],
     )
     return float(np.quantile(field, fraction / 100))
 
@@ -81,6 +81,18 @@ def make_surface(settings: Settings, *, surface_backend="flying_edges", chunked=
         surface = read_surface(settings.imported_geometry_path, require_single=settings.imported_geometry_role == 'compression')
         if settings.imported_geometry_role == 'compression' and (not np.isclose(surface.bounds[4], 0, atol=settings.size * 1e-6) or not np.isclose(surface.bounds[5], settings.size, atol=settings.size * 1e-6)):
             raise ValueError('Imported geometry height has changed. Import it again.')
+        return surface
+    if settings.rectangular:
+        lengths = np.asarray(settings.dimensions)
+        counts = np.maximum(4, np.ceil(lengths / settings.surface_resolution).astype(int))
+        require_memory(int(np.prod(counts + 3)) * 40, "Rectangular reference surface")
+        step = lengths / counts
+        axes = [np.arange(-1, n + 2) * h for n, h in zip(counts, step)]
+        field = sample_box(settings, axes, dtype=np.float32, threshold=geometry_threshold(settings))
+        field[[0, -1], :, :] = field[:, [0, -1], :] = field[:, :, [0, -1]] = 1
+        surface = extract_reference_surface(field, 1., counts, backend=surface_backend)
+        surface.points = surface.points.astype(float) * step
+        surface.field_data['_rustmech_reference'] = np.frombuffer(_surface_signature(surface, settings), dtype=np.uint8).copy()
         return surface
     n = max(4, int(np.ceil(settings.size / settings.surface_resolution)))
     spacing = settings.size / n
@@ -169,11 +181,11 @@ def _project_reference_surface(vertices, faces, spacing, size):
     # VTK's float32 spacing/origin arithmetic can leave nominal cap vertices
     # one ULP inside the specimen. Put only roundoff-close coordinates back
     # on their exact loading planes before merging and removing degeneracies.
-    tolerance = np.finfo(vertices.dtype).eps * max(size, spacing) * 2
+    tolerance = np.finfo(vertices.dtype).eps * max(np.max(size), spacing) * 2
     for start in range(0, len(vertices), 262_144):
         points = vertices[start:start + 262_144]
         points[np.abs(points) <= tolerance] = 0
-        points[np.abs(points - size) <= tolerance] = size
+        np.copyto(points, size, where=np.abs(points - size) <= tolerance, casting="unsafe")
     # Projection can collapse triangles on cap edges. Remove them before the
     # native merge so they cannot become spurious lines or corrupt normals.
     distinct = np.empty(len(faces), dtype=bool)
@@ -192,7 +204,7 @@ def _project_reference_surface(vertices, faces, spacing, size):
 def _surface_signature(surface, settings):
     digest = blake2b(digest_size=32)
     digest.update(repr((settings.structure_family, settings.structure_name,
-                        settings.tpms_morphology, settings.random_seed, settings.size,
+                        settings.tpms_morphology, settings.random_seed, settings.dimensions,
                         settings.cell_size, settings.solid_fraction, settings.surface_resolution)).encode())
     for values in (surface.points, surface.faces):
         digest.update(memoryview(np.ascontiguousarray(values)).cast('B'))
@@ -206,7 +218,7 @@ def geometry_threshold(settings: Settings) -> float:
         settings.structure_name,
         settings.tpms_morphology,
         settings.random_seed,
-        settings.size,
+        settings.dimensions,
         settings.cell_size,
         settings.solid_fraction,
     )
@@ -282,7 +294,14 @@ def generate_volume_mesh(
     n = int(np.ceil(settings.size / settings.mesh_resolution))
     spacing = settings.size / n
     axis = (np.arange(n) + 0.5) * spacing
-    values = sample_priority_grid(settings, axis)
+    if settings.rectangular:
+        lengths = np.asarray(settings.dimensions)
+        counts = np.maximum(1, np.ceil(lengths / settings.mesh_resolution).astype(int))
+        steps = lengths / counts
+        axes = [(np.arange(m) + 0.5) * h for m, h in zip(counts, steps)]
+        values = sample_box(settings, axes)
+    else:
+        values = sample_priority_grid(settings, axis)
     # Sample the fixed geometry at voxel centers. Retargeting the solid fraction
     # on each mesh would move the implicit boundary during a convergence study.
     count = int(np.count_nonzero(values < geometry_threshold(settings)))
@@ -296,11 +315,15 @@ def generate_volume_mesh(
     grid, bottom, top = build_hex_grid(
         retained, spacing, quadratic=quadratic, return_boundaries=True
     )
+    if settings.rectangular:
+        for part in (grid, removed_grid):
+            if part.n_points:
+                part.points *= steps / spacing
     return FEMesh(
         grid,
         spacing,
         n,
-        100 * grid.n_cells / n**3,
+        100 * grid.n_cells / retained.size,
         1,
         bottom,
         top,
@@ -335,6 +358,7 @@ def preview_key(settings: Settings) -> tuple:
         settings.imported_geometry_name,
         settings.imported_geometry_role,
         settings.test_profile, settings.specimen_architecture, settings.core_fraction,
+        *settings.dimensions[:2],
     )
 
 

@@ -42,23 +42,25 @@ class NewDoeTests(unittest.TestCase):
         grid.variable.setChecked(True)
         grid.first.setValue(16)
         grid.last.setValue(32)
+        for axis in ("size_x", "size_y", "size"):
+            factors[axis].first.setValue(12)
         cell = factors["cell_size"]
         cell.variable.setChecked(True)
         cell.first.setValue(2)
         cell.last.setValue(4)
         page.create()
-        self.assertEqual([(r["grid"], r["settings"]["size"]) for r in page.rows],
+        self.assertEqual([(r["grid"], r["settings"]["cell_size"]) for r in page.rows],
                          [(g, s) for g in (16, 32) for s in (2, 4)])
         grid.mode.setCurrentIndex(grid.mode.findData("list"))
         self.assertFalse(page.run.isEnabled())
         grid.selection.setText("32, 17, 24")
         page.create()
-        self.assertEqual([(r["grid"], r["settings"]["size"]) for r in page.rows],
+        self.assertEqual([(r["grid"], r["settings"]["cell_size"]) for r in page.rows],
                          [(g, s) for g in (32, 17, 24) for s in (2, 4)])
         cell.mode.setCurrentIndex(cell.mode.findData("list"))
-        cell.selection.setText("1,25; 3,5")
+        cell.selection.setText("1,5; 3,0")
         page.create()
-        self.assertEqual([r["settings"]["size"] for r in page.rows], [1.25, 3.5] * 3)
+        self.assertEqual([r["settings"]["cell_size"] for r in page.rows], [1.5, 3.0] * 3)
         self.assertTrue(all(r["void_ratio"] == self.window.fft_void_ratio.value() for r in page.rows))
         self.assertFalse(self.window.doe_studio.rows)
         grid.selection.setText("16, 24.5")
@@ -68,7 +70,11 @@ class NewDoeTests(unittest.TestCase):
 
     def test_grouped_drafts_build_geometry_only_on_apply(self):
         page = self.page()
-        cell = next(f for f in page.factors if f.path == ("settings", "cell_size"))
+        fields = {f.path[-1]: f for f in page.factors}
+        fields["cell_size"].first.setValue(1)
+        fields["size_x"].first.setValue(6)
+        fields["size_y"].first.setValue(3)
+        cell = fields["size"]
         geometry = page.sections["Structure / Dimensions"]
         fft = page.sections["FFT Homogenization"]
         with patch.object(self.window, "_show_doe_bounds") as preview:
@@ -85,7 +91,7 @@ class NewDoeTests(unittest.TestCase):
             self.assertTrue(fft.content.isVisible())
             preview.assert_not_called()
             page.apply_button.click()
-            self.assertEqual(next(iter(preview.call_args.args[1].values())).size, 2)
+            self.assertEqual(next(iter(preview.call_args.args[1].values())).dimensions, (6, 3, 2))
             self.assertFalse(page.rows)
             page.create()
             QTest.keyClick(geometry, Qt.Key.Key_Space)
@@ -94,7 +100,7 @@ class NewDoeTests(unittest.TestCase):
             self.assertEqual(len(page.rows), 2)
             page.preview.selectRow(1)
             page.apply_button.click()
-            self.assertEqual(next(iter(preview.call_args.args[1].values())).size, 4)
+            self.assertEqual(next(iter(preview.call_args.args[1].values())).dimensions, (6, 3, 4))
             self.assertEqual(preview.call_count, 2)
 
     def test_two_peridynamic_runs_save_separate_results(self):

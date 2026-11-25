@@ -16,11 +16,11 @@ def block_mesh_dictionary(specimen, flow):
     h = flow.cell_size_mm
     z0,z1 = -flow.inlet_length_mm,flow.section_length(specimen)+flow.outlet_length_mm
     nz = math.ceil((z1-z0)/h)
-    centre = specimen.size/2
+    cx, cy = np.asarray(specimen.dimensions[:2]) / 2
     arcs = []
     if flow.channel_shape == "rectangular":
-        ring = [(centre-width/2,centre-height/2),(centre+width/2,centre-height/2),
-                (centre+width/2,centre+height/2),(centre-width/2,centre+height/2)]
+        ring = [(cx-width/2,cy-height/2),(cx+width/2,cy-height/2),
+                (cx+width/2,cy+height/2),(cx-width/2,cy+height/2)]
         points = [(x,y,z) for z in (z0,z1) for x,y in ring]
         blocks = [((0,1,2,3,4,5,6,7),(math.ceil(width/h),math.ceil(height/h),nz))]
         inlet,outlet = [(3,2,1,0)],[(4,5,6,7)]
@@ -28,14 +28,14 @@ def block_mesh_dictionary(specimen, flow):
     else:
         radius = width/2
         inner,outer = radius/2,radius/math.sqrt(2)
-        ring = [(centre+sx*r,centre+sy*r) for r in (inner,outer)
+        ring = [(cx+sx*r,cy+sy*r) for r in (inner,outer)
                 for sx,sy in ((-1,-1),(1,-1),(1,1),(-1,1))]
         points = [(x,y,z) for z in (z0,z1) for x,y in ring]
         nt,nr = max(2,math.ceil(2*inner/h)),max(1,math.ceil((radius-inner)/h))
         blocks = [((0,1,2,3,8,9,10,11),(nt,nt,nz))]
         inlet,outlet,walls = [(3,2,1,0)],[(8,9,10,11)],[]
-        midpoints = [(centre,centre-radius),(centre+radius,centre),
-                     (centre,centre+radius),(centre-radius,centre)]
+        midpoints = [(cx,cy-radius),(cx+radius,cy),
+                     (cx,cy+radius),(cx-radius,cy)]
         for i in range(4):
             j = (i+1)%4
             face = (i+4,j+4,j,i)
@@ -62,7 +62,7 @@ def snappy_dictionary(specimen, flow):
     from flow_analysis import _header
     # Off-centre, irrational fractions avoid background and refinement faces.
     width,height = flow.cross_section
-    keep = np.array([specimen.size/2+.0314159*width,specimen.size/2+.0271828*height,-.6180339*flow.inlet_length_mm])*.001
+    keep = np.array([specimen.dimensions[0]/2+.0314159*width,specimen.dimensions[1]/2+.0271828*height,-.6180339*flow.inlet_length_mm])*.001
     point = "("+" ".join(f"{v:.16g}" for v in keep)+")"
     geometry = "" if flow.empty_pipe else "insert.stl { type triSurfaceMesh; name insert; }"
     refinement = "" if flow.empty_pipe else f"insert {{ level ({flow.surface_refinement} {flow.surface_refinement}); patchInfo {{ type wall; }} }}"
@@ -124,7 +124,7 @@ def placed_insert_surface(specimen, flow):
     from flow_analysis import specimen_transform
     surface = make_surface(specimen).copy(deep=True)
     rotation,centre = specimen_transform(specimen,flow)
-    surface.points = (surface.points-specimen.size/2) @ rotation.T+centre
+    surface.points = (surface.points-np.asarray(specimen.dimensions)/2) @ rotation.T+centre
     length = flow.section_length(specimen)
     tolerance = max(specimen.size*1e-10,np.finfo(float).eps)
     if surface.bounds[4]<0:

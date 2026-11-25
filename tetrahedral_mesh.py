@@ -132,7 +132,7 @@ def _thin_wall_samples(surface, local_size, surface_spacing, *, sample_spacing=N
 
 
 def _platen_samples(surface, settings):
-    if settings.test_profile != 'custom':
+    if settings.test_profile != 'custom' or settings.rectangular:
         # Specimen boundaries already carry shoulder/contact detail. Do not
         # sample an enclosing cube or project rectangular coupons onto it.
         return np.asarray(surface.points)[spaced_indices(surface.points, settings.local_mesh_size)]
@@ -202,7 +202,7 @@ def _clean_boundary(surface, size, tolerance):
         )
     boundary = surface.copy()
     boundary.points[np.isclose(boundary.points, 0, rtol=0, atol=tolerance)] = 0
-    boundary.points[np.isclose(boundary.points, size, rtol=0, atol=tolerance)] = size
+    np.copyto(boundary.points, size, where=np.isclose(boundary.points, size, rtol=0, atol=tolerance))
     boundary = boundary.clean(tolerance=tolerance, absolute=True).triangulate()
     if not boundary.is_manifold:
         raise ValueError(
@@ -271,8 +271,8 @@ def _linear_tetrahedra(settings, surface, on_progress, use_cache, periodic_thres
                 if on_progress:
                     on_progress(f'Using Netgen: {exc}.')
         if grid is None:
-            boundary = _clean_boundary(surface, settings.size, settings.size * 1e-6)
-            if not settings.imported_geometry_path and settings.test_profile == 'custom':
+            boundary = _clean_boundary(surface, settings.dimensions, min(settings.dimensions) * 1e-6)
+            if not settings.imported_geometry_path and not settings.rectangular and settings.test_profile == 'custom':
                 boundary = simplify_boundary(boundary, settings, on_progress)
             if on_progress:
                 on_progress("Locating thin walls and platen contact regions…")
@@ -319,7 +319,7 @@ def generate_tetrahedral_mesh(
         grid,
         settings.mesh_resolution,
         None,
-        100 * linear.volume / (np.prod(np.asarray(surface.bounds).reshape(3, 2)[:, 1] - np.asarray(surface.bounds).reshape(3, 2)[:, 0]) if settings.imported_geometry_path or settings.test_profile != 'custom' else settings.size**3),
+        100 * linear.volume / (np.prod(np.asarray(surface.bounds).reshape(3, 2)[:, 1] - np.asarray(surface.bounds).reshape(3, 2)[:, 0]) if settings.imported_geometry_path or settings.test_profile != 'custom' else np.prod(settings.dimensions)),
         1,
         bottom,
         top,

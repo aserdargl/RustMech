@@ -49,8 +49,9 @@ class Compression(MpmAnalysis):
         self.spacing = case['point_mm'] * 1e-3
         self.grid_spacing = case['grid_mm'] * 1e-3
         lateral_padding = max(2, math.ceil(round(self.height / self.grid_spacing) / 3)) * self.grid_spacing
-        self.padding = (lateral_padding, lateral_padding, 2 * self.grid_spacing)
-        self.stiffness = case['mpm']['young_mpa'] * 1e6 * self.spacing
+        self.padding = case.get("padding_m", (lateral_padding, lateral_padding, 2 * self.grid_spacing))
+        self.dimensions = np.asarray(case.get("dimensions_mm", [case["geometry"]["size"]] * 3)) * 1e-3
+        self.stiffness = case['mpm']['young_mpa'] * 1e6 * case.get('point_volume_m3', self.spacing**3) / self.spacing**2
         self.body_acceleration = KM.Array3([0., 0., 0.])
         self.contact_points = set()
 
@@ -59,7 +60,7 @@ class Compression(MpmAnalysis):
         self.body = self._GetSolver().GetComputingModelPart()
         self.info = self.body.ProcessInfo
         self.mass = next(iter(self.body.Elements)).CalculateOnIntegrationPoints(MPM.MP_MASS, self.info)[0]
-        expected_mass = self.case['mpm']['density_kg_m3'] * self.spacing**3
+        expected_mass = self.case['mpm']['density_kg_m3'] * self.case.get("point_volume_m3", self.spacing**3)
         if self.body.NumberOfElements() != self.case['points'] or not math.isclose(self.mass, expected_mass):
             raise RuntimeError('Kratos did not generate the expected material points and mass.')
         self.damping = 0.2 * math.sqrt(self.stiffness * self.mass)
@@ -136,7 +137,7 @@ class Compression(MpmAnalysis):
             raise RuntimeError('Non-finite MPM output was produced.')
         padding = np.asarray(self.padding)
         coordinates = outputs['coordinates_mm'] * 1e-3
-        if np.any(coordinates < -padding) or np.any(coordinates > self.height + padding):
+        if np.any(coordinates < -padding) or np.any(coordinates > self.dimensions + padding):
             raise RuntimeError('Material points left the background grid on the final step.')
         np.savez_compressed('mpm_final_particles.npz', **outputs)
         with Path('mpm_force_displacement.csv').open('w', newline='', encoding='utf-8') as stream:

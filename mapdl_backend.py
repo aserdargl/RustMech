@@ -196,13 +196,13 @@ def create_platen_contacts(mapdl, settings: Settings, mesh: FEMesh) -> tuple[int
         mapdl, settings.size, first_node, BOTTOM_PLATEN_PAIR, "GY_BOTTOM",
         settings.bottom_platen_friction_coeff if settings.bottom_platen_contact == "frictional" else 0.0,
         0.0,
-        xy_bounds=mesh.grid.bounds[:4] if settings.imported_geometry_path or settings.test_profile != 'custom' else None,
+        xy_bounds=mesh.grid.bounds[:4] if settings.rectangular or settings.imported_geometry_path or settings.test_profile != 'custom' else None,
     )
     top = create_platen(
         mapdl, settings.size, first_node + 5, TOP_PLATEN_PAIR, "GY_TOP",
         settings.top_platen_friction_coeff if settings.top_platen_contact == "frictional" else 0.0,
         load_sign(settings)*settings.compression, contact_type=8,
-        xy_bounds=mesh.grid.bounds[:4] if settings.imported_geometry_path or settings.test_profile != 'custom' else None,
+        xy_bounds=mesh.grid.bounds[:4] if settings.rectangular or settings.imported_geometry_path or settings.test_profile != 'custom' else None,
     )
     if settings.loading_mode == "force":
         mapdl.ddele(top, "UZ")

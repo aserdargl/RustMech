@@ -89,38 +89,39 @@ def _write_hex_model(path, name, cells, spacing, origin, *, material):
 
 def prepare_mpm_case(geometry, settings, directory):
     from mesh_engine import geometry_threshold
-    from periodic_sampling import sample_priority_grid
+    from periodic_sampling import sample_box
 
     settings.validate(geometry)
-    n = max(2, math.ceil(geometry.size / settings.grid_mm))
+    lengths = np.asarray(geometry.dimensions)
+    n = np.maximum(2, np.ceil(lengths / settings.grid_mm).astype(int))
     n_points = n * settings.points_per_axis
     # Bound the MDPA, particle search and explicitly integrated workload before allocating.
-    if n > 60 or n_points > 100:
+    if n.max() > 60 or n_points.max() > 100:
         raise ValueError('MPM grid is too fine for this version. Increase the spacing or reduce points per axis.')
-    grid_m = geometry.size * 1e-3 / n
+    grid_m = lengths * 1e-3 / n
     particle_m = grid_m / settings.points_per_axis
     duration = settings.duration_ms * 1e-3
     young_pa = settings.young_mpa * 1e6
     nu = settings.poisson_ratio
     wave_speed = math.sqrt(young_pa * (1 - nu) / ((1 + nu) * (1 - 2*nu) * settings.density_kg_m3))
     # Both the wave transit time and the particle-to-platen spring bound the step.
-    contact_omega = math.sqrt(young_pa / settings.density_kg_m3) / particle_m
-    step_limit = min(0.2 * grid_m / wave_speed, 0.2 / contact_omega)
+    contact_omega = math.sqrt(young_pa / settings.density_kg_m3) / particle_m[2]
+    step_limit = min(0.2 * grid_m.min() / wave_speed, 0.2 / contact_omega)
     steps = max(100, math.ceil(duration / step_limit))
     if steps > 50000:
         raise ValueError('MPM would require more than 50,000 time steps. Review the duration and grid spacing.')
-    axis_mm = (np.arange(n_points) + 0.5) * particle_m * 1000
-    material = sample_priority_grid(geometry, axis_mm, threshold=geometry_threshold(geometry)) <= 0
+    axes_mm = [(np.arange(count) + 0.5) * h * 1000 for count, h in zip(n_points, particle_m)]
+    material = sample_box(geometry, axes_mm, threshold=geometry_threshold(geometry)) <= 0
     if not (material[:, :, 0].any() and material[:, :, -1].any()):
         raise ValueError('TPMS sampling missed a platen face. Refine the material-point spacing.')
     particles = np.argwhere(material)
     if len(particles) > 200000:
         raise ValueError('MPM sampled more than 200,000 points. Increase the particle spacing.')
     # Permit lateral expansion and grid crossing without box walls. Any escaped point fails the run.
-    padding = max(2, math.ceil(n / 3))
-    lateral = np.arange(-padding, n + padding)
-    vertical = np.arange(-2, n + 2)
-    grid = np.stack(np.meshgrid(lateral, lateral, vertical, indexing='ij'), axis=-1).reshape(-1, 3)
+    padding = np.maximum(2, np.ceil(n / 3).astype(int))
+    padding[2] = 2
+    axes = [np.arange(-pad, count + pad) for pad, count in zip(padding, n)]
+    grid = np.stack(np.meshgrid(*axes, indexing='ij'), axis=-1).reshape(-1, 3)
     directory.mkdir(parents=True, exist_ok=True)
     _write_hex_model(directory / 'Body.mdpa', 'Parts_body', particles, particle_m, 0, material=True)
     _write_hex_model(directory / 'Grid.mdpa', 'Parts_grid', grid, grid_m, 0, material=False)
@@ -131,8 +132,10 @@ def prepare_mpm_case(geometry, settings, directory):
     (directory / 'Materials.json').write_text(json.dumps({'properties': [law]}), encoding='ascii')
     case = dict(mpm=asdict(settings), geometry={key: getattr(geometry, key) for key in (
         'structure_name', 'tpms_morphology', 'size', 'cell_size', 'solid_fraction')},
-        steps=steps, points=len(particles), grid_mm=grid_m * 1000, point_mm=particle_m * 1000,
-        sampled_fraction=len(particles) / n_points**3, dt_s=duration / steps)
+        steps=steps, points=len(particles), grid_mm=grid_m[2] * 1000, point_mm=particle_m[2] * 1000,
+        dimensions_mm=lengths.tolist(), padding_m=(padding * grid_m).tolist(),
+        point_volume_m3=float(np.prod(particle_m)),
+        sampled_fraction=len(particles) / int(np.prod(n_points)), dt_s=duration / steps)
     (directory / 'mpm_input.json').write_text(json.dumps(case, indent=2), encoding='utf-8')
     return case
 
