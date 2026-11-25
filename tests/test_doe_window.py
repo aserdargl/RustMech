@@ -162,27 +162,32 @@ class DoEWindowTests(unittest.TestCase):
         self.app.processEvents()
         navigation = studio.planner.navigation.layout()
         buttons = [navigation.itemAt(index).widget() for index in range(navigation.count())]
-        self.assertEqual(buttons[:2], [studio.open_plan_btn, studio.save_plan_btn])
-        self.assertEqual([button.text() for button in buttons[2:]],
+        self.assertEqual([button.text() for button in buttons],
                          [studio.settings_tabs.tabText(index)
                           for index in range(studio.settings_tabs.count())])
-        self.assertEqual(buttons[0].width(), buttons[1].width())
-        self.assertLess(buttons[1].width(), buttons[2].width())
-        self.assertEqual(buttons[1].x() - buttons[0].geometry().right() - 1, navigation.spacing())
-        self.assertEqual(len({button.width() for button in buttons[2:]}), 1)
+        open_plan, save_plan = studio.open_plan_btn, studio.save_plan_btn
+        self.assertEqual(open_plan.size(), save_plan.size())
+        self.assertLess(save_plan.width(), buttons[0].width())
+        self.assertEqual(save_plan.x() - open_plan.geometry().right() - 1,
+                         studio.planner.plan_footer.layout().spacing())
+        self.assertEqual(len({button.width() for button in buttons}), 1)
         self.assertTrue(studio.settings_tabs.tabBar().isHidden())
-        studio.save_plan_btn.setFocus()
-        QTest.keyClick(studio.save_plan_btn, Qt.Key.Key_Tab)
-        self.assertTrue(buttons[2].hasFocus())
+        open_plan.setFocus()
+        QTest.keyClick(open_plan, Qt.Key.Key_Tab)
+        self.assertTrue(save_plan.hasFocus())
         self.assertEqual(studio.settings_tabs.tabText(0), "DoE")
         self.assertEqual(studio.settings_tabs.tabText(3), "DoE2")
         self.assertFalse(studio.table.isVisible())
         self.assertEqual(studio.vertical_splitter.handleWidth(), 3)
         self.assertFalse(studio.matrix_tabs.expanding())
-        buttons[5].click()
+        buttons[3].click()
         self.app.processEvents()
         self.assertEqual(studio.settings_tabs.currentIndex(), 3)
-        self.assertTrue(buttons[5].isChecked())
+        self.assertTrue(buttons[3].isChecked())
+        footer_corner = save_plan.mapTo(studio, save_plan.rect().bottomRight())
+        margins = studio.layout().contentsMargins()
+        self.assertEqual(footer_corner.x(), studio.rect().right() - margins.right())
+        self.assertEqual(footer_corner.y(), studio.rect().bottom() - margins.bottom())
         matrix = studio.matrix_navigation.layout()
         experiments, learning = [matrix.itemAt(index).widget() for index in range(matrix.count())]
         self.assertLess(experiments.width() + learning.width(), studio.width() // 2)
@@ -194,7 +199,7 @@ class DoEWindowTests(unittest.TestCase):
         studio.table.setFocus()
         QTest.keyClick(studio.table, Qt.Key.Key_Tab, Qt.KeyboardModifier.ControlModifier)
         self.assertEqual(studio.settings_tabs.currentIndex(), 4)
-        self.assertTrue(buttons[6].isChecked())
+        self.assertTrue(buttons[4].isChecked())
         for buttons in studio._action_groups:
             self.assertEqual(len({button.size().width() for button in buttons}), 1)
             for button in buttons:

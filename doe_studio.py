@@ -431,7 +431,11 @@ class DoEStudioWidget(TrubaParallelMixin, QWidget):
         self._build_ui()
         from operation_progress import OperationProgress
         self.operation_progress = OperationProgress(self, provider=self._operation_state)
+        progress_policy = self.operation_progress.sizePolicy()
+        progress_policy.setRetainSizeWhenHidden(False)
+        self.operation_progress.setSizePolicy(progress_policy)
         self.layout().addWidget(self.operation_progress)
+        self.layout().addWidget(self.planner.plan_footer)
         self.progress_bar = self.operation_progress.bar
         self._refresh_plan()
         self._update_badge()
@@ -747,8 +751,7 @@ class DoEStudioWidget(TrubaParallelMixin, QWidget):
             legacy = self.planner.tabs.widget(index) is not self.new_doe
             if legacy:
                 self._legacy_plan_tab = index
-            for control in (self.open_plan_btn, self.save_plan_btn, self.plan_file_label):
-                control.setVisible(legacy)
+            self.planner.plan_footer.setVisible(legacy)
             self.new_doe.size_navigation(self.planner.navigation, not legacy)
 
         self._settings_navigation = self.planner.navigation.add_tabs(self.planner.tabs)

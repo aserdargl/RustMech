@@ -536,7 +536,7 @@ class NewDoePage(QWidget):
         self.apply_button.setProperty("managesLocalizedWidth", True)
         self.apply_button.setEnabled(False)
         self.apply_button.clicked.connect(self.create)
-        settings_layout.addWidget(self.apply_button, alignment=Qt.AlignmentFlag.AlignLeft)
+        settings_layout.addWidget(self.apply_button, alignment=Qt.AlignmentFlag.AlignRight)
         self._nav_sizes = []
         matrix_panel = QWidget()
         matrix_layout = QVBoxLayout(matrix_panel)
@@ -574,7 +574,7 @@ class NewDoePage(QWidget):
         self.truba_jobs_button.hide()
         self.truba_jobs_button.clicked.connect(self.open_truba_jobs)
         status_row.addWidget(self.truba_jobs_button)
-        layout.addLayout(status_row)
+        matrix_layout.addLayout(status_row)
         self.run.setEnabled(False)
         self.stop.setEnabled(False)
         self.open.setEnabled(False)
@@ -647,7 +647,7 @@ class NewDoePage(QWidget):
     def invalidate(self, *_):
         self.matrix_current = False
         self.run.setEnabled(False)
-        self.status.setText("Press Apply to create the experiment matrix.")
+        self.status.clear()
 
     def inputs_changed(self, *_):
         if self.loaded:

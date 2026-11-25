@@ -3,7 +3,7 @@ from dataclasses import replace
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QFormLayout, QLabel,
+    QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QLabel,
     QButtonGroup, QPushButton, QCheckBox, QListWidget, QTabWidget, QSizePolicy,
 )
 
@@ -59,16 +59,20 @@ class SimpleDoEPlanner(QWidget):
         layout.addWidget(self.navigation)
         s.open_plan_btn = QPushButton('Open')
         s.save_plan_btn = QPushButton('Save')
-        s.open_plan_btn.setFixedWidth(64)
-        s.save_plan_btn.setFixedWidth(64)
         s.open_plan_btn.clicked.connect(s.open_plan_dialog)
         s.save_plan_btn.clicked.connect(s.save_plan_dialog)
-        self.navigation.add_button(s.open_plan_btn)
-        self.navigation.add_button(s.save_plan_btn)
+        self.plan_footer = QWidget()
+        plan_layout = QHBoxLayout(self.plan_footer)
+        plan_layout.setContentsMargins(0, 0, 0, 0)
+        plan_layout.setSpacing(4)
         s.plan_file_label = QLabel('Untitled plan')
         s.plan_file_label.setObjectName('mutedHintLabel')
         s.plan_file_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
-        layout.addWidget(s.plan_file_label)
+        plan_layout.addWidget(s.plan_file_label, 1)
+        for button in (s.open_plan_btn, s.save_plan_btn):
+            button.setFixedSize(64, CONTROL_HEIGHT)
+            button.setAutoDefault(False)
+            plan_layout.addWidget(button)
         self.tabs = s.settings_tabs = QTabWidget()
         self.tabs.tabBar().hide()
         layout.addWidget(self.tabs)

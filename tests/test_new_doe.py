@@ -24,7 +24,7 @@ class NewDoeTests(unittest.TestCase):
         studio.settings_tabs.setCurrentWidget(page)
         self.app.processEvents()
         self.assertEqual(studio.settings_tabs.tabText(studio.settings_tabs.currentIndex()), "DoE")
-        self.assertTrue(studio.save_plan_btn.isHidden())
+        self.assertFalse(studio.save_plan_btn.isVisible())
         self.assertLess(studio.capture_plan()["selection"]["tab"], 5)
         return page
 
@@ -42,15 +42,15 @@ class NewDoeTests(unittest.TestCase):
         self.assertEqual(studio.new_doe.operation.currentText(), "FFT")
         self.assertIsNone(studio.findChild(LanguageSelector))
         self.assertTrue(self.window.language_selector.isVisible())
-        self.assertTrue(studio.plan_file_label.isHidden())
+        self.assertFalse(studio.plan_file_label.isVisible())
         self.assertFalse(studio.findChildren(QAbstractSpinBox))
         analysis = studio.new_doe.operation
         nav = studio.planner.navigation
         nav_bottom = nav.mapToGlobal(QPoint(0, nav.height())).y()
         self.assertLessEqual(analysis.mapToGlobal(QPoint()).y() - nav_bottom, 8)
         buttons = studio.planner.navigation.layout()
-        self.assertEqual(buttons.itemAt(2).widget().text(), "DoE")
-        for index in range(2, buttons.count()):
+        self.assertEqual(buttons.itemAt(0).widget().text(), "DoE")
+        for index in range(buttons.count()):
             button = buttons.itemAt(index).widget()
             self.assertGreaterEqual(button.width(), button.fontMetrics().horizontalAdvance(button.text()) + 22)
         tabs.setCurrentIndex(3)
@@ -290,9 +290,18 @@ class NewDoeTests(unittest.TestCase):
         self.assertEqual(len({control.mapTo(page, QPoint()).y() for control in top_row}), 1)
         self.assertEqual(len({(button.width(), button.height()) for button in top_row[1:]}), 1)
         self.assertLess(page.operation.width(), 150)
-        self.assertEqual(page.apply_button.mapTo(page, QPoint()).x(), page.input_tabs.mapTo(page, QPoint()).x())
+        apply_right = page.apply_button.mapTo(page, page.apply_button.rect().bottomRight()).x()
+        settings_right = page.input_tabs.mapTo(page, page.input_tabs.rect().bottomRight()).x()
+        self.assertEqual(apply_right, settings_right)
         self.assertEqual(page.apply_button.mapTo(page, QPoint(0, page.apply_button.height())).y(),
                          page.splitter.mapTo(page, QPoint(0, page.splitter.height())).y())
+        self.assertEqual(page.splitter.geometry().bottom(),
+                         page.rect().bottom() - page.layout().contentsMargins().bottom())
+        studio = self.window.doe_studio
+        bottom_gap = studio.rect().bottom() - page.apply_button.mapTo(
+            studio, page.apply_button.rect().bottomRight()).y()
+        self.assertLessEqual(bottom_gap, studio.layout().contentsMargins().bottom() + 3)
+        self.assertEqual(page.status.text(), "")
         self.assertTrue(cell.fixed.isVisible())
         cell.fixed.setValue(2)
         cell.variable.setChecked(True)
@@ -312,12 +321,16 @@ class NewDoeTests(unittest.TestCase):
         page.apply_button.click()
         self.assertEqual([row["settings"]["size"] for row in page.rows], [2, 4])
         self.assertTrue(page.run.isEnabled())
+        self.app.processEvents()
+        self.assertEqual(page.splitter.geometry().bottom(),
+                         page.rect().bottom() - page.layout().contentsMargins().bottom())
         QTest.keyClick(geometry, Qt.Key.Key_Space)
         self.assertTrue(cell.fixed.isVisible())
         cell.variable.setChecked(False)
         cell.fixed.setValue(5)
         self.assertEqual(page.sheet.rowCount(), 2)
         self.assertFalse(page.run.isEnabled())
+        self.assertEqual(page.status.text(), "")
         page.apply_button.click()
         self.assertEqual([row["settings"]["size"] for row in page.rows], [5])
         self.assertEqual(page.sheet.rowCount(), 1)

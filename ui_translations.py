@@ -1365,7 +1365,6 @@ Variable|Değişken
 Results folder|Sonuç klasörü
 Structure family / type|Yapı ailesi / türü
 Solid fraction (%)|Katı oranı (%)
-Press Apply to create the experiment matrix.|Deney matrisini oluşturmak için Uygula’ya tıklayın.
 Stopped. Finished results are saved.|Durduruldu. Tamamlanan deneylerin sonuçları kaydedildi.
 Void / solid stiffness|Boşluk / katı rijitliği
 Ratio of the Young’s modulus assigned to void voxels to that of the solid (Eᵥ/Eₛ). For example, 0.01 gives the voids 1% of the solid stiffness. Lower values better approximate empty space but can make the FFT solver harder to converge. Higher values can overestimate the cell’s effective stiffness.|Boşluk voksellerine atanan Young modülünün katının Young modülüne oranıdır (Eᵥ/Eₛ). Örneğin 0,01 değerinde boşluklara katı rijitliğinin %1’i atanır. Düşük değerler gerçek boşluğu daha iyi temsil eder ancak FFT çözücüsünün yakınsamasını zorlaştırabilir. Yüksek değerler hücrenin efektif rijitliğini olduğundan büyük gösterebilir.
