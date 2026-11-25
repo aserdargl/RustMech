@@ -194,11 +194,6 @@ class NoWheelComboBox(CompactComboBox):
 class _ComputeStatusLabel(QLabel):
     """Keep the toolbar height stable when the compute status gets longer."""
 
-    def minimumSizeHint(self):
-        hint = super().minimumSizeHint()
-        hint.setWidth(min(hint.width(), 75))
-        return hint
-
     def paintEvent(self, event):
         painter = QStylePainter(self)
         bounds = self.contentsRect()
@@ -379,10 +374,6 @@ class RustMechDialog(QDialog):
         layout.addWidget(header)
         header_layout = QVBoxLayout(header)
         header_layout.setContentsMargins(3, 4, 3, 4)
-        header_layout.setSpacing(5)
-        context_row = QHBoxLayout()
-        context_row.setSpacing(8)
-        header_layout.addLayout(context_row)
 
         self.brand_title_label = QLabel("Nonlinear Compression")
         self.brand_title_label.setObjectName("brandTitle")
@@ -394,19 +385,16 @@ class RustMechDialog(QDialog):
         self.brand_header = brand_card
         brand_card.setObjectName("brandHeader")
         brand_card.setProperty('computeState', 'local')
-        brand_content = QVBoxLayout(brand_card)
-        brand_content.setContentsMargins(6, 2, 4, 2)
-        brand_content.setSpacing(2)
-        brand_layout = QHBoxLayout()
-        brand_layout.setSpacing(5)
-        brand_content.addLayout(brand_layout)
+        brand_card.setFixedHeight(CONTROL_HEIGHT)
+        brand_layout = QHBoxLayout(brand_card)
+        brand_layout.setContentsMargins(5, 2, 5, 2)
         self.brand_subtitle_lbl = _ComputeStatusLabel(self.solver_capabilities.display_name)
         self.brand_subtitle_lbl.setObjectName("brandSubtitle")
+        self.brand_subtitle_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.brand_subtitle_lbl.setTextFormat(Qt.TextFormat.PlainText)
+        self.brand_subtitle_lbl.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Preferred)
         self.brand_subtitle_lbl.setMaximumWidth(320)
         brand_layout.addWidget(self.brand_subtitle_lbl)
-        context_row.addWidget(brand_card)
-        context_row.addStretch()
         self.truba_session = TrubaSession(self)
         self.truba_session.background_updated.connect(self._background_analysis_updated)
         self.truba_session.connection_changed.connect(self._update_hpc_button)
@@ -960,7 +948,7 @@ class RustMechDialog(QDialog):
         navigation.setSpacing(2)
         navigation.addWidget(self.brand_title_label)
         command_scroll.setWidget(command_bar)
-        header_layout.insertWidget(0, command_scroll)
+        header_layout.addWidget(command_scroll)
 
         from project_workspace import ProjectWorkspace
         self.project_workspace = ProjectWorkspace(self)
@@ -1064,7 +1052,9 @@ class RustMechDialog(QDialog):
             for button in group:
                 button.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
                 navigation.addWidget(button)
-        navigation.addStretch()
+        navigation.addStretch(1)
+        navigation.addWidget(brand_card)
+        navigation.addStretch(1)
         for button in self._compute_commands:
             navigation.addWidget(button)
         navigation.addWidget(self.about_button)
