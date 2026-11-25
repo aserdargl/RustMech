@@ -245,6 +245,8 @@ def slurm_script(context,username,request):
     job_name = "RustMech-remote"
     if request.get("background") or request["operation"] in ANALYSIS_OPERATIONS:
         job_name = analysis_code(request) or job_name
+    if type(request.get("experiment_index")) is int and type(request.get("experiment_count")) is int:
+        job_name += f"-DoE-{request['experiment_index']}-of-{request['experiment_count']}"
     return f'''#!/bin/bash -l
 #SBATCH --job-name={job_name}
 #SBATCH --partition={partition}
@@ -420,6 +422,8 @@ def run_remote_job(request,context,auth=None,marker=None,*,directory=None,resume
                       operation=request["operation"],request_id=request["request_id"],source_sha256=source_hash)
         if "experiment_rows" in request:
             record["experiment_count"] = len(request["experiment_rows"])
+        elif "experiment_index" in request:
+            record.update(experiment_index=request["experiment_index"], experiment_count=request["experiment_count"])
         if study_name and request["operation"] not in ("probe", "prepare", "preview", "surface"):
             record["study_name"] = study_name
         if request['operation'] == 'convergence_level' and request.get('convergence_study'):
@@ -617,6 +621,10 @@ if [ -s job.id ]; then printf 'RUSTMECH_JOB_ID=%s\n' "$(cat job.id)"; fi
                 progress = re.search(r'^RUSTMECH_PROGRESS=(.*)$', reply, re.MULTILINE)
                 if progress and progress[1].strip():
                     value = f"{value} · {progress[1].strip()}"
+            if record.get('experiment_count') and queue_state == 'RUNNING':
+                current = re.search(r'^RUSTMECH_PROGRESS=Running experiment (\d+) / (\d+)$', reply, re.MULTILINE)
+                if current and int(current[2]) == record['experiment_count'] and 1 <= int(current[1]) <= int(current[2]):
+                    record['experiment_index'] = int(current[1])
             previous_progress = record.get('level_progress')
             if record.get('level_resources') and queue_state == 'RUNNING':
                 level_stage = dict(re.findall(r'^RUSTMECH_LEVEL_(\d+)=(.*)$', reply, re.MULTILINE))
@@ -695,6 +703,8 @@ if [ -s job.id ]; then printf 'RUSTMECH_JOB_ID=%s\n' "$(cat job.id)"; fi
             raise RuntimeError(f"SLURM did not confirm successful completion ({accounting or 'unknown'}). See {directory/'slurm.err'}")
         if result.get("error"): raise RuntimeError(result["error"])
         result = _rebase_paths(directory,result)
+        if record.get("experiment_count") and result.get("experiments") == record["experiment_count"]:
+            record["experiment_index"] = record["experiment_count"]
         record.pop("tracking_error", None)
         update("downloaded")
         return result,directory

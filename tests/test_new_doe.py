@@ -22,7 +22,7 @@ class NewDoeTests(unittest.TestCase):
         page = studio.new_doe
         studio.settings_tabs.setCurrentWidget(page)
         self.app.processEvents()
-        self.assertEqual(studio.settings_tabs.tabText(studio.settings_tabs.currentIndex()), "NEW DOE")
+        self.assertEqual(studio.settings_tabs.tabText(studio.settings_tabs.currentIndex()), "DoE")
         self.assertTrue(studio.save_plan_btn.isHidden())
         self.assertLess(studio.capture_plan()["selection"]["tab"], 5)
         return page
@@ -38,7 +38,7 @@ class NewDoeTests(unittest.TestCase):
         self.assertTrue(studio.new_doe.loaded)
         self.assertTrue(studio.planner.language_selector.isVisible())
         buttons = studio.planner.navigation.layout()
-        self.assertEqual(buttons.itemAt(2).widget().text(), "NEW DOE")
+        self.assertEqual(buttons.itemAt(2).widget().text(), "DoE")
         for index in range(2, buttons.count()):
             button = buttons.itemAt(index).widget()
             self.assertGreaterEqual(button.width(), button.fontMetrics().horizontalAdvance(button.text()) + 22)
@@ -288,7 +288,7 @@ class NewDoeTests(unittest.TestCase):
     def test_run_menu_selects_target_for_the_matrix(self):
         page = self.page()
         page.create()
-        local, remote = page.run.menu().actions()
+        local, remote, separate = page.run.menu().actions()
         controller = self.window.remote_controller
         with patch("doe_studio.results_directory", return_value=Path(self.temp.name)), \
                 patch.object(controller, "auth", return_value=None) as auth, \
@@ -332,7 +332,10 @@ class NewDoeTests(unittest.TestCase):
             job = launch.return_value
             job.done.return_value = False
             page.start(remote=True)
+            job.remote_status.return_value = dict(job_id="71", state="RUNNING", experiment_index=2)
             page.advance()
+            self.assertIn("2/2", page.status.text())
+            self.assertEqual(page.sheet.states, ["Awaiting results", "Running"])
             job.done.return_value = True
             job.result.return_value = str(output)
             page.advance()
@@ -340,6 +343,38 @@ class NewDoeTests(unittest.TestCase):
             self.assertEqual(launch.call_args.args[0]["experiment_rows"], page.rows)
             self.assertEqual(page.sheet.states, ["Failed", "Completed"])
             self.assertFalse(page.timer.isActive())
+
+    def test_separate_jobs_send_one_experiment_at_a_time_with_distinct_job_ids(self):
+        page = self.page()
+        grid = next(f for f in page.factors if f.path == ("grid",))
+        grid.variable.setChecked(True)
+        grid.first.setValue(16)
+        grid.last.setValue(24)
+        page.create()
+        root = Path(self.temp.name)
+        jobs = [Mock(), Mock()]
+        with patch("doe_studio.results_directory", return_value=root), \
+                patch.object(self.controller, "auth", return_value=object()), \
+                patch("new_doe_page.launch", side_effect=jobs) as launch:
+            page.run.menu().actions()[2].trigger()
+            for i, job in enumerate(jobs, 1):
+                job.remote_status.return_value = dict(job_id=str(70 + i), state="RUNNING")
+                job.done.return_value = False
+                page.advance()
+                self.assertIn(f"#{70 + i}", page.status.text())
+                self.assertIn(f"{i}/2", page.status.text())
+                self.assertEqual(launch.call_count, i)
+                row, directory, controller = launch.call_args.args
+                self.assertIs(controller, self.controller)
+                self.assertEqual((row["experiment_index"], row["experiment_count"]), (i, 2))
+                self.assertNotIn("experiment_rows", row)
+                job.done.return_value = True
+                job.result.return_value = str(directory)
+                page.advance()
+                record = json.loads((directory / "experiment.json").read_text())
+                self.assertEqual(record["slurm_job_id"], str(70 + i))
+            self.assertFalse(page.timer.isActive())
+            self.assertEqual(page.sheet.states, ["Completed", "Completed"])
 
     def test_truba_uses_selected_operation_and_downloads_into_the_row(self):
         from new_doe_operations import OPERATIONS, launch, snapshot

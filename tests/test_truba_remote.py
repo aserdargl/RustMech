@@ -248,12 +248,35 @@ class RemoteProtocolTests(unittest.TestCase):
     def test_new_doe_matrix_uploads_one_request_to_one_slurm_job(self):
         from new_doe_operations import matrix_request
         rows = [dict(operation="fft_solve", settings=asdict(Settings()), grid=n) for n in (16, 24, 32)]
-        _, folder = run_remote_job(matrix_request(rows), RemoteContext(), directory=self.root / "matrix")
+        command = FakeTransport.command
+        progress = ["RUSTMECH_QUEUE=RUNNING|None\nRUSTMECH_PROGRESS=Running experiment 2 / 3\n"]
+
+        def poll(transport, script):
+            if "RUSTMECH_QUEUE" in script and progress:
+                return progress.pop()
+            return command(transport, script)
+
+        with patch.object(FakeTransport, "command", poll), patch("truba_remote.time.sleep"):
+            _, folder = run_remote_job(matrix_request(rows), RemoteContext(), directory=self.root / "matrix")
         transport, = FakeTransport.instances
         self.assertEqual(transport.submissions, 1)
         self.assertEqual(transport.put_names.count("request.json"), 1)
         self.assertEqual(transport.request["experiment_rows"], json.loads(json.dumps(rows)))
-        self.assertEqual(json.loads((folder / "remote_job.json").read_text())["experiment_count"], 3)
+        from truba_job_list import job_description
+        record = json.loads((folder / "remote_job.json").read_text())
+        self.assertEqual(record["experiment_count"], 3)
+        self.assertEqual(record["experiment_index"], 2)
+        self.assertIn("DoE 2/3", job_description(record))
+
+    def test_separate_doe_job_is_identified_in_slurm_and_the_job_list(self):
+        from truba_job_list import job_description
+        request = dict(operation="fft_solve", settings=asdict(Settings()), grid=16,
+                       experiment_index=2, experiment_count=3)
+        _, directory = run_remote_job(request, RemoteContext(), directory=self.root / "single")
+        record = json.loads((directory / "remote_job.json").read_text())
+        self.assertIn("DoE 2/3", job_description(record))
+        script = (directory / record["script_name"]).read_text()
+        self.assertIn(f"#SBATCH --job-name={analysis_code(record)}-DoE-2-of-3", script)
 
     def test_submission_download_checksum_and_resume_do_not_resubmit(self):
         result,directory = run_remote_job(dict(operation="probe"),RemoteContext(),directory=self.root/"job")
@@ -506,11 +529,23 @@ class ComputeWorkerTests(unittest.TestCase):
                            remote_context=asdict(RemoteContext()))
             (root / "request.json").write_text(json.dumps(request))
             env = dict(os.environ, RUSTMECH_CORE_LIBRARY=str(library), SLURM_JOB_ID="99")
+            # Capture Slurm updates locally while the real worker runs its three rows.
+            recorder = root / ("scontrol.cmd" if os.name == "nt" else "scontrol")
+            recorder.write_text('@echo %* >> "%DOE_COMMENT_LOG%"' if os.name == "nt" else
+                                '#!/bin/sh\necho "$*" >> "$DOE_COMMENT_LOG"\n')
+            recorder.chmod(0o755)
+            comment_log = root / "comments.log"
+            env.update(SLURMD_NODENAME="test-node", DOE_COMMENT_LOG=str(comment_log),
+                       PATH=str(root) + os.pathsep + env["PATH"])
             result = subprocess.run([sys.executable, str(ROOT / "remote_worker.py"), "request.json"],
                                     cwd=root, env=env, capture_output=True, timeout=120)
             self.assertEqual(result.returncode, 0, result.stderr.decode(errors="replace"))
             output = root / "output"
             self.assertEqual(json.loads((output / "result.json").read_text())["failed"], 1)
+            comments = comment_log.read_text().splitlines()
+            self.assertEqual(len(comments), 3)
+            for index, comment in enumerate(comments, 1):
+                self.assertIn(f"DoE {index}/3", comment)
             for index, state in enumerate(("Completed", "Failed", "Completed"), 1):
                 case = output / f"row_{index:05d}"
                 self.assertEqual(json.loads((case / "experiment.json").read_text())["state"], state)

@@ -58,6 +58,9 @@ def job_description(record):
         context = record.get('context', {})
         return f"Resource session · {context.get('cores', '?')} CPUs · {context.get('memory_mb', '?')} MiB"
     label = OPERATIONS.get(record.get('operation'), record.get('operation') or 'Mechanical analysis (Kratos)')
+    if record.get('experiment_count'):
+        number = record.get('experiment_index')
+        label = f"DoE {number}/{record['experiment_count']} · {label}" if number else f"DoE · {label}"
     if 'geometry_name' in record:
         geometry = record['geometry_name']
         return f'{label} · {geometry}' if geometry else label

@@ -704,7 +704,7 @@ class DoEStudioWidget(TrubaParallelMixin, QWidget):
 
         from new_doe_page import NewDoePage
         self.new_doe = NewDoePage(self._operation_host)
-        self.planner.tabs.insertTab(0, self.new_doe, "NEW DOE")
+        self.planner.tabs.insertTab(0, self.new_doe, "DoE")
         self.planner.tabs.setCurrentWidget(self.new_doe)
         self._matrix_tab = self.planner.tabs.addTab(bottom_panel, "Experiment matrix")
         self._legacy_plan_tab = self._matrix_tab

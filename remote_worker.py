@@ -357,6 +357,8 @@ def _run_experiment_matrix(request, output):
         raise ValueError("Invalid experiment count.")
     root = Path.cwd()
     worker = str(Path(__file__).resolve())
+    job_id = os.environ.get("SLURM_JOB_ID", "")
+    scontrol = shutil.which("scontrol") if job_id.isdecimal() and os.environ.get("SLURMD_NODENAME") else None
     failures = 0
     for index, row in enumerate(rows, 1):
         if (root / "cancel.request").exists():
@@ -369,6 +371,14 @@ def _run_experiment_matrix(request, output):
         record = dict(experiment=index, execution_target="truba", inputs=row, state="Running")
         _write(case / "experiment.json", record)
         _stage(f"Running experiment {index} / {len(rows)}")
+        if scontrol:
+            try:
+                update = subprocess.run([scontrol, "update", f"JobId={job_id}", f"Comment=DoE {index}/{len(rows)}"],
+                                        capture_output=True, timeout=5)
+                if update.returncode:
+                    scontrol = None
+            except (OSError, subprocess.TimeoutExpired):
+                scontrol = None
         try:
             if row["operation"] != request["operation"]:
                 raise ValueError("Inconsistent matrix operation.")

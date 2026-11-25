@@ -1336,6 +1336,9 @@ FFT Homogenization|FFT homojenleştirme
 Voxels per axis|Eksen başına voksel
 Run locally|Bu bilgisayarda çalıştır
 Run on TRUBA|TRUBA’da çalıştır
+Run on TRUBA as one job|TRUBA’ya tek iş olarak gönder
+Run on TRUBA as separate jobs|TRUBA’ya ayrı işler olarak gönder
+Awaiting results|Sonuçlar bekleniyor
 Connect to TRUBA, then run the matrix again.|TRUBA bağlantısını kurduktan sonra matrisi yeniden çalıştırın.
 Running experiment matrix on TRUBA.|Deney matrisi TRUBA’da çalıştırılıyor.
 Experiment matrix stopped.|Deney matrisi durduruldu.

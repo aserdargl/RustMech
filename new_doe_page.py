@@ -402,7 +402,8 @@ class NewDoePage(QWidget):
             if callback is None:
                 menu = QMenu(button)
                 menu.addAction("Run locally", lambda: self.start(remote=False))
-                menu.addAction("Run on TRUBA", lambda: self.start(remote=True))
+                menu.addAction("Run on TRUBA as one job", lambda: self.start(remote=True))
+                menu.addAction("Run on TRUBA as separate jobs", lambda: self.start(remote=True, separate=True))
                 button.setMenu(menu)
             else:
                 button.clicked.connect(callback)
@@ -639,7 +640,7 @@ class NewDoePage(QWidget):
         if errors:
             self.status.setText("\n".join(errors))
             return
-        self.host._show_doe_bounds("NEW DOE", {label: settings})
+        self.host._show_doe_bounds("DoE", {label: settings})
 
     def create(self):
         self.invalidate()
@@ -668,7 +669,7 @@ class NewDoePage(QWidget):
         self.run.setEnabled(True)
         self.status.setText(f"{len(rows)} experiments ready.")
 
-    def start(self, *, remote=None):
+    def start(self, *, remote=None, separate=False):
         from doe_studio import results_directory
         if not self.rows or self.timer.isActive():
             return
@@ -676,6 +677,8 @@ class NewDoePage(QWidget):
         if remote is None:
             remote = controller.requested
         self.controller = controller if remote else None
+        self.grouped_remote = remote and not separate
+        self.remote_id = None
         if remote:
             if controller.auth() is None:
                 self.status.setText(translate("Connect to TRUBA, then run the matrix again."))
@@ -685,7 +688,7 @@ class NewDoePage(QWidget):
             except ValueError as error:
                 self.status.setText(translate(str(error)))
                 return
-        directory = results_directory() / ("NEW_DOE_" + datetime.now().strftime("%Y%m%d_%H%M%S_") + uuid4().hex[:8])
+        directory = results_directory() / ("DoE_" + datetime.now().strftime("%Y%m%d_%H%M%S_") + uuid4().hex[:8])
         try:
             directory.mkdir(parents=True)
             with (directory / "matrix.csv").open("w", newline="", encoding="utf-8-sig") as stream:
@@ -702,7 +705,7 @@ class NewDoePage(QWidget):
             self.sheet.set_state(i, "Queued")
         self.open.setEnabled(True)
         self.lock(True)
-        if remote:
+        if self.grouped_remote:
             try:
                 self.job = launch(request, self.directory, controller)
             except Exception as error:
@@ -710,7 +713,7 @@ class NewDoePage(QWidget):
                 return
             self.status.setText(translate("Running experiment matrix on TRUBA."))
         self.timer.start()
-        if not remote:
+        if not self.grouped_remote:
             self.advance()
 
     def lock(self, busy):
@@ -722,6 +725,8 @@ class NewDoePage(QWidget):
         self.sheet.set_state(self.index, state, str(details.get("error", details.get("results", ""))))
         data = dict(experiment=self.index + 1, state=state, execution_target="truba" if self.controller else "local",
                     inputs=self.rows[self.index], **details)
+        if self.remote_id:
+            data["slurm_job_id"] = self.remote_id
         temporary = self.case / "experiment.tmp"
         temporary.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
         temporary.replace(self.case / "experiment.json")
@@ -731,11 +736,27 @@ class NewDoePage(QWidget):
             self.sheet.set_state(index, state, message)
         self.finish(message)
 
+    def show_remote_progress(self):
+        record = self.job.remote_status() or {}
+        if not record.get("job_id"):
+            return
+        self.remote_id = record["job_id"]
+        number = record.get("experiment_index") if self.grouped_remote else self.index + 1
+        if type(number) is int and 1 <= number <= len(self.rows):
+            if self.grouped_remote and self.index <= number - 1:
+                for previous in range(self.index, number - 1):
+                    self.sheet.set_state(previous, "Awaiting results")
+                self.index = number - 1
+                if self.sheet.states[self.index] != "Running":
+                    self.sheet.set_state(self.index, "Running")
+            stage = record['state'].partition(' · Running experiment ')[0]
+            self.status.setText(f"TRUBA #{self.remote_id} · DoE {number}/{len(self.rows)} · {stage}")
+        else:
+            self.status.setText(f"TRUBA #{self.remote_id} · {record['state']}")
+
     def advance_remote(self):
         if not self.job.done():
-            record = self.job.remote_status() or {}
-            if record.get("job_id"):
-                self.status.setText(f"TRUBA #{record['job_id']} · {record['state']}")
+            self.show_remote_progress()
             return
         job, self.job = self.job, None
         try:
@@ -758,11 +779,13 @@ class NewDoePage(QWidget):
         self.finish(f"{len(self.rows)} experiments finished · {self.failures} failed.")
 
     def advance(self):
-        if self.controller is not None:
+        if self.grouped_remote:
             self.advance_remote()
             return
         try:
             if self.job is not None:
+                if self.controller is not None:
+                    self.show_remote_progress()
                 if not self.job.done():
                     return
                 job, self.job = self.job, None
@@ -782,10 +805,14 @@ class NewDoePage(QWidget):
                 return
             self.case = self.directory / f"row_{self.index + 1:05d}"
             self.case.mkdir()
+            self.remote_id = None
             self.record("Running")
             self.status.setText(f"Running experiment {self.index + 1} / {len(self.rows)}")
             try:
-                self.job = launch(self.rows[self.index], self.case, self.controller)
+                row = self.rows[self.index]
+                if self.controller is not None:
+                    row = dict(row, experiment_index=self.index + 1, experiment_count=len(self.rows))
+                self.job = launch(row, self.case, self.controller)
             except Exception as error:
                 self.record("Failed", error=str(error))
                 self.failures += 1
@@ -802,7 +829,16 @@ class NewDoePage(QWidget):
         if self.job is None or not self.job.is_remote:
             return None
         job, self.job = self.job, None
-        self.finish_remote("Detached", translate("Remote experiment detached."))
+        if self.grouped_remote:
+            self.finish_remote("Detached", translate("Remote experiment detached."))
+        else:
+            self.finish(translate("Remote experiment detached."))
+            for index in range(self.index + 1, len(self.rows)):
+                self.sheet.set_state(index, "Skipped")
+            try:
+                self.record("Detached", remote_job=job.remote_status())
+            except OSError as error:
+                self.status.setText(str(error))
         return job
 
     def cancel(self):
@@ -815,7 +851,7 @@ class NewDoePage(QWidget):
                 self.status.setText(str(error))
                 return
             self.job = None
-            if self.controller is not None:
+            if self.grouped_remote:
                 self.finish_remote("Stopped", translate("Experiment matrix stopped."))
                 return
             try:

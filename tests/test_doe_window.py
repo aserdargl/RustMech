@@ -147,7 +147,7 @@ class DoEWindowTests(unittest.TestCase):
         studio.save_plan_btn.setFocus()
         QTest.keyClick(studio.save_plan_btn, Qt.Key.Key_Tab)
         self.assertTrue(buttons[2].hasFocus())
-        self.assertEqual(studio.settings_tabs.tabText(0), "NEW DOE")
+        self.assertEqual(studio.settings_tabs.tabText(0), "DoE")
         self.assertEqual(studio.settings_tabs.tabText(3), "Experiment matrix")
         self.assertFalse(studio.table.isVisible())
         self.assertEqual(studio.vertical_splitter.handleWidth(), 3)
