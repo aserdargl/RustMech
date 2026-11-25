@@ -1586,19 +1586,18 @@ class RustMechDialog(QDialog):
             self.workspace_button: tuple(action.text() for action in self.workspace_menu.actions()
                                          if action.isVisible()),
         }
-        command_groups = ((self.project_button, self.designs_button, self.workspace_button),
-                          (self.sidebar_toggle,), self._workspace_commands[2],
-                          self._compute_commands, (self.about_button,))
-        for group in command_groups:
-            # Each word occupies its own line. Reserve room for the longest word and menu arrow.
-            width = max(button.fontMetrics().horizontalAdvance(word)
-                        + (23 if isinstance(button, QToolButton) else 16)
-                        for button in group
-                        for label in selector_labels.get(button, (button.text(),))
-                        for word in label.split())
-            for button in group:
-                button.setProperty("managesLocalizedWidth", True)
-                button.setFixedSize(max(width, WORKSPACE_COMMAND_WIDTH), WORKSPACE_COMMAND_HEIGHT)
+        commands = (*(button for group in self._workspace_commands for button in group),
+                    *self._compute_commands, self.about_button)
+        # Reserve one common width for the longest word and its menu arrow.
+        command_width = max(button.fontMetrics().horizontalAdvance(word)
+                            + (23 if isinstance(button, QToolButton) else 16)
+                            for button in commands
+                            for label in selector_labels.get(button, (button.text(),))
+                            for word in label.split())
+        command_width = max(command_width, WORKSPACE_COMMAND_WIDTH)
+        for button in commands:
+            button.setProperty("managesLocalizedWidth", True)
+            button.setFixedSize(command_width, WORKSPACE_COMMAND_HEIGHT)
         self.compute_resources_button.setProperty("managesLocalizedWidth", True)
         resources_width = self.compute_resources_button.fontMetrics().horizontalAdvance(
             self.compute_resources_button.text()) + 16

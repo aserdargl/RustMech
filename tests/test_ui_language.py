@@ -159,16 +159,15 @@ class LanguageTests(unittest.TestCase):
             self.assertEqual(mesh_size.text(), f'{before.mesh_resolution:.4f}')
             self.assertEqual(self.preferences.value('ui/meshDisplayDecimals', type=int), 4)
             normal_bounds = window.geometry()
-            groups = ((window.project_button, window.designs_button, window.workspace_button),
-                      (window.doe_button, window.folder_batch_button, window.esen_button),
-                      (window.truba_button, window.sync_button))
+            commands = (window.project_button, window.designs_button, window.workspace_button,
+                        window.sidebar_toggle, window.doe_button, window.folder_batch_button,
+                        window.esen_button, window.truba_button, window.sync_button, window.about_button)
 
             def assert_toolbar_layout():
-                for group in groups:
-                    self.assertEqual(len({button.size().toTuple() for button in group}), 1)
-                    for button in group:
-                        if button.isVisible():
-                            self.assertTrue(button.parentWidget().rect().contains(button.geometry()))
+                self.assertEqual(len({button.size().toTuple() for button in commands}), 1)
+                for button in commands:
+                    if button.isVisible():
+                        self.assertTrue(button.parentWidget().rect().contains(button.geometry()))
                 self.assertLess(window.esen_button.geometry().right(), window.about_button.x())
 
             assert_toolbar_layout()
@@ -181,7 +180,6 @@ class LanguageTests(unittest.TestCase):
             batch_metrics = window.folder_batch_button.fontMetrics()
             self.assertGreaterEqual(window.folder_batch_button.width(),
                                     max(batch_metrics.horizontalAdvance(word) for word in ('Toplu', 'Analiz')) + 16)
-            self.assertLess(window.folder_batch_button.width(), batch_metrics.horizontalAdvance('Toplu Analiz') + 16)
             self.assertGreaterEqual(window.folder_batch_button.height(), 2 * batch_metrics.lineSpacing())
             self.assertEqual(window.about_button.text(), 'Hakkında')
             methods = window.sidebar_toggle.menu().actions()
