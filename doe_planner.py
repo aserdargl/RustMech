@@ -66,6 +66,8 @@ class SimpleDoEPlanner(QWidget):
         layout.addWidget(self.navigation)
         s.open_plan_btn = QPushButton('Open')
         s.save_plan_btn = QPushButton('Save')
+        s.open_plan_btn.setFixedWidth(64)
+        s.save_plan_btn.setFixedWidth(64)
         s.open_plan_btn.clicked.connect(s.open_plan_dialog)
         s.save_plan_btn.clicked.connect(s.save_plan_dialog)
         self.navigation.add_button(s.open_plan_btn)

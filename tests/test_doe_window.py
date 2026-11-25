@@ -181,7 +181,10 @@ class DoEWindowTests(unittest.TestCase):
         self.assertEqual([button.text() for button in buttons[2:]],
                          [studio.settings_tabs.tabText(index)
                           for index in range(studio.settings_tabs.count())])
-        self.assertEqual(len({button.width() for button in buttons}), 1)
+        self.assertEqual(buttons[0].width(), buttons[1].width())
+        self.assertLess(buttons[1].width(), buttons[2].width())
+        self.assertEqual(buttons[1].x() - buttons[0].geometry().right() - 1, navigation.spacing())
+        self.assertEqual(len({button.width() for button in buttons[2:]}), 1)
         self.assertTrue(studio.settings_tabs.tabBar().isHidden())
         studio.save_plan_btn.setFocus()
         QTest.keyClick(studio.save_plan_btn, Qt.Key.Key_Tab)

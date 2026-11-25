@@ -264,7 +264,9 @@ class ActionFlowLayout(QLayout):
                 continue
             size = item.sizeHint().expandedTo(item.minimumSize())
             if self._equal_width:
-                size.setWidth(uniform_width)
+                widget = item.widget()
+                width = min(uniform_width, widget.maximumWidth()) if widget is not None else uniform_width
+                size.setWidth(width)
             if row_height and x + size.width() > area.right() + 1:
                 if apply:
                     place_row()
