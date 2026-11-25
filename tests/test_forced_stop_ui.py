@@ -45,8 +45,10 @@ class ForcedStopUiTests(unittest.TestCase):
             self.assertFalse(dialog.apply_button.isEnabled())
             progress = dialog.local_analysis_progress
             footer = dialog.status_banner.layout()
-            self.assertIs(footer.itemAt(footer.indexOf(progress) + 1).widget(),
-                          dialog._analysis_action_buttons[0])
+            self.assertIs(footer.itemAt(0).widget(), dialog.result_button)
+            self.assertIs(footer.itemAt(1).widget(), dialog.apply_button)
+            self.assertIs(footer.itemAt(footer.count() - 2).widget(), dialog._analysis_action_buttons[0])
+            self.assertEqual(footer.itemAt(footer.count() - 1).widget().objectName(), "unitBadge")
             self.assertFalse(progress.isHidden())
             self.assertEqual(progress.bar.maximum(), 0)
 

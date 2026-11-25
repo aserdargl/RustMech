@@ -104,7 +104,7 @@ class RemoteModeUiTests(unittest.TestCase):
                     hpc_bottom = hpc.y() + window.truba_button.height()
                     self.assertTrue(label.isVisible())
                     self.assertTrue(window.truba_button.isVisible())
-                    self.assertGreater(badge.x(), title.x() + window.brand_title_label.width())
+                    self.assertEqual(title.y(), hpc.y())
                     self.assertLessEqual(badge.x() + window.brand_header.width(), hpc.x())
                     self.assertGreaterEqual(badge.y(), hpc_bottom)
                     self.assertGreaterEqual(label.width(), label.fontMetrics().horizontalAdvance(label.text()))

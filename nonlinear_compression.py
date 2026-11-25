@@ -386,11 +386,9 @@ class RustMechDialog(QDialog):
 
         self.brand_title_label = QLabel("Nonlinear Compression")
         self.brand_title_label.setObjectName("brandTitle")
-        self.brand_title_label.setMinimumHeight(30)
+        self.brand_title_label.setFixedHeight(CONTROL_HEIGHT)
         unit_badge = QLabel("Units: mm  N  MPa")
         unit_badge.setObjectName("unitBadge")
-        context_row.addWidget(self.brand_title_label)
-        context_row.addWidget(unit_badge)
 
         brand_card = QFrame()
         self.brand_header = brand_card
@@ -961,6 +959,7 @@ class RustMechDialog(QDialog):
         navigation = QHBoxLayout(command_bar)
         navigation.setContentsMargins(0, 0, 0, 0)
         navigation.setSpacing(2)
+        navigation.addWidget(self.brand_title_label)
         command_scroll.setWidget(command_bar)
         header_layout.insertWidget(0, command_scroll)
 
@@ -1324,6 +1323,8 @@ class RustMechDialog(QDialog):
         self.analysis_blocker.setWordWrap(True)
         self.analysis_blocker.setMinimumHeight(CONTROL_HEIGHT + 4)
         self.analysis_blocker.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        status_layout.addWidget(self.result_button)
+        status_layout.addWidget(self.apply_button)
         status_layout.addWidget(self.analysis_blocker, 1)
         self._set_analysis_blocker("Preparing geometry preview…")
         from operation_progress import OperationProgress
@@ -1340,8 +1341,7 @@ class RustMechDialog(QDialog):
         self._analysis_action_buttons = (
             cancel, self.apply_button, self.result_button, self.force_stop_button,
         )
-        for button in self._analysis_action_buttons:
-            status_layout.addWidget(button)
+        status_layout.addWidget(self.force_stop_button)
         self.execution_target = NoWheelComboBox()
         self.execution_target.addItem("Local", "local")
         self.execution_target.addItem("TRUBA", "truba")
@@ -1356,6 +1356,8 @@ class RustMechDialog(QDialog):
         self.compute_resources_button.clicked.connect(
             lambda: show_restored_window(self.remote_controller.resource_window))
         status_layout.addWidget(self.compute_resources_button)
+        status_layout.addWidget(cancel)
+        status_layout.addWidget(unit_badge)
         self.operation_progress = OperationProgress(self, provider=lambda: (
             not self._local_analysis_in_progress() and (
                 self.future is not None or self.analysis_job is not None
@@ -1569,7 +1571,9 @@ class RustMechDialog(QDialog):
             self.workspace_button: tuple(action.text() for action in self.workspace_menu.actions()
                                          if action.isVisible()),
         }
-        for group in (*self._workspace_commands, self._compute_commands, (self.about_button,),
+        for group in ((self.project_button, self.designs_button, self.workspace_button),
+                      (self.sidebar_toggle,), self._workspace_commands[2],
+                      self._compute_commands, (self.about_button,),
                       (self.compute_resources_button,)):
             # Fit the longest translated label, including room for focus and menu arrows.
             width = max(button.fontMetrics().horizontalAdvance(label)

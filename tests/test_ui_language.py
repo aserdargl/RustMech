@@ -159,8 +159,7 @@ class LanguageTests(unittest.TestCase):
             self.assertEqual(mesh_size.text(), f'{before.mesh_resolution:.4f}')
             self.assertEqual(self.preferences.value('ui/meshDisplayDecimals', type=int), 4)
             normal_bounds = window.geometry()
-            groups = ((window.project_button, window.designs_button),
-                      (window.workspace_button, window.sidebar_toggle),
+            groups = ((window.project_button, window.designs_button, window.workspace_button),
                       (window.doe_button, window.folder_batch_button, window.esen_button),
                       (window.truba_button, window.sync_button))
 
@@ -170,7 +169,6 @@ class LanguageTests(unittest.TestCase):
                     for button in group:
                         if button.isVisible():
                             self.assertTrue(button.parentWidget().rect().contains(button.geometry()))
-                self.assertLess(window.project_button.width(), window.workspace_button.width())
                 self.assertLess(window.esen_button.geometry().right(), window.about_button.x())
 
             assert_toolbar_layout()
