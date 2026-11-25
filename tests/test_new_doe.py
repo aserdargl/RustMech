@@ -142,6 +142,11 @@ class NewDoeTests(unittest.TestCase):
         self.assertEqual(len(page.rows), 1)
         self.assertEqual(page.rows[0]["settings"]["young_modulus"], modulus.fixed.value())
 
+        for key, length in zip(("size_x", "size_y", "size"), (4, 8, 12)):
+            field = fields[key].fixed
+            self.assertGreater(field.minimum(), 0)
+            self.assertEqual(field.specialValueText(), "")
+            field.setValue(length)
         period = fields["cell_size"]
         period.variable.setChecked(True)
         period.first.setValue(2)
@@ -149,7 +154,7 @@ class NewDoeTests(unittest.TestCase):
         page.create()
         self.assertEqual(
             [tuple(row["settings"][axis] for axis in ("size_x", "size_y", "size")) for row in page.rows],
-            [(2, 2, 2), (4, 4, 4)],
+            [(4, 8, 12), (4, 8, 12)],
         )
 
     def test_grouped_drafts_build_geometry_only_on_apply(self):

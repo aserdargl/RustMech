@@ -1851,15 +1851,15 @@ class RustMechDialog(QDialog):
             fields.addStretch()
 
     def _add_fft_geometry_controls(self, fields, settings: Settings) -> None:
-        from ui_language import translate
-
         defaults = Settings()
+        outer_lengths = settings.dimensions
         if self._persist_solver_profiles:
             preferences = self.solver_profile_store.settings
             try:
                 saved = json.loads(preferences.value("fft/geometry", "null", type=str))
                 if saved is not None:
                     settings = settings_from_dict(saved)
+                    outer_lengths = fft_dimensions(settings)
             except (TypeError, ValueError):
                 pass
         family, name = resolve_family_and_name(settings.structure_family, settings.structure_name)
@@ -1909,14 +1909,18 @@ class RustMechDialog(QDialog):
             control.valueChanged.connect(self.refresh_validity)
 
         self.fft_outer_sizes = {}
-        for axis, key in zip("XYZ", ("size_x", "size_y", "size")):
+        for axis, key, length in zip("XYZ", ("size_x", "size_y", "size"), outer_lengths):
             control = NoWheelDoubleSpinBox()
             control.setDecimals(3)
-            control.setRange(0, 1_000_000)
+            control.setRange(0.001, 1_000_000)
             control.setSingleStep(0.5)
-            control.setSpecialValueText(translate("1 cell"))
-            if self._persist_solver_profiles:
-                control.setValue(float(preferences.value(f"fft/outer{axis}", 0, type=float)))
+            if self._persist_solver_profiles and preferences.contains(f"fft/outer{axis}"):
+                length = preferences.value(f"fft/outer{axis}", type=float)
+                # Older profiles stored zero for one cell. Resolve it once on import.
+                if length == 0:
+                    length = self.fft_cell_size.value()
+            control.setValue(length if isinstance(length, (int, float)) and np.isfinite(length)
+                             and length > 0 else defaults.size)
             self.fft_outer_sizes[key] = control
             form.addRow(field_label(f"Outer {axis} (mm)", control), control)
             control.valueChanged.connect(self.refresh_validity)
@@ -1938,8 +1942,7 @@ class RustMechDialog(QDialog):
             structure_family=family,
             structure_name=self.fft_structure_combo.currentData(),
             tpms_morphology=self.fft_morphology_combo.currentData() if family == "tpms" else "sheet",
-            **{key: control.value() or self.fft_cell_size.value()
-               for key, control in self.fft_outer_sizes.items()},
+            **{key: control.value() for key, control in self.fft_outer_sizes.items()},
             cell_size=self.fft_cell_size.value(),
             solid_fraction=self.fft_solid_fraction.value(),
         )

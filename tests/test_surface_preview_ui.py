@@ -298,11 +298,13 @@ class SurfacePreviewUITests(unittest.TestCase):
         with TemporaryDirectory() as directory:
             path = str(Path(directory) / 'preferences.ini')
             store = SolverProfileStore(QSettings(path, QSettings.Format.IniFormat))
+            store.settings.setValue("fft/outerX", 0)
             fe_settings = Settings(cell_size=3, solid_fraction=30)
             window = RustMechDialog(fe_settings, solver_profile_store=store)
             try:
                 window._select_settings_method(window._fft_method_index)
                 self.assertEqual(window.fft_cell_size.value(), fe_settings.cell_size)
+                self.assertEqual(window._fft_settings(fe_settings).dimensions, (3, 6, 6))
                 family = window.fft_family_combo
                 family.setCurrentIndex(family.findData('lattice'))
                 self.assertTrue(window.fft_morphology_combo.isHidden())
@@ -317,6 +319,8 @@ class SurfacePreviewUITests(unittest.TestCase):
                     QTest.keyClicks(cell_size, '4.5')
                     QTest.keyClick(cell_size, Qt.Key.Key_Return)
                     process.assert_not_called()
+                    self.assertEqual(window._fft_settings(fe_settings).dimensions, (3, 6, 6))
+                    window.fft_outer_sizes['size'].setValue(4.5)
                     window.fft_outer_sizes['size_x'].setValue(9)
                     window.fft_outer_sizes['size_y'].setValue(13.5)
                     preview_request = window._fft_preview_request

@@ -1341,7 +1341,6 @@ Fixed / minimum|Sabit / alt sınır
 Min / max|Min / maks
 Value list|Değer listesi
 Input mode|Giriş biçimi
-1 cell|1 hücre
 Outer X (mm)|Dış ölçü X (mm)
 Outer Y (mm)|Dış ölçü Y (mm)
 Outer Z (mm)|Dış ölçü Z (mm)

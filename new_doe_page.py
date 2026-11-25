@@ -20,7 +20,6 @@ from studio_style import (COMBO_WIDTH, CONTROL_HEIGHT, CompactComboBox, CompactD
 from ui_language import translate, turkish
 from model import CONTACT_NUMERICAL_FIELDS, GEOMETRY_FIELDS, MATERIAL_FIELDS, settings_from_dict, validate_geometry
 
-FFT_OUTER_AXES = ("size_x", "size_y", "size")
 NUMBER_WIDTH = 110
 CONTROL_GAP = 3
 LABELS = {"grid": "Voxels per axis", "void_ratio": "Void / solid stiffness", "distribution": "WSL distribution",
@@ -64,7 +63,7 @@ def parameter_group(path, op):
 def field_sources(host, op):
     if op == "fft_solve":
         material = host.fft_material_editor
-        return dict(host.fft_outer_sizes, grid=host.fft_grid, void_ratio=host.fft_void_ratio, cell_size=host.fft_cell_size,
+        return dict(grid=host.fft_grid, void_ratio=host.fft_void_ratio, cell_size=host.fft_cell_size,
                     solid_fraction=host.fft_solid_fraction, tpms_morphology=host.fft_morphology_combo,
                     distribution=host.fft_distribution, material_name=material.name,
                     poisson_ratio=material.controls["poisson_ratio"],
@@ -505,11 +504,6 @@ class NewDoePage(QWidget):
             sources = field_sources(self.host, op)
             groups = {"Structure / Dimensions": []}
             fields = list(parameters(self.base))
-            if op == "fft_solve":
-                # The workspace uses zero to display "1 cell", even though
-                # its solver snapshot always contains resolved dimensions.
-                fields = [(path, sources[path[-1]].value() if path[-1] in FFT_OUTER_AXES else value)
-                          for path, value in fields]
             variation_rows = {path: index for index, (path, _) in enumerate(fields)}
             self.variations.setRowCount(len(fields))
             for path, value in fields:
@@ -601,15 +595,6 @@ class NewDoePage(QWidget):
         fields["young_modulus"].fixed.setValue(values["young_modulus"] / 1e6)
         fields["poisson_ratio"].fixed.setValue(values["poisson_ratio"])
 
-    def experiments(self, dimensions):
-        for request in matrix(self.base, dimensions):
-            if request["operation"] == "fft_solve":
-                settings = request["settings"]
-                for key in FFT_OUTER_AXES:
-                    if settings[key] == 0:
-                        settings[key] = settings["cell_size"]
-            yield request
-
     def apply_geometry(self):
         selected = self.preview.currentIndex()
         if self.rows:
@@ -628,7 +613,7 @@ class NewDoePage(QWidget):
                         else:
                             value = factor.levels_for_matrix()[0]
                         dimensions[factor.path] = [value]
-                request = next(self.experiments(dimensions))
+                request = next(matrix(self.base, dimensions))
             except (TypeError, ValueError) as error:
                 self.status.setText(f"{factor.label}: {error}")
                 return
@@ -650,7 +635,7 @@ class NewDoePage(QWidget):
                 except (ValueError, TypeError) as error:
                     raise ValueError(f"{factor.label}: {error}") from error
             rows = []
-            for row in self.experiments(dimensions):
+            for row in matrix(self.base, dimensions):
                 try:
                     validate(row)
                 except (ValueError, TypeError) as error:
