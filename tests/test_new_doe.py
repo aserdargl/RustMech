@@ -3,10 +3,10 @@ import json
 from pathlib import Path
 import time
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import MagicMock, Mock, patch
 from PySide6.QtCore import QPoint, Qt
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QAbstractSpinBox, QLineEdit, QTableWidget
+from PySide6.QtWidgets import QAbstractSpinBox, QLineEdit, QTableWidget, QWidget
 
 from tests import test_remote_mode_ui as ui
 from ui_language import LanguageSelector
@@ -74,6 +74,65 @@ class NewDoeTests(unittest.TestCase):
         QTest.keyClicks(factor.last, "4.25")
         QTest.keyClick(factor.last, Qt.Key.Key_Return)
         self.assertEqual(factor.levels_for_matrix(), [3.125, 4.25])
+
+    def test_drafts_survive_switching_operations_and_reopening_the_application(self):
+        from model import Settings
+        from nonlinear_compression import RustMechDialog
+        from solver_profiles import SolverProfileStore
+
+        page = self.page()
+
+        def factor(page, name):
+            return next(field for field in page.factors if field.path[-1] == name)
+
+        grid = factor(page, "grid")
+        grid.fixed.setValue(28)
+        grid.variable.setChecked(True)
+        grid.first.setValue(20)
+        grid.last.setValue(32)
+        grid.mode.setCurrentIndex(grid.mode.findData("list"))
+        grid.selection.setText("32, 48")
+        structure = factor(page, "structure_name")
+        structure.family.setCurrentIndex(structure.family.findData("lattice"))
+        self.assertEqual(structure.family.currentData(), "lattice")
+        structure.variable.setChecked(True)
+        structure.menu.actions()[-1].setChecked(True)
+        expected_structure = structure.draft()
+        distribution = factor(page, "distribution")
+        distribution.fixed.setText("Local Ubuntu")
+
+        cfd = page.operation.findData("flow_solve")
+        page.operation.setCurrentIndex(cfd)
+        factor(page, "size").fixed.setValue(9.25)
+        page.operation.setCurrentIndex(page.operation.findData("fft_solve"))
+        grid = factor(page, "grid")
+        self.assertEqual(grid.fixed.value(), 28)
+        self.assertEqual((grid.first.value(), grid.last.value()), (20, 32))
+        self.assertEqual(grid.levels_for_matrix(), [32, 48])
+        self.assertEqual(factor(page, "structure_name").draft(), expected_structure)
+        self.assertEqual(factor(page, "distribution").fixed.text(), "Local Ubuntu")
+        page.operation.setCurrentIndex(cfd)
+        factor(page, "size").fixed.setText("9.75")
+        self.window.close()
+
+        with patch.object(RustMechDialog, "start_preview", lambda self: None), patch(
+            "nonlinear_compression.create_preview_viewport",
+            side_effect=lambda parent, **kwargs: MagicMock(interactor=QWidget(parent)),
+        ):
+            reopened = RustMechDialog(Settings(), solver_profile_store=SolverProfileStore(self.preferences))
+        try:
+            reopened.doe_window.open_workspace()
+            self.app.processEvents()
+            page = reopened.doe_studio.new_doe
+            self.assertEqual(page.operation.currentData(), "flow_solve")
+            self.assertEqual(factor(page, "size").fixed.value(), 9.75)
+            self.assertFalse(page.rows)
+            self.assertFalse(page.run.isEnabled())
+            page.operation.setCurrentIndex(page.operation.findData("fft_solve"))
+            self.assertEqual(factor(page, "grid").levels_for_matrix(), [32, 48])
+        finally:
+            reopened.close()
+            reopened.dispose()
 
     def test_legacy_integer_specimen_size_exposes_three_decimal_axes(self):
         from new_doe_operations import parameters, snapshot

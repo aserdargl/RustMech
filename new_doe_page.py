@@ -2,6 +2,7 @@
 from collections import deque
 import csv
 import json
+from math import isfinite
 from time import monotonic
 from datetime import datetime
 from pathlib import Path
@@ -274,6 +275,59 @@ class Factor:
                 self.fixed.addItem(label.split(" / ", 1)[-1], name)
         self.fixed.setCurrentIndex(max(0, self.fixed.findData(previous)))
 
+    def draft(self):
+        state = {"variable": self.variable.isChecked(), "seeded": self.levels_seeded}
+        if self.choices:
+            state.update(fixed=self.fixed.currentData(),
+                         choices=[action.data() for action in self.menu.actions() if action.isChecked()])
+        else:
+            state.update(fixed=self.fixed.value() if self.numeric else self.fixed.text(),
+                         levels=self.selection.text())
+            if self.numeric or self.optional_number:
+                state.update(mode=self.mode.currentData(), lower=self.first.value(), upper=self.last.value())
+        return state
+
+    def restore_draft(self, state):
+        if not isinstance(state, dict):
+            return
+        fixed = state.get("fixed")
+        if self.choices:
+            if self.path[-1] == "structure_name":
+                for family, members in ALL_STRUCTURES_BY_FAMILY.items():
+                    if fixed in members and self.family.findData(family) >= 0:
+                        self.family.setCurrentIndex(self.family.findData(family))
+                        break
+            index = self.fixed.findData(fixed)
+            if index >= 0:
+                self.fixed.setCurrentIndex(index)
+            choices = state.get("choices")
+            if isinstance(choices, list):
+                for action in self.menu.actions():
+                    action.setChecked(action.data() in choices)
+        else:
+            if self.numeric:
+                self.restore_number(self.fixed, fixed)
+            elif isinstance(fixed, str):
+                self.fixed.setText(fixed)
+            elif self.optional_number and type(fixed) in (int, float):
+                self.fixed.setText(display(fixed))
+            levels = state.get("levels")
+            if isinstance(levels, str):
+                self.selection.setText(levels)
+            if self.numeric or self.optional_number:
+                self.restore_number(self.first, state.get("lower"))
+                self.restore_number(self.last, state.get("upper"))
+                index = self.mode.findData(state.get("mode"))
+                if index >= 0:
+                    self.mode.setCurrentIndex(index)
+        self.levels_seeded = state.get("seeded") is True or state.get("variable") is True
+        self.variable.setChecked(state.get("variable") is True)
+
+    @staticmethod
+    def restore_number(control, value):
+        if type(value) in (int, float) and control.minimum() <= value <= control.maximum() and isfinite(value):
+            control.setValue(value)
+
     def levels_for_matrix(self):
         varying = self.variable.isChecked()
         if self.choices:
@@ -411,9 +465,14 @@ class DoeTrubaJobsWindow(QMainWindow):
 
 
 class NewDoePage(QWidget):
-    def __init__(self, host):
+    def __init__(self, host, preferences=None):
         super().__init__()
         self.host = host
+        self.preferences = preferences
+        self._loaded_operation = None
+        self._drafts = {}
+        self._draft_timer = QTimer(self, interval=300, singleShot=True)
+        self._draft_timer.timeout.connect(self.save_draft)
         self.rows = []
         self.factors = []
         self.job = self.directory = None
@@ -513,6 +572,11 @@ class NewDoePage(QWidget):
             self.operation.setEnabled(False)
             self.generate.setEnabled(False)
             self.apply_button.setEnabled(False)
+        if self.preferences is not None:
+            last_operation = self.preferences.value("doe/lastOperation", "", type=str)
+            index = self.operation.findData(last_operation)
+            if index >= 0:
+                self.operation.setCurrentIndex(index)
         self.operation.currentIndexChanged.connect(self.load)
 
     def size_navigation(self, navigation, active):
@@ -564,9 +628,32 @@ class NewDoePage(QWidget):
         self.run.setEnabled(False)
         self.status.setText("Choose variable parameters and their levels, then create the matrix.")
 
+    def inputs_changed(self, *_):
+        if self.loaded:
+            self.invalidate()
+            self._draft_timer.start()
+
+    def save_draft(self, *, commit=False):
+        if not self.loaded:
+            return
+        if commit:
+            for field in self.findChildren(NumericLineEdit):
+                field.interpretText()
+        self._draft_timer.stop()
+        op = self._loaded_operation
+        draft = {"/".join(factor.path): factor.draft() for factor in self.factors}
+        if self._drafts.get(op) != draft:
+            self._drafts[op] = draft
+            if self.preferences is not None:
+                self.preferences.setValue(f"doe/operationDrafts/{op}", json.dumps(draft, ensure_ascii=False))
+        if self.preferences is not None:
+            self.preferences.sync()
+
     def load(self, *_):
         if self.host is None:
             return
+        self.save_draft(commit=True)
+        self.loaded = False
         self.invalidate()
         expanded = {title: not section.content.isHidden() for title, section in self.sections.items()}
         self.sections.clear()
@@ -581,6 +668,15 @@ class NewDoePage(QWidget):
         self.inputs.setWidget(panel)
         try:
             op = self.operation.currentData()
+            draft = self._drafts.get(op)
+            if draft is None and self.preferences is not None:
+                try:
+                    draft = json.loads(self.preferences.value(f"doe/operationDrafts/{op}", "{}", type=str))
+                except ValueError:
+                    draft = None
+            if not isinstance(draft, dict):
+                draft = {}
+            self._drafts[op] = draft
             self.base = snapshot(self.host, op)
             sources = field_sources(self.host, op)
             groups = {"Structure / Dimensions": []}
@@ -623,8 +719,10 @@ class NewDoePage(QWidget):
                 body.addWidget(table)
                 table.setRowCount(len(members))
                 for row, (path, value) in enumerate(members):
-                    factors[path] = Factor(table, row, self.variations, variation_rows[path], path, value,
-                                           sources.get(path[-1]), op, self.invalidate)
+                    factor = Factor(table, row, self.variations, variation_rows[path], path, value,
+                                    sources.get(path[-1]), op, self.inputs_changed)
+                    factor.restore_draft(draft.get("/".join(path)))
+                    factors[path] = factor
                 table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
                 table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
                 frame = 2 * table.frameWidth()
@@ -637,6 +735,9 @@ class NewDoePage(QWidget):
                 button.setProperty("managesLocalizedWidth", True)
                 button.setFixedWidth(button_width or button.sizeHint().width())
             self.loaded = True
+            self._loaded_operation = op
+            if self.preferences is not None:
+                self.preferences.setValue("doe/lastOperation", op)
         except Exception as error:
             self.status.setText(str(error))
             self.loaded = False

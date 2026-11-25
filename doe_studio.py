@@ -372,6 +372,10 @@ class DoEStudioWindow(QMainWindow):
         from window_state import show_restored_window
         show_restored_window(self)
 
+    def closeEvent(self, event):
+        self.centralWidget().save_workspace_draft()
+        super().closeEvent(event)
+
 
 class DoEStudioWidget(TrubaParallelMixin, QWidget):
     """Interactive Excel-like Design of Experiments (DoE) table & Batch Solver."""
@@ -387,11 +391,13 @@ class DoEStudioWidget(TrubaParallelMixin, QWidget):
         mesh_generator: Callable[[Settings], object],
         batch_solver_runner: Callable[[Settings, object], dict] | None = None,
         parent: QWidget | None = None,
-        *, operation_host=None,
+        *, operation_host=None, preferences=None,
     ) -> None:
         super().__init__(parent)
         self._settings_provider = settings_provider
         self._operation_host = operation_host
+        self._preferences = preferences
+        self._workspace_draft = None
         self._mesh_generator = mesh_generator
         self._batch_solver_runner = batch_solver_runner
         self._rows: list[ExperimentRow] = []
@@ -436,7 +442,7 @@ class DoEStudioWidget(TrubaParallelMixin, QWidget):
         self._poll_timer.timeout.connect(self._poll_worker)
         self._poll_timer.start()
 
-    def capture_plan(self, *, commit=False):
+    def capture_plan(self, *, commit=False, inputs_only=False):
         from doe_plan import PLAN_FORMAT, PLAN_VERSION
         if commit:
             # Save the text still being edited, even before focus leaves the field.
@@ -457,12 +463,38 @@ class DoEStudioWidget(TrubaParallelMixin, QWidget):
                          seed=self.sampling_seed.value(), ml_count=self.ml_count_spin.value(),
                          ml_seed=self.ml_seed_spin.value(), common_strain_enabled=self.common_strain_check.isChecked(),
                          common_strain=self.common_strain_spin.value()),
-            matrices={name: [asdict(row) for row in matrices[index]]
+            matrices={name: [] if inputs_only else [asdict(row) for row in matrices[index]]
                       for index, name in enumerate(('doe', 'ml'))},
-            sample_settings=self.sample_settings.state(),
+            sample_settings={} if inputs_only else self.sample_settings.state(),
             selection=dict(design=self._selected_design, matrix=self._matrix_index,
                            tab=self._legacy_plan_tab),
         )
+
+    def restore_workspace_draft(self):
+        from doe_plan import decode_plan
+
+        if self._preferences is None or self._workspace_draft is not None:
+            return
+        raw = self._preferences.value("doe/classicDraft", "", type=str)
+        if raw:
+            try:
+                plan = decode_plan(json.loads(raw))
+            except ValueError:
+                pass
+            else:
+                self._restore_plan(plan, select_tab=False)
+                self._saved_plan_state = self.capture_plan()
+        self._workspace_draft = self.capture_plan(inputs_only=True)
+
+    def save_workspace_draft(self):
+        self.new_doe.save_draft(commit=True)
+        if self._workspace_draft is None:
+            return
+        draft = self.capture_plan(commit=True, inputs_only=True)
+        if draft != self._workspace_draft:
+            self._preferences.setValue("doe/classicDraft", json.dumps(draft, ensure_ascii=False))
+            self._preferences.sync()
+            self._workspace_draft = draft
 
     def _set_plan_path(self, path):
         self._plan_path = Path(path).resolve()
@@ -486,7 +518,7 @@ class DoEStudioWidget(TrubaParallelMixin, QWidget):
         self._set_plan_path(path)
         self._saved_plan_state = self.capture_plan()
 
-    def _restore_plan(self, plan):
+    def _restore_plan(self, plan, *, select_tab=True):
         from doe_planner import geometry_group
         self._loading_design = True
         controls = (self.design_list, self.sampling_combo, self.lhs_count_spin, self.sampling_seed,
@@ -543,7 +575,9 @@ class DoEStudioWidget(TrubaParallelMixin, QWidget):
         self._refresh_table_view()
         self.sample_settings.restore_state(plan.get("sample_settings", {}))
         # Version 1 plans may name the removed editor at index zero.
-        self.settings_tabs.setCurrentIndex(selection['tab'] or self._matrix_tab)
+        self._legacy_plan_tab = selection['tab'] or self._matrix_tab
+        if select_tab:
+            self.settings_tabs.setCurrentIndex(self._legacy_plan_tab)
 
     def save_plan_dialog(self):
         from doe_plan import PLAN_FILTER
@@ -700,7 +734,7 @@ class DoEStudioWidget(TrubaParallelMixin, QWidget):
         bottom_layout.addWidget(self.table, 1)
 
         from new_doe_page import NewDoePage
-        self.new_doe = NewDoePage(self._operation_host)
+        self.new_doe = NewDoePage(self._operation_host, self._preferences)
         self.planner.tabs.insertTab(0, self.new_doe, "DoE")
         self.planner.tabs.setCurrentWidget(self.new_doe)
         self._matrix_tab = self.planner.tabs.addTab(bottom_panel, "Experiment matrix")
@@ -752,6 +786,7 @@ class DoEStudioWidget(TrubaParallelMixin, QWidget):
 
     def showEvent(self, event):
         super().showEvent(event)
+        self.restore_workspace_draft()
         # The parent window's stylesheet may be installed after construction.
         # Measure after inheritance so every complete label fits at this DPI.
         for buttons in self._action_groups:
@@ -1784,6 +1819,7 @@ class DoEStudioWidget(TrubaParallelMixin, QWidget):
         return self._rows
 
     def dispose(self) -> None:
+        self.save_workspace_draft()
         self.new_doe.cancel()
         self.sample_settings.save_preferences()
         self._stop_requested = True

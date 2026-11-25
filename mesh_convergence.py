@@ -141,7 +141,7 @@ class ConvergenceToolbarScroll(QScrollArea):
 
 
 class MeshConvergenceDialog(QDialog):
-    def __init__(self, settings, mesh_generator, solver, owner=None):
+    def __init__(self, settings, mesh_generator, solver, owner=None, *, preferences=None):
         # Keep the study above its workspace without blocking it or pinning to the desktop.
         super().__init__(owner, Qt.WindowType.Window | Qt.WindowType.WindowMinMaxButtonsHint
                          | Qt.WindowType.WindowCloseButtonHint)
@@ -154,7 +154,7 @@ class MeshConvergenceDialog(QDialog):
         layout.setSpacing(4)
         self.setToolTip(f"{settings.structure_name} · {settings.size:g} mm · {settings.material_name}")
         self.remote_controller = getattr(owner, "remote_controller", None)
-        self.study = MeshConvergenceWidget(settings, mesh_generator, solver, self)
+        self.study = MeshConvergenceWidget(settings, mesh_generator, solver, self, preferences=preferences)
         layout.addWidget(self.study)
         self.resize(1080, 430)
 
@@ -166,7 +166,7 @@ class MeshConvergenceDialog(QDialog):
 
 
 class MeshConvergenceWidget(QWidget):
-    def __init__(self, settings, mesh_generator, solver, parent=None):
+    def __init__(self, settings, mesh_generator, solver, parent=None, *, preferences=None):
         super().__init__(parent)
         self.setObjectName("meshConvergenceStudy")
         self.setStyleSheet(STUDIO_STYLESHEET + CONVERGENCE_STYLESHEET)
@@ -417,9 +417,9 @@ class MeshConvergenceWidget(QWidget):
             label.setBuddy(control)
             mesh_fields.addWidget(label)
             mesh_fields.addWidget(stepper_with_unit(control, "mm"))
-        preferences = QSettings("RustMech", "RustMech")
+        display_preferences = preferences if preferences is not None else QSettings("RustMech", "RustMech")
         self.mesh_precision = mesh_precision_stepper(
-            preferences, "meshConvergence/meshDisplayDecimals",
+            display_preferences, "meshConvergence/meshDisplayDecimals",
             self.start_size, self.local_size,
         )
         self.mesh_precision.setFixedWidth(36)
@@ -432,7 +432,7 @@ class MeshConvergenceWidget(QWidget):
         self.truba_resource_info.setToolTip(
             "Two levels share one Slurm allocation when each can use at least 16 CPUs. "
             "A single level uses the full allocation.")
-        remote_preferences = self.remote_controller.preferences if self.remote_controller is not None else preferences
+        remote_preferences = self.remote_controller.preferences if self.remote_controller is not None else display_preferences
         walltime_key = "meshConvergence/trubaWallMinutes"
         self._select_wall_minutes(remote_preferences.value(walltime_key, DEFAULT_TRUBA_WALL_MINUTES, type=int))
         self.truba_wall_field.currentIndexChanged.connect(
@@ -464,6 +464,8 @@ class MeshConvergenceWidget(QWidget):
         self.linear_solver_combo.currentIndexChanged.connect(self._linear_solver_changed)
         self.mesh_type_combo.currentIndexChanged.connect(self._mesh_type_changed)
         self.start_size.valueChanged.connect(self._sync_local_size_limit)
+        if preferences is not None:
+            self._remember_study_inputs(preferences)
         if self.remote_controller is not None:
             self.run_on_truba.toggled.connect(self._select_execution_target)
             self.remote_controller.changed.connect(self._solver_changed)
@@ -473,6 +475,46 @@ class MeshConvergenceWidget(QWidget):
         studies = self._refresh_saved_studies()
         if studies and self.run_on_truba.isChecked():
             self._restore_saved_study(1, studies)
+
+    def _remember_study_inputs(self, preferences):
+        prefix = "meshConvergence/draft/"
+
+        def save(key, value):
+            if self._study_draft is None:
+                preferences.setValue(prefix + key, value)
+
+        for name in ("solver_combo", "mesh_type_combo"):
+            control = getattr(self, name)
+            index = control.findData(preferences.value(prefix + name, "", type=str))
+            if index >= 0:
+                with QSignalBlocker(control):
+                    control.setCurrentIndex(index)
+            control.activated.connect(lambda _, combo=control, key=name: save(key, combo.currentData()))
+
+        linear_solver = preferences.value(prefix + "linear_solver", "", type=str)
+        if linear_solver in KRATOS_LINEAR_SOLVERS:
+            self.kratos_linear_solver_override = linear_solver
+        self.linear_solver_combo.activated.connect(
+            lambda _: save("linear_solver", self.linear_solver_combo.currentData()))
+
+        numbers = {name: getattr(self, name) for name in (
+            "start_size", "local_size", "tolerance", "factor", "minimum", "max_levels", "max_elements",
+            "max_minutes", "script_count")}
+        checks = {"automatic": self.automatic, "single_truba_mesh": self.single_truba_mesh}
+        for (_, metric), check, absolute in zip(METRICS, self.metric_checks, self.absolute, strict=True):
+            numbers[f"absolute/{metric}"] = absolute
+            checks[f"metrics/{metric}"] = check
+        for name, control in numbers.items():
+            default = control.value()
+            value = preferences.value(prefix + name, default, type=type(default))
+            if value is not None and control.minimum() <= value <= control.maximum():
+                control.setValue(value)
+            control.valueChanged.connect(lambda value, key=name: save(key, value))
+        for name, control in checks.items():
+            control.setChecked(preferences.value(prefix + name, control.isChecked(), type=bool))
+            control.toggled.connect(lambda value, key=name: save(key, value))
+        self.manual.setText(preferences.value(prefix + "manual", "", type=str))
+        self.manual.textChanged.connect(lambda value: save("manual", value))
 
     def _build_script_plan(self, layout):
         self.script_plan_panel = QWidget()

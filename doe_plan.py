@@ -48,8 +48,11 @@ def _settings(data):
             if value is not None:
                 if name in ('automatic_cores', 'automatic_contact_parameters'):
                     _boolean(value)
+                elif name == 'material_card':
+                    if not isinstance(value, dict):
+                        raise ValueError('Invalid material card.')
                 else:
-                    _number(value, integer=True)
+                    _number(value, integer=name in ('minimum_substeps', 'maximum_substeps'))
         elif isinstance(default, bool):
             _boolean(value)
         elif isinstance(default, str):

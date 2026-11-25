@@ -51,8 +51,8 @@ class DoEWindowTests(unittest.TestCase):
             del self.app._rustmech_window_state
         self.temp.cleanup()
 
-    def window(self):
-        studio = DoEStudioWidget(Settings, lambda _: None)
+    def window(self, *, preferences=None):
+        studio = DoEStudioWidget(Settings, lambda _: None, preferences=preferences)
         window = DoEStudioWindow(studio)
         window.setStyleSheet(STUDIO_STYLESHEET)
         self.windows.append(window)
@@ -83,6 +83,33 @@ class DoEWindowTests(unittest.TestCase):
         self.assertEqual(len(studio.rows), 1)
         self.assertEqual(len(studio._designs), 1)
         self.assertTrue(window.isVisible())
+
+    def test_classic_inputs_restore_without_restoring_generated_experiments(self):
+        first, studio = self.window(preferences=self.store.settings)
+        studio.add_design(replace(Settings(), cell_size=3.5, stl_resolution=0.075))
+        studio.settings_tabs.setCurrentIndex(1)
+        studio.sampling_combo.setCurrentIndex(studio.sampling_combo.findData("lhs"))
+        studio.lhs_count_spin.setValue(14)
+        studio.sampling_seed.setValue(23)
+        enabled, low, high, levels = studio.factor_controls["cell_size"]
+        enabled.setChecked(True)
+        low.setValue(2.5)
+        high.setValue(4.5)
+        levels.setValue(4)
+        studio.generate_table()
+        self.assertTrue(studio.rows)
+        first.close()
+
+        _, restored = self.window(preferences=self.store.settings)
+        self.assertEqual(restored._designs[0].cell_size, 3.5)
+        self.assertEqual(restored._designs[0].stl_resolution, 0.075)
+        self.assertEqual(restored.sampling_combo.currentData(), "lhs")
+        self.assertEqual((restored.lhs_count_spin.value(), restored.sampling_seed.value()), (14, 23))
+        enabled, low, high, levels = restored.factor_controls["cell_size"]
+        self.assertTrue(enabled.isChecked())
+        self.assertEqual((low.value(), high.value(), levels.value()), (2.5, 4.5, 4))
+        self.assertFalse(restored.rows)
+        self.assertIs(restored.settings_tabs.currentWidget(), restored.new_doe)
 
     def test_geometry_splitters_and_maximized_normal_bounds_restore(self):
         first, studio = self.window()

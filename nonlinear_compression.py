@@ -1394,6 +1394,7 @@ class RustMechDialog(QDialog):
             batch_solver_runner=run_batch_experiment,
             parent=self,
             operation_host=self,
+            preferences=preferences,
         )
         self.doe_studio.setObjectName("doeWorkspace")
         self.doe_studio.setMinimumSize(220, 140)
@@ -2562,8 +2563,9 @@ class RustMechDialog(QDialog):
 
         dialog = self._mesh_convergence_dialog
         if dialog is None:
+            preferences = self.solver_profile_store.settings if getattr(self, "_persist_solver_profiles", False) else None
             dialog = MeshConvergenceDialog(
-                self.collect(), generate_volume_mesh, run_batch_experiment, owner=self,
+                self.collect(), generate_volume_mesh, run_batch_experiment, owner=self, preferences=preferences,
             )
             self._mesh_convergence_dialog = dialog
             dialog.finished.connect(self._finish_mesh_convergence)

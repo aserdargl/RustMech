@@ -155,6 +155,27 @@ class LiveConvergenceTests(unittest.TestCase):
         self.app.removeEventFilter(self.window_store)
         self.temp.cleanup()
 
+    def test_study_keeps_edited_inputs_when_recreated(self):
+        preferences = self.window_store.settings
+        first = MeshConvergenceWidget(SETTINGS, self.mesh, self.solver, preferences=preferences)
+        self.widgets.append(first)
+        first.start_size.setValue(0.35)
+        first.tolerance.setValue(4.5)
+        first.automatic.setChecked(False)
+        first.manual.setText("0.35, 0.22, 0.15")
+        first.metric_checks[1].setChecked(False)
+        first.absolute[0].setValue(0.025)
+
+        second = MeshConvergenceWidget(SETTINGS, self.mesh, self.solver, preferences=preferences)
+        self.widgets.append(second)
+        self.assertAlmostEqual(second.start_size.value(), 0.35)
+        self.assertAlmostEqual(second.tolerance.value(), 4.5)
+        self.assertFalse(second.automatic.isChecked())
+        self.assertEqual(second.manual.text(), "0.35, 0.22, 0.15")
+        self.assertFalse(second.metric_checks[1].isChecked())
+        self.assertAlmostEqual(second.absolute[0].value(), 0.025)
+        self.assertIsNone(second.future)
+
     def mesh(self, settings):
         return SimpleNamespace(grid=SimpleNamespace(n_cells=round(1 / settings.mesh_resolution**3)),
                                solve_errors=[])
