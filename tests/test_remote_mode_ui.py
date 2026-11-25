@@ -728,22 +728,23 @@ class RemoteModeUiTests(unittest.TestCase):
             'NodeName=hamsi1 Partitions=hamsi CPUEfctv=56 RealMemory=190000')
         queue.setCurrentIndex(queue.findData('hamsi'))
         self.assertTrue(self.controller.controls['cores'].isEnabled())
-        self.assertEqual(self.controller.controls['cores'].minimum(), 28)
-        self.assertAlmostEqual(self.controller.controls['memory_mb'].maximum(), 98000 / 1024)
+        self.assertEqual(self.controller.controls['cores'].minimum(), 56)
+        self.assertAlmostEqual(self.controller.controls['memory_mb'].maximum(), 190000 / 1024)
         self.controller.controls['memory_mb'].setValue(1.5)
         self.assertEqual(self.controller.context().memory_mb, 1536)
 
     def test_manual_resource_values_restore_without_network(self):
+        from dataclasses import asdict
+        import json
         from remote_controller import RemoteController
-        queue = self.controller.controls['partition']
-        queue.setCurrentIndex(queue.findData('hamsi'))
-        self.controller.controls['cores'].setValue(35)
-        self.controller.controls['memory_mb'].setValue(1.5)
+        from truba_remote import RemoteContext
+        saved = RemoteContext(partition='hamsi', cores=40, memory_mb=1536)
+        self.preferences.setValue('remote/context', json.dumps(asdict(saved)))
         with patch('remote_controller.fetch_catalog') as fetch:
             restored = RemoteController(self.window, self.preferences)
             try:
                 context = restored.context()
-                self.assertEqual((context.partition, context.cores, context.gpus, context.memory_mb), ('hamsi', 35, 0, 1536))
+                self.assertEqual((context.partition, context.cores, context.gpus, context.memory_mb), ('hamsi', 56, 0, 1536))
                 fetch.assert_not_called()
             finally:
                 restored.shutdown()

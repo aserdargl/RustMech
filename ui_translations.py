@@ -1588,6 +1588,7 @@ Unsupported structure morphology.|Desteklenmeyen yapı morfolojisi.
 Unsupported FE mesh type.|Desteklenmeyen SE ağı türü.
 Unsupported tetrahedral mesh strategy.|Desteklenmeyen tetra ağ stratejisi.
 FE solid must intersect both top and bottom faces.|SE katısı hem alt hem üst yüzeyle kesişmelidir.
+Hamsi requires 56 CPU cores per node. Select 56 cores or choose another queue.|Hamsi düğüm başına 56 işlemci çekirdeği gerektirir. 56 çekirdek veya başka bir kuyruk seçin.
 size|Boyut
 cell_size|Hücre boyutu
 solid_fraction|Katı oranı

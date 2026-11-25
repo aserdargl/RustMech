@@ -49,7 +49,7 @@ class ResourceSessionTests(unittest.TestCase):
         SessionTransport.commands = []
         SessionTransport.queue = 'RUNNING|2-23:59:00|None'
         SessionTransport.step = 'COMPLETED|0:0'
-        self.context = RemoteContext(partition='hamsi', cores=28, walltime='72:00:00')
+        self.context = RemoteContext(partition='hamsi', cores=56, walltime='72:00:00')
         self.session = dict(kind='rustmech_session', host=HOST, username='tester',
                             job_id='321', remote_directory='/arf/scratch/tester/RustMech/'+'a'*32,
                             context=asdict(self.context), state='RUNNING', ready=True, transport='ssh')

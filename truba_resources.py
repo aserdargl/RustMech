@@ -2,6 +2,7 @@
 
 Documented baseline: https://docs.truba.gov.tr/1-kaynaklar/arf/arf_kuyruk_bilgisi.html
 Policy reference: https://docs.truba.gov.tr/2-temel_bilgiler/hesaplama_kumeleri.html
+Hamsi submit policy: https://docs.truba.gov.tr/2-temel_bilgiler/uygulamalar/Matlab/truba_matlab_tr.html
 Scheduler defaults (DefMemPerCPU) are not minimum memory requirements.
 """
 from dataclasses import dataclass, replace
@@ -10,6 +11,7 @@ import re
 
 MIN_CPUS = 1
 MIN_MEMORY_MB = 1  # Smallest positive Slurm MiB request; not a site policy.
+MIN_ANALYSIS_MEMORY_MB = 128 * 1024
 
 
 @dataclass(frozen=True)
@@ -44,7 +46,7 @@ class QueueLimits:
 
 BASELINES = {
     'debug': QueueLimits('debug', 'Debug · short tests', 1, 112, 384 * 1024, 4 * 3600, max_gpus=4),
-    'hamsi': QueueLimits('hamsi', 'Hamsi', 28, 56, 192 * 1024, max_memory_per_cpu=3400, default_memory_per_cpu=3400),
+    'hamsi': QueueLimits('hamsi', 'Hamsi', 56, 56, 192 * 1024, max_memory_per_cpu=3400, default_memory_per_cpu=3400),
     'barbun': QueueLimits('barbun', 'Barbun', 20, 40, 384 * 1024, max_memory_per_cpu=9500, default_memory_per_cpu=8500),
     'orfoz': QueueLimits('orfoz', 'Orfoz', 56, 112, 256 * 1024, max_memory_per_cpu=2295, default_memory_per_cpu=2000),
     'smp': QueueLimits('smp', 'Orkinos · smp', 4, 224, 4096 * 1024, max_memory_per_cpu=18400, default_memory_per_cpu=17000),
@@ -54,6 +56,8 @@ BASELINES = {
     'kolyoz-cuda': QueueLimits('kolyoz-cuda', 'Kolyoz · H100 / H200 GPU', 16, 64, 1024 * 1024, min_gpus=1, max_gpus=4, max_memory_per_cpu=16384, default_memory_per_cpu=16384),
 }
 AUTO_QUEUES = ('hamsi', 'barbun', 'orfoz')
+# Single-node job-submit rules for the production CPU queues.
+ANALYSIS_CPU_MULTIPLES = {'hamsi': 56, 'barbun': 40, 'orfoz': 56}
 
 
 def seconds(value):
@@ -70,6 +74,8 @@ def seconds(value):
 def candidates(partition, cpus, memory_mb, walltime, catalog=None, *, gpus=0):
     catalog = BASELINES if catalog is None else catalog
     names = AUTO_QUEUES if partition == 'auto' else tuple(partition.split(','))
+    if partition != 'auto' and 'hamsi' in names and cpus != BASELINES['hamsi'].min_cpus:
+        raise ValueError('Hamsi requires 56 CPU cores per node. Select 56 cores or choose another queue.')
     result = []
     for name in names:
         limit = catalog.get(name)
@@ -83,6 +89,38 @@ def candidates(partition, cpus, memory_mb, walltime, catalog=None, *, gpus=0):
     if not result:
         raise ValueError('No eligible queue for this CPU, GPU, RAM and wall time request.')
     return ','.join(result)
+
+
+def analysis_submission_context(context, catalog=None):
+    """Fit a standalone CPU analysis to the selected queues and RAM floor."""
+    catalog = BASELINES if catalog is None else catalog
+    memory = max(context.memory_mb, MIN_ANALYSIS_MEMORY_MB)
+    if context.gpus:
+        raise ValueError('TRUBA analyses require a CPU queue.')
+
+    automatic = context.partition == 'auto'
+    queue_groups = [(name,) for name in AUTO_QUEUES] if automatic else [tuple(context.partition.split(','))]
+    options = []
+    for names in queue_groups:
+        limits = [catalog.get(name) for name in names]
+        if any(limit is None or not limit.available or limit.min_gpus for limit in limits):
+            continue
+        minimum = max(context.cores, *(limit.min_cpus for limit in limits))
+        maximum = min(limit.max_cpus for limit in limits)
+        for cores in range(minimum, maximum + 1):
+            if any(cores % ANALYSIS_CPU_MULTIPLES.get(name, 1) for name in names):
+                continue
+            if any(memory > limit.memory_ceiling(cores) or memory < (limit.min_memory_mb or 1)
+                   or seconds(context.walltime) > limit.max_seconds for limit in limits):
+                continue
+            idle_fit = any(cpus >= cores and ram >= memory for cpus, ram in limits[0].idle_capacities)
+            options.append((not idle_fit, cores, ','.join(names)))
+            break
+    if not options:
+        raise ValueError(f'TRUBA queue {context.partition} cannot fit {memory / 1024:g} GiB of RAM '
+                         f'with at least {context.cores} CPU cores for {context.walltime}.')
+    _, cores, partition = min(options, key=lambda option: option[:2])
+    return replace(context, partition=partition, cores=cores, memory_mb=memory, session_id='')
 
 
 def _fields(line):
@@ -126,8 +164,9 @@ def parse_catalog(partitions, nodes, *, live_node_capacity=False):
                      if not any(state in n.get('State', '') for state in ('DOWN', 'DRAIN', 'FAIL', 'RESERVED')))
         max_cpu = max(c for c, m in capacities)
         mem = max(m for c, m in capacities)
-        if not live_node_capacity:
+        if not live_node_capacity or name == 'hamsi':
             max_cpu = min(base.max_cpus, max_cpu)
+        if not live_node_capacity:
             mem = min(base.max_memory_mb, mem)
         cpu_cap = _number(row.get('MaxCPUsPerNode'))
         mem_cap = _number(row.get('MaxMemPerNode'))
@@ -195,10 +234,6 @@ def convergence_context(context, catalog, solver_cpus, max_jobs):
     """Use the full node CPU allowance and count the mesh levels it can carry."""
     if context.gpus:
         raise ValueError('Mesh convergence requires a CPU queue on TRUBA.')
-    if 'hamsi' in catalog:
-        # Hamsi's job-submit plugin requires a full 56-core node for sbatch.
-        hamsi = catalog['hamsi']
-        catalog = {**catalog, 'hamsi': replace(hamsi, min_cpus=max(hamsi.min_cpus, 56))}
     if context.partition == 'auto':
         partition = automatic_context(context, catalog, min_cpus=solver_cpus).partition
     else:
@@ -226,8 +261,7 @@ def convergence_context(context, catalog, solver_cpus, max_jobs):
 def planned_convergence_context(context, catalog, partition, level_cpus, level_count, memory_mb):
     baseline = BASELINES[partition]
     limit = catalog[partition]
-    minimum = max(baseline.min_cpus, limit.min_cpus, level_cpus * level_count,
-                  56 if partition == 'hamsi' else 1)
+    minimum = max(baseline.min_cpus, limit.min_cpus, level_cpus * level_count)
     cores = min(baseline.max_cpus, limit.max_cpus)
     memory_ceiling = min(baseline.memory_ceiling(cores), limit.memory_ceiling(cores))
     if cores < minimum or not level_count <= memory_mb <= memory_ceiling:

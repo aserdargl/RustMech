@@ -12,18 +12,18 @@ from truba_remote import RemoteContext, slurm_script
 
 class QueuePolicyTests(unittest.TestCase):
     def test_documented_cpu_and_node_limits(self):
-        self.assertEqual((BASELINES['hamsi'].min_cpus, BASELINES['hamsi'].max_cpus), (28, 56))
+        self.assertEqual((BASELINES['hamsi'].min_cpus, BASELINES['hamsi'].max_cpus), (56, 56))
         self.assertEqual(BASELINES['barbun'].min_cpus, 20)
         self.assertEqual(BASELINES['orfoz'].min_cpus, 56)
         self.assertEqual(BASELINES['smp'].max_cpus, 224)
-        for queue, cores, ram in [('hamsi', 27, 131072), ('hamsi', 64, 131072),
+        for queue, cores, ram in [('hamsi', 27, 131072), ('hamsi', 40, 136000), ('hamsi', 64, 131072),
                                   ('barbun', 41, 131072), ('orfoz', 55, 131072),
-                                  ('smp', 225, 131072), ('hamsi', 28, 200 * 1024)]:
+                                  ('smp', 225, 131072), ('hamsi', 56, 200 * 1024)]:
             with self.subTest(queue=queue, cores=cores), self.assertRaises(ValueError):
                 candidates(queue, cores, ram, '01:00:00')
 
     def test_auto_only_includes_queues_matching_the_same_request(self):
-        self.assertEqual(candidates('auto', 28, 64000, '24:00:00'), 'hamsi,barbun')
+        self.assertEqual(candidates('auto', 28, 64000, '24:00:00'), 'barbun')
         self.assertEqual(candidates('auto', 56, 128000, '24:00:00'), 'hamsi,orfoz')
         self.assertEqual(candidates('auto', 28, 256 * 1024, '24:00:00'), 'barbun')
         with self.assertRaises(ValueError):
@@ -38,10 +38,20 @@ class QueuePolicyTests(unittest.TestCase):
         limit = catalog['hamsi']
         self.assertTrue(limit.verified)
         self.assertEqual(limit.max_memory_mb, 188000)
-        self.assertEqual(limit.memory_ceiling(28), 98000)
+        self.assertEqual(limit.memory_ceiling(56), 188000)
         with self.assertRaises(ValueError):
-            candidates('hamsi', 28, 131072, '01:00:00', catalog)
-        self.assertEqual(candidates('hamsi', 40, 131072, '01:00:00', catalog), 'hamsi')
+            candidates('hamsi', 56, 190000, '01:00:00', catalog)
+        self.assertEqual(candidates('hamsi', 56, 131072, '01:00:00', catalog), 'hamsi')
+
+    def test_fft_script_requires_a_full_hamsi_node(self):
+        context = RemoteContext(partition='hamsi', cores=40, memory_mb=136000, walltime='04:00:00')
+        request = dict(operation='fft_solve', source_sha256='0' * 64)
+        with self.assertRaisesRegex(ValueError, 'Hamsi requires 56'):
+            slurm_script(context, 'tester', request)
+        script = slurm_script(replace(context, cores=56), 'tester', request)
+        self.assertIn('#SBATCH --cpus-per-task=56\n', script)
+        self.assertIn('#SBATCH --mem=136000M\n', script)
+        self.assertIn('#SBATCH --time=04:00:00\n', script)
 
     def test_heterogeneous_debug_does_not_combine_two_node_capacities(self):
         catalog = parse_catalog('PartitionName=debug State=UP MaxTime=04:00:00',
@@ -67,9 +77,9 @@ class QueuePolicyTests(unittest.TestCase):
 
     def test_auto_prefers_idle_fit_and_honours_solver_cpu_requirement(self):
         catalog = dict(BASELINES)
-        catalog['hamsi'] = replace(catalog['hamsi'], idle_capacities=((56, 190000),))
+        catalog['hamsi'] = replace(catalog['hamsi'], idle_capacities=((56, 191000),))
         chosen = automatic_context(RemoteContext(partition='auto'), catalog)
-        self.assertEqual((chosen.partition, chosen.cores, chosen.memory_mb), ('hamsi', 28, 95200))
+        self.assertEqual((chosen.partition, chosen.cores, chosen.memory_mb), ('hamsi', 56, 190400))
         chosen = automatic_context(RemoteContext(partition='auto'), catalog, min_cpus=64)
         self.assertEqual((chosen.partition, chosen.cores), ('orfoz', 64))
 
