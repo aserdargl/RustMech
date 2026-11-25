@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from unittest.mock import MagicMock, patch
 
-from PySide6.QtCore import QSettings, Qt
+from PySide6.QtCore import QEvent, QObject, QSettings, Qt
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QWidget
 
@@ -73,6 +73,25 @@ class MaterialCatalogUiTests(unittest.TestCase):
         dialog = MaterialLibraryDialog(**kwargs)
         self.windows.append(dialog)
         return dialog
+
+    def test_constructing_material_panels_shows_no_standalone_window(self):
+        shown = []
+
+        class ShowObserver(QObject):
+            def eventFilter(self, widget, event):
+                if event.type() == QEvent.Type.Show and isinstance(widget, QWidget) and widget.isWindow():
+                    shown.append(widget.objectName())
+                return False
+
+        observer = ShowObserver()
+        self.app.installEventFilter(observer)
+        self.addCleanup(self.app.removeEventFilter, observer)
+        for elastic_only in (False, True):
+            editor = MaterialEditor(Settings(), elastic_only=elastic_only, library_settings=self.settings)
+            self.windows.append(editor)
+            self.assertFalse(editor.library_button.isHidden())
+            self.assertEqual(editor.save_button.isHidden(), elastic_only)
+        self.assertEqual(shown, [])
 
     def test_browsing_enter_cancel_do_not_change_editor_add_selects_and_deduplicates(self):
         editor = self.editor()

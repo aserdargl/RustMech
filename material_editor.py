@@ -105,6 +105,7 @@ class MaterialEditor(SidebarGroupBox):
 
         actions = ActionFlowLayout(equal_width=True)
         actions.setAlignment(Qt.AlignmentFlag.AlignRight)
+        content_layout.addLayout(actions)
         self.library_button = QPushButton("Library")
         self.library_button.setToolTip("Browse material properties and source datasheets")
         self.library_button.clicked.connect(self.show_library)
@@ -133,7 +134,6 @@ class MaterialEditor(SidebarGroupBox):
         self.delete_button.clicked.connect(self.delete_file)
         self.edit_button.toggled.connect(self.set_editable)
         self.delete_button.setEnabled(False)
-        content_layout.addLayout(actions)
 
         self.form = QFormLayout()
         self.form.setContentsMargins(0, 0, 0, 0)
