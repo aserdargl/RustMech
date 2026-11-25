@@ -671,6 +671,7 @@ Nonlinear Compression|Doğrusal olmayan basma
 Finite Element|Sonlu Eleman
 Mechanic|Mekanik
 Experiments (DoE)|Deneyler (DoE)
+Experiments|Deneyler
 Flow CFD|Akış CFD
 Flow (CFD)|Akış (CFD)
 Thermal CHT|Isıl CHT
@@ -1390,6 +1391,7 @@ Uses each geometry's selected variables. Without variables, only its reference c
 Top platen displacement in −Z; reaction force is calculated (N).|Üst plakanın −Z yönündeki yer değiştirmesi; tepki kuvveti hesaplanır (N).
 Pending / active remote jobs|Bekleyen / Etkin uzak işler
 TRUBA jobs|TRUBA işleri
+DoE · TRUBA jobs|DoE · TRUBA işleri
 Active jobs|Aktif işler
 Queue status|Kuyruk durumu
 Allocated CPU|Ayrılmış CPU
@@ -1462,6 +1464,7 @@ Analysis started and running|Analiz başladı ve çalışıyor
 Analysis is finishing…|Analiz tamamlanıyor…
 Downloading results…|Sonuçlar indiriliyor…
 Analysis complete|Analiz tamamlandı
+Analysis complete · results downloaded|Analiz tamamlandı · sonuçlar indirildi
 results downloaded|sonuçlar indirildi
 See TRUBA jobs for this analysis. Results download automatically when connected.|Bu analiz için TRUBA işleri listesine bakın. Bağlandığınızda sonuçlar otomatik indirilir.
 Waiting for TRUBA submission confirmation. Close once the Slurm job number is visible.|TRUBA gönderim onayı bekleniyor. Slurm iş numarası göründüğünde programı kapatabilirsiniz.

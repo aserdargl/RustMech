@@ -33,7 +33,7 @@ QLabel:disabled { color: #808080; }
 #trubaConnectionBadge[state="disconnected"] { color: #FFFFFF; background: #B91C1C; }
 #sidebarPanel { background: #F5F5F3; border: 1px solid #CBD5E1; border-radius: 2px; }
 #scrollFields, #doeWorkspace { background: #F5F5F3; }
-QMainWindow#doeStudioWindow { background: #F5F5F3; }
+QMainWindow#doeStudioWindow, QMainWindow#doeTrubaJobsWindow { background: #F5F5F3; }
 QMainWindow#doeStudioWindow::separator { width: 3px; height: 3px; background: #DDDDDD; }
 QMainWindow#doeStudioWindow::separator:hover { background: #A0A0A0; }
 #doeHeader { background: #FFFFFF; border: 1px solid #D1DBE5; border-radius: 6px; }

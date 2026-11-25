@@ -10,7 +10,8 @@ from uuid import uuid4
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt, QTimer, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDoubleSpinBox, QHeaderView,
-                               QHBoxLayout, QLabel, QLineEdit, QMenu, QPushButton, QScrollArea, QSpinBox, QSplitter,
+                               QHBoxLayout, QLabel, QLineEdit, QMainWindow, QMenu, QPushButton,
+                               QScrollArea, QSpinBox, QSplitter,
                                QStackedWidget, QTabWidget, QTableView, QTableWidget, QTableWidgetItem,
                                QVBoxLayout, QWidget)
 
@@ -19,6 +20,7 @@ from new_doe_operations import (OPERATIONS, explicit_numbers, launch, matrix, ma
 from structure_library import ALL_STRUCTURES_BY_FAMILY, STRUCTURE_FAMILIES
 from studio_style import (COMBO_WIDTH, CONTROL_HEIGHT, ActionFlowLayout, CompactComboBox, NumericLineEdit,
                           SidebarGroupBox)
+from window_state import show_restored_window
 from ui_language import translate, turkish
 from model import CONTACT_NUMERICAL_FIELDS, GEOMETRY_FIELDS, MATERIAL_FIELDS, settings_from_dict, validate_geometry
 
@@ -347,6 +349,67 @@ class ExperimentMatrix(QAbstractTableModel):
         self.dataChanged.emit(index, index)
 
 
+class DoeTrubaJobsWindow(QMainWindow):
+    """Slurm jobs confirmed for the latest TRUBA run from this DoE page."""
+
+    def __init__(self, parent):
+        super().__init__(parent, Qt.WindowType.Window)
+        self.setObjectName("doeTrubaJobsWindow")
+        self.setWindowTitle("DoE · TRUBA jobs")
+        self.resize(600, 320)
+        content = QWidget()
+        layout = QVBoxLayout(content)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(7)
+        self.table = QTableWidget(0, 3)
+        self.table.setAccessibleName("TRUBA jobs")
+        self.table.setHorizontalHeaderLabels(["Experiments", "Slurm ID", "Status"])
+        self.table.setAlternatingRowColors(True)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.table.verticalHeader().hide()
+        self.table.verticalHeader().setDefaultSectionSize(CONTROL_HEIGHT)
+        self.table.setColumnWidth(0, 120)
+        self.table.setColumnWidth(1, 105)
+        self.table.horizontalHeader().setStretchLastSection(True)
+        layout.addWidget(self.table)
+        self.notice = QLabel()
+        self.notice.setObjectName("mutedHintLabel")
+        self.notice.setTextFormat(Qt.TextFormat.PlainText)
+        self.notice.setWordWrap(True)
+        layout.addWidget(self.notice)
+        self.setCentralWidget(content)
+        self.job_rows = {}
+
+    def begin(self):
+        self.job_rows.clear()
+        self.table.setRowCount(0)
+        self.notice.setText("Submitting analysis to TRUBA…")
+        show_restored_window(self)
+
+    def update_job(self, experiment, record):
+        job_id = record.get("job_id")
+        if not job_id:
+            return
+        from truba_job_list import background_status
+
+        row = self.job_rows.get(experiment)
+        if row is None:
+            row = self.table.rowCount()
+            self.job_rows[experiment] = row
+            self.table.insertRow(row)
+            self.table.setItem(row, 0, QTableWidgetItem(experiment))
+            self.table.setItem(row, 1, QTableWidgetItem())
+            self.table.setItem(row, 2, QTableWidgetItem())
+        self.table.item(row, 1).setText(str(job_id))
+        state = record.get("state", "")
+        stage = state.partition(" · Running experiment ")[0]
+        status = "Cancelled" if stage.lower() == "cancelled" else background_status({"state": stage})
+        self.table.item(row, 2).setText(status)
+        self.table.item(row, 2).setToolTip(state)
+        self.notice.clear()
+
+
 class NewDoePage(QWidget):
     def __init__(self, host):
         super().__init__()
@@ -354,6 +417,7 @@ class NewDoePage(QWidget):
         self.rows = []
         self.factors = []
         self.job = self.directory = None
+        self.truba_jobs_window = None
         self.submitted_rows = {}
         self.pending_checks = deque()
         self.separate_remote = False
@@ -434,7 +498,14 @@ class NewDoePage(QWidget):
         self.status = QLabel()
         self.status.setWordWrap(True)
         self.status.setTextFormat(Qt.TextFormat.PlainText)
-        layout.addWidget(self.status)
+        status_row = QHBoxLayout()
+        status_row.addWidget(self.status, 1)
+        self.truba_jobs_button = QPushButton("TRUBA jobs")
+        self.truba_jobs_button.setAutoDefault(False)
+        self.truba_jobs_button.hide()
+        self.truba_jobs_button.clicked.connect(self.open_truba_jobs)
+        status_row.addWidget(self.truba_jobs_button)
+        layout.addLayout(status_row)
         self.run.setEnabled(False)
         self.stop.setEnabled(False)
         self.open.setEnabled(False)
@@ -702,6 +773,11 @@ class NewDoePage(QWidget):
             self.sheet.set_state(i, "Queued")
         self.open.setEnabled(True)
         self.lock(True)
+        if remote:
+            if self.truba_jobs_window is None:
+                self.truba_jobs_window = DoeTrubaJobsWindow(self.window())
+            self.truba_jobs_button.show()
+            self.truba_jobs_window.begin()
         if self.grouped_remote:
             try:
                 self.job = launch(request, self.directory, controller)
@@ -712,6 +788,10 @@ class NewDoePage(QWidget):
         self.timer.start()
         if not self.grouped_remote:
             self.advance()
+
+    def open_truba_jobs(self):
+        if self.truba_jobs_window is not None:
+            show_restored_window(self.truba_jobs_window)
 
     def lock(self, busy):
         for widget in (self.operation, self.input_tabs, self.apply_button, self.generate, self.run):
@@ -734,11 +814,19 @@ class NewDoePage(QWidget):
             self.sheet.set_state(index, state, message)
         self.finish(message)
 
+    def update_current_truba_job(self, record):
+        if self.grouped_remote:
+            experiment = f"1–{len(self.rows)}" if len(self.rows) > 1 else "1"
+        else:
+            experiment = str(self.index + 1)
+        self.truba_jobs_window.update_job(experiment, record)
+
     def show_remote_progress(self):
         record = self.job.remote_status() or {}
         if not record.get("job_id"):
             return
         self.remote_id = record["job_id"]
+        self.update_current_truba_job(record)
         number = record.get("experiment_index") if self.grouped_remote else self.index + 1
         if type(number) is int and 1 <= number <= len(self.rows):
             if self.grouped_remote and self.index <= number - 1:
@@ -753,8 +841,9 @@ class NewDoePage(QWidget):
             self.status.setText(f"TRUBA #{self.remote_id} · {record['state']}")
 
     def advance_remote(self):
-        if not self.job.done():
-            self.show_remote_progress()
+        done = self.job.done()
+        self.show_remote_progress()
+        if not done:
             return
         job, self.job = self.job, None
         try:
@@ -783,6 +872,7 @@ class NewDoePage(QWidget):
         from truba_job_list import terminal_record
 
         index = self.submitted_rows[request_id]
+        self.truba_jobs_window.update_job(str(index + 1), record)
         state = record.get("state", "")
         job_id = record.get("job_id")
         details = {"slurm_job_id": job_id} if job_id else {}
@@ -892,6 +982,8 @@ class NewDoePage(QWidget):
         self.timer.stop()
         self.lock(False)
         self.status.setText(message)
+        if self.controller is not None and self.truba_jobs_window is not None:
+            self.truba_jobs_window.notice.setText(message)
 
     def detach_remote(self):
         if self.separate_remote and self.timer.isActive():
@@ -919,6 +1011,14 @@ class NewDoePage(QWidget):
                 self.status.setText(str(error))
                 return
             self.job = None
+            if self.controller is not None:
+                directory = self.directory if self.grouped_remote else self.case
+                try:
+                    record = json.loads((directory / "truba" / "remote_job.json").read_text(encoding="utf-8"))
+                except (OSError, ValueError):
+                    pass
+                else:
+                    self.update_current_truba_job(record)
             if self.grouped_remote:
                 self.finish_remote("Stopped", translate("Experiment matrix stopped."))
                 return

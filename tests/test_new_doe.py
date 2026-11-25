@@ -323,6 +323,7 @@ class NewDoeTests(unittest.TestCase):
                 patch("new_doe_page.launch") as launch:
             remote.trigger()
             self.assertIsNone(page.directory)
+            self.assertIsNone(page.truba_jobs_window)
             self.assertFalse(page.timer.isActive())
             self.assertTrue(page.run.isEnabled())
             launch.assert_not_called()
@@ -333,12 +334,19 @@ class NewDoeTests(unittest.TestCase):
             self.assertTrue(context.partition)
             remote.trigger()
             self.assertIs(launch.call_args.args[2], controller)
+            self.assertTrue(page.truba_jobs_window.isVisible())
             self.assertFalse(controller.requested)
+            record = page.directory / "truba" / "remote_job.json"
+            record.parent.mkdir()
+            record.write_text(json.dumps(dict(job_id="71", state="cancelled")), encoding="utf-8")
             page.cancel()
+            self.assertEqual(page.truba_jobs_window.table.item(0, 2).text(), "Cancelled")
+            page.truba_jobs_window.close()
 
             with patch.object(controller, "requested", True):
                 local.trigger()
                 self.assertIsNone(launch.call_args.args[2])
+                self.assertFalse(page.truba_jobs_window.isVisible())
                 page.cancel()
 
     def test_truba_dispatches_whole_matrix_once_and_restores_each_row_state(self):
@@ -360,13 +368,22 @@ class NewDoeTests(unittest.TestCase):
             job = launch.return_value
             job.done.return_value = False
             page.start(remote=True)
+            jobs = page.truba_jobs_window
+            self.assertTrue(jobs.isVisible())
+            self.assertEqual(jobs.table.rowCount(), 0)
             job.remote_status.return_value = dict(job_id="71", state="RUNNING", experiment_index=2)
             page.advance()
+            self.assertEqual(jobs.table.rowCount(), 1)
+            self.assertEqual([jobs.table.item(0, col).text() for col in range(3)],
+                             ["1–2", "71", "Analysis started and running"])
             self.assertIn("2/2", page.status.text())
             self.assertEqual(page.sheet.states, ["Awaiting results", "Running"])
             job.done.return_value = True
             job.result.return_value = str(output)
+            job.remote_status.return_value["state"] = "downloaded"
             page.advance()
+            self.assertEqual(jobs.table.rowCount(), 1)
+            self.assertEqual(jobs.table.item(0, 2).text(), "Analysis complete · results downloaded")
             launch.assert_called_once()
             self.assertEqual(launch.call_args.args[0]["experiment_rows"], page.rows)
             self.assertEqual(page.sheet.states, ["Failed", "Completed"])
@@ -403,10 +420,18 @@ class NewDoeTests(unittest.TestCase):
                 patch("new_doe_page.launch", side_effect=submit), \
                 patch("new_doe_page.monotonic", return_value=0) as clock:
             page.run.menu().actions()[2].trigger()
+            jobs = page.truba_jobs_window
+            self.assertTrue(jobs.isVisible())
             page.advance()
+            jobs.close()
             page.advance()
             self.assertEqual(len(records), 2)
             self.assertTrue(page.timer.isActive())
+            self.assertFalse(jobs.isVisible())
+            self.assertEqual(jobs.table.rowCount(), 2)
+            self.assertEqual([jobs.table.item(row, 1).text() for row in range(2)], ["71", "72"])
+            page.truba_jobs_button.click()
+            self.assertTrue(jobs.isVisible())
             self.assertEqual(page.sheet.states, ["Queued", "Queued"])
             for index, state in enumerate(("RUNNING|None", "downloaded")):
                 record = records[index]
@@ -415,6 +440,8 @@ class NewDoeTests(unittest.TestCase):
             clock.return_value = 3
             page.advance()
             self.assertEqual(page.sheet.states, ["Running", "Completed"])
+            self.assertEqual(jobs.table.item(0, 2).text(), "Analysis started and running")
+            self.assertEqual(jobs.table.item(1, 2).text(), "Analysis complete · results downloaded")
             records[0]["state"] = "downloaded"
             (Path(records[0]["local_directory"]) / "remote_job.json").write_text(json.dumps(records[0]))
             clock.return_value = 6
@@ -424,6 +451,32 @@ class NewDoeTests(unittest.TestCase):
                 saved = json.loads((Path(record["local_directory"]).parent / "experiment.json").read_text())
                 self.assertEqual(saved["slurm_job_id"], record["job_id"])
                 self.assertEqual(saved["state"], "Completed")
+
+    def test_truba_jobs_window_restores_normal_bounds_and_maximized_state(self):
+        from new_doe_page import DoeTrubaJobsWindow
+        from window_state import show_restored_window
+
+        owner = self.page().window()
+        first = DoeTrubaJobsWindow(owner)
+        show_restored_window(first)
+        self.app.processEvents()
+        first.resize(540, 310)
+        first.move(45, 55)
+        self.app.processEvents()
+        expected = first.geometry()
+        self.assertEqual(first.rustmechCaption.height(), 25)
+        first.showMaximized()
+        self.app.processEvents()
+        first.close()
+
+        reopened = DoeTrubaJobsWindow(owner)
+        show_restored_window(reopened)
+        self.app.processEvents()
+        self.assertTrue(reopened.isMaximized())
+        reopened.showNormal()
+        self.app.processEvents()
+        self.assertEqual(reopened.geometry(), expected)
+        reopened.close()
 
     def test_truba_uses_selected_operation_and_downloads_into_the_row(self):
         from new_doe_operations import OPERATIONS, launch, snapshot
