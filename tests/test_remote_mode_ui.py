@@ -115,8 +115,9 @@ class RemoteModeUiTests(unittest.TestCase):
                         hpc = window.truba_button.geometry()
                         self.assertTrue(label.isVisible())
                         self.assertIs(window.brand_header.parentWidget(), window.esen_button.parentWidget())
-                        self.assertEqual(esen.y(), badge.y())
-                        self.assertEqual(badge.y(), hpc.y())
+                        self.assertEqual(esen.size().height(), hpc.size().height())
+                        self.assertEqual(esen.center().y(), hpc.center().y())
+                        self.assertLessEqual(abs(esen.center().y() - badge.center().y()), 1)
                         left_gap = badge.left() - esen.right() - 1
                         right_gap = hpc.left() - badge.right() - 1
                         self.assertGreaterEqual(min(left_gap, right_gap), 0)

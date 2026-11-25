@@ -21,6 +21,9 @@ QLabel:disabled { color: #808080; }
 }
 #workspaceCommandDivider { background: #D5DBE2; border: none; }
 #workspaceCommandBar { background: #FCFCFB; }
+#workspaceCommandBar > QPushButton, #workspaceCommandBar > QToolButton {
+    border-radius: 3px; min-height: 48px; max-height: 48px;
+}
 #brandHeader[computeState="ready"], #brandHeader[computeState="allocated"] { background: #E7F3E8; border-color: #329447; }
 #brandHeader[computeState="pending"] { background: #FFF4CE; border-color: #C8A044; }
 #brandTitle {

@@ -136,6 +136,8 @@ from structure_library import (
 )
 
 PREVIEW_DELAY_MS = 300
+WORKSPACE_COMMAND_WIDTH = 65
+WORKSPACE_COMMAND_HEIGHT = 50
 MESH_TYPE_LABELS = {
     "HEX20": "Voxel hexahedral (HEX20)",
     "TET10": "Netgen tetrahedral (TET10)",
@@ -940,9 +942,9 @@ class RustMechDialog(QDialog):
         command_scroll.setFrameShape(QFrame.Shape.NoFrame)
         command_scroll.setWidgetResizable(True)
         command_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        command_scroll.setFixedHeight(CONTROL_HEIGHT)
+        command_scroll.setFixedHeight(WORKSPACE_COMMAND_HEIGHT)
         command_scroll.horizontalScrollBar().rangeChanged.connect(
-            lambda _, maximum: command_scroll.setFixedHeight(CONTROL_HEIGHT + (6 if maximum else 0))
+            lambda _, maximum: command_scroll.setFixedHeight(WORKSPACE_COMMAND_HEIGHT + (6 if maximum else 0))
         )
         command_bar = QWidget()
         command_bar.setObjectName("workspaceCommandBar")
@@ -1050,7 +1052,7 @@ class RustMechDialog(QDialog):
             if index:
                 divider = QFrame()
                 divider.setObjectName("workspaceCommandDivider")
-                divider.setFixedSize(1, 17)
+                divider.setFixedSize(1, WORKSPACE_COMMAND_HEIGHT - 10)
                 navigation.addWidget(divider)
             for button in group:
                 button.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
@@ -1566,18 +1568,22 @@ class RustMechDialog(QDialog):
             self.workspace_button: tuple(action.text() for action in self.workspace_menu.actions()
                                          if action.isVisible()),
         }
-        for group in ((self.project_button, self.designs_button, self.workspace_button),
-                      (self.sidebar_toggle,), self._workspace_commands[2],
-                      self._compute_commands, (self.about_button,),
-                      (self.compute_resources_button,)):
+        command_groups = ((self.project_button, self.designs_button, self.workspace_button),
+                          (self.sidebar_toggle,), self._workspace_commands[2],
+                          self._compute_commands, (self.about_button,))
+        for group in (*command_groups, (self.compute_resources_button,)):
             # Fit the longest translated label, including room for focus and menu arrows.
             width = max(button.fontMetrics().horizontalAdvance(label)
                         + (23 if isinstance(button, QToolButton) else 16)
                         for button in group
                         for label in selector_labels.get(button, (button.text(),)))
+            height = CONTROL_HEIGHT
+            if group in command_groups:
+                width = max(width, WORKSPACE_COMMAND_WIDTH)
+                height = WORKSPACE_COMMAND_HEIGHT
             for button in group:
                 button.setProperty("managesLocalizedWidth", True)
-                button.setFixedSize(width, CONTROL_HEIGHT)
+                button.setFixedSize(width, height)
         # Allow the shared button face's focus border to grow by 1 px on each side.
         width = max(button.sizeHint().width() for button in self._analysis_action_buttons) + 2
         for button in self._analysis_action_buttons:
