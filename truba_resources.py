@@ -11,7 +11,6 @@ import re
 
 MIN_CPUS = 1
 MIN_MEMORY_MB = 1  # Smallest positive Slurm MiB request; not a site policy.
-MIN_ANALYSIS_MEMORY_MB = 128 * 1024
 
 
 @dataclass(frozen=True)
@@ -56,8 +55,6 @@ BASELINES = {
     'kolyoz-cuda': QueueLimits('kolyoz-cuda', 'Kolyoz · H100 / H200 GPU', 16, 64, 1024 * 1024, min_gpus=1, max_gpus=4, max_memory_per_cpu=16384, default_memory_per_cpu=16384),
 }
 AUTO_QUEUES = ('hamsi', 'barbun', 'orfoz')
-# Single-node job-submit rules for the production CPU queues.
-ANALYSIS_CPU_MULTIPLES = {'hamsi': 56, 'barbun': 40, 'orfoz': 56}
 
 
 def seconds(value):
@@ -89,38 +86,6 @@ def candidates(partition, cpus, memory_mb, walltime, catalog=None, *, gpus=0):
     if not result:
         raise ValueError('No eligible queue for this CPU, GPU, RAM and wall time request.')
     return ','.join(result)
-
-
-def analysis_submission_context(context, catalog=None):
-    """Fit a standalone CPU analysis to the selected queues and RAM floor."""
-    catalog = BASELINES if catalog is None else catalog
-    memory = max(context.memory_mb, MIN_ANALYSIS_MEMORY_MB)
-    if context.gpus:
-        raise ValueError('TRUBA analyses require a CPU queue.')
-
-    automatic = context.partition == 'auto'
-    queue_groups = [(name,) for name in AUTO_QUEUES] if automatic else [tuple(context.partition.split(','))]
-    options = []
-    for names in queue_groups:
-        limits = [catalog.get(name) for name in names]
-        if any(limit is None or not limit.available or limit.min_gpus for limit in limits):
-            continue
-        minimum = max(context.cores, *(limit.min_cpus for limit in limits))
-        maximum = min(limit.max_cpus for limit in limits)
-        for cores in range(minimum, maximum + 1):
-            if any(cores % ANALYSIS_CPU_MULTIPLES.get(name, 1) for name in names):
-                continue
-            if any(memory > limit.memory_ceiling(cores) or memory < (limit.min_memory_mb or 1)
-                   or seconds(context.walltime) > limit.max_seconds for limit in limits):
-                continue
-            idle_fit = any(cpus >= cores and ram >= memory for cpus, ram in limits[0].idle_capacities)
-            options.append((not idle_fit, cores, ','.join(names)))
-            break
-    if not options:
-        raise ValueError(f'TRUBA queue {context.partition} cannot fit {memory / 1024:g} GiB of RAM '
-                         f'with at least {context.cores} CPU cores for {context.walltime}.')
-    _, cores, partition = min(options, key=lambda option: option[:2])
-    return replace(context, partition=partition, cores=cores, memory_mb=memory, session_id='')
 
 
 def _fields(line):
