@@ -452,6 +452,8 @@ Fixed value|Sabit değer
 Analysis settings|Analiz ayarları
 Variable settings|Değişken ayarları
 Lower bound|Alt sınır
+Upper bound|Üst sınır
+Values|Değerler
 Material card|Malzeme kartı
 + Value column|+ Değer sütunu
 - Last column|- Son sütun

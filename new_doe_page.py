@@ -7,8 +7,8 @@ from uuid import uuid4
 
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt, QTimer, QUrl
 from PySide6.QtGui import QDesktopServices
-from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDoubleSpinBox,
-                               QHBoxLayout, QLabel, QLineEdit, QMenu, QPushButton, QScrollArea, QSpinBox,
+from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDoubleSpinBox, QHeaderView,
+                               QHBoxLayout, QLabel, QLineEdit, QMenu, QPushButton, QScrollArea, QSpinBox, QSplitter,
                                QStackedWidget, QTabWidget, QTableView, QTableWidget, QTableWidgetItem,
                                QVBoxLayout, QWidget)
 
@@ -21,6 +21,8 @@ from ui_language import translate, turkish
 from model import CONTACT_NUMERICAL_FIELDS, GEOMETRY_FIELDS, MATERIAL_FIELDS, settings_from_dict, validate_geometry
 
 FFT_OUTER_AXES = ("size_x", "size_y", "size")
+NUMBER_WIDTH = 110
+CONTROL_GAP = 3
 LABELS = {"grid": "Voxels per axis", "void_ratio": "Void / solid stiffness", "distribution": "WSL distribution",
           "structure_name": "Structure family / type", "tpms_morphology": "Morphology",
           "young_modulus": "Young’s modulus (MPa)", "cell_size": "Cell size (mm)",
@@ -111,7 +113,7 @@ def number(value, source):
     else:
         bound = 2147483647 if integer else max(1e15, abs(value))
         box.setRange(-bound, bound)
-    box.setFixedWidth(110)
+    box.setFixedWidth(NUMBER_WIDTH)
     box.setKeyboardTracking(False)
     box.setValue(value)
     return box
@@ -136,11 +138,14 @@ class Factor:
                               if label.buddy() is source), None)
                 if label is not None:
                     self.label = label.text()
-        table.setItem(row, 0, QTableWidgetItem(self.label))
-        variations.setItem(variation_row, 0, QTableWidgetItem(self.label))
+        for view, cell in ((table, (row, 1)), (variations, (variation_row, 0))):
+            item = QTableWidgetItem(self.label)
+            item.setToolTip(translate(self.label))
+            view.setItem(*cell, item)
         self.variable = QCheckBox()
-        self.variable.setAccessibleName(self.label + " variable")
-        table.setCellWidget(row, 2, self.variable)
+        self.variable.setAccessibleName(f"{translate('Variable')} · {translate(self.label)}")
+        self.variable.setToolTip(translate("Variable"))
+        table.setCellWidget(row, 0, self.variable)
         self.variations = variations
         self.variation_row = variation_row
         self.choices = []
@@ -169,7 +174,6 @@ class Factor:
                 action.toggled.connect(changed)
             self.fixed.setCurrentIndex(self.fixed.findData(value))
             self.fixed.currentIndexChanged.connect(changed)
-            self.extra = [self.selection]
         elif self.numeric or self.optional_number:
             initial = value if self.numeric else (0.1 if key == "stl_resolution" else 1)
             self.first = number(initial, source)
@@ -189,18 +193,21 @@ class Factor:
             else:
                 self.fixed = text_field("null")
                 self.fixed.textChanged.connect(changed)
-            self.lower_cell = QStackedWidget()
-            self.lower_cell.addWidget(self.first)
-            self.lower_blank = QWidget()
-            self.lower_cell.addWidget(self.lower_blank)
-            self.upper_cell = QStackedWidget()
-            self.upper_cell.addWidget(self.last)
-            self.upper_cell.addWidget(self.selection)
-            self.extra = [self.lower_cell, self.upper_cell, self.mode]
-            self.mode.currentIndexChanged.connect(lambda: self.toggle(self.variable.isChecked()))
-            self.mode.currentIndexChanged.connect(changed)
-            for box in (self.first, self.last):
+            self.bounds = QWidget()
+            bounds = QHBoxLayout(self.bounds)
+            bounds.setContentsMargins(0, 0, 0, 0)
+            bounds.setSpacing(CONTROL_GAP)
+            for box, label in ((self.first, "Lower bound"), (self.last, "Upper bound")):
+                box.setAccessibleName(f"{translate(self.label)} · {translate(label)}")
+                box.setToolTip(translate(label))
+                bounds.addWidget(box)
                 box.valueChanged.connect(changed)
+            bounds.addStretch()
+            self.level_entry = QStackedWidget()
+            self.level_entry.addWidget(self.bounds)
+            self.level_entry.addWidget(self.selection)
+            self.mode.currentIndexChanged.connect(self.update_level_entry)
+            self.mode.currentIndexChanged.connect(changed)
         else:
             self.fixed = text_field(display(value))
             self.fixed.textChanged.connect(changed)
@@ -208,18 +215,26 @@ class Factor:
             self.selection.setPlaceholderText('["value 1", "value 2"]')
             self.selection.setToolTip("Enter the levels as a JSON list.")
             self.selection.textChanged.connect(changed)
-            self.extra = [self.selection]
-        first_column = 1 if self.numeric or self.optional_number else 2
-        for i, widget in enumerate(self.extra, first_column):
-            variations.setCellWidget(variation_row, i, widget)
+        if self.numeric or self.optional_number:
+            levels = QWidget()
+            controls = QVBoxLayout(levels)
+            controls.setContentsMargins(0, 0, 0, 0)
+            controls.setSpacing(1)
+            controls.addWidget(self.mode)
+            controls.addWidget(self.level_entry)
+            variations.setCellWidget(variation_row, 1, levels)
+            variations.setRowHeight(variation_row, 2 * CONTROL_HEIGHT + 2)
+        else:
+            variations.setCellWidget(variation_row, 1, self.selection)
         self.fixed_panel = self.fixed
         if key == "structure_name":
             self.add_structure_family(value)
-        table.setCellWidget(row, 1, self.fixed_panel)
+            table.setRowHeight(row, 2 * CONTROL_HEIGHT + 2)
+        table.setCellWidget(row, 2, self.fixed_panel)
         self.toggle(False)
         self.variable.toggled.connect(self.toggle)
         self.variable.toggled.connect(changed)
-        for editor in (self.fixed, *self.extra):
+        for editor in (self.fixed, self.selection):
             editor.setAccessibleName(self.label + " " + editor.accessibleName())
             if isinstance(editor, QPushButton):
                 editor.setAutoDefault(False)
@@ -235,10 +250,9 @@ class Factor:
                 self.first.setValue(self.fixed.value())
                 self.last.setValue(self.fixed.value())
             self.levels_seeded = True
-        if self.numeric or self.optional_number:
-            listed = self.mode.currentData() == "list"
-            self.lower_cell.setCurrentWidget(self.lower_blank if listed else self.first)
-            self.upper_cell.setCurrentWidget(self.selection if listed else self.last)
+
+    def update_level_entry(self):
+        self.level_entry.setCurrentWidget(self.selection if self.mode.currentData() == "list" else self.bounds)
 
     def add_structure_family(self, value):
         names = {name for _, name in self.choices}
@@ -251,12 +265,11 @@ class Factor:
                 if value in members:
                     self.family.setCurrentIndex(self.family.count() - 1)
         self.fixed_panel = QWidget()
-        controls = QHBoxLayout(self.fixed_panel)
+        controls = QVBoxLayout(self.fixed_panel)
         controls.setContentsMargins(0, 0, 0, 0)
-        controls.setSpacing(3)
+        controls.setSpacing(1)
         controls.addWidget(self.family)
         controls.addWidget(self.fixed)
-        controls.addStretch()
         self.family.currentIndexChanged.connect(self.update_structure_choices)
         self.update_structure_choices()
 
@@ -377,14 +390,15 @@ class NewDoePage(QWidget):
         self.inputs = QScrollArea()
         self.inputs.setWidgetResizable(True)
         self.input_tabs = QTabWidget()
+        self.input_tabs.setMinimumWidth(320)
         self.input_tabs.addTab(self.inputs, "Analysis settings")
-        self.variations = self.table(["Parameter", "Lower bound", "Maximum / values", "Input mode"])
+        self.variations = self.table(["Parameter", "Values"])
         self.variations.setAccessibleName("Variable settings")
+        self.variations.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         self.input_tabs.addTab(self.variations, "Variable settings")
         self.sections = {}
-        layout.addWidget(self.input_tabs, 3)
         buttons = QHBoxLayout()
-        layout.insertLayout(1, buttons)
+        layout.addLayout(buttons)
         for name, title, callback in (("generate", "Create matrix", self.create), ("run", "Run", self.start),
                                       ("stop", "Stop", self.cancel), ("open", "Results folder", self.open_results)):
             button = QPushButton(title)
@@ -395,12 +409,32 @@ class NewDoePage(QWidget):
         self.commands = (self.apply_button, self.reload, self.generate, self.run, self.stop, self.open)
         self.button_width = 0
         buttons.addStretch()
+        matrix_panel = QWidget()
+        matrix_layout = QVBoxLayout(matrix_panel)
+        matrix_layout.setContentsMargins(0, 0, 0, 0)
+        matrix_layout.setSpacing(0)
+        matrix_title = QLabel("Experiment matrix")
+        matrix_title.setObjectName("sectionSubheader")
+        matrix_title.setFixedHeight(CONTROL_HEIGHT)
+        matrix_title.setContentsMargins(4, 0, 0, 0)
+        matrix_layout.addWidget(matrix_title)
         self.preview = QTableView()
+        self.preview.setAccessibleName("Experiment matrix")
+        self.preview.setMinimumWidth(220)
         self.preview.setAlternatingRowColors(True)
         self.sheet = ExperimentMatrix(self.preview)
         self.preview.setModel(self.sheet)
         self.preview.verticalHeader().setDefaultSectionSize(26)
-        layout.addWidget(self.preview, 2)
+        matrix_layout.addWidget(self.preview, 1)
+        self.splitter = QSplitter(Qt.Orientation.Horizontal)
+        self.splitter.setObjectName("newDoeSettingsAndMatrix")
+        self.splitter.setHandleWidth(7)
+        self.splitter.setChildrenCollapsible(False)
+        self.splitter.addWidget(self.input_tabs)
+        self.splitter.addWidget(matrix_panel)
+        self.splitter.setStretchFactor(1, 1)
+        self.splitter.setSizes([350, 600])
+        layout.addWidget(self.splitter, 1)
         self.status = QLabel()
         self.status.setWordWrap(True)
         self.status.setTextFormat(Qt.TextFormat.PlainText)
@@ -418,7 +452,8 @@ class NewDoePage(QWidget):
             titles = [b.text() for b in (*nav, *self.commands)] + ["Select values"]
             self.button_width = max(self.fontMetrics().horizontalAdvance(text) + 26
                                     for title in titles for text in (title, turkish(title)))
-            for button in (*nav, *self.findChildren(QPushButton)):
+            variable_buttons = self.variations.findChildren(QPushButton)
+            for button in (*nav, *self.commands, *variable_buttons):
                 button.setProperty("managesLocalizedWidth", True)
                 button.setFixedWidth(self.button_width)
         else:
@@ -433,6 +468,7 @@ class NewDoePage(QWidget):
         table = QTableWidget(0, len(headers))
         table.setHorizontalHeaderLabels(headers)
         table.setAlternatingRowColors(True)
+        table.setWordWrap(False)
         table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         table.verticalHeader().hide()
         table.verticalHeader().setMinimumSectionSize(25)
@@ -447,7 +483,6 @@ class NewDoePage(QWidget):
     def invalidate(self, *_):
         self.rows = []
         self.sheet.reset([], [])
-        self.preview.hide()
         self.run.setEnabled(False)
         self.status.setText("Choose variable parameters and their levels, then create the matrix.")
 
@@ -479,7 +514,7 @@ class NewDoePage(QWidget):
             self.variations.setRowCount(len(fields))
             for path, value in fields:
                 groups.setdefault(parameter_group(path, op), []).append((path, value))
-            factors, tables = {}, []
+            factors = {}
             button_width = self.button_width
             for title, members in groups.items():
                 section = SidebarGroupBox(title)
@@ -489,8 +524,8 @@ class NewDoePage(QWidget):
                 body.setContentsMargins(2, 0, 2, 1)
                 if title == "Solid phase material":
                     actions = QHBoxLayout()
-                    width = button_width or max(self.fontMetrics().horizontalAdvance(translate(label))
-                                                for label in ("Library", "Load")) + 26
+                    width = max(self.fontMetrics().horizontalAdvance(text) for label in ("Library", "Load")
+                                for text in (label, turkish(label))) + 26
                     for label, callback in (("Library", self.open_fft_material_library),
                                             ("Load", self.load_fft_material)):
                         button = QPushButton(label)
@@ -501,41 +536,31 @@ class NewDoePage(QWidget):
                         actions.addWidget(button)
                     actions.addStretch()
                     body.addLayout(actions)
-                table = self.table(["Parameter", "Fixed value", "Variable"])
-                tables.append(table)
+                table = self.table(["", "Parameter", "Fixed value"])
+                table.horizontalHeaderItem(0).setToolTip(translate("Variable"))
+                header = table.horizontalHeader()
+                header.setMinimumSectionSize(0)
+                header.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
+                header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+                header.setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
+                table.setColumnWidth(0, 24)
+                table.setColumnWidth(2, COMBO_WIDTH + 6)
                 body.addWidget(table)
                 table.setRowCount(len(members))
                 for row, (path, value) in enumerate(members):
                     factors[path] = Factor(table, row, self.variations, variation_rows[path], path, value,
                                            sources.get(path[-1]), op, self.invalidate)
-                table.ensurePolished()
-                table.resizeColumnsToContents()
-                width = max((factors[path].fixed_panel.sizeHint().width() for path, _ in members),
-                            default=COMBO_WIDTH)
-                table.setColumnWidth(1, max(table.columnWidth(1), width + 6))
                 table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
                 table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-                section.set_expanded(expanded.get(title, op == "fft_solve" or title == "Structure / Dimensions"))
-            widths = [max(table.columnWidth(column) for table in tables) for column in range(3)]
-            for table in tables:
-                for column, width in enumerate(widths):
-                    table.setColumnWidth(column, width)
                 frame = 2 * table.frameWidth()
-                table.setMinimumWidth(sum(widths) + frame)
                 table.setFixedHeight(table.horizontalHeader().sizeHint().height() + table.verticalHeader().length() + frame)
+                section.set_expanded(expanded.get(title, op == "fft_solve" or title == "Structure / Dimensions"))
             # Keep matrix combinations and CSV columns in the operation's parameter order.
             self.factors = [factors[path] for path, _ in fields]
-            self.variations.setColumnWidth(0, max(
-                [100, *(self.fontMetrics().horizontalAdvance(translate(f.label)) + 18 for f in self.factors)]))
-            for column, width in ((1, 116), (2, max(180, button_width + 4)), (3, COMBO_WIDTH + 6)):
-                self.variations.setColumnWidth(column, width)
+            self.variations.setColumnWidth(1, max(2 * NUMBER_WIDTH + CONTROL_GAP, button_width) + 4)
             for button in self.variations.findChildren(QPushButton):
                 button.setProperty("managesLocalizedWidth", True)
                 button.setFixedWidth(button_width or button.sizeHint().width())
-            if self.button_width:
-                for button in panel.findChildren(QPushButton):
-                    button.setProperty("managesLocalizedWidth", True)
-                    button.setFixedWidth(self.button_width)
             self.loaded = True
         except Exception as error:
             self.status.setText(str(error))
@@ -636,7 +661,6 @@ class NewDoePage(QWidget):
             return
         self.rows = rows
         self.sheet.reset(rows, self.factors)
-        self.preview.show()
         for i, factor in enumerate(self.sheet.columns, 1):
             width = max(self.fontMetrics().horizontalAdvance(label) for label in (factor.label, turkish(factor.label)))
             self.preview.setColumnWidth(i, max(100, width + 20))

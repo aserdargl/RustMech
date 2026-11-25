@@ -4,8 +4,9 @@ from pathlib import Path
 import time
 import unittest
 from unittest.mock import Mock, patch
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QPoint, Qt
 from PySide6.QtTest import QTest
+from PySide6.QtWidgets import QTableWidget
 
 from tests import test_remote_mode_ui as ui
 
@@ -160,6 +161,15 @@ class NewDoeTests(unittest.TestCase):
         cell = fields["size"]
         geometry = page.sections["Structure / Dimensions"]
         fft = page.sections["FFT Homogenization"]
+        grid = fields["grid"]
+        settings_table = fft.findChild(QTableWidget)
+        self.assertIs(settings_table.cellWidget(0, 0), grid.variable)
+        self.assertEqual(settings_table.item(0, 1).text(), grid.label)
+        self.assertTrue(page.preview.isVisible())
+        self.assertGreater(page.preview.mapTo(page, QPoint()).x(),
+                           page.input_tabs.mapTo(page, QPoint()).x() + page.input_tabs.width())
+        self.assertLess(page.input_tabs.width(), page.preview.width())
+        self.assertEqual(page.inputs.horizontalScrollBar().maximum(), 0)
         with patch.object(self.window, "_show_doe_bounds") as preview:
             self.assertTrue(cell.fixed.isVisible())
             cell.fixed.setValue(2)
@@ -189,6 +199,18 @@ class NewDoeTests(unittest.TestCase):
             page.apply_button.click()
             self.assertEqual(next(iter(preview.call_args.args[1].values())).dimensions, (6, 3, 4))
             self.assertEqual(preview.call_count, 2)
+
+    def test_settings_splitter_restores_user_width(self):
+        page = self.page()
+        sizes = page.splitter.sizes()
+        page.splitter.setSizes([sizes[0] + 100, sizes[1] - 100])
+        adjusted = page.splitter.sizes()
+        self.assertNotEqual(adjusted, sizes)
+        self.store.save(page.window())
+        page.splitter.setSizes(sizes)
+        self.store.restore(page.window())
+        self.app.processEvents()
+        self.assertEqual(page.splitter.sizes(), adjusted)
 
     def test_two_peridynamic_runs_save_separate_results(self):
         page = self.page()
