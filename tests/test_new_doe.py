@@ -265,6 +265,34 @@ class NewDoeTests(unittest.TestCase):
         self.assertEqual(page.sheet.states, ["Failed", "Stopped", "Skipped"])
         self.assertIn("Solver failed", (page.directory / "row_00001/experiment.json").read_text())
 
+    def test_run_menu_selects_target_for_the_matrix(self):
+        page = self.page()
+        page.create()
+        local, remote = page.run.menu().actions()
+        controller = self.window.remote_controller
+        with patch("doe_studio.results_directory", return_value=Path(self.temp.name)), \
+                patch.object(controller, "auth", return_value=None) as auth, \
+                patch("new_doe_page.launch") as launch:
+            remote.trigger()
+            self.assertIsNone(page.directory)
+            self.assertFalse(page.timer.isActive())
+            self.assertTrue(page.run.isEnabled())
+            launch.assert_not_called()
+
+            auth.return_value = object()
+            context, credentials = controller.require_analysis("damask", explicit_target=True)
+            self.assertEqual(credentials, auth.return_value)
+            self.assertTrue(context.partition)
+            remote.trigger()
+            self.assertIs(launch.call_args.args[2], controller)
+            self.assertFalse(controller.requested)
+            page.cancel()
+
+            with patch.object(controller, "requested", True):
+                local.trigger()
+                self.assertIsNone(launch.call_args.args[2])
+                page.cancel()
+
     def test_truba_uses_selected_operation_and_downloads_into_the_row(self):
         from new_doe_operations import OPERATIONS, launch, snapshot
         from remote_operations import OPERATIONS as capabilities
@@ -281,5 +309,6 @@ class NewDoeTests(unittest.TestCase):
                         request["settings"]["solver_backend"] = "kratos"
                     launch(request, directory, controller)
                     self.assertEqual(controller.require_analysis.call_args.args[0], capabilities[op])
+                    self.assertTrue(controller.require_analysis.call_args.kwargs["explicit_target"])
                     worker.assert_called_with(run_remote_operation, request, "context", remote_auth="auth",
                                               remote_options={"directory": directory / "truba"})

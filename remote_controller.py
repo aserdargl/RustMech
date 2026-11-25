@@ -787,13 +787,13 @@ class RemoteController(QObject):
     def require(self,capability,settings=None, *, allow_handover=False):
         return self._require(capability, settings, allow_handover=allow_handover)
 
-    def require_analysis(self, capability, settings=None):
+    def require_analysis(self, capability, settings=None, *, explicit_target=False):
         """Use the verified workflow when available, or submit to Slurm directly."""
         if self.ready:
-            return self.require(capability, settings)
+            return self._require(capability, settings, explicit_target=explicit_target)
         if self.closing:
             raise RuntimeError("RustMech is closing.")
-        if not self.requested:
+        if not (self.requested or explicit_target):
             raise ValueError("TRUBA computation mode is not enabled.")
         auth = self.auth()
         if auth is None:
@@ -837,7 +837,7 @@ class RemoteController(QObject):
     def require_batch_queue(self, partition, settings):
         return self._require(settings.solver_backend, settings, partition=partition)
 
-    def _require(self, capability, settings, *, allow_handover=False, partition=None):
+    def _require(self, capability, settings, *, allow_handover=False, partition=None, explicit_target=False):
         if self.closing: raise RuntimeError('RustMech is closing.')
         can_renew = (allow_handover and self.session and self.session.get('state') == 'ended'
                      and self.session.get('context', {}).get('auto_renew', True)
@@ -845,7 +845,7 @@ class RemoteController(QObject):
         if (not self.session or not self.session_watch or
                 (not can_renew and (self.session.get("state") != "RUNNING" or not self.session.get("ready")))):
             raise RuntimeError("Allocate or refresh the resource session and wait until it is ready before computing.")
-        if not self.requested: raise ValueError("TRUBA computation mode is not enabled.")
+        if not (self.requested or explicit_target): raise ValueError("TRUBA computation mode is not enabled.")
         if not self.ready:
             if self.future is not None or self._auto_probe_session is None:
                 raise RuntimeError("TRUBA runtime is being checked and prepared automatically. Wait until READY before computing.\n" + self.status.text())

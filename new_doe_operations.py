@@ -174,7 +174,7 @@ def launch(request, directory, controller):
         from remote_operations import required_capability
         from truba_remote import run_remote_operation
         capability = required_capability(request)
-        context, auth = controller.require_analysis(capability, settings_from_dict(request["settings"]))
+        context, auth = controller.require_analysis(capability, settings_from_dict(request["settings"]), explicit_target=True)
         return AnalysisProcess(run_remote_operation, request, context, remote_auth=auth,
                                remote_options={"directory": Path(directory) / "truba"})
     if request["operation"] == "fft_solve":

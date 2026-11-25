@@ -382,9 +382,6 @@ class NewDoePage(QWidget):
         self.apply_button.setToolTip("Generate the selected experiment geometry, or the first geometry in the draft.")
         self.apply_button.clicked.connect(self.apply_geometry)
         bar.addWidget(self.apply_button)
-        self.reload = QPushButton("Read workspace settings")
-        self.reload.setAutoDefault(False)
-        bar.addWidget(self.reload)
         bar.addStretch()
         self.inputs = QScrollArea()
         self.inputs.setWidgetResizable(True)
@@ -398,14 +395,20 @@ class NewDoePage(QWidget):
         self.sections = {}
         buttons = QHBoxLayout()
         layout.addLayout(buttons)
-        for name, title, callback in (("generate", "Create matrix", self.create), ("run", "Run", self.start),
+        for name, title, callback in (("generate", "Create matrix", self.create), ("run", "Run", None),
                                       ("stop", "Stop", self.cancel), ("open", "Results folder", self.open_results)):
             button = QPushButton(title)
             button.setAutoDefault(False)
-            button.clicked.connect(callback)
+            if callback is None:
+                menu = QMenu(button)
+                menu.addAction("Run locally", lambda: self.start(remote=False))
+                menu.addAction("Run on TRUBA", lambda: self.start(remote=True))
+                button.setMenu(menu)
+            else:
+                button.clicked.connect(callback)
             buttons.addWidget(button)
             setattr(self, name, button)
-        self.commands = (self.apply_button, self.reload, self.generate, self.run, self.stop, self.open)
+        self.commands = (self.apply_button, self.generate, self.run, self.stop, self.open)
         self.button_width = 0
         buttons.addStretch()
         matrix_panel = QWidget()
@@ -442,7 +445,6 @@ class NewDoePage(QWidget):
         self.stop.setEnabled(False)
         self.open.setEnabled(False)
         self.operation.currentIndexChanged.connect(self.load)
-        self.reload.clicked.connect(self.load)
 
     def size_navigation(self, navigation, active):
         nav = navigation.findChildren(QPushButton)
@@ -652,10 +654,25 @@ class NewDoePage(QWidget):
         self.run.setEnabled(True)
         self.status.setText(f"{len(rows)} experiments ready.")
 
-    def start(self):
+    def start(self, *, remote=None):
         from doe_studio import results_directory
         if not self.rows or self.timer.isActive():
             return
+        controller = self.host.remote_controller
+        if remote is None:
+            remote = controller.requested
+        self.controller = controller if remote else None
+        if remote:
+            from remote_operations import required_capability
+            if controller.auth() is None:
+                self.status.setText(translate("Connect to TRUBA, then run the matrix again."))
+                return
+            try:
+                for row in self.rows:
+                    required_capability(row)
+            except ValueError as error:
+                self.status.setText(translate(str(error)))
+                return
         directory = results_directory() / ("NEW_DOE_" + datetime.now().strftime("%Y%m%d_%H%M%S_") + uuid4().hex[:8])
         try:
             directory.mkdir(parents=True)
@@ -669,7 +686,6 @@ class NewDoePage(QWidget):
             return
         self.directory = directory
         self.index = self.failures = 0
-        self.controller = self.host.remote_controller if self.host.remote_controller.requested else None
         for i in range(len(self.rows)):
             self.sheet.set_state(i, "Queued")
         self.open.setEnabled(True)
@@ -678,13 +694,14 @@ class NewDoePage(QWidget):
         self.advance()
 
     def lock(self, busy):
-        for widget in (self.operation, self.reload, self.input_tabs, self.apply_button, self.generate, self.run):
+        for widget in (self.operation, self.input_tabs, self.apply_button, self.generate, self.run):
             widget.setEnabled(not busy)
         self.stop.setEnabled(busy)
 
     def record(self, state, **details):
         self.sheet.set_state(self.index, state, str(details.get("error", details.get("results", ""))))
-        data = dict(experiment=self.index + 1, state=state, inputs=self.rows[self.index], **details)
+        data = dict(experiment=self.index + 1, state=state, execution_target="truba" if self.controller else "local",
+                    inputs=self.rows[self.index], **details)
         temporary = self.case / "experiment.tmp"
         temporary.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
         temporary.replace(self.case / "experiment.json")

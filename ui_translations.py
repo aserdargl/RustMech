@@ -1335,7 +1335,9 @@ Material Point Method|Malzeme noktası yöntemi
 Peridynamics|Peridinamik
 FFT Homogenization|FFT homojenleştirme
 Voxels per axis|Eksen başına voksel
-Read workspace settings|Ana ekrandaki ayarları al
+Run locally|Bu bilgisayarda çalıştır
+Run on TRUBA|TRUBA’da çalıştır
+Connect to TRUBA, then run the matrix again.|TRUBA bağlantısını kurduktan sonra matrisi yeniden çalıştırın.
 Create matrix|Matris oluştur
 Fixed / minimum|Sabit / alt sınır
 Min / max|Min / maks
