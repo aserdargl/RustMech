@@ -46,6 +46,8 @@ from PySide6.QtWidgets import (
     QSizePolicy,
     QSplitter,
     QStyle,
+    QStyleOptionButton,
+    QStyleOptionToolButton,
     QStylePainter,
     QTabBar,
     QTabWidget,
@@ -191,6 +193,22 @@ class NoWheelComboBox(CompactComboBox):
 
     def wheelEvent(self, event) -> None:
         event.ignore()
+
+
+class _WorkspaceCommandButton(QPushButton):
+    def paintEvent(self, event):
+        option = QStyleOptionButton()
+        self.initStyleOption(option)
+        option.text = "\n".join(option.text.split())
+        QStylePainter(self).drawControl(QStyle.ControlElement.CE_PushButton, option)
+
+
+class _WorkspaceCommandMenu(QToolButton):
+    def paintEvent(self, event):
+        option = QStyleOptionToolButton()
+        self.initStyleOption(option)
+        option.text = "\n".join(option.text.split())
+        QStylePainter(self).drawComplexControl(QStyle.ComplexControl.CC_ToolButton, option)
 
 
 class _ComputeStatusLabel(QLabel):
@@ -403,18 +421,18 @@ class RustMechDialog(QDialog):
         self.truba_session = TrubaSession(self)
         self.truba_session.background_updated.connect(self._background_analysis_updated)
         self.truba_session.connection_changed.connect(self._update_hpc_button)
-        self.truba_button = QPushButton("HPC")
+        self.truba_button = _WorkspaceCommandButton("HPC")
         self.truba_button.setObjectName("primaryLaunchBtn")
         self.truba_button.setAutoDefault(False)
         self.truba_button.setToolTip("Open the Connection tab in the TRUBA application")
         self.truba_button.clicked.connect(self._open_truba_desktop)
         self.sync_window = None
-        self.sync_button = QPushButton("SYNC")
+        self.sync_button = _WorkspaceCommandButton("SYNC")
         self.sync_button.setObjectName("secondaryActionBtn")
         self.sync_button.setAutoDefault(False)
         self.sync_button.setToolTip("View RustMech analysis files and synchronized results")
         self.sync_button.clicked.connect(self.show_truba_sync)
-        self.about_button = QPushButton("About")
+        self.about_button = _WorkspaceCommandButton("About")
         self.about_button.setObjectName("aboutBtn")
         self.about_button.clicked.connect(self.show_about)
         self._compute_commands = (self.truba_button, self.sync_button)
@@ -957,7 +975,7 @@ class RustMechDialog(QDialog):
 
         from project_workspace import ProjectWorkspace
         self.project_workspace = ProjectWorkspace(self)
-        self.project_button = QToolButton()
+        self.project_button = _WorkspaceCommandMenu()
         self.project_button.setObjectName("headerMenu")
         self.project_button.setText("Project")
         self.project_button.setAccessibleName("Analysis project")
@@ -970,7 +988,7 @@ class RustMechDialog(QDialog):
         project_menu.addAction("Export mechanical 3D results...", self.project_workspace.export_mechanical_3d)
         self.project_button.setMenu(project_menu)
 
-        self.sidebar_toggle = QToolButton()
+        self.sidebar_toggle = _WorkspaceCommandMenu()
         self.sidebar_toggle.setObjectName("headerMenu")
         self.sidebar_toggle.setProperty("contextSelector", True)
         self.sidebar_toggle.setToolTip("Select a method to open its settings")
@@ -1004,7 +1022,7 @@ class RustMechDialog(QDialog):
         self.workspace_navigation.currentChanged.connect(self.workspace_tabs.setCurrentIndex)
         self.workspace_tabs.currentChanged.connect(self.workspace_navigation.setCurrentIndex)
         self.workspace_navigation.hide()
-        self.workspace_button = QToolButton()
+        self.workspace_button = _WorkspaceCommandMenu()
         self.workspace_button.setObjectName("headerMenu")
         self.workspace_button.setProperty("contextSelector", True)
         self.workspace_button.setText(workspace_names[0])
@@ -1022,10 +1040,10 @@ class RustMechDialog(QDialog):
             action.setVisible(index != 1)
             action.triggered.connect(lambda checked=False, page=index: self.workspace_tabs.setCurrentIndex(page))
         self.workspace_button.setMenu(self.workspace_menu)
-        self.doe_button = QPushButton("DoE")
+        self.doe_button = _WorkspaceCommandButton("DoE")
         self.doe_button.setToolTip("Open Design of Experiments settings.")
         self.doe_button.clicked.connect(self._show_doe_workspace)
-        self.designs_button = QToolButton()
+        self.designs_button = _WorkspaceCommandMenu()
         self.designs_button.setObjectName("headerMenu")
         self.designs_button.setText("Designs")
         self.designs_button.setAccessibleName("Design Pool and analysis queue")
@@ -1036,11 +1054,11 @@ class RustMechDialog(QDialog):
         designs_menu.addAction("Add current model to analysis queue", self._enqueue_current_model)
         designs_menu.addAction("Analysis queue...", self._show_analysis_queue)
         self.designs_button.setMenu(designs_menu)
-        self.folder_batch_button = QPushButton("Batch Analysis")
+        self.folder_batch_button = _WorkspaceCommandButton("Batch Analysis")
         self.folder_batch_button.setToolTip("Batch analysis from folder...")
         self.folder_batch_button.clicked.connect(self._show_folder_batch)
         self.esen_workspace = None
-        self.esen_button = QPushButton("ESEN")
+        self.esen_button = _WorkspaceCommandButton("ESEN")
         self.esen_button.setToolTip("Open the LAMMPS workspace")
         self.esen_button.clicked.connect(self.show_esen_workspace)
         self._workspace_commands = (
@@ -1571,19 +1589,20 @@ class RustMechDialog(QDialog):
         command_groups = ((self.project_button, self.designs_button, self.workspace_button),
                           (self.sidebar_toggle,), self._workspace_commands[2],
                           self._compute_commands, (self.about_button,))
-        for group in (*command_groups, (self.compute_resources_button,)):
-            # Fit the longest translated label, including room for focus and menu arrows.
-            width = max(button.fontMetrics().horizontalAdvance(label)
+        for group in command_groups:
+            # Each word occupies its own line. Reserve room for the longest word and menu arrow.
+            width = max(button.fontMetrics().horizontalAdvance(word)
                         + (23 if isinstance(button, QToolButton) else 16)
                         for button in group
-                        for label in selector_labels.get(button, (button.text(),)))
-            height = CONTROL_HEIGHT
-            if group in command_groups:
-                width = max(width, WORKSPACE_COMMAND_WIDTH)
-                height = WORKSPACE_COMMAND_HEIGHT
+                        for label in selector_labels.get(button, (button.text(),))
+                        for word in label.split())
             for button in group:
                 button.setProperty("managesLocalizedWidth", True)
-                button.setFixedSize(width, height)
+                button.setFixedSize(max(width, WORKSPACE_COMMAND_WIDTH), WORKSPACE_COMMAND_HEIGHT)
+        self.compute_resources_button.setProperty("managesLocalizedWidth", True)
+        resources_width = self.compute_resources_button.fontMetrics().horizontalAdvance(
+            self.compute_resources_button.text()) + 16
+        self.compute_resources_button.setFixedSize(resources_width, CONTROL_HEIGHT)
         # Allow the shared button face's focus border to grow by 1 px on each side.
         width = max(button.sizeHint().width() for button in self._analysis_action_buttons) + 2
         for button in self._analysis_action_buttons:

@@ -178,8 +178,11 @@ class LanguageTests(unittest.TestCase):
             self.assertEqual(window._mesh_form.labelForField(window.mesh_precision).text(), 'Ağ ondalık hane sayısı')
             self.assertEqual(window.folder_batch_button.text(), 'Toplu Analiz')
             assert_toolbar_layout()
+            batch_metrics = window.folder_batch_button.fontMetrics()
             self.assertGreaterEqual(window.folder_batch_button.width(),
-                                    window.folder_batch_button.fontMetrics().horizontalAdvance('Toplu Analiz') + 16)
+                                    max(batch_metrics.horizontalAdvance(word) for word in ('Toplu', 'Analiz')) + 16)
+            self.assertLess(window.folder_batch_button.width(), batch_metrics.horizontalAdvance('Toplu Analiz') + 16)
+            self.assertGreaterEqual(window.folder_batch_button.height(), 2 * batch_metrics.lineSpacing())
             self.assertEqual(window.about_button.text(), 'Hakkında')
             methods = window.sidebar_toggle.menu().actions()
             self.assertEqual(

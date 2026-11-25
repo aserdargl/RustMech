@@ -193,8 +193,9 @@ class DialogKeyboardTests(unittest.TestCase):
                             self.assertTrue(action.isChecked())
                             self.assertEqual(dialog.workspace_tabs.currentIndex(), 0)
                             self.assertEqual(dialog.sidebar_toggle.width(), button_width)
-                            self.assertGreaterEqual(button_width,
-                                dialog.sidebar_toggle.fontMetrics().horizontalAdvance(label) + 18)
+                            longest_word = max(dialog.sidebar_toggle.fontMetrics().horizontalAdvance(word)
+                                               for word in label.split())
+                            self.assertGreaterEqual(button_width, longest_word + 18)
                         self.assertEqual(opened.count(), len(menu.actions()))
                         self.assertFalse(dialog.setup_tabs.tabBar().isVisible())
                         # Selecting settings also recovers a previously collapsed saved sidebar.
