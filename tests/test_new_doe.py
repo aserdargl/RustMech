@@ -27,6 +27,26 @@ class NewDoeTests(unittest.TestCase):
         self.assertLess(studio.capture_plan()["selection"]["tab"], 5)
         return page
 
+    def test_new_doe_is_the_first_and_initial_page(self):
+        studio = self.window.doe_studio
+        self.window.doe_window.open_workspace()
+        self.app.processEvents()
+        tabs = studio.settings_tabs
+        self.assertEqual(tabs.count(), 5)
+        self.assertIs(tabs.widget(0), studio.new_doe)
+        self.assertIs(tabs.currentWidget(), studio.new_doe)
+        self.assertTrue(studio.new_doe.loaded)
+        self.assertTrue(studio.planner.language_selector.isVisible())
+        buttons = studio.planner.navigation.layout()
+        self.assertEqual(buttons.itemAt(2).widget().text(), "NEW DOE")
+        for index in range(2, buttons.count()):
+            button = buttons.itemAt(index).widget()
+            self.assertGreaterEqual(button.width(), button.fontMetrics().horizontalAdvance(button.text()) + 22)
+        tabs.setCurrentIndex(3)
+        self.assertTrue(studio.open_plan_btn.isVisible())
+        self.assertEqual(studio.open_plan_btn.width(), 64)
+        self.assertEqual(studio.save_plan_btn.width(), 64)
+
     def test_legacy_integer_specimen_size_exposes_three_decimal_axes(self):
         from new_doe_operations import parameters, snapshot
         base = snapshot(self.window, "flow_solve")

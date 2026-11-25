@@ -70,6 +70,7 @@ class DoEWindowTests(unittest.TestCase):
         self.assertEqual(len(studio.rows), 1)
         buttons = studio.findChildren(QPushButton)
         spies = [QSignalSpy(button.clicked) for button in buttons]
+        studio.settings_tabs.setCurrentIndex(1)
         spin = studio.common_strain_spin
         spin.setFocus()
         spin.lineEdit().selectAll()
@@ -89,16 +90,16 @@ class DoEWindowTests(unittest.TestCase):
         first.move(90, 80)
         self.app.processEvents()
         studio.vertical_splitter.setSizes([280, 340])
-        studio.plan_splitter.setSizes([360, 660])
+        studio.new_doe.splitter.setSizes([360, 660])
         self.app.processEvents()
         frame = first.frameGeometry()
         vertical = studio.vertical_splitter.sizes()
-        horizontal = studio.plan_splitter.sizes()
+        horizontal = studio.new_doe.splitter.sizes()
         first.close()
         second, restored = self.window()
         self.assertEqual(second.frameGeometry(), frame)
         self.assertEqual(restored.vertical_splitter.sizes(), vertical)
-        self.assertEqual(restored.plan_splitter.sizes(), horizontal)
+        self.assertEqual(restored.new_doe.splitter.sizes(), horizontal)
         normal_size = second.size()
         second.showMaximized()
         self.app.processEvents()
@@ -108,51 +109,6 @@ class DoEWindowTests(unittest.TestCase):
         third.showNormal()
         self.app.processEvents()
         self.assertEqual(third.size(), normal_size)
-
-    def test_new_geometry_contains_preview_then_parameters_without_companion(self):
-        window, studio = self.window()
-        panel = studio.planner.geometry_panel
-        self.assertFalse(hasattr(window, 'geometry_window'))
-        self.assertFalse(hasattr(studio, 'geometry_toggle'))
-        self.assertIs(panel.window(), window)
-        self.assertTrue(panel.splitter.widget(0).isAncestorOf(panel.preview_host))
-        self.assertTrue(panel.splitter.widget(1).isAncestorOf(panel.values['size']))
-        self.assertEqual({b.text() for b in panel.findChildren(QPushButton)}, {'Apply', 'Add'})
-        self.assertNotIn('Use current model', [b.text() for b in studio.findChildren(QPushButton)])
-
-    def test_embedded_preview_splitter_restores_without_separate_window(self):
-        first, studio = self.window()
-        first.resize(1180, 850)
-        self.app.processEvents()
-        panel = studio.planner.geometry_panel
-        panel.splitter.setSizes([300, 280])
-        self.app.processEvents()
-        sizes = panel.splitter.sizes()
-        first.close()
-        second, restored = self.window()
-        self.assertEqual(restored.planner.geometry_panel.splitter.sizes(), sizes)
-        self.assertFalse(hasattr(second, 'geometry_window'))
-
-    def test_preview_apply_uses_draft_without_starting_analysis_or_adding(self):
-        from concurrent.futures import Future
-        _, studio = self.window()
-        panel = studio.planner.geometry_panel
-        panel.timer.stop()
-        panel.refresh()
-        with patch.object(studio, '_geometry_surface_builder', return_value=None):
-            studio.planner.values['solid_fraction'].setValue(35)
-            self.assertEqual(studio._designs, [])
-            panel._apply()
-            self.assertEqual(panel._requested_settings.solid_fraction, 35)
-            self.assertEqual(studio._designs, [])
-        pending = Future()
-        panel._future = (panel.selected_settings(), pending)
-        studio.planner.values['size'].lineEdit().setText('8')
-        panel.add_button.click()
-        self.assertEqual(studio._designs[0].size, 8)
-        self.assertEqual(studio._designs[0].solid_fraction, 35)
-        self.assertIsNone(studio._active_future)
-        pending.cancel()
 
     def test_compact_window_wraps_actions_without_clipping(self):
         window, studio = self.window()
@@ -175,6 +131,8 @@ class DoEWindowTests(unittest.TestCase):
 
     def test_geometry_actions_and_matrix_tabs_fit_their_content(self):
         _, studio = self.window()
+        studio.settings_tabs.setCurrentIndex(1)
+        self.app.processEvents()
         navigation = studio.planner.navigation.layout()
         buttons = [navigation.itemAt(index).widget() for index in range(navigation.count())]
         self.assertEqual(buttons[:2], [studio.open_plan_btn, studio.save_plan_btn])
@@ -189,12 +147,9 @@ class DoEWindowTests(unittest.TestCase):
         studio.save_plan_btn.setFocus()
         QTest.keyClick(studio.save_plan_btn, Qt.Key.Key_Tab)
         self.assertTrue(buttons[2].hasFocus())
-        self.assertEqual(studio.settings_tabs.tabText(0), "Design experiments")
+        self.assertEqual(studio.settings_tabs.tabText(0), "NEW DOE")
         self.assertEqual(studio.settings_tabs.tabText(3), "Experiment matrix")
-        self.assertEqual(studio.plan_splitter.count(), 3)
-        self.assertEqual(studio.add_structure_btn.text(), "Add")
         self.assertFalse(studio.table.isVisible())
-        self.assertEqual(studio.plan_splitter.handleWidth(), 3)
         self.assertEqual(studio.vertical_splitter.handleWidth(), 3)
         self.assertFalse(studio.matrix_tabs.expanding())
         buttons[5].click()
@@ -253,17 +208,11 @@ class DoEWindowTests(unittest.TestCase):
             dialog.close()
             dialog.dispose()
 
-    def test_embedded_add_preserves_dimensions_and_defers_mesh_settings(self):
+    def test_saved_designs_preserve_dimensions_and_defer_mesh_settings(self):
         _, studio = self.window()
-        panel = studio.planner.geometry_panel
-        panel.timer.stop()
         studio.add_design(replace(Settings(), size=20))
-        panel.values['size'].lineEdit().setText('8')
-        panel.values['cell_size'].lineEdit().setText('2')
-        panel.values['solid_fraction'].lineEdit().setText('35')
-        panel.add_button.click()
-        panel.values['size'].setValue(10)
-        panel.add_button.click()
+        for size in (8, 10):
+            studio.add_design(replace(Settings(), size=size, cell_size=2, solid_fraction=35))
         self.assertEqual([design.size for design in studio._designs], [20, 8, 10])
         studio._designs[1] = replace(studio._designs[1], mesh_resolution=0)
         with patch('doe_studio.QMessageBox.warning') as warning:
@@ -305,9 +254,6 @@ class DoEWindowTests(unittest.TestCase):
         self.assertTrue(all(settings.mesh_type == "TET10" and settings.local_mesh_size == .08
                             and settings.mesh_resolution == .4 for settings in first))
         self.assertEqual([row.cell_size for row in studio.rows[3:]], [2, 3])
-        studio._remove_design()
-        self.assertEqual(len(studio._design_factors), 1)
-        self.assertTrue(studio.factor_controls["cell_size"][0].isChecked())
 
     def test_ml_matrix_is_separate_repeatable_and_exports_snapshot_and_splits(self):
         _, studio = self.window()
@@ -359,16 +305,13 @@ class DoEWindowTests(unittest.TestCase):
         warning.assert_called_once()
         self.assertIs(studio.rows, original)
 
-    def test_structure_choices_common_size_and_optional_size_sweep(self):
+    def test_saved_structure_groups_can_sweep_size_independently(self):
         _, studio = self.window()
-        studio.common_size_spin.setValue(6)
         for name in ("Gyroid", "Neovius"):
-            studio.structure_family_combo.setCurrentIndex(studio.structure_family_combo.findData("tpms"))
-            studio.structure_type_combo.setCurrentText(name)
-            studio.add_structure_btn.click()
-            self.assertFalse(studio.size_variable_btn.isChecked())
-            studio.size_variable_btn.click()
-            _, low, high, levels = studio.factor_controls["size"]
+            studio.add_design(replace(Settings(), structure_name=name, size=6))
+            enabled, low, high, levels = studio.factor_controls["size"]
+            self.assertFalse(enabled.isChecked())
+            enabled.setChecked(True)
             low.setValue(6)
             high.setValue(7)
             levels.setValue(2)
@@ -378,26 +321,22 @@ class DoEWindowTests(unittest.TestCase):
             levels.setValue(2)
             enabled.setChecked(True)
         self.assertEqual([design.size for design in studio._designs], [6, 6])
-        self.assertIn("2 × 2 = 4", studio.sampling_details.text())
         studio.generate_table()
         self.assertEqual(len(studio.rows), 8)
         self.assertEqual({(row.structure_name, row.size, row.solid_fraction) for row in studio.rows},
                          {(name, size, density) for name in ("Gyroid", "Neovius")
                           for size in (6, 7) for density in (30, 40)})
         studio.design_list.setCurrentRow(0)
-        self.assertTrue(studio.size_variable_btn.isChecked())
-        studio.size_variable_btn.click()
+        size_enabled = studio.factor_controls["size"][0]
+        self.assertTrue(size_enabled.isChecked())
+        size_enabled.setChecked(False)
         self.assertNotIn("size", studio._design_factors[0])
         self.assertIn("size", studio._design_factors[1])
 
-    def test_doe_structure_picker_selects_duplicate_and_excludes_inactive_structures(self):
+    def test_saved_designs_exclude_duplicates_and_unchecked_designs(self):
         _, studio = self.window()
-        self.assertEqual(studio.settings_tabs.tabText(0), "Design experiments")
-        studio.structure_type_combo.setCurrentText("Gyroid")
-        studio.add_structure_btn.click()
-        studio.add_structure_btn.click()
-        studio.structure_type_combo.setCurrentText("S. Diamond")
-        studio.add_structure_btn.click()
+        for name in ("Gyroid", "Gyroid", "S. Diamond"):
+            studio.add_design(replace(Settings(), structure_name=name))
         self.assertEqual([s.structure_name for s in studio._designs],
                          ["Gyroid", "S. Diamond"])
         studio.factor_controls["cell_size"][0].setChecked(True)
@@ -407,16 +346,12 @@ class DoEWindowTests(unittest.TestCase):
         self.assertEqual([r.cell_size for r in studio.rows[1:]], [2, 2.5, 3, 3.5, 4])
         for index in (0, 1):
             studio.design_list.item(index).setCheckState(Qt.CheckState.Unchecked)
-        self.assertFalse(studio.generate_btn.isEnabled())
         self.assertFalse(studio.generate_ml_btn.isEnabled())
 
     def test_entered_and_selected_dimensions_reach_generated_settings(self):
         _, studio = self.window()
-        planner = studio.planner
-        planner.values["size"].setValue(8)
-        planner.add_draft()
-        planner.values["size"].setValue(12)
-        planner.add_draft()
+        for size in (8, 12):
+            studio.add_design(replace(Settings(), size=size))
         self.assertEqual([s.size for s in studio._designs], [8, 12])
         studio.design_list.setCurrentRow(0)
         studio.design_value_controls["size"].setValue(9)
@@ -427,22 +362,14 @@ class DoEWindowTests(unittest.TestCase):
 
     def test_group_bounds_two_variables_and_unique_experiments(self):
         _, studio = self.window()
-        planner = studio.planner
         for cell, density in ((2, 20), (4, 40)):
-            planner.values['cell_size'].setValue(cell)
-            planner.values['solid_fraction'].setValue(density)
-            planner.add_draft()
-        self.assertEqual(planner.tree.topLevelItemCount(), 1)
-        self.assertEqual(planner.tree.topLevelItem(0).childCount(), 2)
-        for field in ('cell_size', 'solid_fraction'):
+            studio.add_design(replace(Settings(), cell_size=cell, solid_fraction=density))
+        for field, limits in (('cell_size', (2, 4)), ('solid_fraction', (20, 40))):
             enabled, low, high, levels = studio.factor_controls[field]
             enabled.setChecked(True)
             levels.setValue(3)
-            for bound, index in (('Min', 0), ('Max', 1)):
-                combo = planner.bound_sources[field, bound]
-                combo.setCurrentIndex(combo.findData(index))
-            self.assertEqual((low.value(), high.value()),
-                             (2, 4) if field == 'cell_size' else (20, 40))
+            low.setValue(limits[0])
+            high.setValue(limits[1])
         studio.design_list.setCurrentRow(0)
         self.assertEqual(set(studio._active_factors()), {'cell_size', 'solid_fraction'})
         # Reference dimensions remain editable while the field varies in experiments.
@@ -452,50 +379,17 @@ class DoEWindowTests(unittest.TestCase):
         self.assertEqual({(r.cell_size, r.solid_fraction) for r in studio.rows},
                          {(c, d) for c in (2, 3, 4) for d in (20, 30, 40)})
 
-    def test_draft_enter_validation_manual_bounds_and_group_isolation(self):
+    def test_saved_designs_keep_factors_separate_between_geometry_groups(self):
         _, studio = self.window()
-        planner = studio.planner
-        spin = planner.values['solid_fraction']
-        spin.setFocus()
-        spin.lineEdit().selectAll()
-        QTest.keyClicks(spin.lineEdit(), '25')
-        QTest.keyClick(spin.lineEdit(), Qt.Key.Key_Return)
-        self.assertEqual(spin.value(), 25)
-        self.assertEqual(studio._designs, [])
-        studio.add_structure_btn.click()
-        enabled, low, high, count = studio.factor_controls['solid_fraction']
+        studio.add_design(Settings())
+        enabled, low, high, _ = studio.factor_controls['solid_fraction']
         enabled.setChecked(True)
         low.setValue(20)
         high.setValue(50)
-        planner.structure.setCurrentText('Neovius')
-        planner.add_draft()
+        studio.add_design(replace(Settings(), structure_name='Neovius'))
         self.assertFalse(enabled.isChecked())
-        self.assertEqual(planner.tree.topLevelItemCount(), 2)
         studio.design_list.setCurrentRow(0)
         self.assertEqual((low.value(), high.value()), (20, 50))
-        low.setValue(60)
-        self.assertFalse(studio.generate_btn.isEnabled())
-        high.setValue(70)
-        self.assertTrue(studio.generate_btn.isEnabled())
-        planner.values['cell_size'].setValue(80)
-        self.assertFalse(studio.add_structure_btn.isEnabled())
-        self.assertIsNone(studio._active_future)
-
-    def test_morphology_groups_and_unchecked_design_survive_editing(self):
-        _, studio = self.window()
-        planner = studio.planner
-        planner.add_draft()
-        planner.morphology.setCurrentIndex(planner.morphology.findData('network_a'))
-        planner.add_draft()
-        self.assertEqual(planner.tree.topLevelItemCount(), 2)
-        planner._tree_items[0].setCheckState(0, Qt.CheckState.Unchecked)
-        studio.design_value_controls['cell_size'].setValue(2)
-        self.assertEqual(planner._tree_items[0].checkState(0), Qt.CheckState.Unchecked)
-        planner.tree.setCurrentItem(planner._tree_items[0])
-        self.assertEqual(studio._selected_design, 0)
-        planner.family.setCurrentIndex(planner.family.findData('porous'))
-        self.assertTrue(planner.morphology.isEnabled())
-        self.assertEqual(planner.draft_settings().tpms_morphology, 'network_a')
 
     def test_plan_file_roundtrip_restores_designs_variables_both_matrices_and_draft(self):
         _, studio = self.window()
@@ -521,25 +415,24 @@ class DoEWindowTests(unittest.TestCase):
         studio._rows[0].run_folder = 'D:/results/experiment-1'
         studio.generate_ml_table()
         studio.settings_tabs.setCurrentIndex(0)
-        studio.planner.values['size'].setValue(9)
-        studio.planner.values['solid_fraction'].lineEdit().setText('42')
+        studio.planner.saved_draft = replace(studio.planner.saved_draft, size=9, solid_fraction=42)
         path = Path(self.temp.name) / 'plan.rustmech-doe.json'
         studio.save_plan_path(path)
         expected = studio.capture_plan()
         self.assertEqual(expected['draft']['solid_fraction'], 42)
+        previous_plan = json.loads(path.read_text(encoding='utf-8'))
+        previous_plan['selection']['tab'] = 0
+        path.write_text(json.dumps(previous_plan), encoding='utf-8')
         _, restored = self.window()
-        submit = MagicMock(side_effect=AssertionError('opening a plan must not compute'))
-        with patch.object(restored.planner.geometry_panel._executor, 'submit', submit):
-            restored.open_plan_path(path)
-            restored.planner.geometry_panel.refresh()
-            self.app.processEvents()
+        restored.open_plan_path(path)
+        self.app.processEvents()
+        self.assertEqual(restored.settings_tabs.currentIndex(), 3)
         self.assertEqual(restored.capture_plan(), expected)
         self.assertEqual(restored._plan_path, path.resolve())
         self.assertEqual(restored.plan_file_label.text(), path.name)
         self.assertEqual(len(restored._matrix_rows[0]), 4)
         self.assertEqual(len(restored._matrix_rows[1]), 5)
         self.assertIsNone(restored._active_future)
-        submit.assert_not_called()
 
     def test_invalid_plan_keeps_current_workspace_and_failed_save_keeps_existing_file(self):
         _, studio = self.window()
@@ -600,17 +493,14 @@ class DoEWindowTests(unittest.TestCase):
             studio.save_plan_path(path)
         studio._active_mode = None
 
-    def test_disabled_factors_keep_reference_values_and_enter_does_not_add(self):
+    def test_disabled_factors_keep_reference_values(self):
         _, studio = self.window()
-        studio.add_structure_btn.click()
+        studio.add_design(Settings())
         enabled, low, high, count = studio.factor_controls["solid_fraction"]
         enabled.setChecked(True)
         self.assertTrue(low.isEnabled())
         enabled.setChecked(False)
         self.assertFalse(low.isEnabled())
-        studio.settings_tabs.setCurrentIndex(0)
-        studio.planner.values['size'].setFocus()
-        QTest.keyClick(studio.planner.values['size'], Qt.Key.Key_Return)
         self.assertEqual(len(studio._designs), 1)
         self.assertEqual(studio.rows, [])
         studio.generate_table()

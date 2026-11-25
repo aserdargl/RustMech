@@ -44,16 +44,11 @@ PROBE = textwrap.dedent("""
         kind, action = sys.argv[1:]
         if kind == 'main':
             from nonlinear_compression import RustMechDialog
-            from doe_studio import DoEStudioWidget
-            with patch.object(RustMechDialog, 'start_preview', lambda self: None), patch.object(
-                DoEStudioWidget, '_geometry_surface_builder', lambda self: None
-            ):
+            with patch.object(RustMechDialog, 'start_preview', lambda self: None):
                 dialog = RustMechDialog(Settings())
             dialog.doe_window.open_workspace()
-            panel = dialog.doe_studio.planner.geometry_panel
-            panel._ensure_plotter()
             for plotter in (dialog.plotter, dialog.flow_workspace.plotter,
-                            dialog.thermal_workspace.plotter, panel.plotter):
+                            dialog.thermal_workspace.plotter):
                 plotter.add_mesh(pv.Sphere())
                 plotter.add_axes()
                 plotter.render()

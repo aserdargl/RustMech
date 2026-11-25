@@ -21,7 +21,7 @@ FIELDS = (
 def selected_settings(studio):
     if 0 <= studio._selected_design < len(studio._designs):
         return studio._designs[studio._selected_design]
-    return studio.planner.draft_settings()
+    return studio.planner.saved_draft
 
 
 def sample_fields(studio):

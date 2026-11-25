@@ -15,7 +15,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDoubleS
 from new_doe_operations import (OPERATIONS, explicit_numbers, launch, matrix, matrix_request,
                                 parameters, snapshot, structure_choices, validate)
 from structure_library import ALL_STRUCTURES_BY_FAMILY, STRUCTURE_FAMILIES
-from studio_style import (COMBO_WIDTH, CONTROL_HEIGHT, CompactComboBox, CompactDoubleSpinBox,
+from studio_style import (COMBO_WIDTH, CONTROL_HEIGHT, ActionFlowLayout, CompactComboBox, CompactDoubleSpinBox,
                           CompactSpinBox, SidebarGroupBox)
 from ui_language import translate, turkish
 from model import CONTACT_NUMERICAL_FIELDS, GEOMETRY_FIELDS, MATERIAL_FIELDS, settings_from_dict, validate_geometry
@@ -393,7 +393,7 @@ class NewDoePage(QWidget):
         self.variations.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         self.input_tabs.addTab(self.variations, "Variable settings")
         self.sections = {}
-        buttons = QHBoxLayout()
+        buttons = ActionFlowLayout()
         layout.addLayout(buttons)
         for name, title, callback in (("generate", "Create matrix", self.create), ("run", "Run", None),
                                       ("stop", "Stop", self.cancel), ("open", "Results folder", self.open_results)):
@@ -410,7 +410,7 @@ class NewDoePage(QWidget):
             setattr(self, name, button)
         self.commands = (self.apply_button, self.generate, self.run, self.stop, self.open)
         self.button_width = 0
-        buttons.addStretch()
+        self._nav_sizes = []
         matrix_panel = QWidget()
         matrix_layout = QVBoxLayout(matrix_panel)
         matrix_layout.setContentsMargins(0, 0, 0, 0)
@@ -444,21 +444,33 @@ class NewDoePage(QWidget):
         self.run.setEnabled(False)
         self.stop.setEnabled(False)
         self.open.setEnabled(False)
+        if host is None:
+            self.operation.setEnabled(False)
+            self.generate.setEnabled(False)
+            self.apply_button.setEnabled(False)
         self.operation.currentIndexChanged.connect(self.load)
 
     def size_navigation(self, navigation, active):
         nav = navigation.findChildren(QPushButton)
         if active:
-            self._nav_sizes = [(b, b.minimumWidth(), b.maximumWidth(), b.property("managesLocalizedWidth")) for b in nav]
-            titles = [b.text() for b in (*nav, *self.commands)] + ["Select values"]
-            self.button_width = max(self.fontMetrics().horizontalAdvance(text) + 26
-                                    for title in titles for text in (title, turkish(title)))
+            if not self._nav_sizes:
+                self._nav_sizes = [(button, button.minimumWidth(), button.maximumWidth(),
+                                    button.property("managesLocalizedWidth")) for button in nav]
+            widths = []
+            for button in (*nav, *self.commands):
+                button.ensurePolished()
+                padding = 26 + (12 if button.menu() else 0)
+                widths.extend(button.fontMetrics().horizontalAdvance(text) + padding
+                              for text in (button.text(), turkish(button.text())))
+            widths.extend(self.apply_button.fontMetrics().horizontalAdvance(text) + 26
+                          for text in ("Select values", turkish("Select values")))
+            self.button_width = max(widths)
             variable_buttons = self.variations.findChildren(QPushButton)
             for button in (*nav, *self.commands, *variable_buttons):
                 button.setProperty("managesLocalizedWidth", True)
                 button.setFixedWidth(self.button_width)
         else:
-            for button, low, high, managed in getattr(self, "_nav_sizes", ()):
+            for button, low, high, managed in self._nav_sizes:
                 button.setMinimumWidth(low)
                 button.setMaximumWidth(high)
                 button.setProperty("managesLocalizedWidth", managed)
@@ -478,7 +490,7 @@ class NewDoePage(QWidget):
 
     def showEvent(self, event):
         super().showEvent(event)
-        if not self.loaded:
+        if self.host is not None and not self.loaded:
             self.load()
 
     def invalidate(self, *_):
@@ -488,6 +500,8 @@ class NewDoePage(QWidget):
         self.status.setText("Choose variable parameters and their levels, then create the matrix.")
 
     def load(self, *_):
+        if self.host is None:
+            return
         self.invalidate()
         expanded = {title: not section.content.isHidden() for title, section in self.sections.items()}
         self.sections.clear()

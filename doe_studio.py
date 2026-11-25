@@ -55,7 +55,6 @@ from file_dialog import QFileDialog
 from model import MIN_MESH_INPUT_MM, ROOT, Settings, settings_from_dict, validate_geometry
 from studio_style import ActionFlowLayout, CONTROL_HEIGHT, NUMERIC_FIELD_WIDTH, CompactDoubleSpinBox
 from structure_library import (
-    ALL_STRUCTURES_BY_FAMILY,
     TPMS_MORPHOLOGIES,
     resolve_family_and_name,
 )
@@ -401,7 +400,6 @@ class DoEStudioWidget(TrubaParallelMixin, QWidget):
         self._rows: list[ExperimentRow] = []
         self._designs: list[Settings] = []
         self._design_factors = []
-        self._individual_sizes = []
         self._selected_design = -1
         self._loading_design = False
         self._matrix_rows = {0: self._rows, 1: []}
@@ -454,7 +452,7 @@ class DoEStudioWidget(TrubaParallelMixin, QWidget):
             designs=[dict(settings=asdict(design), factors=factors.copy(),
                           enabled=self.design_list.item(i).checkState() == Qt.CheckState.Checked)
                      for i, (design, factors) in enumerate(zip(self._designs, self._design_factors))],
-            draft=asdict(self.planner.draft_settings()),
+            draft=asdict(self.planner.saved_draft),
             variable_editor={name: dict(enabled=enabled.isChecked(), min=low.value(),
                                         max=high.value(), levels=count.value())
                              for name, (enabled, low, high, count) in self.factor_controls.items()},
@@ -466,7 +464,7 @@ class DoEStudioWidget(TrubaParallelMixin, QWidget):
                       for index, name in enumerate(('doe', 'ml'))},
             sample_settings=self.sample_settings.state(),
             selection=dict(design=self._selected_design, matrix=self._matrix_index,
-                           tab=getattr(self, "_legacy_plan_tab", self.settings_tabs.currentIndex())),
+                           tab=self._legacy_plan_tab),
         )
 
     def _set_plan_path(self, path):
@@ -503,10 +501,7 @@ class DoEStudioWidget(TrubaParallelMixin, QWidget):
             self.design_list.clear()
             self._designs = [entry['settings'] for entry in plan['designs']]
             self._design_factors = [entry['factors'] for entry in plan['designs']]
-            self._individual_sizes = [design.size for design in self._designs]
             self.planner._group_factors.clear()
-            self.planner._tree_signature = None
-            self.planner._source_signature = None
             for i, entry in enumerate(plan['designs']):
                 item = QListWidgetItem()
                 item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
@@ -522,7 +517,7 @@ class DoEStudioWidget(TrubaParallelMixin, QWidget):
                 control.setValue(options[key])
             self.common_strain_check.setChecked(options['common_strain_enabled'])
             self.common_strain_spin.setEnabled(options['common_strain_enabled'])
-            self.planner.geometry_panel.restore_draft(plan['draft'])
+            self.planner.saved_draft = plan['draft']
             selection = plan['selection']
             self.design_list.setCurrentRow(selection['design'])
             for matrix in plan['matrices'].values():
@@ -550,7 +545,8 @@ class DoEStudioWidget(TrubaParallelMixin, QWidget):
         self._refresh_plan()
         self._refresh_table_view()
         self.sample_settings.restore_state(plan.get("sample_settings", {}))
-        self.settings_tabs.setCurrentIndex(selection['tab'])
+        # Version 1 plans may name the removed editor at index zero.
+        self.settings_tabs.setCurrentIndex(selection['tab'] or self._matrix_tab)
 
     def save_plan_dialog(self):
         from doe_plan import PLAN_FILTER
@@ -595,9 +591,6 @@ class DoEStudioWidget(TrubaParallelMixin, QWidget):
         self.setObjectName("doeWorkspace")
         root.setContentsMargins(6, 6, 6, 4)
         root.setSpacing(4)
-
-        self.design_count_badge = QLabel("0 designs")
-        self.design_count_badge.setObjectName("mutedHintLabel")
 
         self.vertical_splitter = QSplitter(Qt.Orientation.Vertical)
         self.vertical_splitter.setObjectName("doePlannerWorkspaceV2")
@@ -709,26 +702,27 @@ class DoEStudioWidget(TrubaParallelMixin, QWidget):
         self.table.cellDoubleClicked.connect(self._on_row_double_clicked)
         bottom_layout.addWidget(self.table, 1)
 
-        self.planner.tabs.addTab(bottom_panel, "Experiment matrix")
+        from new_doe_page import NewDoePage
+        self.new_doe = NewDoePage(self._operation_host)
+        self.planner.tabs.insertTab(0, self.new_doe, "NEW DOE")
+        self.planner.tabs.setCurrentWidget(self.new_doe)
+        self._matrix_tab = self.planner.tabs.addTab(bottom_panel, "Experiment matrix")
+        self._legacy_plan_tab = self._matrix_tab
         from doe_sample_settings import SampleSettingsPage
         self.sample_settings = SampleSettingsPage(self)
         self.planner.tabs.addTab(self.sample_settings, "Sample Settings")
-        if self._operation_host is not None:
-            from new_doe_page import NewDoePage
-            self.new_doe = NewDoePage(self._operation_host)
-            independent_tab = self.planner.tabs.addTab(self.new_doe, "NEW DOE")
-            self._legacy_plan_tab = self.planner.tabs.currentIndex()
 
-            def select_page(index):
-                legacy = index != independent_tab
-                if legacy:
-                    self._legacy_plan_tab = index
-                for control in (self.open_plan_btn, self.save_plan_btn, self.planner.plan_status_bar):
-                    control.setVisible(legacy)
-                self.new_doe.size_navigation(self.planner.navigation, not legacy)
+        def select_page(index):
+            legacy = self.planner.tabs.widget(index) is not self.new_doe
+            if legacy:
+                self._legacy_plan_tab = index
+            for control in (self.open_plan_btn, self.save_plan_btn, self.plan_file_label):
+                control.setVisible(legacy)
+            self.new_doe.size_navigation(self.planner.navigation, not legacy)
 
-            self.planner.tabs.currentChanged.connect(select_page)
-        self.planner.navigation.add_tabs(self.planner.tabs)
+        self._settings_navigation = self.planner.navigation.add_tabs(self.planner.tabs)
+        self.planner.tabs.currentChanged.connect(select_page)
+        select_page(self.planner.tabs.currentIndex())
         self.vertical_splitter.setStretchFactor(0, 0)
         self.vertical_splitter.setSizes([730])
         root.addWidget(self.vertical_splitter, 1)
@@ -739,13 +733,11 @@ class DoEStudioWidget(TrubaParallelMixin, QWidget):
         footer.setWordWrap(True)
         root.addWidget(footer)
         footer.hide()
-        self.planner.tabs.currentChanged.connect(lambda index: footer.setVisible(index == 3))
+        self.planner.tabs.currentChanged.connect(lambda index: footer.setVisible(index == self._matrix_tab))
 
         for button in self.findChildren(QPushButton):
             button.setAutoDefault(False)
             button.setDefault(False)
-
-        self._on_sampling_mode_changed()
 
     def _size_action_group(self, *buttons):
         """Keep related actions equal and large enough for their styled labels."""
@@ -767,6 +759,8 @@ class DoEStudioWidget(TrubaParallelMixin, QWidget):
         # Measure after inheritance so every complete label fits at this DPI.
         for buttons in self._action_groups:
             self._size_action_group(*buttons)
+        if self.settings_tabs.currentWidget() is self.new_doe:
+            self.new_doe.size_navigation(self.planner.navigation, True)
 
     @staticmethod
     def _make_dspin(low: float, high: float, val: float, step: float, dec: int) -> QDoubleSpinBox:
@@ -787,9 +781,9 @@ class DoEStudioWidget(TrubaParallelMixin, QWidget):
         sp.setFixedWidth(DOE_FIELD_WIDTH)
         return sp
 
-    def _add_factor_row(self, grid, row, spec) -> None:
+    def _add_factor_controls(self, parent, spec) -> None:
         field, label, lower, upper, minimum, maximum, step, decimals, levels = spec
-        enabled = QCheckBox(label)
+        enabled = QCheckBox(label, parent)
         low = self._make_dspin(lower, upper, minimum, step, decimals)
         high = self._make_dspin(lower, upper, maximum, step, decimals)
         count = self._make_ispin(2, 50, levels)
@@ -798,61 +792,9 @@ class DoEStudioWidget(TrubaParallelMixin, QWidget):
         count.setToolTip("Number of evenly spaced values, including Min and Max. For example: Min 20, Max 40, Levels 3 gives 20, 30, 40. LHS uses Runs per design instead.")
         self.factor_controls[field] = (enabled, low, high, count)
         enabled.toggled.connect(self._refresh_plan)
-        for column, control in enumerate((enabled, low, high, count)):
-            grid.addWidget(control, row, column)
-            if column:
-                control.valueChanged.connect(self._refresh_plan)
-
-    def _toggle_size_variable(self, enabled):
-        self.factor_controls["size"][0].setChecked(enabled)
-        for control in self.factor_controls["size"]:
-            control.setVisible(enabled)
-        self._refresh_plan()
-
-    def _update_structure_types(self, *_):
-        self.structure_type_combo.clear()
-        self.structure_type_combo.addItems(ALL_STRUCTURES_BY_FAMILY[self.structure_family_combo.currentData()])
-
-    def _add_structure_type(self):
-        if self._active_mode is not None:
-            return
-        self.add_design(replace(
-            self._settings_provider(),
-            structure_family=self.structure_family_combo.currentData(),
-            structure_name=self.structure_type_combo.currentText(),
-            imported_geometry_path="", test_profile="custom",
-        ), allow_duplicate=True)
-
-    def _apply_common_size(self, *_):
-        if self._loading_design or self.individual_sizes_btn.isChecked() or self._active_mode is not None:
-            return
-        for index, design in enumerate(self._designs):
-            if not design.imported_geometry_path:
-                self._designs[index] = replace(design, size=self.common_size_spin.value())
-                self._update_design_caption(index)
-        self._select_design(self._selected_design)
-
-    def _toggle_individual_sizes(self, enabled):
-        self.individual_size_label.setVisible(enabled)
-        self.individual_size_spin.setVisible(enabled)
-        self.common_size_spin.setEnabled(not enabled)
-        for index, design in enumerate(self._designs):
-            if not design.imported_geometry_path:
-                self._designs[index] = replace(design, size=(self._individual_sizes[index]
-                    if enabled else self.common_size_spin.value()))
-                self._update_design_caption(index)
-        self._select_design(self._selected_design)
-
-    def _edit_individual_size(self, value):
-        if self._loading_design or self._active_mode is not None or self._selected_design < 0:
-            return
-        index = self._selected_design
-        if self._designs[index].imported_geometry_path:
-            return
-        self._individual_sizes[index] = value
-        self._designs[index] = replace(self._designs[index], size=value)
-        self._update_design_caption(index)
-        self._select_design(index)
+        for control in (low, high, count):
+            control.setParent(parent)
+            control.valueChanged.connect(self._refresh_plan)
 
     def _update_design_caption(self, index):
         settings = self._designs[index]
@@ -873,24 +815,12 @@ class DoEStudioWidget(TrubaParallelMixin, QWidget):
                 included.append((design, factors))
         return included
 
-    def add_active_geometry(self, settings: Settings) -> None:
-        """Keep the active panel's dimensions instead of imposing the common size."""
-        if self._active_mode is not None:
-            return
-        if not settings.imported_geometry_path and not self.individual_sizes_btn.isChecked():
-            # Switching modes must not restore old sizes over existing designs.
-            self._individual_sizes[:] = [design.size for design in self._designs]
-            self.individual_sizes_btn.setChecked(True)
-        self.add_design(settings)
-
     def add_design(self, settings: Settings, *, allow_duplicate=False) -> None:
         """Capture a model snapshot or select the matching existing design."""
-        individual_size = settings.size
         if not allow_duplicate and settings in self._designs:
             self.design_list.setCurrentRow(self._designs.index(settings))
             return
         self._designs.append(settings)
-        self._individual_sizes.append(individual_size)
         from doe_planner import geometry_group
         self._design_factors.append(self.planner._group_factors.get(geometry_group(settings), {}).copy())
         morphology = TPMS_MORPHOLOGIES[settings.tpms_morphology].split(" (")[0]
@@ -910,19 +840,6 @@ class DoEStudioWidget(TrubaParallelMixin, QWidget):
         self.design_list.setCurrentRow(len(self._designs) - 1)
         self._refresh_plan()
 
-    def _remove_design(self) -> None:
-        if self._active_mode is not None:
-            return
-        index = self.design_list.currentRow()
-        if index >= 0:
-            self.design_list.blockSignals(True)
-            self._designs.pop(index)
-            self._design_factors.pop(index)
-            self._individual_sizes.pop(index)
-            self.design_list.takeItem(index)
-            self.design_list.blockSignals(False)
-            self._select_design(self.design_list.currentRow())
-
     def _open_geometry_library(self):
         from doe_geometry import GeometryLibraryDialog
         builder = self._geometry_surface_builder()
@@ -934,11 +851,6 @@ class DoEStudioWidget(TrubaParallelMixin, QWidget):
         if dialog.exec():
             self.add_design(dialog.selected_settings())
         dialog.deleteLater()
-
-    def _active_geometry_settings(self):
-        if 0 <= self._selected_design < len(self._designs):
-            return replace(self._designs[self._selected_design])
-        return replace(self._settings_provider())
 
     def _geometry_surface_builder(self):
         from mesh_engine import make_surface
@@ -967,14 +879,12 @@ class DoEStudioWidget(TrubaParallelMixin, QWidget):
         self._loading_design = True
         try:
             has_design = 0 <= index < len(self._designs)
-            self.geometry_editor.setEnabled(has_design and self._active_mode is None)
             if has_design:
                 settings = self._designs[index]
                 for field, control in self.design_value_controls.items():
                     control.setValue(getattr(settings, field))
                 self.design_mesh_type.setCurrentText(settings.mesh_type)
                 self.design_mesh_strategy.setCurrentIndex(self.design_mesh_strategy.findData(settings.tetra_strategy))
-                self.individual_size_spin.setValue(settings.size)
             factors = self._design_factors[index] if has_design else {}
             for spec in (*FACTOR_SPECS, SIZE_FACTOR_SPEC):
                 field, _, _, _, low, high, _, _, count = spec
@@ -997,16 +907,8 @@ class DoEStudioWidget(TrubaParallelMixin, QWidget):
                            **{field: control.value() for field, control in self.design_value_controls.items()},
                            mesh_type=self.design_mesh_type.currentText(),
                            tetra_strategy=self.design_mesh_strategy.currentData())
-        if not settings.imported_geometry_path:
-            settings = replace(settings, size=(settings.size if self.individual_sizes_btn.isChecked()
-                                               else self.common_size_spin.value()))
-            if self.individual_sizes_btn.isChecked():
-                self._individual_sizes[index] = settings.size
         self._designs[index] = settings
         self._update_design_caption(index)
-        self.individual_size_spin.blockSignals(True)
-        self.individual_size_spin.setValue(settings.size)
-        self.individual_size_spin.blockSignals(False)
         self._refresh_plan()
 
     def _active_factors(self) -> dict[str, tuple[float, float, int]]:
@@ -1015,9 +917,6 @@ class DoEStudioWidget(TrubaParallelMixin, QWidget):
             for name, (enabled, low, high, count) in self.factor_controls.items()
             if enabled.isChecked()
         }
-
-    def _on_sampling_mode_changed(self, *_) -> None:
-        self._refresh_plan()
 
     def _refresh_plan(self, *_) -> None:
         if self._loading_design:
@@ -1031,9 +930,6 @@ class DoEStudioWidget(TrubaParallelMixin, QWidget):
             for index, design in enumerate(self._designs):
                 if geometry_group(design) == group:
                     self._design_factors[index] = factors.copy()
-        for control in (self.lhs_count_label, self.lhs_count_spin,
-                        self.sampling_seed_label, self.sampling_seed):
-            control.setVisible(lhs)
         selected = self.preview_factor.currentData()
         self.preview_factor.clear()
         for name, (enabled, low, high, count) in self.factor_controls.items():
@@ -1049,27 +945,7 @@ class DoEStudioWidget(TrubaParallelMixin, QWidget):
             self.preview_factor.setCurrentIndex(0)
         has_design = self.design_list.currentRow() >= 0
         idle = self._active_mode is None
-        individual = self.individual_sizes_btn.isChecked()
-        imported = has_design and bool(self._designs[self._selected_design].imported_geometry_path)
-        self.common_size_spin.setEnabled(idle and not individual)
-        self.individual_sizes_btn.setEnabled(idle)
-        self.size_variable_btn.setEnabled(idle and has_design and not imported)
-        self.size_variable_btn.blockSignals(True)
-        self.size_variable_btn.setChecked("size" in factors)
-        self.size_variable_btn.blockSignals(False)
-        for control in self.factor_controls["size"]:
-            control.setVisible("size" in factors)
-        self.individual_size_spin.setEnabled(idle and individual and has_design and not imported)
-        self.add_structure_btn.setEnabled(idle)
-        self.structure_family_combo.setEnabled(idle)
-        self.structure_type_combo.setEnabled(idle)
         self.design_list.setEnabled(idle)
-        self.geometry_editor.setEnabled(has_design and idle)
-        self.design_value_controls["size"].setEnabled(individual and not imported)
-        for field, control in self.design_value_controls.items():
-            if field in self.factor_controls:
-                imported = has_design and bool(self._designs[self._selected_design].imported_geometry_path)
-                control.setEnabled(field not in factors and not imported)
         tetra = self.design_mesh_type.currentText() in ("TET4", "TET10")
         self.design_value_controls["local_mesh_size"].setEnabled(tetra)
         self.design_mesh_strategy.setEnabled(tetra)
@@ -1077,32 +953,15 @@ class DoEStudioWidget(TrubaParallelMixin, QWidget):
         self.matrix_tabs.setEnabled(idle)
         self.matrix_navigation.setEnabled(idle)
         self.sample_settings.setEnabled(idle)
-        self.design_count_badge.setText(f"{len(self._designs)} designs")
-        self.remove_design_btn.setEnabled(has_design and idle)
         self.preview_bounds_btn.setEnabled(has_design and bool(factors))
         self.preview_factor.setEnabled(bool(factors))
-        total, message = self._plan_summary(factors, lhs)
-        self.plan_label.setText(message)
-        if lhs:
-            self.sampling_details.setText(
-                f"LHS: {self.lhs_count_spin.value()} samples per structure with variables. "
-                "Each range is sampled across its full span; Levels is not used.")
-        else:
-            counts = [levels for _, _, levels in factors.values()]
-            combinations = math.prod(counts)
-            expression = " × ".join(map(str, counts)) if counts else "1 reference case"
-            self.sampling_details.setText(
-                f"Every combination of the evenly spaced values is generated. "
-                f"Selected structure: {expression} = {combinations} experiments. "
-                "Min 20, Max 40, Levels 3 → 20, 30, 40.")
-        self.generate_btn.setEnabled(0 < total <= MAX_DOE_ROWS and self._active_mode is None)
-        ml_total, ml_message = self._plan_summary(factors, True, self.ml_count_spin.value())
+        self.open_plan_btn.setEnabled(idle)
+        self.save_plan_btn.setEnabled(idle)
+        ml_total, ml_message = self._plan_summary(True, self.ml_count_spin.value())
         self.ml_plan_label.setText(ml_message + "\nUses each geometry's selected variables. Without variables, only its reference case is generated.")
         self.generate_ml_btn.setEnabled(0 < ml_total <= MAX_DOE_ROWS and idle)
-        self.planner.sync()
 
-
-    def _plan_summary(self, factors, lhs, sample_count=None) -> tuple[int, str]:
+    def _plan_summary(self, lhs, sample_count=None) -> tuple[int, str]:
         designs = len(self._included_designs())
         if not designs:
             return 0, "Add a geometry and check the saved designs to include in your experiment plan."
@@ -1137,9 +996,9 @@ class DoEStudioWidget(TrubaParallelMixin, QWidget):
         })
 
     def generate_table(self) -> None:
-        if not self.generate_btn.isEnabled():
-            return
-        self._generate_matrix(0)
+        total, _ = self._plan_summary(self.sampling_combo.currentData() == "lhs")
+        if 0 < total <= MAX_DOE_ROWS:
+            self._generate_matrix(0)
 
     def generate_ml_table(self) -> None:
         if self.generate_ml_btn.isEnabled():
@@ -1175,7 +1034,7 @@ class DoEStudioWidget(TrubaParallelMixin, QWidget):
         self._matrix_index = target
         self._rows = rows
         self._refresh_table_view()
-        self.planner.tabs.setCurrentIndex(3)
+        self.planner.tabs.setCurrentIndex(self._matrix_tab)
 
     def _switch_matrix(self, index):
         if self._active_mode is not None:
@@ -1647,9 +1506,6 @@ class DoEStudioWidget(TrubaParallelMixin, QWidget):
 
     def _serial_operation_state(self):
         if self._active_future is None or not self._queue:
-            panel = self.planner.geometry_panel
-            if panel._future is not None:
-                return True, panel.status.text()
             return False, ""
         index = self._queue[0]
         row = self._rows[index]
@@ -1950,10 +1806,8 @@ class DoEStudioWidget(TrubaParallelMixin, QWidget):
         return self._rows
 
     def dispose(self) -> None:
-        if hasattr(self, "new_doe"):
-            self.new_doe.cancel()
+        self.new_doe.cancel()
         self.sample_settings.save_preferences()
-        self.planner.geometry_panel.dispose()
         self._stop_requested = True
         self._poll_timer.stop()
         self.stop_active_queue()

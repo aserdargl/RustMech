@@ -737,7 +737,6 @@ Configure selected...|Seçileni yapılandır...
 1. New geometry|1. Yeni geometri
 2. Saved designs|2. Kaydedilen tasarımlar
 3. Selected design / variables|3. Seçili tasarım / Değişkenler
-Design experiments|Deney tasarla
 Experiment matrix|Deney matrisi
 Experiment variables|Deney değişkenleri
 Machine learning|Makine öğrenmesi

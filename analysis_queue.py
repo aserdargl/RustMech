@@ -116,7 +116,10 @@ class AnalysisQueueWidget(FolderResultMixin, DoEStudioWidget):
         self.setObjectName("analysisQueueWorkspace")
         # Reuse the proven batch lifecycle without exposing sampling/generation
         # operations: every job is an independently configured model snapshot.
-        self.plan_splitter.hide()
+        self.settings_tabs.setCurrentIndex(self._matrix_tab)
+        new_doe_index = self.settings_tabs.indexOf(self.new_doe)
+        self.settings_tabs.setTabVisible(new_doe_index, False)
+        self._settings_navigation.button(new_doe_index).hide()
         self.matrix_tabs.hide()
         self.footer_label.setText("Select rows to move, remove or preview. Each job retains its saved analysis settings.")
         for button in self.findChildren(QPushButton):

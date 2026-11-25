@@ -5,7 +5,7 @@ from studio_style import CONTROL_HEIGHT, SidebarGroupBox
 
 
 def sample_section(title):
-    """Use the same section surfaces as the Design experiments planner."""
+    """Use the shared DoE section surfaces."""
     panel = SidebarGroupBox(title)
     panel.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
     layout = QVBoxLayout(panel.content)

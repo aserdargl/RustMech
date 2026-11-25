@@ -260,7 +260,6 @@ class FolderBatchRunner(FolderResultMixin, DoEStudioWidget):
         self._write_folder_reports(summary_name=self._dataset_path.name)
 
     def dispose(self):
-        self.planner.geometry_panel.dispose()
         self._poll_timer.stop()
         self.stop_active_queue()
 

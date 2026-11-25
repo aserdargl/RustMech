@@ -1225,10 +1225,9 @@ class RemoteModeUiTests(unittest.TestCase):
             self.assertFalse(start.call_args.args[4])
             doe.stop_active_queue()
 
-    def test_doe_new_geometry_is_porous_and_solve_uses_current_remote_solver(self):
+    def test_legacy_doe_solve_uses_current_remote_solver(self):
         from dataclasses import replace
         doe = self.window.doe_studio
-        self.assertEqual(doe.planner.geometry_panel.selected_settings().specimen_architecture, 'porous_all')
         old = replace(self.window.collect(), solver_backend='ansys_mapdl', self_contact_mode='disabled')
         doe.add_design(old)
         doe.add_blank_row()
