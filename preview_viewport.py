@@ -13,7 +13,7 @@ ORIENTATION_RIGHT_INSET = 2
 
 
 def orientation_cube_size(viewport):
-    return max(1, min(72, viewport.width() - ORIENTATION_RIGHT_INSET, viewport.height() // 5))
+    return max(1, min(96, viewport.width() - ORIENTATION_RIGHT_INSET, viewport.height() // 4))
 
 
 class _PreviewInteractor(QtInteractor):
