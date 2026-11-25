@@ -71,12 +71,12 @@ class DoEWindowTests(unittest.TestCase):
         buttons = studio.findChildren(QPushButton)
         spies = [QSignalSpy(button.clicked) for button in buttons]
         studio.settings_tabs.setCurrentIndex(1)
-        spin = studio.common_strain_spin
-        spin.setFocus()
-        spin.lineEdit().selectAll()
-        QTest.keyClicks(spin.lineEdit(), "12.5")
-        QTest.keyClick(spin.lineEdit(), Qt.Key.Key_Return)
-        self.assertEqual(spin.value(), 12.5)
+        field = studio.common_strain_spin
+        field.setFocus()
+        field.selectAll()
+        QTest.keyClicks(field, "12.5")
+        QTest.keyClick(field, Qt.Key.Key_Return)
+        self.assertEqual(field.value(), 12.5)
         self.assertTrue(all(spy.count() == 0 for spy in spies))
         window.close()
         window.open_workspace()

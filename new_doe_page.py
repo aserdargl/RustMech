@@ -17,8 +17,8 @@ from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDoubleS
 from new_doe_operations import (OPERATIONS, explicit_numbers, launch, matrix, matrix_request,
                                 parameters, snapshot, structure_choices, validate)
 from structure_library import ALL_STRUCTURES_BY_FAMILY, STRUCTURE_FAMILIES
-from studio_style import (COMBO_WIDTH, CONTROL_HEIGHT, ActionFlowLayout, CompactComboBox, CompactDoubleSpinBox,
-                          CompactSpinBox, SidebarGroupBox)
+from studio_style import (COMBO_WIDTH, CONTROL_HEIGHT, ActionFlowLayout, CompactComboBox, NumericLineEdit,
+                          SidebarGroupBox)
 from ui_language import translate, turkish
 from model import CONTACT_NUMERICAL_FIELDS, GEOMETRY_FIELDS, MATERIAL_FIELDS, settings_from_dict, validate_geometry
 
@@ -103,21 +103,11 @@ def display(value):
 
 
 def number(value, source):
-    integer = type(value) is int
-    box = CompactSpinBox() if integer else CompactDoubleSpinBox()
     if isinstance(source, (QSpinBox, QDoubleSpinBox)):
-        if isinstance(source, QDoubleSpinBox):
-            box.setDecimals(source.decimals())
-        box.setRange(min(value, source.minimum()), max(value, source.maximum()))
-        box.setSingleStep(source.singleStep())
-        box.setSpecialValueText(source.specialValueText())
-    else:
-        bound = 2147483647 if integer else max(1e15, abs(value))
-        box.setRange(-bound, bound)
-    box.setFixedWidth(NUMBER_WIDTH)
-    box.setKeyboardTracking(False)
-    box.setValue(value)
-    return box
+        return NumericLineEdit(value, min(value, source.minimum()), max(value, source.maximum()),
+                               width=NUMBER_WIDTH)
+    bound = 2147483647 if type(value) is int else max(1e15, abs(value))
+    return NumericLineEdit(value, -bound, bound, width=NUMBER_WIDTH)
 
 
 def text_field(value=""):
@@ -189,7 +179,6 @@ class Factor:
             self.selection.textChanged.connect(changed)
             if self.numeric:
                 self.fixed = number(initial, source)
-                self.initial_display = self.fixed.value()
                 self.fixed.valueChanged.connect(changed)
             else:
                 self.fixed = text_field("null")
@@ -297,8 +286,7 @@ class Factor:
                     raise ValueError("The upper bound must exceed the lower bound.")
                 values = [self.first.value(), self.last.value()]
         elif self.numeric:
-            value = self.fixed.value()
-            values = [self.value if value == self.initial_display else value]
+            values = [self.fixed.value()]
         elif varying:
             values = json.loads(self.selection.text())
         else:

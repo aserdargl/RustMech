@@ -6,9 +6,10 @@ import unittest
 from unittest.mock import Mock, patch
 from PySide6.QtCore import QPoint, Qt
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QTableWidget
+from PySide6.QtWidgets import QAbstractSpinBox, QLineEdit, QTableWidget
 
 from tests import test_remote_mode_ui as ui
+from ui_language import LanguageSelector
 
 
 class NewDoeTests(unittest.TestCase):
@@ -36,7 +37,14 @@ class NewDoeTests(unittest.TestCase):
         self.assertIs(tabs.widget(0), studio.new_doe)
         self.assertIs(tabs.currentWidget(), studio.new_doe)
         self.assertTrue(studio.new_doe.loaded)
-        self.assertTrue(studio.planner.language_selector.isVisible())
+        self.assertIsNone(studio.findChild(LanguageSelector))
+        self.assertTrue(self.window.language_selector.isVisible())
+        self.assertTrue(studio.plan_file_label.isHidden())
+        self.assertFalse(studio.findChildren(QAbstractSpinBox))
+        analysis = studio.new_doe.operation
+        nav = studio.planner.navigation
+        nav_bottom = nav.mapToGlobal(QPoint(0, nav.height())).y()
+        self.assertLessEqual(analysis.mapToGlobal(QPoint()).y() - nav_bottom, 8)
         buttons = studio.planner.navigation.layout()
         self.assertEqual(buttons.itemAt(2).widget().text(), "DoE")
         for index in range(2, buttons.count()):
@@ -46,6 +54,26 @@ class NewDoeTests(unittest.TestCase):
         self.assertTrue(studio.open_plan_btn.isVisible())
         self.assertEqual(studio.open_plan_btn.width(), 64)
         self.assertEqual(studio.save_plan_btn.width(), 64)
+
+    def test_numeric_input_commits_on_enter_and_rejects_invalid_bounds(self):
+        page = self.page()
+        factor = next(factor for factor in page.factors if factor.path == ("settings", "cell_size"))
+        self.assertIsInstance(factor.fixed, QLineEdit)
+        factor.fixed.selectAll()
+        QTest.keyClicks(factor.fixed, "3.125")
+        QTest.keyClick(factor.fixed, Qt.Key.Key_Return)
+        self.assertEqual(factor.levels_for_matrix(), [3.125])
+        self.assertFalse(page.rows)
+        factor.variable.setChecked(True)
+        self.assertIsInstance(factor.first, QLineEdit)
+        self.assertIsInstance(factor.last, QLineEdit)
+        factor.first.clear()
+        QTest.keyClick(factor.first, Qt.Key.Key_Return)
+        self.assertEqual(factor.first.value(), 3.125)
+        factor.last.selectAll()
+        QTest.keyClicks(factor.last, "4.25")
+        QTest.keyClick(factor.last, Qt.Key.Key_Return)
+        self.assertEqual(factor.levels_for_matrix(), [3.125, 4.25])
 
     def test_legacy_integer_specimen_size_exposes_three_decimal_axes(self):
         from new_doe_operations import parameters, snapshot
@@ -165,7 +193,7 @@ class NewDoeTests(unittest.TestCase):
         for key, length in zip(("size_x", "size_y", "size"), (4, 8, 12)):
             field = fields[key].fixed
             self.assertGreater(field.minimum(), 0)
-            self.assertEqual(field.specialValueText(), "")
+            self.assertTrue(field.hasAcceptableInput())
             field.setValue(length)
         period = fields["cell_size"]
         period.variable.setChecked(True)

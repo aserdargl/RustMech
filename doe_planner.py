@@ -3,12 +3,12 @@ from dataclasses import replace
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QLabel,
+    QWidget, QVBoxLayout, QFormLayout, QLabel,
     QButtonGroup, QPushButton, QCheckBox, QListWidget, QTabWidget, QSizePolicy,
 )
 
 from model import MIN_MESH_INPUT_MM
-from studio_style import ActionFlowLayout, CompactComboBox, CONTROL_HEIGHT
+from studio_style import ActionFlowLayout, CompactComboBox, CONTROL_HEIGHT, NumericLineEdit
 
 
 def geometry_group(settings):
@@ -54,6 +54,7 @@ class SimpleDoEPlanner(QWidget):
         self._group_factors = {}
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(2)
         self.navigation = DoENavigation()
         layout.addWidget(self.navigation)
         s.open_plan_btn = QPushButton('Open')
@@ -64,20 +65,10 @@ class SimpleDoEPlanner(QWidget):
         s.save_plan_btn.clicked.connect(s.save_plan_dialog)
         self.navigation.add_button(s.open_plan_btn)
         self.navigation.add_button(s.save_plan_btn)
-        self.plan_status_bar = QWidget()
-        plan_status = QHBoxLayout(self.plan_status_bar)
-        plan_status.setContentsMargins(0, 0, 0, 0)
         s.plan_file_label = QLabel('Untitled plan')
         s.plan_file_label.setObjectName('mutedHintLabel')
-        s.plan_file_label.setMinimumWidth(140)
-        policy = QSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
-        policy.setRetainSizeWhenHidden(True)
-        s.plan_file_label.setSizePolicy(policy)
-        plan_status.addWidget(s.plan_file_label, 1)
-        from ui_language import LanguageSelector, install_language
-        self.language_selector = LanguageSelector(install_language(), self)
-        plan_status.addWidget(self.language_selector)
-        layout.addWidget(self.plan_status_bar)
+        s.plan_file_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+        layout.addWidget(s.plan_file_label)
         self.tabs = s.settings_tabs = QTabWidget()
         self.tabs.tabBar().hide()
         layout.addWidget(self.tabs)
@@ -93,10 +84,10 @@ class SimpleDoEPlanner(QWidget):
         s.design_list.itemChanged.connect(s._refresh_plan)
         s.design_value_controls = {}
         for field, low, high in (('size', 1, 100), ('cell_size', .1, 100), ('solid_fraction', 1, 99)):
-            spin = s._make_dspin(low, high, getattr(base, field), .1, 3)
-            spin.setParent(saved_plan_controls)
-            spin.valueChanged.connect(s._edit_design)
-            s.design_value_controls[field] = spin
+            editor = NumericLineEdit(float(getattr(base, field)), low, high)
+            editor.setParent(saved_plan_controls)
+            editor.valueChanged.connect(s._edit_design)
+            s.design_value_controls[field] = editor
         s.factor_controls = {}
         for spec in factor_specs:
             s._add_factor_controls(saved_plan_controls, spec)
@@ -104,8 +95,8 @@ class SimpleDoEPlanner(QWidget):
         s.sampling_combo.addItem('Full factorial grid', 'full_factorial')
         s.sampling_combo.addItem('Latin hypercube (LHS)', 'lhs')
         s.sampling_combo.currentIndexChanged.connect(s._refresh_plan)
-        s.lhs_count_spin = s._make_ispin(2, 500, 15)
-        s.sampling_seed = s._make_ispin(1, 999999, 42)
+        s.lhs_count_spin = NumericLineEdit(15, 2, 500)
+        s.sampling_seed = NumericLineEdit(42, 1, 999999)
         for control in (s.lhs_count_spin, s.sampling_seed):
             control.setParent(saved_plan_controls)
             control.valueChanged.connect(s._refresh_plan)
@@ -114,10 +105,10 @@ class SimpleDoEPlanner(QWidget):
         advanced_layout = QFormLayout(advanced)
         advanced_layout.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.FieldsStayAtSizeHint)
         for field, label in (('mesh_resolution', 'Global mesh size (mm)'), ('local_mesh_size', 'Local mesh size (mm)')):
-            spin = s._make_dspin(MIN_MESH_INPUT_MM, 100, getattr(base, field), .05, 3)
-            s.design_value_controls[field] = spin
-            spin.valueChanged.connect(s._edit_design)
-            advanced_layout.addRow(label, spin)
+            editor = NumericLineEdit(float(getattr(base, field)), MIN_MESH_INPUT_MM, 100)
+            s.design_value_controls[field] = editor
+            editor.valueChanged.connect(s._edit_design)
+            advanced_layout.addRow(label, editor)
         s.design_mesh_type = CompactComboBox()
         s.design_mesh_type.addItems(['HEX8', 'HEX20', 'TET4', 'TET10'])
         s.design_mesh_type.currentTextChanged.connect(s._edit_design)
@@ -129,7 +120,7 @@ class SimpleDoEPlanner(QWidget):
         advanced_layout.addRow('Tetra mesher', s.design_mesh_strategy)
         s.common_strain_check = QCheckBox('Common final strain (%)')
         s.common_strain_check.setChecked(True)
-        s.common_strain_spin = s._make_dspin(.1, 95, 10, .5, 2)
+        s.common_strain_spin = NumericLineEdit(10.0, .1, 95)
         s.common_strain_check.toggled.connect(s.common_strain_spin.setEnabled)
         advanced_layout.addRow(s.common_strain_check, s.common_strain_spin)
         s.preview_factor = CompactComboBox()
@@ -143,8 +134,8 @@ class SimpleDoEPlanner(QWidget):
         ml = QWidget()
         ml_layout = QFormLayout(ml)
         ml_layout.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.FieldsStayAtSizeHint)
-        s.ml_count_spin = s._make_ispin(2, 5000, 100)
-        s.ml_seed_spin = s._make_ispin(1, 999999, 42)
+        s.ml_count_spin = NumericLineEdit(100, 2, 5000)
+        s.ml_seed_spin = NumericLineEdit(42, 1, 999999)
         ml_layout.addRow('LHS samples per geometry', s.ml_count_spin)
         ml_layout.addRow('Seed', s.ml_seed_spin)
         s.ml_plan_label = QLabel()

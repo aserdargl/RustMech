@@ -26,14 +26,12 @@ from uuid import uuid4
 from typing import Callable
 
 import numpy as np
-from studio_style import CompactSpinBox
 from PySide6.QtCore import QSignalBlocker, QTimer, Qt, Signal
 from PySide6.QtGui import QBrush, QColor
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
     QCheckBox,
-    QDoubleSpinBox,
     QFrame,
     QHeaderView,
     QLabel,
@@ -53,14 +51,13 @@ from PySide6.QtWidgets import (
 
 from file_dialog import QFileDialog
 from model import MIN_MESH_INPUT_MM, ROOT, Settings, settings_from_dict, validate_geometry
-from studio_style import ActionFlowLayout, CONTROL_HEIGHT, NUMERIC_FIELD_WIDTH, CompactDoubleSpinBox
+from studio_style import ActionFlowLayout, CONTROL_HEIGHT, NumericLineEdit
 from structure_library import (
     TPMS_MORPHOLOGIES,
     resolve_family_and_name,
 )
 
 
-DOE_FIELD_WIDTH = NUMERIC_FIELD_WIDTH
 DOE_ACTION_WIDTH = 96
 DOE_RUN_WIDTH = 140
 DOE_STOP_WIDTH = 108
@@ -68,12 +65,12 @@ DOE_TOOLBAR_GAP = 6
 MAX_DOE_ROWS = 5000
 SNAPSHOT_HEADER = "Design settings (JSON)"
 
-# Field, label, input bounds, default range, increment, precision and levels.
+# Field, label, input bounds, default range and levels.
 FACTOR_SPECS = (
-    ("cell_size", "2. Cell Size (mm)", 0.1, 100.0, 2.0, 4.0, 0.25, 3, 5),
-    ("solid_fraction", "3. Density (%)", 1.0, 99.0, 15.0, 45.0, 5.0, 2, 5),
+    ("cell_size", "2. Cell Size (mm)", 0.1, 100.0, 2.0, 4.0, 5),
+    ("solid_fraction", "3. Density (%)", 1.0, 99.0, 15.0, 45.0, 5),
 )
-SIZE_FACTOR_SPEC = ("size", "Cube size (mm)", 1.0, 100.0, 6.0, 8.0, 0.5, 3, 3)
+SIZE_FACTOR_SPEC = ("size", "Cube size (mm)", 1.0, 100.0, 6.0, 8.0, 3)
 
 
 @dataclass
@@ -443,8 +440,8 @@ class DoEStudioWidget(TrubaParallelMixin, QWidget):
         from doe_plan import PLAN_FORMAT, PLAN_VERSION
         if commit:
             # Save the text still being edited, even before focus leaves the field.
-            for spin in self.findChildren(QDoubleSpinBox) + self.findChildren(CompactSpinBox):
-                spin.interpretText()
+            for field in self.findChildren(NumericLineEdit):
+                field.interpretText()
         matrices = dict(self._matrix_rows)
         matrices[self._matrix_index] = self._rows
         return dict(
@@ -762,31 +759,12 @@ class DoEStudioWidget(TrubaParallelMixin, QWidget):
         if self.settings_tabs.currentWidget() is self.new_doe:
             self.new_doe.size_navigation(self.planner.navigation, True)
 
-    @staticmethod
-    def _make_dspin(low: float, high: float, val: float, step: float, dec: int) -> QDoubleSpinBox:
-        sp = CompactDoubleSpinBox()
-        sp.setRange(low, high)
-        sp.setSingleStep(step)
-        sp.setValue(val)
-        sp.setFixedWidth(DOE_FIELD_WIDTH)
-        return sp
-
-    @staticmethod
-    def _make_ispin(low: int, high: int, val: int) -> CompactSpinBox:
-        sp = CompactSpinBox()
-        sp.setFixedHeight(CONTROL_HEIGHT)
-        sp.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-        sp.setRange(low, high)
-        sp.setValue(val)
-        sp.setFixedWidth(DOE_FIELD_WIDTH)
-        return sp
-
     def _add_factor_controls(self, parent, spec) -> None:
-        field, label, lower, upper, minimum, maximum, step, decimals, levels = spec
+        field, label, lower, upper, minimum, maximum, levels = spec
         enabled = QCheckBox(label, parent)
-        low = self._make_dspin(lower, upper, minimum, step, decimals)
-        high = self._make_dspin(lower, upper, maximum, step, decimals)
-        count = self._make_ispin(2, 50, levels)
+        low = NumericLineEdit(minimum, lower, upper)
+        high = NumericLineEdit(maximum, lower, upper)
+        count = NumericLineEdit(levels, 2, 50)
         low.setToolTip("Lowest value included in this variable's range.")
         high.setToolTip("Highest value included in this variable's range.")
         count.setToolTip("Number of evenly spaced values, including Min and Max. For example: Min 20, Max 40, Levels 3 gives 20, 30, 40. LHS uses Runs per design instead.")
@@ -887,7 +865,7 @@ class DoEStudioWidget(TrubaParallelMixin, QWidget):
                 self.design_mesh_strategy.setCurrentIndex(self.design_mesh_strategy.findData(settings.tetra_strategy))
             factors = self._design_factors[index] if has_design else {}
             for spec in (*FACTOR_SPECS, SIZE_FACTOR_SPEC):
-                field, _, _, _, low, high, _, _, count = spec
+                field, _, _, _, low, high, count = spec
                 enabled, lo, hi, levels = self.factor_controls[field]
                 enabled.setChecked(field in factors)
                 lower, upper, steps = factors.get(field, (low, high, count))

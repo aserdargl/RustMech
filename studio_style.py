@@ -4,8 +4,8 @@ from html import escape
 from pathlib import Path
 from decimal import Decimal
 
-from PySide6.QtCore import QPoint, QRect, QSize, Qt
-from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen, QValidator
+from PySide6.QtCore import QLocale, QPoint, QRect, QSize, Qt, Signal
+from PySide6.QtGui import QColor, QDoubleValidator, QIntValidator, QPainter, QPainterPath, QPen, QValidator
 from PySide6.QtWidgets import QAbstractSpinBox, QComboBox, QDoubleSpinBox, QFormLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QLayout, QSizePolicy, QSpinBox, QStyle, QStyleOptionComboBox, QStyleOptionGroupBox, QStylePainter, QVBoxLayout, QWidget
 
 
@@ -15,6 +15,68 @@ FORM_LABEL_WIDTH = 118
 FORM_FIELD_MIN_WIDTH = 94
 NUMERIC_FIELD_WIDTH = 80
 FORM_COLUMN_GAP = 4
+
+
+class NumericLineEdit(QLineEdit):
+    """Direct numeric entry with a bounded value committed on Enter or focus loss."""
+
+    valueChanged = Signal(object)
+
+    def __init__(self, value, low, high, *, width=NUMERIC_FIELD_WIDTH):
+        super().__init__()
+        self._integer = type(value) is int
+        validator = (QIntValidator(int(low), int(high), self) if self._integer
+                     else QDoubleValidator(low, high, -1, self))
+        locale = QLocale(self.locale())
+        locale.setNumberOptions(locale.numberOptions() | QLocale.NumberOption.RejectGroupSeparator)
+        validator.setLocale(locale)
+        self.setValidator(validator)
+        self.setFixedSize(width, CONTROL_HEIGHT)
+        self._value = None
+        self.setValue(value)
+
+    def minimum(self):
+        return self.validator().bottom()
+
+    def maximum(self):
+        return self.validator().top()
+
+    def value(self):
+        return self._value
+
+    def setValue(self, value):
+        number = int(value) if self._integer else float(value)
+        number = max(self.minimum(), min(self.maximum(), number))
+        changed = number != self._value
+        self._value = number
+        display = str(number)
+        if not self._integer:
+            display = display.removesuffix(".0").replace(".", self.validator().locale().decimalPoint())
+        if display != self.text():
+            self.setText(display)
+        if changed:
+            self.valueChanged.emit(number)
+
+    def interpretText(self):
+        if self.hasAcceptableInput():
+            locale = self.validator().locale()
+            number, valid = (locale.toInt(self.text()) if self._integer
+                             else locale.toDouble(self.text()))
+            if valid:
+                self.setValue(number)
+                return
+        self.setValue(self._value)
+
+    def focusOutEvent(self, event):
+        self.interpretText()
+        super().focusOutEvent(event)
+
+    def keyPressEvent(self, event):
+        if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            self.interpretText()
+            event.accept()
+        else:
+            super().keyPressEvent(event)
 
 _UI_ASSETS = Path(__file__).resolve().parent / "assets" / "ui"
 from datenburg_widgets import (
