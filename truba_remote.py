@@ -746,8 +746,9 @@ def run_remote_preview(settings,context,auth,on_progress,cancelled,*,include_mes
     return preview
 
 
-def run_remote_operation(request,context,remote_auth=None,job_marker=None):
-    result,directory = run_remote_job(request,context,remote_auth,job_marker)
+def run_remote_operation(request,context,remote_auth=None,job_marker=None,*,directory=None):
+    options = {"directory": directory} if directory is not None else {}
+    result,directory = run_remote_job(request,context,remote_auth,job_marker,**options)
     return str(directory/"output") if result is not None else None
 run_remote_operation.remote_job_target = True
 

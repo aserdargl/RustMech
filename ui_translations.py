@@ -1329,6 +1329,17 @@ Material Point Method|Malzeme noktası yöntemi
 Peridynamics|Peridinamik
 FFT Homogenization|FFT homojenleştirme
 Voxels per axis|Eksen başına voksel
+Read workspace settings|Ana ekrandaki ayarları al
+Create matrix|Matris oluştur
+Fixed / minimum|Sabit / alt sınır
+Maximum / values|Üst sınır / değerler
+Select values|Değerleri seç
+Variable|Değişken
+Results folder|Sonuç klasörü
+Structure family / type|Yapı ailesi / türü
+Solid fraction (%)|Katı oranı (%)
+Choose variable parameters and their levels, then create the matrix.|Değişkenleri ve seviyelerini seçip matrisi oluşturun.
+Stopped. Finished results are saved.|Durduruldu. Tamamlanan deneylerin sonuçları kaydedildi.
 Void / solid stiffness|Boşluk / katı rijitliği
 Ratio of the Young’s modulus assigned to void voxels to that of the solid (Eᵥ/Eₛ). For example, 0.01 gives the voids 1% of the solid stiffness. Lower values better approximate empty space but can make the FFT solver harder to converge. Higher values can overestimate the cell’s effective stiffness.|Boşluk voksellerine atanan Young modülünün katının Young modülüne oranıdır (Eᵥ/Eₛ). Örneğin 0,01 değerinde boşluklara katı rijitliğinin %1’i atanır. Düşük değerler gerçek boşluğu daha iyi temsil eder ancak FFT çözücüsünün yakınsamasını zorlaştırabilir. Yüksek değerler hücrenin efektif rijitliğini olduğundan büyük gösterebilir.
 DAMASK voxel preview unavailable. Check the settings below.|DAMASK voksel önizlemesi kullanılamıyor. Aşağıdaki ayarları kontrol edin.
@@ -1596,6 +1607,9 @@ TURKISH.update({
 })
 
 TEMPLATES = {
+    '{count} experiments ready.': '{count} deney hazır.',
+    'Running experiment {index} / {total}': 'Deney çalıştırılıyor {index} / {total}',
+    '{count} experiments finished · {failed} failed.': '{count} deney tamamlandı · {failed} hata.',
     'Permanently delete {count} selected files from TRUBA?':
         'Seçilen {count} dosya TRUBA’dan kalıcı olarak silinsin mi?',
     'Deleted {count} files from TRUBA.': 'TRUBA’dan {count} dosya silindi.',

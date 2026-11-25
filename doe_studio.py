@@ -391,9 +391,11 @@ class DoEStudioWidget(TrubaParallelMixin, QWidget):
         mesh_generator: Callable[[Settings], object],
         batch_solver_runner: Callable[[Settings, object], dict] | None = None,
         parent: QWidget | None = None,
+        *, operation_host=None,
     ) -> None:
         super().__init__(parent)
         self._settings_provider = settings_provider
+        self._operation_host = operation_host
         self._mesh_generator = mesh_generator
         self._batch_solver_runner = batch_solver_runner
         self._rows: list[ExperimentRow] = []
@@ -464,7 +466,7 @@ class DoEStudioWidget(TrubaParallelMixin, QWidget):
                       for index, name in enumerate(('doe', 'ml'))},
             sample_settings=self.sample_settings.state(),
             selection=dict(design=self._selected_design, matrix=self._matrix_index,
-                           tab=self.settings_tabs.currentIndex()),
+                           tab=getattr(self, "_legacy_plan_tab", self.settings_tabs.currentIndex())),
         )
 
     def _set_plan_path(self, path):
@@ -711,6 +713,20 @@ class DoEStudioWidget(TrubaParallelMixin, QWidget):
         from doe_sample_settings import SampleSettingsPage
         self.sample_settings = SampleSettingsPage(self)
         self.planner.tabs.addTab(self.sample_settings, "Sample Settings")
+        if self._operation_host is not None:
+            from new_doe_page import NewDoePage
+            self.new_doe = NewDoePage(self._operation_host)
+            independent_tab = self.planner.tabs.addTab(self.new_doe, "NEW DOE")
+            self._legacy_plan_tab = self.planner.tabs.currentIndex()
+
+            def select_page(index):
+                legacy = index != independent_tab
+                if legacy:
+                    self._legacy_plan_tab = index
+                for control in (self.open_plan_btn, self.save_plan_btn, self.plan_file_label):
+                    control.setVisible(legacy)
+
+            self.planner.tabs.currentChanged.connect(select_page)
         self.planner.navigation.add_tabs(self.planner.tabs)
         self.vertical_splitter.setStretchFactor(0, 0)
         self.vertical_splitter.setSizes([730])
@@ -1933,6 +1949,8 @@ class DoEStudioWidget(TrubaParallelMixin, QWidget):
         return self._rows
 
     def dispose(self) -> None:
+        if hasattr(self, "new_doe"):
+            self.new_doe.cancel()
         self.sample_settings.save_preferences()
         self.planner.geometry_panel.dispose()
         self._stop_requested = True

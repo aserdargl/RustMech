@@ -101,8 +101,8 @@ with h5py.File(case + '.hdf5') as result:
 
 
 class DamaskAnalysisProcess(AnalysisProcess):
-    def __init__(self, settings, grid, void_ratio, distribution):
-        self.folder = new_run_folder()
+    def __init__(self, settings, grid, void_ratio, distribution, *, folder=None):
+        self.folder = new_run_folder() if folder is None else Path(folder)
         super().__init__(run_periodic_fft, settings, grid, void_ratio, distribution, self.folder)
 
     def force_stop(self):

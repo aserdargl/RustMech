@@ -1390,6 +1390,7 @@ class RustMechDialog(QDialog):
             mesh_generator=generate_volume_mesh,
             batch_solver_runner=run_batch_experiment,
             parent=self,
+            operation_host=self,
         )
         self.doe_studio.setObjectName("doeWorkspace")
         self.doe_studio.setMinimumSize(220, 140)
@@ -4062,6 +4063,9 @@ class RustMechDialog(QDialog):
         for queue in (self.doe_studio, self.analysis_queue_widget):
             if queue is not None:
                 jobs.extend(queue.detach_remote_queue())
+        new_doe_job = self.doe_studio.new_doe.detach_remote()
+        if new_doe_job is not None:
+            jobs.append(new_doe_job)
         if hasattr(self, "folder_batch_dialog"):
             jobs.extend(self.folder_batch_dialog.detach_remote_jobs())
         if self._mesh_convergence_dialog is not None:
