@@ -16,7 +16,6 @@ class SampleTableFilter(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(2)
         self.column = CompactComboBox()
-        self.column.setMaximumWidth(145)
         self.column.setToolTip("Aranacak sutun" if turkish else "Search column")
         self.search = QLineEdit()
         self.search.setPlaceholderText("Bu tabloda ara..." if turkish else "Search this table...")

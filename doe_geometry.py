@@ -5,7 +5,7 @@ from dataclasses import replace
 from PySide6.QtCore import QSize, QTimer, Qt, Signal
 from PySide6.QtWidgets import (
     QDialog, QDialogButtonBox, QFormLayout, QFrame, QHBoxLayout, QLabel,
-    QPushButton, QScrollArea, QSizePolicy, QSplitter, QVBoxLayout, QWidget,
+    QPushButton, QScrollArea, QSplitter, QVBoxLayout, QWidget,
 )
 
 from model import validate_geometry
@@ -96,12 +96,6 @@ class ActiveGeometryPanel(QWidget):
         self.family = CompactComboBox()
         self.structure = CompactComboBox()
         self.morphology = CompactComboBox()
-        for combo in (self.family, self.structure, self.morphology):
-            combo.setMinimumWidth(100)
-            combo.setMaximumWidth(200)
-            combo.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
-            if embedded:
-                combo.setFixedSize(150, CONTROL_HEIGHT)
         for key, label in STRUCTURE_FAMILIES.items():
             self.family.addItem(label, key)
         for key, label in TPMS_MORPHOLOGIES.items():
@@ -456,11 +450,6 @@ class GeometryLibraryDialog(QDialog):
             self.family.addItem(label, key)
         self.structure = CompactComboBox()
         self.morphology = CompactComboBox()
-        for combo in (self.family, self.structure, self.morphology):
-            combo.setMinimumWidth(100)
-            combo.setMaximumWidth(200)
-            combo.setFixedHeight(CONTROL_HEIGHT)
-            combo.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
         for key, label in TPMS_MORPHOLOGIES.items():
             self.morphology.addItem(label, key)
         form.addRow("Family", self.family)

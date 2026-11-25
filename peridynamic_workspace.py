@@ -67,7 +67,6 @@ class PeridynamicSettingsPanel(QWidget):
         ):
             control = CompactComboBox()
             control.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
-            control.setMaximumWidth(200)
             for value, name in choices.items():
                 control.addItem(name, value)
             control.setCurrentIndex(max(0, control.findData(defaults[key])))
@@ -155,7 +154,6 @@ class PeridynamicResults(QWidget):
         self.metric = CompactComboBox()
         self.metric.setAccessibleName("Result chart")
         self.metric.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
-        self.metric.setMaximumWidth(200)
         self.metric.addItem("Force–displacement", "force")
         self.metric.addItem("Damage by layer", "layers")
         self.metric.currentIndexChanged.connect(self._draw_chart)

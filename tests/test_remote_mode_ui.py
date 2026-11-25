@@ -86,6 +86,16 @@ class RemoteModeUiTests(unittest.TestCase):
         QTest.keyClick(field,Qt.Key.Key_Return)
         self.assertFalse(self.controller.requested)
 
+    def test_dropdown_width_is_shared_across_workspace_tabs(self):
+        from studio_style import COMBO_WIDTH, CompactComboBox
+
+        for combo in self.window.findChildren(CompactComboBox):
+            if combo.property("flagSelector"):
+                continue
+            with self.subTest(field=combo.accessibleName() or combo.currentText()):
+                self.assertEqual((combo.minimumWidth(), combo.maximumWidth(), combo.width()),
+                                 (COMBO_WIDTH,) * 3)
+
     def test_fft_status_stays_with_the_workspace_context(self):
         window = self.window
         window.setup_tabs.setCurrentIndex(window._fft_method_index)

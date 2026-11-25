@@ -15,7 +15,7 @@ from unittest.mock import MagicMock, patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtTest import QTest
-from studio_style import NUMERIC_FIELD_WIDTH
+from studio_style import COMBO_WIDTH, NUMERIC_FIELD_WIDTH
 from PySide6.QtCore import QSettings, Qt
 from PySide6.QtWidgets import QApplication, QComboBox, QDialog
 
@@ -877,7 +877,7 @@ class LiveConvergenceTests(unittest.TestCase):
         self.assertFalse(hasattr(widget, "advanced_button"))
         self.assertEqual(widget.start_size.width(), NUMERIC_FIELD_WIDTH)
         self.assertEqual(widget.tolerance.width(), NUMERIC_FIELD_WIDTH - 2)
-        self.assertEqual(widget.solver_combo.width(), 138)
+        self.assertEqual(widget.solver_combo.width(), COMBO_WIDTH)
         self.assertGreater(widget.run_button.x(), widget.stop_button.x())
         self.assertGreater(widget.run_button.x(), widget.apply_button.x())
 

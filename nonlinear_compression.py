@@ -811,7 +811,6 @@ class RustMechDialog(QDialog):
         self.substeps_mode_combo = NoWheelComboBox()
         self.substeps_mode_combo.addItem("Automatic", "automatic")
         self.substeps_mode_combo.addItem("Advanced", "advanced")
-        self.substeps_mode_combo.setFixedWidth(110)
         self.substeps_mode_combo.setToolTip(
             "Automatic uses recommended load stepping defaults. Advanced applies the values below.")
         substeps_layout.addWidget(self.substeps_mode_combo)
@@ -1105,7 +1104,6 @@ class RustMechDialog(QDialog):
         self.result_preview_field.addItem("von Mises stress / MPa", "Von_Mises_MPa")
         self.result_preview_field.addItem("Displacement / mm", "Displacement_Magnitude_mm")
         self.result_preview_field.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
-        self.result_preview_field.setMaximumWidth(200)
         self.result_preview_field.currentIndexChanged.connect(self.render_preview)
         self.result_preview_controls.hide()
 

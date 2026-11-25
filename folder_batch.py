@@ -327,14 +327,12 @@ class FolderBatchDialog(QDialog):
         self.mode = CompactComboBox()
         self.mode.addItems(['Z: bottom / top', 'X: min / max', 'Y: min / max',
                             'First specimen', 'Manual faces'])
-        self.mode.setFixedWidth(108)
         direction_label = QLabel('Direction')
         direction_label.setBuddy(self.mode)
         controls.addWidget(direction_label)
         controls.addWidget(self.mode)
         self.solver = CompactComboBox()
         self.solver.addItems(['Current workspace', 'ANSYS MAPDL', 'Kratos', 'ANSYS + Kratos'])
-        self.solver.setFixedWidth(112)
         solver_label = QLabel('Solver')
         solver_label.setBuddy(self.solver)
         controls.addWidget(solver_label)
@@ -342,7 +340,6 @@ class FolderBatchDialog(QDialog):
         self.execution_target = CompactComboBox()
         self.execution_target.addItem('TRUBA', 'truba')
         self.execution_target.addItem(translate('Local'), 'local')
-        self.execution_target.setFixedWidth(82)
         execution_label = QLabel('Execution')
         execution_label.setBuddy(self.execution_target)
         controls.addWidget(execution_label)
@@ -352,7 +349,6 @@ class FolderBatchDialog(QDialog):
         for name, limits in BASELINES.items():
             if not limits.min_gpus:
                 self.script.addItem(name, name)
-        self.script.setFixedWidth(84)
         self.script.setToolTip('Choose the TRUBA queue for the generated Slurm script.')
         self.script_label = QLabel('Script')
         self.script_label.setBuddy(self.script)
@@ -373,7 +369,6 @@ class FolderBatchDialog(QDialog):
         self.mesh_type.addItems(['TET4', 'TET10'])
         self.mesh_type.setCurrentText('TET10' if initial.mesh_type == 'TET10' else 'TET4')
         mesh_layout.addWidget(field_label('Element type', self.mesh_type), 0, 2)
-        self.mesh_type.setFixedWidth(100)
         mesh_layout.addWidget(self.mesh_type, 0, 3)
         self.mesh_precision = mesh_precision_stepper(self.preferences, 'folderBatch/meshDisplayDecimals',
                                                    self.mesh_resolution, self.local_mesh_size)

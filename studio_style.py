@@ -10,6 +10,7 @@ from PySide6.QtWidgets import QAbstractSpinBox, QComboBox, QDoubleSpinBox, QForm
 
 
 CONTROL_HEIGHT = 25
+COMBO_WIDTH = 150
 FORM_LABEL_WIDTH = 118
 FORM_FIELD_MIN_WIDTH = 94
 NUMERIC_FIELD_WIDTH = 80
@@ -40,7 +41,7 @@ class CompactComboBox(DatenburgComboBox):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.setFixedHeight(CONTROL_HEIGHT)
+        self.setFixedSize(COMBO_WIDTH, CONTROL_HEIGHT)
         self.setStyleSheet(graphcalc_combo_stylesheet().replace("#GraphCalcCombo", ""))
         self._apply_light_popup_style()
         self.view().setItemDelegate(DatenburgComboDelegate(self.view()))
@@ -387,7 +388,7 @@ def field_label(text: str, control: QWidget, *, tooltip: str = "") -> QLabel:
         control.setMaximumWidth(180)
         control.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         control.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
-    else:
+    elif not isinstance(control, QComboBox):
         control.setMinimumWidth(FORM_FIELD_MIN_WIDTH)
         control.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
     label = QLabel(text)

@@ -146,7 +146,6 @@ class RemoteController(QObject):
                 control.valueChanged.connect(self.configuration_changed)
             elif name == 'partition':
                 control = CompactComboBox()
-                control.setFixedWidth(190)
                 control.addItem('Auto · program chooses resources', 'auto')
                 for key, limit in BASELINES.items():
                     control.addItem(limit.label, key)

@@ -82,7 +82,6 @@ class FlowWorkspace(QWidget):
         self.mesh_method = CompactComboBox()
         self.mesh_method.addItem("Cartesian", "cartesian")
         self.mesh_method.addItem("Fitted · OpenFOAM", "snappy")
-        self.mesh_method.setFixedWidth(160)
         self.mesh_method.setCurrentIndex(max(0,self.mesh_method.findData(defaults.mesh_method)))
         self.mesh_method.currentIndexChanged.connect(self.inputs_changed)
         form.addRow(field_label("Fluid mesh",self.mesh_method),self.mesh_method)

@@ -114,7 +114,6 @@ class SampleSettingsPage(QWidget):
                               ("Parameter", 0), ("Name", 1),
                               ("Value", 2)):
             self.filter_column.addItem(label, column)
-        self.filter_column.setMaximumWidth(120)
         search_row.addWidget(self.filter_column)
         search_row.addWidget(self.search, 1)
         layout.addLayout(search_row)
@@ -197,14 +196,12 @@ class SampleSettingsPage(QWidget):
         rule = load_rules().get(self.context, {})
         options = QHBoxLayout()
         self.separator = CompactComboBox()
-        self.separator.setFixedWidth(70)
         for label, value in (("-", "-"), ("_", "_"), ("None", "")):
             self.separator.addItem(label, value)
         self.separator.setCurrentIndex(max(0, self.separator.findData(rule.get("separator", "-"))))
         options.addWidget(QLabel("Separator"))
         options.addWidget(self.separator)
         self.decimal = CompactComboBox()
-        self.decimal.setFixedWidth(70)
         for label, value in ((".", "."), ("_", "_"), ("Remove", "")):
             self.decimal.addItem(label, value)
         self.decimal.setCurrentIndex(max(0, self.decimal.findData(rule.get("decimal", "."))))

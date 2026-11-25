@@ -4,7 +4,7 @@ from studio_style import CompactComboBox, CONTROL_HEIGHT, STUDIO_STYLESHEET
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QApplication, QDialog, QDialogButtonBox, QFrame, QHBoxLayout, QLabel,
-    QPushButton, QSizePolicy, QVBoxLayout,
+    QPushButton, QVBoxLayout,
 )
 
 from model import Settings, validate_geometry
@@ -57,11 +57,6 @@ class DoEBoundaryPreview(QDialog):
         self.case_selector = CompactComboBox()
         self.case_selector.addItems(list(cases))
         self.case_selector.setAccessibleName("DoE preview case")
-        self.case_selector.setSizeAdjustPolicy(CompactComboBox.SizeAdjustPolicy.AdjustToContents)
-        self.case_selector.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
-        self.case_selector.setMinimumWidth(100)
-        self.case_selector.setMaximumWidth(200)
-        self.case_selector.setFixedHeight(CONTROL_HEIGHT)
         case_label.setBuddy(self.case_selector)
         tools.addWidget(case_label)
         tools.addWidget(self.case_selector)

@@ -99,7 +99,6 @@ class MaterialEditor(SidebarGroupBox):
         if elastic_only:
             for label in (selector_label, name_lbl):
                 label.setFixedWidth(90)
-            self.material_selector.setMaximumWidth(200)
             self.name.setToolTip(self.name.text())
             self.name.textChanged.connect(self.name.setToolTip)
 
@@ -147,8 +146,6 @@ class MaterialEditor(SidebarGroupBox):
             self.stress_unit.addItem(unit, factor)
         self.stress_unit.setCurrentText("MPa")
         self.form.addRow(field_label("Stress unit", self.stress_unit), self.stress_unit)
-        if elastic_only:
-            self.stress_unit.setFixedWidth(self.stress_unit.minimumWidth())
 
         self.model = NoWheelComboBox()
         for key, label in MATERIAL_MODELS.items():

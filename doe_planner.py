@@ -10,11 +10,10 @@ from PySide6.QtWidgets import (
 
 from model import MIN_MESH_INPUT_MM, validate_geometry
 from structure_library import STRUCTURE_FAMILIES
-from studio_style import ActionFlowLayout, CompactComboBox, CONTROL_HEIGHT, NUMERIC_FIELD_WIDTH, SidebarGroupBox
+from studio_style import ActionFlowLayout, CompactComboBox, COMBO_WIDTH, CONTROL_HEIGHT, NUMERIC_FIELD_WIDTH, SidebarGroupBox
 
 
 SELECTED_LABEL_WIDTH = 132
-BOUND_SOURCE_WIDTH = 100
 LEVELS_WIDTH = 64
 
 
@@ -197,14 +196,14 @@ class SimpleDoEPlanner(QWidget):
         grid.setHorizontalSpacing(6)
         grid.setVerticalSpacing(4)
         grid.setColumnMinimumWidth(0, SELECTED_LABEL_WIDTH)
-        grid.setColumnMinimumWidth(1, BOUND_SOURCE_WIDTH)
-        grid.setColumnMinimumWidth(2, BOUND_SOURCE_WIDTH)
+        grid.setColumnMinimumWidth(1, COMBO_WIDTH)
+        grid.setColumnMinimumWidth(2, COMBO_WIDTH)
         grid.setColumnMinimumWidth(3, LEVELS_WIDTH)
         grid.setColumnStretch(4, 1)
         for col, title in enumerate(('Vary', 'Min', 'Max', 'Levels')):
             caption = QLabel(title)
             caption.setFixedWidth(SELECTED_LABEL_WIDTH if col == 0 else
-                                  LEVELS_WIDTH if col == 3 else BOUND_SOURCE_WIDTH)
+                                  LEVELS_WIDTH if col == 3 else COMBO_WIDTH)
             grid.addWidget(caption, 0, col, Qt.AlignmentFlag.AlignLeft)
         s.factor_controls = {}
         self.bound_sources = {}
@@ -223,8 +222,7 @@ class SimpleDoEPlanner(QWidget):
             source_label.setFixedWidth(SELECTED_LABEL_WIDTH)
             grid.addWidget(source_label, input_row + 1, 0, Qt.AlignmentFlag.AlignLeft)
             for column, bound in enumerate(('Min', 'Max'), 1):
-                combo = self.combo()
-                combo.setFixedWidth(BOUND_SOURCE_WIDTH)
+                combo = CompactComboBox()
                 combo.setAccessibleName(f'{spec[1]} {bound} source')
                 combo.currentIndexChanged.connect(
                     lambda _, f=field, b=bound, c=combo: self.use_bound(f, b, c))
@@ -238,7 +236,7 @@ class SimpleDoEPlanner(QWidget):
 
         sampling = QHBoxLayout()
         sampling.addWidget(QLabel('Sampling'))
-        s.sampling_combo = self.combo()
+        s.sampling_combo = CompactComboBox()
         s.sampling_combo.addItem('Full factorial grid', 'full_factorial')
         s.sampling_combo.addItem('Latin hypercube (LHS)', 'lhs')
         s.sampling_combo.currentIndexChanged.connect(s._refresh_plan)
@@ -272,10 +270,10 @@ class SimpleDoEPlanner(QWidget):
             s.design_value_controls[field] = spin
             spin.valueChanged.connect(s._edit_design)
             advanced_layout.addRow(label, spin)
-        s.design_mesh_type = self.combo()
+        s.design_mesh_type = CompactComboBox()
         s.design_mesh_type.addItems(['HEX8', 'HEX20', 'TET4', 'TET10'])
         s.design_mesh_type.currentTextChanged.connect(s._edit_design)
-        s.design_mesh_strategy = self.combo()
+        s.design_mesh_strategy = CompactComboBox()
         for strategy in ('auto', 'netgen', 'periodic'):
             s.design_mesh_strategy.addItem(strategy, strategy)
         s.design_mesh_strategy.currentIndexChanged.connect(s._edit_design)
@@ -286,7 +284,7 @@ class SimpleDoEPlanner(QWidget):
         s.common_strain_spin = s._make_dspin(.1, 95, 10, .5, 2)
         s.common_strain_check.toggled.connect(s.common_strain_spin.setEnabled)
         advanced_layout.addRow(s.common_strain_check, s.common_strain_spin)
-        s.preview_factor = self.combo()
+        s.preview_factor = CompactComboBox()
         s.preview_bounds_btn = QPushButton('Preview bounds')
         s.preview_bounds_btn.clicked.connect(s._preview_bounds)
         advanced_layout.addRow(s.preview_factor, s.preview_bounds_btn)
@@ -333,12 +331,6 @@ class SimpleDoEPlanner(QWidget):
         for button in self.findChildren(QPushButton):
             button.setDefault(False)
             button.setAutoDefault(False)
-
-    @staticmethod
-    def combo():
-        combo = CompactComboBox()
-        combo.setFixedSize(150, CONTROL_HEIGHT)
-        return combo
 
     def draft_settings(self):
         return self.geometry_panel.selected_settings()

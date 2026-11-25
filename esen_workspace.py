@@ -165,8 +165,6 @@ def compact_combo(options):
     box = CompactComboBox()
     for label, value in options:
         box.addItem(label, value)
-    width = max(box.fontMetrics().horizontalAdvance(translate(label)) for label, _ in options)
-    box.setFixedWidth(max(100, min(200, width + 44)))
     return box
 
 
