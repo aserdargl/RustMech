@@ -585,7 +585,6 @@ class NewDoePage(QWidget):
             index = self.operation.findData(last_operation)
             if index >= 0:
                 self.operation.setCurrentIndex(index)
-        self.operation.currentIndexChanged.connect(self.size_operation)
         self.operation.currentIndexChanged.connect(self.load)
 
     def size_navigation(self, navigation, active):
@@ -639,8 +638,9 @@ class NewDoePage(QWidget):
             self.load()
 
     def size_operation(self):
-        title = self.operation.currentText()
-        width = max(self.operation.fontMetrics().horizontalAdvance(label)
+        metrics = self.operation.fontMetrics()
+        width = max(metrics.horizontalAdvance(label)
+                    for title in OPERATIONS
                     for label in (title, turkish(title))) + 34
         self.operation.setFixedWidth(width)
 

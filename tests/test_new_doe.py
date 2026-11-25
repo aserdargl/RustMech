@@ -6,10 +6,10 @@ import unittest
 from unittest.mock import MagicMock, Mock, patch
 from PySide6.QtCore import QPoint, Qt
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QAbstractSpinBox, QLineEdit, QTableWidget, QWidget
+from PySide6.QtWidgets import QAbstractSpinBox, QLineEdit, QStyle, QStyleOptionComboBox, QTableWidget, QWidget
 
 from tests import test_remote_mode_ui as ui
-from ui_language import LanguageSelector
+from ui_language import LanguageSelector, turkish
 
 
 class NewDoeTests(unittest.TestCase):
@@ -182,9 +182,18 @@ class NewDoeTests(unittest.TestCase):
     def test_operation_inputs_and_fft_factorial_matrix(self):
         from new_doe_operations import snapshot
         page = self.page()
+        selector = page.operation
+        selector_width = selector.width()
+        option = QStyleOptionComboBox()
+        selector.initStyleOption(option)
+        text_rect = selector.style().subControlRect(QStyle.ComplexControl.CC_ComboBox, option,
+                                                    QStyle.SubControl.SC_ComboBoxEditField, selector)
         for i in range(page.operation.count()):
             page.operation.setCurrentIndex(i)
             with self.subTest(op=page.operation.currentText()):
+                self.assertEqual(selector.width(), selector_width)
+                for title in (selector.currentText(), turkish(selector.currentText())):
+                    self.assertLessEqual(selector.fontMetrics().horizontalAdvance(title), text_rect.width())
                 self.assertTrue(page.loaded, page.status.text())
                 self.assertEqual(page.base, snapshot(self.window, page.operation.currentData()))
                 page.create()
