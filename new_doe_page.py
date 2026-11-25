@@ -641,7 +641,7 @@ class NewDoePage(QWidget):
     def size_operation(self):
         title = self.operation.currentText()
         width = max(self.operation.fontMetrics().horizontalAdvance(label)
-                    for label in (title, turkish(title))) + 24
+                    for label in (title, turkish(title))) + 34
         self.operation.setFixedWidth(width)
 
     def invalidate(self, *_):
