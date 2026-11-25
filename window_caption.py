@@ -11,6 +11,7 @@ from PySide6.QtWidgets import QAbstractButton, QDialog, QHBoxLayout, QMainWindow
 
 CAPTION_HEIGHT = 25
 FRAME_GRIP = 4
+FRAME_INSET = 1
 CAPTION_PROPERTY = "rustmechCaption"
 WM_GETMINMAXINFO = 0x0024
 WM_STYLECHANGING = 0x007C
@@ -458,20 +459,20 @@ class WindowCaptionService(QObject):
 
     def _update_layout(self, window, caption):
         fullscreen = window.isFullScreen() and not window.isMaximized()
-        grip = 0 if fullscreen or window.isMaximized() else FRAME_GRIP
+        inset = 0 if fullscreen or window.isMaximized() else FRAME_INSET
         top = 0 if fullscreen else CAPTION_HEIGHT
-        target_margins = caption.base_margins + QMargins(grip, grip + top, grip, grip)
+        target_margins = caption.base_margins + QMargins(inset, inset + top, inset, inset)
         if window.contentsMargins() != target_margins:
             window.setContentsMargins(target_margins)
             if window.layout() is not None:
                 window.layout().activate()
-        caption.setGeometry(grip, grip, max(0, window.width() - 2 * grip), CAPTION_HEIGHT)
+        caption.setGeometry(inset, inset, max(0, window.width() - 2 * inset), CAPTION_HEIGHT)
         caption.setVisible(not fullscreen)
         caption.sync_actions()
         caption.raise_()
         if caption.outline is not None:
             caption.outline.setGeometry(window.rect())
-            caption.outline.setVisible(bool(grip))
+            caption.outline.setVisible(bool(inset))
             caption.outline.raise_()
             caption.outline.update()
         caption.update()

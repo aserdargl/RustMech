@@ -6,7 +6,7 @@ from ctypes import wintypes
 from pathlib import Path
 from unittest.mock import patch
 
-from PySide6.QtCore import QPoint, QSettings, Qt
+from PySide6.QtCore import QMargins, QPoint, QSettings, Qt
 from PySide6.QtWidgets import (
     QApplication, QDialog, QFileDialog, QMainWindow, QMenu, QMessageBox, QSplitter, QVBoxLayout, QWidget,
 )
@@ -266,6 +266,8 @@ class WindowStateTests(unittest.TestCase):
         self.app.processEvents()
         assert_integrated_frame(main)
         caption = main.property(CAPTION_PROPERTY)
+        self.assertEqual(caption.x(), 1)
+        self.assertEqual(main.contentsMargins() - caption.base_margins, QMargins(1, 26, 1, 1))
         buttons = caption.findChildren(CaptionButton)
         self.assertEqual([button.action for button in buttons], ["pin", "minimize", "maximize", "close"])
         self.assertEqual([button.x() for button in buttons], list(range(caption.width() - 100, caption.width(), 25)))
