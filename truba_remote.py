@@ -247,7 +247,9 @@ def slurm_script(context,username,request):
     if request.get("background") or request["operation"] in ANALYSIS_OPERATIONS:
         job_name = analysis_code(request) or job_name
     if type(request.get("experiment_index")) is int and type(request.get("experiment_count")) is int:
-        job_name += f"-DoE-{request['experiment_index']}-of-{request['experiment_count']}"
+        first = request["experiment_index"]
+        experiments = f"{first}-{first + 1}" if request.get("paired_experiments") else str(first)
+        job_name += f"-DoE-{experiments}-of-{request['experiment_count']}"
     return f'''#!/bin/bash -l
 #SBATCH --job-name={job_name}
 #SBATCH --partition={partition}
@@ -370,17 +372,41 @@ def _rebase_paths(directory,result, *, rewrite_summaries=True):
     return result
 
 
+def doe_row_result(output):
+    """Return a completed row folder or the failure reported by its worker."""
+    try:
+        record = json.loads((output / "experiment.json").read_text(encoding="utf-8"))
+        if record["state"] == "Completed":
+            return "Completed", {"results": str(output)}
+        if record["state"] == "Failed":
+            return "Failed", {"error": record.get("error") or "Analysis failed."}
+        raise ValueError("Incomplete experiment record.")
+    except (OSError, KeyError, ValueError) as error:
+        return "Failed", {"error": str(error)}
+
+
 def _save_doe_row_result(record, directory, stage):
     if not record.get("background") or not record.get("experiment_index"):
         return
     if stage != "downloaded" and stage.upper().partition("|")[0] not in SLURM_TERMINAL_STATES:
         return
-    manifest = directory.parent / "experiment.json"
-    if manifest.is_file():
+    first = record["experiment_index"]
+    size = record.get("experiment_batch_size", 1)
+    for offset in range(size):
+        manifest = directory.parent.parent / f"row_{first + offset:05d}" / "experiment.json"
+        if size == 1:
+            manifest = directory.parent / "experiment.json"
+        if not manifest.is_file():
+            continue
         row = json.loads(manifest.read_text(encoding="utf-8"))
         row["slurm_job_id"] = record.get("job_id")
         if stage == "downloaded":
-            row.update(state="Completed", results=str(directory / "output"))
+            output = directory / "output"
+            if size > 1:
+                state, details = doe_row_result(output / f"row_{offset + 1:05d}")
+                row.update(state=state, **details)
+            else:
+                row.update(state="Completed", results=str(output))
         else:
             row.update(state="Stopped" if stage.upper().startswith("CANCELLED") else "Failed", error=stage)
         write_record(manifest, row)
@@ -395,6 +421,12 @@ def run_remote_job(request,context,auth=None,marker=None,*,directory=None,resume
         required_capability(request)
         if request['operation'] in ANALYSIS_OPERATIONS:
             context = _standalone_analysis_context(context, request['operation'])
+        if request.get("paired_experiments"):
+            index, count = request.get("experiment_index"), request.get("experiment_count")
+            if (not submit_only or len(request.get("experiment_rows", ())) != 2
+                    or type(index) is not int or type(count) is not int or not 1 <= index < count
+                    or min(context.cores, context.memory_mb) < 2):
+                raise ValueError("Paired TRUBA experiments require two rows, CPUs and MiB of RAM.")
     if context.session_id and not resume_record and request.get('operation') == 'doe_mesh':
         from truba_handover import context_for_request
         context = context_for_request(context, auth, cancelled=cancelled, marker=marker, on_progress=on_progress)
@@ -433,10 +465,12 @@ def run_remote_job(request,context,auth=None,marker=None,*,directory=None,resume
                       remote_directory=f"/arf/scratch/{transport.username}/RustMech/{uuid.uuid4().hex}",
                       local_directory=str(directory.resolve()),state="preparing",context=asdict(context),
                       operation=request["operation"],request_id=request["request_id"],source_sha256=source_hash)
-        if "experiment_rows" in request:
-            record["experiment_count"] = len(request["experiment_rows"])
-        elif "experiment_index" in request:
+        if "experiment_index" in request:
             record.update(experiment_index=request["experiment_index"], experiment_count=request["experiment_count"])
+        elif "experiment_rows" in request:
+            record["experiment_count"] = len(request["experiment_rows"])
+        if request.get("paired_experiments"):
+            record["experiment_batch_size"] = len(request["experiment_rows"])
         if study_name and request["operation"] not in ("probe", "prepare", "preview", "surface"):
             record["study_name"] = study_name
         if request['operation'] == 'convergence_level' and request.get('convergence_study'):
@@ -641,7 +675,7 @@ if [ -s job.id ]; then printf 'RUSTMECH_JOB_ID=%s\n' "$(cat job.id)"; fi
                 progress = re.search(r'^RUSTMECH_PROGRESS=(.*)$', reply, re.MULTILINE)
                 if progress and progress[1].strip():
                     value = f"{value} · {progress[1].strip()}"
-            if record.get('experiment_count') and queue_state == 'RUNNING':
+            if record.get('experiment_count') and not record.get('background') and queue_state == 'RUNNING':
                 current = re.search(r'^RUSTMECH_PROGRESS=Running experiment (\d+) / (\d+)$', reply, re.MULTILINE)
                 if current and int(current[2]) == record['experiment_count'] and 1 <= int(current[1]) <= int(current[2]):
                     record['experiment_index'] = int(current[1])
@@ -723,7 +757,8 @@ if [ -s job.id ]; then printf 'RUSTMECH_JOB_ID=%s\n' "$(cat job.id)"; fi
             raise RuntimeError(f"SLURM did not confirm successful completion ({accounting or 'unknown'}). See {directory/'slurm.err'}")
         if result.get("error"): raise RuntimeError(result["error"])
         result = _rebase_paths(directory,result)
-        if record.get("experiment_count") and result.get("experiments") == record["experiment_count"]:
+        if (not record.get("background") and record.get("experiment_count")
+                and result.get("experiments") == record["experiment_count"]):
             record["experiment_index"] = record["experiment_count"]
         record.pop("tracking_error", None)
         update("downloaded")

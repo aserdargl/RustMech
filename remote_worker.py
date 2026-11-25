@@ -3,6 +3,7 @@
 The module itself uses only the standard library so a missing runtime can be
 reported by the cluster's bootstrap Python without importing the application.
 """
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack
 from dataclasses import asdict,replace
 from functools import partial
@@ -349,27 +350,83 @@ def _run_operation(request,output):
     raise ValueError("Unsupported remote operation.")
 
 
-def _run_experiment_matrix(request, output):
+def _run_experiment_row(request, output, root, index, row, resources=None):
     from remote_operations import required_capability
 
+    name = f"row_{index:05d}"
+    case = (output / name).resolve()
+    work = root / "matrix_work" / name
+    work.mkdir(parents=True)
+    record = dict(experiment=index, execution_target="truba", inputs=row, state="Running")
+    _write(case / "experiment.json", record)
+    try:
+        if row["operation"] != request["operation"]:
+            raise ValueError("Inconsistent matrix operation.")
+        required_capability(row)
+        allocation = request["remote_context"]
+        child = dict(row, request_id=request["request_id"], source_sha256=request["source_sha256"],
+                     native_sha256=request["native_sha256"], remote_context=allocation)
+        command = [sys.executable, str(Path(__file__).resolve()), "request.json", "--row-output", str(case)]
+        environment = None
+        if resources is not None:
+            cores, memory = resources
+            child["remote_context"] = dict(allocation, cores=cores, memory_mb=memory)
+            settings = row["settings"]
+            child["settings"] = dict(settings, cores=min(settings.get("cores", cores), cores),
+                                     automatic_cores=False)
+            record["resources"] = dict(cores=cores, memory_mb=memory)
+            environment = dict(os.environ, OMP_NUM_THREADS=str(cores), RUSTMECH_THREADS=str(cores))
+            environment.pop("SLURM_MEM_PER_CPU", None)
+            environment.pop("SLURM_MEM_PER_GPU", None)
+            command = [
+                "srun", "--exact", "--nodes=1", "--ntasks=1", "--cpu-bind=cores",
+                f"--cpus-per-task={cores}", f"--mem={memory}M", f"--job-name=doe-{index}", *command,
+            ]
+        path = row["settings"].get("imported_geometry_path")
+        if path:
+            child["imported_geometry_vtp"] = request["matrix_geometries"][path]
+        _write(work / "request.json", child)
+        with (case / "worker.log").open("w") as log:
+            result = subprocess.run(command, cwd=work, env=environment, stdout=log, stderr=subprocess.STDOUT)
+        if result.returncode:
+            report = case / "result.json"
+            detail = json.loads(report.read_text(encoding="utf-8")).get("error") if report.is_file() else None
+            raise RuntimeError(detail or f"Worker exited with code {result.returncode}.")
+        record.update(state="Completed", results=".")
+    except Exception as error:
+        record.update(state="Failed", error=str(error))
+    _write(case / "experiment.json", record)
+    return record["state"] == "Failed"
+
+
+def _run_experiment_matrix(request, output):
     rows = request["experiment_rows"]
     if not 1 <= len(rows) <= 10000:
         raise ValueError("Invalid experiment count.")
     root = Path.cwd()
-    worker = str(Path(__file__).resolve())
+    if request.get("paired_experiments"):
+        allocation = request["remote_context"]
+        cores, memory = allocation["cores"], allocation["memory_mb"]
+        if len(rows) != 2 or min(cores, memory) < 2:
+            raise ValueError("Paired TRUBA experiments require two rows, CPUs and MiB of RAM.")
+        if (root / "cancel.request").exists():
+            raise RuntimeError("Experiment matrix cancelled.")
+        _stage("Running two experiments in parallel")
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            tasks = [
+                executor.submit(_run_experiment_row, request, output, root, index, row, resources)
+                for index, (row, resources) in enumerate(zip(rows, (
+                    (cores // 2, memory // 2),
+                    (cores - cores // 2, memory - memory // 2),
+                )), 1)
+            ]
+            return dict(experiments=2, failed=sum(task.result() for task in tasks))
     job_id = os.environ.get("SLURM_JOB_ID", "")
     scontrol = shutil.which("scontrol") if job_id.isdecimal() and os.environ.get("SLURMD_NODENAME") else None
     failures = 0
     for index, row in enumerate(rows, 1):
         if (root / "cancel.request").exists():
             raise RuntimeError("Experiment matrix cancelled.")
-        name = f"row_{index:05d}"
-        case = (output / name).resolve()
-        case.mkdir()
-        work = root / "matrix_work" / name
-        work.mkdir(parents=True)
-        record = dict(experiment=index, execution_target="truba", inputs=row, state="Running")
-        _write(case / "experiment.json", record)
         _stage(f"Running experiment {index} / {len(rows)}")
         if scontrol:
             try:
@@ -379,28 +436,7 @@ def _run_experiment_matrix(request, output):
                     scontrol = None
             except (OSError, subprocess.TimeoutExpired):
                 scontrol = None
-        try:
-            if row["operation"] != request["operation"]:
-                raise ValueError("Inconsistent matrix operation.")
-            required_capability(row)
-            child = dict(row, request_id=request["request_id"], source_sha256=request["source_sha256"],
-                         native_sha256=request["native_sha256"], remote_context=request["remote_context"])
-            path = row["settings"].get("imported_geometry_path")
-            if path:
-                child["imported_geometry_vtp"] = request["matrix_geometries"][path]
-            _write(work / "request.json", child)
-            with (case / "worker.log").open("w") as log:
-                result = subprocess.run([sys.executable, worker, "request.json", "--row-output", str(case)],
-                                        cwd=work, stdout=log, stderr=subprocess.STDOUT)
-            if result.returncode:
-                report = case / "result.json"
-                detail = json.loads(report.read_text(encoding="utf-8")).get("error") if report.is_file() else None
-                raise RuntimeError(detail or f"Worker exited with code {result.returncode}.")
-            record.update(state="Completed", results=".")
-        except Exception as error:
-            failures += 1
-            record.update(state="Failed", error=str(error))
-        _write(case / "experiment.json", record)
+        failures += _run_experiment_row(request, output, root, index, row)
     return dict(experiments=len(rows), failed=failures)
 
 

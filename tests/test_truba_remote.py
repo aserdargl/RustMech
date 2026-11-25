@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+from threading import Barrier
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -323,6 +324,33 @@ class RemoteProtocolTests(unittest.TestCase):
             self.assertEqual(manifest["slurm_job_id"], record["job_id"])
             self.assertEqual(Path(manifest["results"]), folder / "output")
 
+    def test_paired_doe_submission_records_both_background_results(self):
+        from truba_job_list import job_description
+        from truba_remote import _save_doe_row_result, submit_remote_analysis
+
+        cases = [self.root / f"row_{i:05d}" for i in (3, 4)]
+        for case in cases:
+            case.mkdir()
+            (case / "experiment.json").write_text("{}")
+        rows = [dict(operation="fft_solve", settings=asdict(Settings()), grid=n) for n in (16, 24)]
+        request = dict(rows[0], experiment_rows=rows, experiment_index=3, experiment_count=5,
+                       paired_experiments=True)
+        directory = cases[0] / "truba"
+        record = submit_remote_analysis(request, RemoteContext(partition="hamsi", cores=56),
+                                        directory=directory)
+        self.assertEqual(FakeTransport.instances[0].submissions, 1)
+        self.assertIn("DoE 3–4/5", job_description(record))
+        for offset, state in enumerate(("Completed", "Failed"), 1):
+            output = directory / "output" / f"row_{offset:05d}"
+            output.mkdir(parents=True)
+            (output / "experiment.json").write_text(json.dumps(dict(state=state, error="solver error")))
+        _save_doe_row_result(record, directory, "downloaded")
+        first, second = (json.loads((case / "experiment.json").read_text()) for case in cases)
+        self.assertEqual(first["state"], "Completed")
+        self.assertEqual(Path(first["results"]), directory / "output" / "row_00001")
+        self.assertEqual((second["state"], second["error"]), ("Failed", "solver error"))
+        self.assertEqual(first["slurm_job_id"], second["slurm_job_id"])
+
     def test_submission_download_checksum_and_resume_do_not_resubmit(self):
         result,directory = run_remote_job(dict(operation="probe"),RemoteContext(),directory=self.root/"job")
         self.assertTrue(result["capabilities"]["mesh"])
@@ -556,6 +584,40 @@ class RemoteProtocolTests(unittest.TestCase):
 
 
 class ComputeWorkerTests(unittest.TestCase):
+    def test_paired_experiment_workers_start_together_and_split_cpu_and_memory(self):
+        from remote_worker import _run_experiment_matrix
+
+        barrier = Barrier(2, timeout=5)
+        settings = dict(solver_backend="kratos", cores=52)
+        rows = [dict(operation="mechanical", settings=settings) for _ in range(2)]
+        request = dict(operation="mechanical", experiment_rows=rows, paired_experiments=True,
+                       remote_context={"cores": 56, "memory_mb": 131073}, request_id="pair",
+                       source_sha256="a" * 64, native_sha256="b" * 64)
+
+        def execute(command, *, cwd, env, **kwargs):
+            row = int(cwd.name[-1])
+            child = json.loads((cwd / "request.json").read_text())
+            self.assertEqual(command[0], "srun")
+            self.assertIn("--cpus-per-task=28", command)
+            self.assertIn(f"--mem={65535 + row}M", command)
+            self.assertEqual(child["settings"]["cores"], 28)
+            self.assertEqual(env["OMP_NUM_THREADS"], "28")
+            barrier.wait()
+            return subprocess.CompletedProcess(command, row - 1)
+
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            output = root / "output"
+            with patch("remote_worker.Path.cwd", return_value=root), \
+                    patch("remote_worker.subprocess.run", side_effect=execute) as run:
+                result = _run_experiment_matrix(request, output)
+            self.assertEqual(result, {"experiments": 2, "failed": 1})
+            self.assertEqual(run.call_count, 2)
+            for offset, state in enumerate(("Completed", "Failed"), 1):
+                saved = json.loads((output / f"row_{offset:05d}" / "experiment.json").read_text())
+                self.assertEqual(saved["state"], state)
+                self.assertEqual(saved["inputs"]["settings"]["cores"], 52)
+
     def test_matrix_worker_runs_rows_sequentially_and_preserves_sibling_results(self):
         from peridynamic_analysis import CompressionOptions
         with tempfile.TemporaryDirectory() as temporary:

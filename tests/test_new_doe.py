@@ -408,7 +408,7 @@ class NewDoeTests(unittest.TestCase):
     def test_run_menu_selects_target_for_the_matrix(self):
         page = self.page()
         page.create()
-        local, remote, separate = page.run.menu().actions()
+        local, _, remote = page.run.menu().actions()
         controller = self.window.remote_controller
         with patch("doe_studio.results_directory", return_value=Path(self.temp.name)), \
                 patch.object(controller, "auth", return_value=None) as auth, \
@@ -459,7 +459,7 @@ class NewDoeTests(unittest.TestCase):
                 patch("new_doe_page.launch") as launch:
             job = launch.return_value
             job.done.return_value = False
-            page.start(remote=True)
+            page.start(remote=True, separate=False)
             jobs = page.truba_jobs_window
             self.assertTrue(jobs.isVisible())
             self.assertEqual(jobs.table.rowCount(), 0)
@@ -483,6 +483,7 @@ class NewDoeTests(unittest.TestCase):
 
     def test_separate_jobs_queue_before_completion_and_finish_out_of_order(self):
         page = self.page()
+        page.pair_experiments.setChecked(False)
         grid = next(f for f in page.factors if f.path == ("grid",))
         grid.variable.setChecked(True)
         grid.first.setValue(16)
@@ -511,7 +512,7 @@ class NewDoeTests(unittest.TestCase):
                 patch.object(self.controller, "auth", return_value=object()), \
                 patch("new_doe_page.launch", side_effect=submit), \
                 patch("new_doe_page.monotonic", return_value=0) as clock:
-            page.run.menu().actions()[2].trigger()
+            page.run.menu().actions()[1].trigger()
             jobs = page.truba_jobs_window
             self.assertTrue(jobs.isVisible())
             page.advance()
@@ -543,6 +544,84 @@ class NewDoeTests(unittest.TestCase):
                 saved = json.loads((Path(record["local_directory"]).parent / "experiment.json").read_text())
                 self.assertEqual(saved["slurm_job_id"], record["job_id"])
                 self.assertEqual(saved["state"], "Completed")
+
+    def test_truba_pairs_by_default_and_keeps_the_last_experiment_separate(self):
+        page = self.page()
+        self.assertTrue(page.pair_experiments.isChecked())
+        grid = next(f for f in page.factors if f.path == ("grid",))
+        grid.variable.setChecked(True)
+        grid.mode.setCurrentIndex(grid.mode.findData("list"))
+        grid.selection.setText("16, 24, 32")
+        page.create()
+        root = Path(self.temp.name)
+        records = []
+
+        def submit(request, case, controller):
+            first = request["experiment_index"]
+            self.assertEqual(request["experiment_count"], 3)
+            if first == 1:
+                self.assertTrue(request["paired_experiments"])
+                self.assertEqual([row["grid"] for row in request["experiment_rows"]], [16, 24])
+            else:
+                self.assertEqual(first, 3)
+                self.assertEqual(request["grid"], 32)
+                self.assertNotIn("experiment_rows", request)
+            folder = case / "truba"
+            folder.mkdir()
+            record = dict(request_id=str(first), job_id=str(70 + first), state="submitted",
+                          local_directory=str(folder))
+            (folder / "remote_job.json").write_text(json.dumps(record), encoding="utf-8")
+            records.append(record)
+            job = Mock()
+            job.remote_status.return_value = record
+            job.result.return_value = record
+            job.done.return_value = True
+            return job
+
+        with patch("doe_studio.results_directory", return_value=root), \
+                patch.object(self.controller, "auth", return_value=object()), \
+                patch("new_doe_page.launch", side_effect=submit), \
+                patch("new_doe_page.monotonic", return_value=0) as clock:
+            page.run.menu().actions()[1].trigger()
+            page.advance()
+            page.advance()
+            self.assertEqual(len(records), 2)
+            table = page.truba_jobs_window.table
+            self.assertEqual([table.item(row, 0).text() for row in range(2)], ["1–2", "3"])
+            self.assertEqual(page.sheet.states, ["Queued"] * 3)
+            outputs = Path(records[0]["local_directory"]) / "output"
+            for i, state in enumerate(("Failed", "Completed"), 1):
+                folder = outputs / f"row_{i:05d}"
+                folder.mkdir(parents=True)
+                (folder / "experiment.json").write_text(json.dumps(dict(state=state)), encoding="utf-8")
+            for record in records:
+                record["state"] = "downloaded"
+                (Path(record["local_directory"]) / "remote_job.json").write_text(json.dumps(record), encoding="utf-8")
+            clock.return_value = 3
+            page.advance()
+            self.assertEqual(page.sheet.states, ["Failed", "Completed", "Completed"])
+            self.assertEqual(page.failures, 1)
+            self.assertFalse(page.timer.isActive())
+            for i, job_id in enumerate(("71", "71", "73"), 1):
+                record = json.loads((page.directory / f"row_{i:05d}" / "experiment.json").read_text(encoding="utf-8"))
+                self.assertEqual(record["slurm_job_id"], job_id)
+
+    def test_truba_pairing_is_saved_per_analysis(self):
+        from new_doe_page import NewDoePage
+
+        page = self.page()
+        self.assertTrue(page.pair_experiments.isChecked())
+        fft = page.operation.currentIndex()
+        page.pair_experiments.setChecked(False)
+        page.operation.setCurrentIndex(page.operation.findData("flow_solve"))
+        self.assertTrue(page.pair_experiments.isChecked())
+        page.operation.setCurrentIndex(fft)
+        self.assertFalse(page.pair_experiments.isChecked())
+        reopened = NewDoePage(None, page.preferences)
+        try:
+            self.assertFalse(reopened.pair_experiments.isChecked())
+        finally:
+            reopened.deleteLater()
 
     def test_truba_jobs_window_restores_normal_bounds_and_maximized_state(self):
         from new_doe_page import DoeTrubaJobsWindow

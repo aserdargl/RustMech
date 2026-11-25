@@ -8,7 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
 
-from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt, QTimer, QUrl
+from PySide6.QtCore import QAbstractTableModel, QModelIndex, QSignalBlocker, Qt, QTimer, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDoubleSpinBox, QHeaderView,
                                QHBoxLayout, QLabel, QLineEdit, QMainWindow, QMenu, QPushButton,
@@ -471,6 +471,7 @@ class NewDoePage(QWidget):
         self.preferences = preferences
         self._loaded_operation = None
         self._drafts = {}
+        self._pairing = {}
         self._draft_timer = QTimer(self, interval=300, singleShot=True)
         self._draft_timer.timeout.connect(self.save_draft)
         self.rows = []
@@ -509,8 +510,8 @@ class NewDoePage(QWidget):
         self.run = QPushButton("Run")
         menu = QMenu(self.run)
         menu.addAction("Run locally", lambda: self.start(remote=False))
-        menu.addAction("Run on TRUBA as one job", lambda: self.start(remote=True))
-        menu.addAction("Run on TRUBA as separate jobs", lambda: self.start(remote=True, separate=True))
+        menu.addAction("Run on TRUBA", lambda: self.start(remote=True))
+        menu.addAction("Run on TRUBA as one job", lambda: self.start(remote=True, separate=False))
         self.run.setMenu(menu)
         self.stop = QPushButton("Stop")
         self.stop.clicked.connect(self.cancel)
@@ -523,6 +524,12 @@ class NewDoePage(QWidget):
             button.setProperty("managesLocalizedWidth", True)
             button.setFixedHeight(CONTROL_HEIGHT)
             bar.addWidget(button)
+        self.pair_experiments = QCheckBox("Pair TRUBA experiments")
+        self.pair_experiments.setToolTip(
+            "Run two experiments per Slurm job, sharing CPUs and RAM. Turn off to run one experiment per job."
+        )
+        self.pair_experiments.toggled.connect(self.save_pairing)
+        bar.addWidget(self.pair_experiments)
         bar.addStretch()
 
         settings_panel = QWidget()
@@ -580,12 +587,29 @@ class NewDoePage(QWidget):
         self.open.setEnabled(False)
         if host is None:
             self.operation.setEnabled(False)
+            self.pair_experiments.setEnabled(False)
         if self.preferences is not None:
             last_operation = self.preferences.value("doe/lastOperation", "", type=str)
             index = self.operation.findData(last_operation)
             if index >= 0:
                 self.operation.setCurrentIndex(index)
+        self.restore_pairing()
+        self.operation.currentIndexChanged.connect(self.restore_pairing)
         self.operation.currentIndexChanged.connect(self.load)
+
+    def restore_pairing(self):
+        operation = self.operation.currentData()
+        enabled = self._pairing.get(operation, True)
+        if self.preferences is not None:
+            enabled = self.preferences.value(f"doe/pairTrubaExperiments/{operation}", True, type=bool)
+        with QSignalBlocker(self.pair_experiments):
+            self.pair_experiments.setChecked(enabled)
+
+    def save_pairing(self, enabled):
+        operation = self.operation.currentData()
+        self._pairing[operation] = enabled
+        if self.preferences is not None:
+            self.preferences.setValue(f"doe/pairTrubaExperiments/{operation}", enabled)
 
     def size_navigation(self, navigation, active):
         nav = navigation.findChildren(QPushButton)
@@ -835,7 +859,7 @@ class NewDoePage(QWidget):
         self.run.setEnabled(True)
         self.status.setText(f"{len(rows)} experiments ready.")
 
-    def start(self, *, remote=None, separate=False):
+    def start(self, *, remote=None, separate=True):
         from doe_studio import results_directory
         if not self.matrix_current or not self.rows or self.timer.isActive():
             return
@@ -845,6 +869,8 @@ class NewDoePage(QWidget):
         self.controller = controller if remote else None
         self.grouped_remote = remote and not separate
         self.separate_remote = remote and separate
+        self.batch_size = 2 if self.separate_remote and self.pair_experiments.isChecked() else 1
+        self.submission_size = 1
         self.submitted_rows.clear()
         self.pending_checks.clear()
         self.remote_id = None
@@ -896,7 +922,7 @@ class NewDoePage(QWidget):
             show_restored_window(self.truba_jobs_window)
 
     def lock(self, busy):
-        for widget in (self.operation, self.input_tabs, self.apply_button):
+        for widget in (self.operation, self.input_tabs, self.apply_button, self.pair_experiments):
             widget.setEnabled(not busy)
         self.run.setEnabled(not busy and self.matrix_current)
         self.stop.setEnabled(busy)
@@ -917,11 +943,13 @@ class NewDoePage(QWidget):
             self.sheet.set_state(index, state, message)
         self.finish(message)
 
+    @staticmethod
+    def experiment_range(index, count):
+        return f"{index + 1}–{index + count}" if count > 1 else str(index + 1)
+
     def update_current_truba_job(self, record):
-        if self.grouped_remote:
-            experiment = f"1–{len(self.rows)}" if len(self.rows) > 1 else "1"
-        else:
-            experiment = str(self.index + 1)
+        experiment = (self.experiment_range(0, len(self.rows)) if self.grouped_remote
+                      else self.experiment_range(self.index, self.submission_size))
         self.truba_jobs_window.update_job(experiment, record)
 
     def show_remote_progress(self):
@@ -930,9 +958,13 @@ class NewDoePage(QWidget):
             return
         self.remote_id = record["job_id"]
         self.update_current_truba_job(record)
-        number = record.get("experiment_index") if self.grouped_remote else self.index + 1
+        if not self.grouped_remote:
+            experiments = self.experiment_range(self.index, self.submission_size)
+            self.status.setText(f"TRUBA #{self.remote_id} · DoE {experiments}/{len(self.rows)} · {record['state']}")
+            return
+        number = record.get("experiment_index")
         if type(number) is int and 1 <= number <= len(self.rows):
-            if self.grouped_remote and self.index <= number - 1:
+            if self.index <= number - 1:
                 for previous in range(self.index, number - 1):
                     self.sheet.set_state(previous, "Awaiting results")
                 self.index = number - 1
@@ -973,28 +1005,39 @@ class NewDoePage(QWidget):
         if request_id not in self.submitted_rows:
             return
         from truba_job_list import terminal_record
+        from truba_remote import doe_row_result
 
-        index = self.submitted_rows[request_id]
-        self.truba_jobs_window.update_job(str(index + 1), record)
+        index, size = self.submitted_rows[request_id]
+        self.truba_jobs_window.update_job(self.experiment_range(index, size), record)
         state = record.get("state", "")
         job_id = record.get("job_id")
         details = {"slurm_job_id": job_id} if job_id else {}
         if state == "downloaded":
-            self.record("Completed", index=index, results=str(Path(record["local_directory"]) / "output"), **details)
+            output = Path(record["local_directory"]) / "output"
+            for offset in range(size):
+                if size > 1:
+                    row_state, result = doe_row_result(output / f"row_{offset + 1:05d}")
+                else:
+                    row_state, result = "Completed", {"results": str(output)}
+                self.record(row_state, index=index + offset, **result, **details)
+                self.failures += row_state == "Failed"
         elif terminal_record(record):
-            self.failures += 1
-            self.record("Stopped" if state.lower() == "cancelled" else "Failed", index=index, error=state, **details)
+            self.failures += size
+            label = "Stopped" if state.upper().startswith("CANCELLED") else "Failed"
+            for row in range(index, index + size):
+                self.record(label, index=row, error=state, **details)
         else:
             label = "Running" if state.startswith("RUNNING") else "Queued"
             detail = f"TRUBA #{job_id or '…'} · {state}"
-            if self.sheet.details.get(index) != detail:
-                self.record(label, index=index, **details)
-                self.sheet.set_state(index, label, detail)
+            for row in range(index, index + size):
+                if self.sheet.details.get(row) != detail:
+                    self.record(label, index=row, **details)
+                    self.sheet.set_state(row, label, detail)
             return
         del self.submitted_rows[request_id]
 
     def track_submission(self, record):
-        self.submitted_rows[record["request_id"]] = self.index
+        self.submitted_rows[record["request_id"]] = (self.index, self.submission_size)
         # A fast job can finish between the submission reply and this UI tick.
         path = self.case / "truba" / "remote_job.json"
         if path.is_file():
@@ -1013,7 +1056,7 @@ class NewDoePage(QWidget):
             self.pending_checks.popleft()
             if request_id not in self.submitted_rows:
                 continue
-            index = self.submitted_rows[request_id]
+            index, _ = self.submitted_rows[request_id]
             path = self.directory / f"row_{index + 1:05d}" / "truba" / "remote_job.json"
             if path.is_file():
                 self.update_submitted_row(json.loads(path.read_text(encoding="utf-8")))
@@ -1049,35 +1092,43 @@ class NewDoePage(QWidget):
                     if saved.get("submission_attempted"):
                         self.track_submission(saved)
                     else:
-                        self.failures += 1
-                        self.record("Failed", error=str(error))
+                        self.failures += self.submission_size
+                        for index in range(self.index, self.index + self.submission_size):
+                            self.record("Failed", index=index, error=str(error))
                 else:
                     if not self.separate_remote:
                         self.record("Completed", results=path)
-                self.index += 1
+                self.index += self.submission_size
             if self.index == len(self.rows):
                 if self.submitted_rows:
-                    self.status.setText(f"TRUBA · {len(self.submitted_rows)} / {len(self.rows)} " + translate("jobs pending or running"))
+                    job_count = (len(self.rows) + self.batch_size - 1) // self.batch_size
+                    self.status.setText(f"TRUBA · {len(self.submitted_rows)} / {job_count} " + translate("jobs pending or running"))
                     return
                 self.finish(f"{self.index} experiments finished · {self.failures} failed.")
                 return
             self.case = self.directory / f"row_{self.index + 1:05d}"
-            self.case.mkdir()
+            self.submission_size = min(self.batch_size, len(self.rows) - self.index)
             self.remote_id = None
-            self.record("Submitting" if self.separate_remote else "Running")
+            end = self.index + self.submission_size
+            for index in range(self.index, end):
+                (self.directory / f"row_{index + 1:05d}").mkdir()
+                self.record("Submitting" if self.separate_remote else "Running", index=index)
             if self.separate_remote:
-                self.status.setText(f"TRUBA · {translate('Submitting')} · DoE {self.index + 1}/{len(self.rows)}")
+                experiments = self.experiment_range(self.index, self.submission_size)
+                self.status.setText(f"TRUBA · {translate('Submitting')} · DoE {experiments}/{len(self.rows)}")
             else:
                 self.status.setText(f"Running experiment {self.index + 1} / {len(self.rows)}")
             try:
-                row = self.rows[self.index]
+                row = (dict(matrix_request(self.rows[self.index:end]), paired_experiments=True)
+                       if self.submission_size > 1 else self.rows[self.index])
                 if self.controller is not None:
                     row = dict(row, experiment_index=self.index + 1, experiment_count=len(self.rows))
                 self.job = launch(row, self.case, self.controller)
             except Exception as error:
-                self.record("Failed", error=str(error))
-                self.failures += 1
-                self.index += 1
+                for index in range(self.index, end):
+                    self.record("Failed", index=index, error=str(error))
+                self.failures += self.submission_size
+                self.index = end
         except OSError as error:
             self.finish(f"Cannot save experiment progress: {error} · {self.directory}")
 
@@ -1091,7 +1142,7 @@ class NewDoePage(QWidget):
     def detach_remote(self):
         if self.separate_remote and self.timer.isActive():
             # Slurm and the durable background monitor now own every accepted job.
-            first_unsent = self.index + (1 if self.job is not None else 0)
+            first_unsent = self.index + (self.submission_size if self.job is not None else 0)
             for i in range(first_unsent, len(self.rows)):
                 self.sheet.set_state(i, "Skipped")
             self.submitted_rows.clear()
@@ -1126,7 +1177,8 @@ class NewDoePage(QWidget):
                 self.finish_remote("Stopped", translate("Experiment matrix stopped."))
                 return
             try:
-                self.record("Stopped")
+                for index in range(self.index, self.index + self.submission_size):
+                    self.record("Stopped", index=index)
             except OSError as error:
                 self.finish(str(error))
                 return
@@ -1137,7 +1189,7 @@ class NewDoePage(QWidget):
                     self.sheet.set_state(i, "Skipped")
             self.index = len(self.rows)
             errors = []
-            for index in list(self.submitted_rows.values()):
+            for index, _ in list(self.submitted_rows.values()):
                 path = self.directory / f"row_{index + 1:05d}" / "truba" / "remote_job.json"
                 try:
                     cancel_remote(path, self.controller.auth())

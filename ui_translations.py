@@ -1343,6 +1343,10 @@ Run locally|Bu bilgisayarda çalıştır
 Run on TRUBA|TRUBA’da çalıştır
 Run on TRUBA as one job|TRUBA’ya tek iş olarak gönder
 Run on TRUBA as separate jobs|TRUBA’ya ayrı işler olarak gönder
+Pair TRUBA experiments|TRUBA’da betik başına iki deney
+Run two experiments per Slurm job, sharing CPUs and RAM. Turn off to run one experiment per job.|Her Slurm işinde iki deney çekirdekleri ve RAM’i paylaşır. Her betikte tek deney çalıştırmak için seçimi kaldırın.
+Paired TRUBA experiments require two rows, CPUs and MiB of RAM.|İkili TRUBA gönderimi için iki deney, en az iki çekirdek ve 2 MiB RAM gerekir.
+Running two experiments in parallel|İki deney paralel çalışıyor
 Awaiting results|Sonuçlar bekleniyor
 Connect to TRUBA, then run the matrix again.|TRUBA bağlantısını kurduktan sonra matrisi yeniden çalıştırın.
 Running experiment matrix on TRUBA.|Deney matrisi TRUBA’da çalıştırılıyor.

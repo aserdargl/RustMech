@@ -60,6 +60,8 @@ def job_description(record):
     label = OPERATIONS.get(record.get('operation'), record.get('operation') or 'Mechanical analysis (Kratos)')
     if record.get('experiment_count'):
         number = record.get('experiment_index')
+        if number and record.get('experiment_batch_size', 1) > 1:
+            number = f"{number}–{number + record['experiment_batch_size'] - 1}"
         label = f"DoE {number}/{record['experiment_count']} · {label}" if number else f"DoE · {label}"
     if 'geometry_name' in record:
         geometry = record['geometry_name']
