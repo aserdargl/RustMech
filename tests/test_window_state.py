@@ -398,6 +398,7 @@ class WindowStateTests(unittest.TestCase):
         assert_native_work_area(main)
         main.hide()
         restored = QMainWindow()
+        service.prepare_main_window(restored)
         self.windows.append(restored)
         restored.show()
         self.app.processEvents()

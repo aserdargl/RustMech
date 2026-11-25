@@ -43,9 +43,24 @@ PROBE = textwrap.dedent("""
         app._rustmech_window_state = store
         kind, action = sys.argv[1:]
         if kind == 'main':
-            from nonlinear_compression import RustMechDialog
-            with patch.object(RustMechDialog, 'start_preview', lambda self: None):
-                dialog = RustMechDialog(Settings())
+            import nonlinear_compression as studio
+            from window_caption import CAPTION_PROPERTY
+            create_viewport = studio.create_preview_viewport
+            def check_frame(owner, **kwargs):
+                if not isinstance(owner, studio.RustMechDialog):
+                    return create_viewport(owner, **kwargs)
+                assert owner.property(CAPTION_PROPERTY) is not None
+                viewport = create_viewport(owner, **kwargs)
+                if app.platformName() == 'windows':
+                    import ctypes
+                    from window_caption import GWL_STYLE, WS_CAPTION
+                    style = ctypes.windll.user32.GetWindowLongW(int(owner.winId()), GWL_STYLE)
+                    assert not (style & WS_CAPTION), 'viewport created a native title'
+                return viewport
+            with patch.object(studio.RustMechDialog, 'start_preview', lambda self: None), patch.object(
+                studio, 'create_preview_viewport', check_frame
+            ):
+                dialog = studio.RustMechDialog(Settings())
             dialog.doe_window.open_workspace()
             for plotter in (dialog.plotter, dialog.flow_workspace.plotter,
                             dialog.thermal_workspace.plotter):

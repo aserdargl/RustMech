@@ -234,7 +234,7 @@ class RustMechDialog(QDialog):
             from window_state import install_window_state
             from window_caption import install_window_captions
             install_window_state(app_inst)
-            install_window_captions(app_inst)
+            captions = install_window_captions(app_inst)
             from ui_copy import install_copy_support
             install_copy_support(app_inst)
             from ui_input import install_settings_wheel_guard
@@ -334,6 +334,7 @@ class RustMechDialog(QDialog):
             | Qt.WindowType.WindowMinimizeButtonHint
             | Qt.WindowType.WindowMaximizeButtonHint
         )
+        captions.prepare_main_window(self)
         self.setSizeGripEnabled(True)
         self.resize(1440, 960)
         self.setMinimumHeight(600)

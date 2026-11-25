@@ -448,6 +448,14 @@ class WindowCaptionService(QObject):
         window.setProperty(CAPTION_PROPERTY, caption)
         return caption
 
+    def prepare_main_window(self, window):
+        # A native OpenGL child can create the parent's HWND during construction,
+        # before Qt sends Polish or Show. Give that HWND its final frame up front.
+        caption = getattr(window, CAPTION_PROPERTY, None)
+        if caption is None:
+            caption = self._attach(window)
+        self._update_layout(window, caption)
+
     def _update_layout(self, window, caption):
         fullscreen = window.isFullScreen() and not window.isMaximized()
         grip = 0 if fullscreen or window.isMaximized() else FRAME_GRIP
@@ -555,3 +563,4 @@ def install_window_captions(app):
         app.setAttribute(Qt.ApplicationAttribute.AA_DontUseNativeDialogs)
         app._rustmech_caption_service = WindowCaptionService(app)
         app.installEventFilter(app._rustmech_caption_service)
+    return app._rustmech_caption_service

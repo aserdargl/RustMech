@@ -151,6 +151,14 @@ def run():
     try:
         if gui_mode:
             previous_handler = signal.signal(signal.SIGINT, request_close)
+            if sys.platform == "win32" and not getattr(sys, "frozen", False):
+                # IDEs can start python.exe without an attached console. Windows
+                # would allocate a visible console for the spawned preview worker.
+                import ctypes
+
+                windowed_python = Path(sys.executable).with_name("pythonw.exe")
+                if not ctypes.windll.kernel32.GetConsoleWindow() and windowed_python.is_file():
+                    multiprocessing.set_executable(str(windowed_python))
         if "--offline-test" not in sys.argv:
             from mesh_preview_worker import warmup_mesh_preview
 
