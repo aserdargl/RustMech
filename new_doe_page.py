@@ -14,11 +14,43 @@ from new_doe_operations import (OPERATIONS, explicit_numbers, launch, matrix,
                                 parameters, snapshot, structure_choices, validate)
 from studio_style import COMBO_WIDTH, CompactComboBox, CompactDoubleSpinBox, CompactSpinBox
 from ui_language import translate, turkish
+from model import CONTACT_NUMERICAL_FIELDS, GEOMETRY_FIELDS, MATERIAL_FIELDS, settings_from_dict, validate_geometry
 
 LABELS = {"grid": "Voxels per axis", "void_ratio": "Void / solid stiffness", "distribution": "WSL distribution",
           "structure_name": "Structure family / type", "tpms_morphology": "Morphology",
           "young_modulus": "Young’s modulus (MPa)", "cell_size": "Cell size (mm)",
           "solid_fraction": "Solid fraction (%)", "size": "Specimen size (mm)"}
+
+
+def parameter_group(path):
+    key = path[-1]
+    if path[0] == "settings":
+        if key in ("test_profile", "specimen_architecture", "core_fraction"):
+            return "Standard test"
+        if key in ("mesh_resolution", "mesh_type", "tetra_strategy", "local_mesh_size"):
+            return "Mesh"
+        if key in GEOMETRY_FIELDS:
+            return "Structure / Dimensions"
+        if key in MATERIAL_FIELDS:
+            return "Solid material"
+        if key.startswith("kratos_"):
+            return "Kratos · nonlinear solution"
+        if key.startswith(("bottom_platen", "top_platen", "self_")) or "contact" in key or key in CONTACT_NUMERICAL_FIELDS:
+            return "Contact and friction"
+        return "Solver and loading"
+    if path[0] == "mpm":
+        return "MPM solid material" if key in ("young_mpa", "poisson_ratio", "density_kg_m3") else "Loading and discretization"
+    if path[0] == "thermal":
+        if key.startswith("solid_"):
+            return "Solid material"
+        return "Fluid material" if key.startswith("water_") else "Thermal (CHT)"
+    if path[0] == "flow":
+        if key in ("density", "dynamic_viscosity", "fluid_material_card"):
+            return "Fluid material"
+        if key in ("cells_across", "mesh_method", "surface_refinement", "boundary_layers", "max_fitted_cells"):
+            return "Mesh"
+        return "Channel · Isothermal CFD"
+    return "Peridynamics" if path[0] == "options" else "FFT Homogenization"
 
 
 def field_sources(host, op):
@@ -261,6 +293,8 @@ class NewDoePage(QWidget):
         self.timer = QTimer(self, interval=200)
         self.timer.timeout.connect(self.advance)
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(4, 3, 4, 3)
+        layout.setSpacing(3)
         bar = QHBoxLayout()
         layout.addLayout(bar)
         self.operation = CompactComboBox()
@@ -268,6 +302,16 @@ class NewDoePage(QWidget):
             self.operation.addItem(title, op)
         bar.addWidget(QLabel("Analysis"))
         bar.addWidget(self.operation)
+        self.group = CompactComboBox()
+        group_label = QLabel("Parameter group")
+        group_label.setBuddy(self.group)
+        bar.addWidget(group_label)
+        bar.addWidget(self.group)
+        self.apply_button = QPushButton("Apply")
+        self.apply_button.setAutoDefault(False)
+        self.apply_button.setToolTip("Generate the selected experiment geometry, or the first geometry in the draft.")
+        self.apply_button.clicked.connect(self.apply_geometry)
+        bar.addWidget(self.apply_button)
         self.reload = QPushButton("Read workspace settings")
         bar.addWidget(self.reload)
         bar.addStretch()
@@ -304,6 +348,7 @@ class NewDoePage(QWidget):
         self.open.setEnabled(False)
         self.operation.currentIndexChanged.connect(self.load)
         self.reload.clicked.connect(self.load)
+        self.group.currentIndexChanged.connect(self.show_group)
 
     @staticmethod
     def table(headers):
@@ -311,7 +356,9 @@ class NewDoePage(QWidget):
         table.setHorizontalHeaderLabels(headers)
         table.setAlternatingRowColors(True)
         table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        table.verticalHeader().setDefaultSectionSize(29)
+        table.verticalHeader().hide()
+        table.verticalHeader().setMinimumSectionSize(25)
+        table.verticalHeader().setDefaultSectionSize(26)
         return table
 
     def showEvent(self, event):
@@ -340,11 +387,53 @@ class NewDoePage(QWidget):
             self.inputs.resizeColumnsToContents()
             self.inputs.setColumnWidth(2, max(self.inputs.columnWidth(2), COMBO_WIDTH + 6))
             self.inputs.setColumnWidth(4, COMBO_WIDTH + 6)
+            self.group.clear()
+            groups = dict.fromkeys(parameter_group(f.path) for f in self.factors)
+            for title in groups:
+                self.group.addItem(title, title)
+            self.group.setCurrentIndex(self.group.findData("Structure / Dimensions"))
+            self.show_group()
             self.loaded = True
         except Exception as error:
             self.status.setText(str(error))
             self.loaded = False
         self.generate.setEnabled(self.loaded)
+        self.apply_button.setEnabled(self.loaded)
+
+    def show_group(self, *_):
+        group = self.group.currentData()
+        for row, factor in enumerate(self.factors):
+            self.inputs.setRowHidden(row, parameter_group(factor.path) != group)
+
+    def apply_geometry(self):
+        selected = self.preview.currentIndex()
+        if self.rows:
+            index = selected.row() if selected.isValid() else 0
+            request = self.rows[index]
+            label = f"Experiment {index + 1}"
+        else:
+            # Preview one geometry without generating a matrix or requiring solver inputs.
+            dimensions = {}
+            try:
+                for factor in self.factors:
+                    if factor.path[0] == "settings" and factor.path[-1] in GEOMETRY_FIELDS:
+                        if ((factor.numeric or factor.optional_number) and factor.variable.isChecked()
+                                and factor.mode.currentData() == "bounds"):
+                            value = factor.first.value()
+                        else:
+                            value = factor.levels_for_matrix()[0]
+                        dimensions[factor.path] = [value]
+                request = next(matrix(self.base, dimensions))
+            except (TypeError, ValueError) as error:
+                self.status.setText(f"{factor.label}: {error}")
+                return
+            label = "Geometry preview"
+        settings = settings_from_dict(request["settings"])
+        errors = validate_geometry(settings, include_mesh=False)
+        if errors:
+            self.status.setText("\n".join(errors))
+            return
+        self.host._show_doe_bounds("NEW DOE", {label: settings})
 
     def create(self):
         self.invalidate()
@@ -399,7 +488,7 @@ class NewDoePage(QWidget):
         self.advance()
 
     def lock(self, busy):
-        for widget in (self.operation, self.reload, self.inputs, self.generate, self.run):
+        for widget in (self.operation, self.reload, self.inputs, self.apply_button, self.generate, self.run):
             widget.setEnabled(not busy)
         self.stop.setEnabled(busy)
 

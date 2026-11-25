@@ -64,6 +64,27 @@ class NewDoeTests(unittest.TestCase):
         self.assertFalse(page.rows)
         self.assertFalse(page.run.isEnabled())
 
+    def test_grouped_drafts_build_geometry_only_on_apply(self):
+        page = self.page()
+        cell = next(f for f in page.factors if f.path == ("settings", "cell_size"))
+        row = page.factors.index(cell)
+        with patch.object(self.window, "_show_doe_bounds") as preview:
+            self.assertFalse(page.inputs.isRowHidden(row))
+            cell.first.setValue(2)
+            cell.variable.setChecked(True)
+            cell.last.setValue(4)
+            page.group.setCurrentIndex(page.group.findData("FFT Homogenization"))
+            self.assertTrue(page.inputs.isRowHidden(row))
+            preview.assert_not_called()
+            page.apply_button.click()
+            self.assertEqual(next(iter(preview.call_args.args[1].values())).size, 2)
+            self.assertFalse(page.rows)
+            page.create()
+            page.preview.selectRow(1)
+            page.apply_button.click()
+            self.assertEqual(next(iter(preview.call_args.args[1].values())).size, 4)
+            self.assertEqual(preview.call_count, 2)
+
     def test_two_peridynamic_runs_save_separate_results(self):
         page = self.page()
         page.operation.setCurrentIndex(page.operation.findData("peridynamic_solve"))

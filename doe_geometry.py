@@ -148,7 +148,6 @@ class ActiveGeometryPanel(QWidget):
         self.splitter.setSizes([260, 280] if embedded else [440, 190])
         self.timer = QTimer(self, interval=200)
         self.timer.timeout.connect(self.refresh)
-        self.timer.start()
 
         if not embedded:
             from operation_progress import OperationProgress
@@ -181,13 +180,19 @@ class ActiveGeometryPanel(QWidget):
                     f"{store.key(self.window())}/splitters/{self.splitter.objectName()}")
                 if state is not None:
                     self.splitter.restoreState(state)
+        self.refresh()
+        if self._future is not None:
+            self.timer.start()
+
+    def hideEvent(self, event):
+        self.timer.stop()
+        super().hideEvent(event)
 
     def _sync_source(self):
         source = self._settings_provider()
         if source == self._source_settings:
             return
         self._source_settings = replace(source)
-        self._requested_settings = replace(source)
         self._base = replace(source)
         self._loading = True
         try:
@@ -222,6 +227,7 @@ class ActiveGeometryPanel(QWidget):
 
     def restore_draft(self, settings):
         """Restore parameter inputs without submitting a preview or analysis."""
+        self.timer.stop()
         if self._cancel_event is not None:
             self._cancel_event.set()
         if self._future is not None:
@@ -232,6 +238,7 @@ class ActiveGeometryPanel(QWidget):
         self._source_settings = None
         self._sync_source()
         self._settings = replace(snapshot)
+        self._requested_settings = None
         self._ready = None
         self._build_pending = False
         if self.plotter is not None:
@@ -269,7 +276,7 @@ class ActiveGeometryPanel(QWidget):
             return
         self._requested_settings = replace(settings)
         # Allow an explicit retry after an unavailable or failed preview.
-        self._build_pending = True
+        self._build_pending = self._future is None or self._future[0] != settings
         self.refresh()
 
     def _set_view(self, view):
@@ -289,19 +296,19 @@ class ActiveGeometryPanel(QWidget):
     def refresh(self):
         if self._disposed or not self.isVisible():
             return
-        self._ensure_plotter()
-        settings = self.selected_settings()
+        draft = self.selected_settings()
         # Inclusion depends on the parameter snapshot, never on a completed
         # surface preview or volume mesh. A slow/failed preview must not block DoE.
-        errors = validate_geometry(settings, include_mesh=False)
+        errors = validate_geometry(draft, include_mesh=False)
         self.add_button.setEnabled(not errors)
         settings = self._requested_settings
+        if settings is None:
+            self.status.setText("\n".join(errors) if errors else "Click Apply to generate geometry.")
+            return
+        self._ensure_plotter()
         if settings != self._settings:
             self._settings = replace(settings)
-            self._build_pending = True
             self._ready = None
-            self.plotter.clear()
-            self.plotter.render()
             self.details.setText(
                 f"{settings.imported_geometry_name or settings.structure_name}\n"
                 f"Size {settings.size:g} mm · Cell {settings.cell_size:g} mm\n"
@@ -316,12 +323,14 @@ class ActiveGeometryPanel(QWidget):
                         self.status.setText(stage)
                 return
             self._future = None
+            self.timer.stop()
             if snapshot == self._settings:
                 try:
                     surface = future.result()
                     if not surface.n_cells:
                         raise ValueError("Geometry is empty; adjust its parameters.")
                     # clear() removes the lights too: restore them for every build.
+                    self.plotter.clear()
                     self.plotter.enable_lightkit()
                     self.plotter.set_background("#e9eef4", top="#ffffff")
                     self.plotter.add_mesh(surface, color="#699bc4", smooth_shading=True,
@@ -331,14 +340,14 @@ class ActiveGeometryPanel(QWidget):
                     self.plotter.add_axes(interactive=False)
                     self._set_view("iso")
                     self._ready = snapshot
-                    self.status.setText("Ready")
+                    self.status.setText("Ready" if draft == snapshot else "Dimensions changed. Click Apply to generate geometry.")
                 except Exception as error:
                     self.status.setText(f"Preview unavailable: {error}")
                 return
         if not self._build_pending:
             if errors:
                 self.status.setText("\n".join(errors))
-            elif self.selected_settings() != self._settings:
+            elif draft != self._settings:
                 self.status.setText("Dimensions changed. Click Apply to generate geometry.")
             return
         preview_errors = validate_geometry(settings, include_mesh=False)
@@ -355,6 +364,7 @@ class ActiveGeometryPanel(QWidget):
         self._progress_status = getattr(builder, "progress_status", None)
         snapshot = replace(self._settings)
         self._future = (snapshot, self._executor.submit(builder, snapshot))
+        self.timer.start()
 
     def _add(self):
         # Commit a numeric edit even if the user clicks Add before pressing Enter.
@@ -467,7 +477,7 @@ class GeometryLibraryDialog(QDialog):
             spin.setKeyboardTracking(False)
             self.values[name] = spin
             form.addRow(label, spin)
-            spin.valueChanged.connect(self._schedule)
+            spin.valueChanged.connect(self._draft_changed)
         parameter_scroll = QScrollArea()
         parameter_scroll.setWidgetResizable(True)
         parameter_scroll.setWidget(parameters)
@@ -484,6 +494,8 @@ class GeometryLibraryDialog(QDialog):
         self.status.setMinimumHeight(2 * self.status.fontMetrics().lineSpacing())
         root.addWidget(self.status)
         self.buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        self.apply_button = self.buttons.addButton("Apply", QDialogButtonBox.ButtonRole.ApplyRole)
+        self.apply_button.clicked.connect(self._start_preview)
         self.confirm = self.buttons.button(QDialogButtonBox.StandardButton.Ok)
         self.confirm.setText("Include geometry")
         self.confirm.setEnabled(False)
@@ -503,13 +515,11 @@ class GeometryLibraryDialog(QDialog):
             self._future is not None, self.status.text(),
         ))
         root.addWidget(self.operation_progress)
-        self._debounce = QTimer(self, singleShot=True, interval=200)
-        self._debounce.timeout.connect(self._start_preview)
         self._poll_timer = QTimer(self, interval=60)
         self._poll_timer.timeout.connect(self._poll)
         self.family.currentIndexChanged.connect(self._populate)
-        self.structure.currentIndexChanged.connect(self._schedule)
-        self.morphology.currentIndexChanged.connect(self._schedule)
+        self.structure.currentIndexChanged.connect(self._draft_changed)
+        self.morphology.currentIndexChanged.connect(self._draft_changed)
         self.family.setCurrentIndex(max(0, self.family.findData(settings.structure_family)))
         self._populate()
         self.structure.setCurrentText(settings.structure_name)
@@ -527,20 +537,18 @@ class GeometryLibraryDialog(QDialog):
         self.structure.addItems(ALL_STRUCTURES_BY_FAMILY[self.family.currentData()])
         self.structure.blockSignals(False)
         self.morphology.setEnabled(self.family.currentData() == "tpms")
-        self._schedule()
+        self._draft_changed()
 
-    def _schedule(self, *_):
+    def _draft_changed(self, *_):
         self._revision += 1
         self.confirm.setEnabled(False)
-        self.status.setText("Updating geometry preview…")
-        self._debounce.start()
+        self.status.setText("Click Apply to generate geometry.")
 
     def _start_preview(self):
-        if self._disposed:
+        if self._disposed or self._future is not None:
             return
-        if self._future is not None:
-            self._debounce.start()
-            return
+        for spin in self.values.values():
+            spin.interpretText()
         settings = self.selected_settings()
         errors = validate_geometry(settings, include_mesh=False)
         self.plotter.clear()
@@ -548,6 +556,10 @@ class GeometryLibraryDialog(QDialog):
         if errors:
             self.status.setText("\n".join(errors))
             return
+        self.apply_button.setEnabled(False)
+        self.confirm.setEnabled(False)
+        self._ready_revision = -1
+        self.status.setText("Updating geometry preview…")
         self._future = (self._revision, self._executor.submit(self._builder, settings))
         self._poll_timer.start()
 
@@ -557,6 +569,7 @@ class GeometryLibraryDialog(QDialog):
             return
         self._future = None
         self._poll_timer.stop()
+        self.apply_button.setEnabled(True)
         if revision != self._revision:
             return
         try:
@@ -612,7 +625,6 @@ class GeometryLibraryDialog(QDialog):
         if self._disposed:
             return
         self._disposed = True
-        self._debounce.stop()
         self._poll_timer.stop()
         self._executor.shutdown(wait=False, cancel_futures=True)
         self.plotter.close()
