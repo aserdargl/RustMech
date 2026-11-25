@@ -150,6 +150,36 @@ class WindowStateTests(unittest.TestCase):
         self.assertEqual(restored.orientation(), Qt.Orientation.Horizontal)
         self.assertEqual(restored.sizes(), expected)
 
+    def test_plain_tool_window_can_be_embedded_again(self):
+        service_attr = "_rustmech_caption_service"
+        install_window_captions(self.app)
+        service = getattr(self.app, service_attr)
+        self.addCleanup(delattr, self.app, service_attr)
+        self.addCleanup(self.app.removeEventFilter, service)
+        if service._native_frame:
+            self.addCleanup(self.app.removeNativeEventFilter, service._native_frame)
+        host = QWidget()
+        panel = QWidget(host, Qt.WindowType.Tool)
+        self.windows.extend([host, panel])
+        panel.setWindowTitle("Preview")
+        panel.setObjectName("tool-panel")
+        margins = panel.contentsMargins()
+        panel.show()
+        self.assertTrue(panel.property(CAPTION_PROPERTY).isVisible())
+        panel.resize(430, 270)
+        panel.hide()
+        self.assertTrue(self.settings.contains(f"{self.store.key(panel)}/geometry"))
+        reopened = QWidget(host, Qt.WindowType.Tool)
+        self.windows.append(reopened)
+        reopened.setObjectName("tool-panel")
+        reopened.show()
+        self.assertEqual(reopened.size(), panel.size())
+        panel.setParent(host, Qt.WindowType.Widget)
+        host.show()
+        panel.show()
+        self.assertIsNone(panel.property(CAPTION_PROPERTY))
+        self.assertEqual(panel.contentsMargins(), margins)
+
     def test_caption_preserves_window_actions_modality_and_saved_geometry(self):
         # A native viewport can create the HWND before the owner is shown.
         main = QMainWindow()
@@ -300,7 +330,16 @@ class WindowStateTests(unittest.TestCase):
         self.assertEqual([button.action for button in dialog_buttons], ["pin", "close"])
         assert_frame_decoration(main)
         assert_frame_decoration(dialog)
+        native = service._native_frame
+        if native is not None:
+            owner = native._get_owner(int(dialog.winId()), -8)
+            self.assertEqual(owner, int(main.winId()))
         dialog_caption.pin.click()
+        if native is not None:
+            self.assertEqual(native._get_owner(int(dialog.winId()), -8), 0)
+            dialog_caption.pin.click()
+            self.assertEqual(native._get_owner(int(dialog.winId()), -8), owner)
+            dialog_caption.pin.click()
         self.assertTrue(dialog_caption.pin.isChecked())
         self.assertFalse(caption.pin.isChecked())
         self.assertEqual(dialog.windowModality(), Qt.WindowModality.WindowModal)

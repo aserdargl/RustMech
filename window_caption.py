@@ -3,6 +3,7 @@
 import ctypes
 from ctypes import wintypes
 
+from shiboken6 import createdByPython as python_created
 from PySide6.QtCore import QAbstractNativeEventFilter, QEvent, QMargins, QObject, QPoint, QPointF, QRect, Qt
 from PySide6.QtGui import QColor, QCursor, QFont, QPainter, QPainterPath, QPen, QRegion
 from PySide6.QtWidgets import QAbstractButton, QDialog, QHBoxLayout, QMainWindow, QWidget
@@ -76,7 +77,15 @@ class WindowsCaptionFrame(QAbstractNativeEventFilter):
 
     def __init__(self):
         super().__init__()
-        api = ctypes.windll.user32
+        api = ctypes.WinDLL("user32", use_last_error=True)
+        self._get_owner = getattr(api, "GetWindowLongPtrW", api.GetWindowLongW)
+        self._get_owner.argtypes = (wintypes.HWND, ctypes.c_int)
+        self._get_owner.restype = ctypes.c_ssize_t
+        self._set_owner = getattr(api, "SetWindowLongPtrW", api.SetWindowLongW)
+        self._set_owner.argtypes = (wintypes.HWND, ctypes.c_int, ctypes.c_ssize_t)
+        self._set_owner.restype = ctypes.c_ssize_t
+        self._is_window = api.IsWindow
+        self._is_window.argtypes = (wintypes.HWND,)
         self._get_style = api.GetWindowLongW
         self._get_style.argtypes = (wintypes.HWND, ctypes.c_int)
         self._set_style = api.SetWindowLongW
@@ -140,9 +149,29 @@ class WindowsCaptionFrame(QAbstractNativeEventFilter):
         # Give DWM a frame to compose without changing Qt's client bounds.
         self._extend_dwm_frame(hwnd, ctypes.byref(DwmMargins(bottom=1)))
 
-    def set_pinned(self, handle, enabled):
-        # HWND_TOPMOST / HWND_NOTOPMOST, with no move, resize, activation or owner change.
-        return self._set_position(int(handle.winId()), -1 if enabled else -2, 0, 0, 0, 0, 0x0213)
+    def _change_owner(self, hwnd, owner):
+        ctypes.set_last_error(0)
+        return bool(self._set_owner(hwnd, -8, owner) or not ctypes.get_last_error())
+
+    def set_pinned(self, window, enabled):
+        hwnd = int(window.winId())
+        owner = self._get_owner(hwnd, -8)  # GWLP_HWNDPARENT
+        # Only detach the native z-order group. Qt keeps ownership and modality.
+        if enabled and owner and not self._change_owner(hwnd, 0):
+            return False
+        if not self._set_position(hwnd, -1 if enabled else -2, 0, 0, 0, 0, 0x0213):
+            if enabled and owner:
+                self._change_owner(hwnd, owner)
+            return False
+        if enabled and owner:
+            window._caption_native_owner = hwnd, owner
+        elif not enabled:
+            old_hwnd, old_owner = getattr(window, "_caption_native_owner", (None, None))
+            if old_hwnd == hwnd and self._is_window(old_owner) and not self._change_owner(hwnd, old_owner):
+                self._set_position(hwnd, -1, 0, 0, 0, 0, 0x0213)
+                return False
+            window._caption_native_owner = None, None
+        return True
 
     def nativeEventFilter(self, event_type, message):
         if event_type != b"windows_generic_MSG":
@@ -152,7 +181,9 @@ class WindowsCaptionFrame(QAbstractNativeEventFilter):
                                   WM_NCLBUTTONDBLCLK, WM_DWMCOMPOSITIONCHANGED):
             return False, 0
         window = QWidget.find(int(native.hWnd or 0))
-        caption = window.property(CAPTION_PROPERTY) if window is not None else None
+        caption = getattr(window, CAPTION_PROPERTY, None)
+        if caption is not None and not window.isWindow():
+            return False, 0
         if caption is None:
             return False, 0
         if native.message == WM_DWMCOMPOSITIONCHANGED:
@@ -346,7 +377,7 @@ class WindowCaption(QWidget):
         if handle is None:
             self.pin.setChecked(not enabled)
         elif self._native_frame is not None:
-            if not self._native_frame.set_pinned(handle, enabled):
+            if not self._native_frame.set_pinned(self.window(), enabled):
                 self.pin.setChecked(not enabled)
         else:
             handle.setFlag(Qt.WindowType.WindowStaysOnTopHint, enabled)
@@ -397,15 +428,23 @@ class WindowCaptionService(QObject):
 
     def __init__(self, app):
         super().__init__(app)
+        self._qt_owned_windows = {}
         self._native_frame = WindowsCaptionFrame() if app.platformName() == "windows" else None
         if self._native_frame is not None:
             app.installNativeEventFilter(self._native_frame)
 
     def _attach(self, window):
+        # Static Qt dialog factories create temporary Python wrappers. Keep the
+        # wrapper and its caption together until Qt destroys the native dialog.
+        key = id(window)
+        if not python_created(window) and key not in self._qt_owned_windows:
+            self._qt_owned_windows[key] = window
+            window.destroyed.connect(lambda: self._qt_owned_windows.pop(key, None))
         flags = window.windowFlags()
         if self._native_frame is None and not window.isVisible():
             window.setWindowFlag(Qt.WindowType.FramelessWindowHint)
         caption = WindowCaption(window, flags, self._native_frame)
+        setattr(window, CAPTION_PROPERTY, caption)
         window.setProperty(CAPTION_PROPERTY, caption)
         return caption
 
@@ -432,14 +471,30 @@ class WindowCaptionService(QObject):
 
     def eventFilter(self, watched, event):
         kind = event.type()
+        if (kind in (QEvent.Type.ParentChange, QEvent.Type.Show)
+                and isinstance(watched, QWidget) and not watched.isWindow()):
+            caption = getattr(watched, CAPTION_PROPERTY, None)
+            if caption is not None:
+                delattr(watched, CAPTION_PROPERTY)
+                watched.setProperty(CAPTION_PROPERTY, None)
+                watched.setContentsMargins(caption.base_margins)
+                caption.hide()
+                caption.deleteLater()
+                if caption.outline is not None:
+                    caption.outline.hide()
+                    caption.outline.deleteLater()
+            return False
         if kind not in LAYOUT_EVENTS and kind not in (QEvent.Type.Move, QEvent.Type.MouseButtonPress):
             return False
-        if not isinstance(watched, (QDialog, QMainWindow)) or not watched.isWindow():
+        if not isinstance(watched, QWidget) or not watched.isWindow():
             return False
-        caption = watched.property(CAPTION_PROPERTY)
+        caption = getattr(watched, CAPTION_PROPERTY, None)
         if caption is None:
-            if kind not in (QEvent.Type.Polish, QEvent.Type.Show) or watched.windowType() not in (
-                Qt.WindowType.Window, Qt.WindowType.Dialog, Qt.WindowType.Sheet, Qt.WindowType.Tool
+            if kind not in (QEvent.Type.Polish, QEvent.Type.Show) or not is_regular_window(watched):
+                return False
+            # Plain widgets often get polished before insertion in a parent layout.
+            if kind == QEvent.Type.Polish and (
+                not python_created(watched) or not isinstance(watched, (QDialog, QMainWindow))
             ):
                 return False
             # A native viewport or another Qt service may have polished the
@@ -466,6 +521,16 @@ class WindowCaptionService(QObject):
                 if edges and handle is not None and handle.startSystemResize(edges):
                     return True
         return False
+
+
+def is_regular_window(window):
+    if not isinstance(window, QWidget) or not window.isWindow():
+        return False
+    flags = window.windowFlags()
+    return (window.windowType() in (Qt.WindowType.Window, Qt.WindowType.Dialog,
+                                    Qt.WindowType.Sheet, Qt.WindowType.Tool)
+            and bool(flags & Qt.WindowType.WindowTitleHint)
+            and not flags & Qt.WindowType.FramelessWindowHint)
 
 
 def resize_edges(window, point):

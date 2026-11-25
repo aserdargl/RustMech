@@ -18,9 +18,9 @@ def configure_application(app, *, name="RustMech", app_id=WINDOWS_APP_ID, settin
     from window_state import install_window_state
 
     install_button_shadows(app)
+    install_window_state(app, settings)
     install_window_captions(app)
     install_file_dialogs(app)
-    install_window_state(app, settings)
     if sys.platform == "win32":
         import ctypes
 

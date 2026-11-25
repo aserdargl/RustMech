@@ -81,8 +81,8 @@ class WindowStateStore(QObject):
         kind = event.type()
         if kind not in (QEvent.Type.Show, QEvent.Type.Close, QEvent.Type.Hide):
             return False
-        if (isinstance(window, (QDialog, QMainWindow)) and window.isWindow()
-                and not isinstance(window, QMessageBox)):
+        if ((isinstance(window, (QDialog, QMainWindow)) or getattr(window, "rustmechCaption", None))
+                and window.isWindow() and not isinstance(window, QMessageBox)):
             if isinstance(window, QFileDialog) and not window.testOption(QFileDialog.Option.DontUseNativeDialog):
                 return False
             if kind == QEvent.Type.Show and not window.property("preferencesRestored"):
