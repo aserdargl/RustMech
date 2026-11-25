@@ -7,12 +7,12 @@ from uuid import uuid4
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt, QTimer, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDoubleSpinBox,
-                               QHBoxLayout, QLabel, QLineEdit, QMenu, QPushButton, QSpinBox,
+                               QHBoxLayout, QLabel, QLineEdit, QMenu, QPushButton, QScrollArea, QSpinBox,
                                QStackedWidget, QTableView, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
 
 from new_doe_operations import (OPERATIONS, explicit_numbers, launch, matrix,
                                 parameters, snapshot, structure_choices, validate)
-from studio_style import COMBO_WIDTH, CompactComboBox, CompactDoubleSpinBox, CompactSpinBox
+from studio_style import COMBO_WIDTH, CompactComboBox, CompactDoubleSpinBox, CompactSpinBox, SidebarGroupBox
 from ui_language import translate, turkish
 from model import CONTACT_NUMERICAL_FIELDS, GEOMETRY_FIELDS, MATERIAL_FIELDS, settings_from_dict, validate_geometry
 
@@ -302,11 +302,6 @@ class NewDoePage(QWidget):
             self.operation.addItem(title, op)
         bar.addWidget(QLabel("Analysis"))
         bar.addWidget(self.operation)
-        self.group = CompactComboBox()
-        group_label = QLabel("Parameter group")
-        group_label.setBuddy(self.group)
-        bar.addWidget(group_label)
-        bar.addWidget(self.group)
         self.apply_button = QPushButton("Apply")
         self.apply_button.setAutoDefault(False)
         self.apply_button.setToolTip("Generate the selected experiment geometry, or the first geometry in the draft.")
@@ -315,7 +310,9 @@ class NewDoePage(QWidget):
         self.reload = QPushButton("Read workspace settings")
         bar.addWidget(self.reload)
         bar.addStretch()
-        self.inputs = self.table(["Parameter", "Variable", "Fixed / minimum", "Maximum / values", "Input mode"])
+        self.inputs = QScrollArea()
+        self.inputs.setWidgetResizable(True)
+        self.sections = {}
         layout.addWidget(self.inputs, 3)
         buttons = QHBoxLayout()
         layout.addLayout(buttons)
@@ -348,7 +345,6 @@ class NewDoePage(QWidget):
         self.open.setEnabled(False)
         self.operation.currentIndexChanged.connect(self.load)
         self.reload.clicked.connect(self.load)
-        self.group.currentIndexChanged.connect(self.show_group)
 
     @staticmethod
     def table(headers):
@@ -374,36 +370,53 @@ class NewDoePage(QWidget):
 
     def load(self, *_):
         self.invalidate()
-        self.inputs.setRowCount(0)
+        expanded = {title: not section.content.isHidden() for title, section in self.sections.items()}
+        self.sections.clear()
         self.factors.clear()
+        panel = QWidget()
+        stack = QVBoxLayout(panel)
+        stack.setContentsMargins(2, 2, 2, 2)
+        stack.setSpacing(2)
+        stack.setAlignment(Qt.AlignmentFlag.AlignTop)
+        self.inputs.setWidget(panel)
         try:
             op = self.operation.currentData()
             self.base = snapshot(self.host, op)
             sources = field_sources(self.host, op)
-            for path, value in parameters(self.base):
-                row = self.inputs.rowCount()
-                self.inputs.insertRow(row)
-                self.factors.append(Factor(self.inputs, row, path, value, sources.get(path[-1]), op, self.invalidate))
-            self.inputs.resizeColumnsToContents()
-            self.inputs.setColumnWidth(2, max(self.inputs.columnWidth(2), COMBO_WIDTH + 6))
-            self.inputs.setColumnWidth(4, COMBO_WIDTH + 6)
-            self.group.clear()
-            groups = dict.fromkeys(parameter_group(f.path) for f in self.factors)
-            for title in groups:
-                self.group.addItem(title, title)
-            self.group.setCurrentIndex(self.group.findData("Structure / Dimensions"))
-            self.show_group()
+            groups = {"Structure / Dimensions": []}
+            fields = list(parameters(self.base))
+            for path, value in fields:
+                groups.setdefault(parameter_group(path), []).append((path, value))
+            factors = {}
+            for title, members in groups.items():
+                section = SidebarGroupBox(title)
+                self.sections[title] = section
+                stack.addWidget(section)
+                body = QVBoxLayout(section.content)
+                body.setContentsMargins(2, 0, 2, 1)
+                table = self.table(["Parameter", "Variable", "Fixed / minimum", "Maximum / values", "Input mode"])
+                body.addWidget(table)
+                table.setRowCount(len(members))
+                for row, (path, value) in enumerate(members):
+                    factors[path] = Factor(table, row, path, value, sources.get(path[-1]), op, self.invalidate)
+                table.ensurePolished()
+                table.resizeColumnsToContents()
+                table.setColumnWidth(2, max(table.columnWidth(2), COMBO_WIDTH + 6))
+                table.setColumnWidth(4, COMBO_WIDTH + 6)
+                table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+                table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+                frame = 2 * table.frameWidth()
+                table.setMinimumWidth(table.horizontalHeader().length() + frame)
+                table.setFixedHeight(table.horizontalHeader().sizeHint().height() + table.verticalHeader().length() + frame)
+                section.set_expanded(expanded.get(title, title == "Structure / Dimensions"))
+            # Keep matrix combinations and CSV columns in the operation's parameter order.
+            self.factors = [factors[path] for path, _ in fields]
             self.loaded = True
         except Exception as error:
             self.status.setText(str(error))
             self.loaded = False
         self.generate.setEnabled(self.loaded)
         self.apply_button.setEnabled(self.loaded)
-
-    def show_group(self, *_):
-        group = self.group.currentData()
-        for row, factor in enumerate(self.factors):
-            self.inputs.setRowHidden(row, parameter_group(factor.path) != group)
 
     def apply_geometry(self):
         selected = self.preview.currentIndex()

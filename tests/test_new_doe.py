@@ -4,6 +4,8 @@ from pathlib import Path
 import time
 import unittest
 from unittest.mock import Mock, patch
+from PySide6.QtCore import Qt
+from PySide6.QtTest import QTest
 
 from tests import test_remote_mode_ui as ui
 
@@ -67,19 +69,29 @@ class NewDoeTests(unittest.TestCase):
     def test_grouped_drafts_build_geometry_only_on_apply(self):
         page = self.page()
         cell = next(f for f in page.factors if f.path == ("settings", "cell_size"))
-        row = page.factors.index(cell)
+        geometry = page.sections["Structure / Dimensions"]
+        fft = page.sections["FFT Homogenization"]
         with patch.object(self.window, "_show_doe_bounds") as preview:
-            self.assertFalse(page.inputs.isRowHidden(row))
+            self.assertTrue(cell.first.isVisible())
             cell.first.setValue(2)
             cell.variable.setChecked(True)
             cell.last.setValue(4)
-            page.group.setCurrentIndex(page.group.findData("FFT Homogenization"))
-            self.assertTrue(page.inputs.isRowHidden(row))
+            QTest.mouseClick(fft, Qt.MouseButton.LeftButton, pos=fft.header_rect().center())
+            self.assertTrue(fft.content.isVisible())
+            self.assertTrue(cell.first.isVisible())
+            geometry.setFocus()
+            QTest.keyClick(geometry, Qt.Key.Key_Space)
+            self.assertFalse(cell.first.isVisible())
+            self.assertTrue(fft.content.isVisible())
             preview.assert_not_called()
             page.apply_button.click()
             self.assertEqual(next(iter(preview.call_args.args[1].values())).size, 2)
             self.assertFalse(page.rows)
             page.create()
+            QTest.keyClick(geometry, Qt.Key.Key_Space)
+            self.assertTrue(cell.first.isVisible())
+            self.assertEqual((cell.first.value(), cell.last.value()), (2, 4))
+            self.assertEqual(len(page.rows), 2)
             page.preview.selectRow(1)
             page.apply_button.click()
             self.assertEqual(next(iter(preview.call_args.args[1].values())).size, 4)

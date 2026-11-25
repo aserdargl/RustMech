@@ -1335,7 +1335,8 @@ Fixed / minimum|Sabit / alt sınır
 Min / max|Min / maks
 Value list|Değer listesi
 Input mode|Giriş biçimi
-Parameter group|Ayar grubu
+Solid material|Katı malzeme
+Fluid material|Akışkan malzeme
 Click Apply to generate geometry.|Geometriyi oluşturmak için Uygula’ya tıklayın.
 Generate the selected experiment geometry, or the first geometry in the draft.|Seçili deneyin geometrisini veya taslaktaki ilk geometriyi oluşturur.
 Separate values with commas. For decimal commas, use a semicolon between values.|Değerleri virgülle ayırın. Ondalık virgül kullanırken değerleri noktalı virgülle ayırın.
