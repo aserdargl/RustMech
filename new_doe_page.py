@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDoubleS
                                QStackedWidget, QTabWidget, QTableView, QTableWidget, QTableWidgetItem,
                                QVBoxLayout, QWidget)
 
-from new_doe_operations import (OPERATIONS, explicit_numbers, launch, matrix,
+from new_doe_operations import (OPERATIONS, explicit_numbers, launch, matrix, matrix_request,
                                 parameters, snapshot, structure_choices, validate)
 from structure_library import ALL_STRUCTURES_BY_FAMILY, STRUCTURE_FAMILIES
 from studio_style import (COMBO_WIDTH, CONTROL_HEIGHT, CompactComboBox, CompactDoubleSpinBox,
@@ -663,13 +663,11 @@ class NewDoePage(QWidget):
             remote = controller.requested
         self.controller = controller if remote else None
         if remote:
-            from remote_operations import required_capability
             if controller.auth() is None:
                 self.status.setText(translate("Connect to TRUBA, then run the matrix again."))
                 return
             try:
-                for row in self.rows:
-                    required_capability(row)
+                request = matrix_request(self.rows)
             except ValueError as error:
                 self.status.setText(translate(str(error)))
                 return
@@ -690,8 +688,16 @@ class NewDoePage(QWidget):
             self.sheet.set_state(i, "Queued")
         self.open.setEnabled(True)
         self.lock(True)
+        if remote:
+            try:
+                self.job = launch(request, self.directory, controller)
+            except Exception as error:
+                self.finish_remote("Failed", str(error))
+                return
+            self.status.setText(translate("Running experiment matrix on TRUBA."))
         self.timer.start()
-        self.advance()
+        if not remote:
+            self.advance()
 
     def lock(self, busy):
         for widget in (self.operation, self.input_tabs, self.apply_button, self.generate, self.run):
@@ -706,7 +712,41 @@ class NewDoePage(QWidget):
         temporary.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
         temporary.replace(self.case / "experiment.json")
 
+    def finish_remote(self, state, message):
+        for index in range(len(self.rows)):
+            self.sheet.set_state(index, state, message)
+        self.finish(message)
+
+    def advance_remote(self):
+        if not self.job.done():
+            record = self.job.remote_status() or {}
+            if record.get("job_id"):
+                self.status.setText(f"TRUBA #{record['job_id']} · {record['state']}")
+            return
+        job, self.job = self.job, None
+        try:
+            output = Path(job.result())
+        except Exception as error:
+            self.finish_remote("Failed", str(error))
+            return
+        for index in range(len(self.rows)):
+            case = output / f"row_{index + 1:05d}"
+            try:
+                record = json.loads((case / "experiment.json").read_text(encoding="utf-8"))
+                state = record["state"]
+                if state not in ("Completed", "Failed"):
+                    raise ValueError("Incomplete experiment record.")
+                detail = record.get("error") or str(case)
+            except (OSError, KeyError, ValueError) as error:
+                state, detail = "Failed", str(error)
+            self.sheet.set_state(index, state, detail)
+            self.failures += state == "Failed"
+        self.finish(f"{len(self.rows)} experiments finished · {self.failures} failed.")
+
     def advance(self):
+        if self.controller is not None:
+            self.advance_remote()
+            return
         try:
             if self.job is not None:
                 if not self.job.done():
@@ -748,11 +788,7 @@ class NewDoePage(QWidget):
         if self.job is None or not self.job.is_remote:
             return None
         job, self.job = self.job, None
-        self.finish("Remote experiment detached.")
-        try:
-            self.record("Detached", remote_job=job.remote_status())
-        except OSError as error:
-            self.status.setText(str(error))
+        self.finish_remote("Detached", translate("Remote experiment detached."))
         return job
 
     def cancel(self):
@@ -765,6 +801,9 @@ class NewDoePage(QWidget):
                 self.status.setText(str(error))
                 return
             self.job = None
+            if self.controller is not None:
+                self.finish_remote("Stopped", translate("Experiment matrix stopped."))
+                return
             try:
                 self.record("Stopped")
             except OSError as error:

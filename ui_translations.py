@@ -1338,6 +1338,9 @@ Voxels per axis|Eksen başına voksel
 Run locally|Bu bilgisayarda çalıştır
 Run on TRUBA|TRUBA’da çalıştır
 Connect to TRUBA, then run the matrix again.|TRUBA bağlantısını kurduktan sonra matrisi yeniden çalıştırın.
+Running experiment matrix on TRUBA.|Deney matrisi TRUBA’da çalıştırılıyor.
+Experiment matrix stopped.|Deney matrisi durduruldu.
+Remote experiment detached.|TRUBA işi arka planda izlemeye alındı.
 Create matrix|Matris oluştur
 Fixed / minimum|Sabit / alt sınır
 Min / max|Min / maks

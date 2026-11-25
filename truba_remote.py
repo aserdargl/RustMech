@@ -397,6 +397,11 @@ def run_remote_job(request,context,auth=None,marker=None,*,directory=None,resume
             if staged_geometry['username'] != transport.username:
                 raise ValueError('Use the TRUBA account that received the prepared specimens.')
             batch_geometry_name(staged_geometry['sha256'])
+        elif 'experiment_rows' in request:
+            paths = {row['settings'].get('imported_geometry_path') for row in request['experiment_rows']}
+            request = {**request, 'matrix_geometries': {
+                path: base64.b64encode(Path(path).read_bytes()).decode('ascii') for path in paths if path
+            }}
         elif geometry_path:
             request = {**request, 'imported_geometry_vtp': base64.b64encode(Path(geometry_path).read_bytes()).decode('ascii')}
         directory = Path(directory) if directory else ROOT/"results"/("TRUBA_"+uuid.uuid4().hex)
@@ -413,6 +418,8 @@ def run_remote_job(request,context,auth=None,marker=None,*,directory=None,resume
                       remote_directory=f"/arf/scratch/{transport.username}/RustMech/{uuid.uuid4().hex}",
                       local_directory=str(directory.resolve()),state="preparing",context=asdict(context),
                       operation=request["operation"],request_id=request["request_id"],source_sha256=source_hash)
+        if "experiment_rows" in request:
+            record["experiment_count"] = len(request["experiment_rows"])
         if study_name and request["operation"] not in ("probe", "prepare", "preview", "surface"):
             record["study_name"] = study_name
         if request['operation'] == 'convergence_level' and request.get('convergence_study'):
@@ -583,7 +590,7 @@ if [ -s job.id ]; then printf 'RUSTMECH_JOB_ID=%s\n' "$(cat job.id)"; fi
             else:
                 from truba_session import QUEUE_FUNCTION
                 queue_command = f"printf 'RUSTMECH_QUEUE='; rustmech_queue {record['job_id']} '%T|%r'"
-                if record.get('operation') == 'convergence_level':
+                if record.get('operation') == 'convergence_level' or record.get('experiment_count'):
                     queue_command += ("\nprintf '\\nRUSTMECH_PROGRESS='; head -c 500 "
                                       + shlex.quote(remote + '/progress.txt') + ' 2>/dev/null || true')
                     for index, _ in enumerate(record.get('level_resources', ()), 1):
@@ -606,7 +613,7 @@ if [ -s job.id ]; then printf 'RUSTMECH_JOB_ID=%s\n' "$(cat job.id)"; fi
                 progress = re.search(r'^RUSTMECH_PROGRESS=(.*)$', reply, re.MULTILINE)
                 if step and step[1] == 'RUNNING' and progress and progress[1].strip():
                     value += ' · ' + progress[1].strip()
-            elif queue_state == 'RUNNING' and record.get('operation') == 'convergence_level':
+            elif queue_state == 'RUNNING' and (record.get('operation') == 'convergence_level' or record.get('experiment_count')):
                 progress = re.search(r'^RUSTMECH_PROGRESS=(.*)$', reply, re.MULTILINE)
                 if progress and progress[1].strip():
                     value = f"{value} · {progress[1].strip()}"

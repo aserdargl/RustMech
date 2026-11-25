@@ -293,6 +293,34 @@ class NewDoeTests(unittest.TestCase):
                 self.assertIsNone(launch.call_args.args[2])
                 page.cancel()
 
+    def test_truba_dispatches_whole_matrix_once_and_restores_each_row_state(self):
+        page = self.page()
+        grid = next(f for f in page.factors if f.path == ("grid",))
+        grid.variable.setChecked(True)
+        grid.first.setValue(16)
+        grid.last.setValue(24)
+        page.create()
+        root = Path(self.temp.name)
+        output = root / "output"
+        for i, state in enumerate(("Failed", "Completed"), 1):
+            case = output / f"row_{i:05d}"
+            case.mkdir(parents=True)
+            (case / "experiment.json").write_text(json.dumps(dict(state=state)))
+        with patch("doe_studio.results_directory", return_value=root), \
+                patch.object(self.controller, "auth", return_value=object()), \
+                patch("new_doe_page.launch") as launch:
+            job = launch.return_value
+            job.done.return_value = False
+            page.start(remote=True)
+            page.advance()
+            job.done.return_value = True
+            job.result.return_value = str(output)
+            page.advance()
+            launch.assert_called_once()
+            self.assertEqual(launch.call_args.args[0]["experiment_rows"], page.rows)
+            self.assertEqual(page.sheet.states, ["Failed", "Completed"])
+            self.assertFalse(page.timer.isActive())
+
     def test_truba_uses_selected_operation_and_downloads_into_the_row(self):
         from new_doe_operations import OPERATIONS, launch, snapshot
         from remote_operations import OPERATIONS as capabilities

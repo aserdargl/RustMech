@@ -349,6 +349,51 @@ def _run_operation(request,output):
     raise ValueError("Unsupported remote operation.")
 
 
+def _run_experiment_matrix(request, output):
+    from remote_operations import required_capability
+
+    rows = request["experiment_rows"]
+    if not 1 <= len(rows) <= 10000:
+        raise ValueError("Invalid experiment count.")
+    root = Path.cwd()
+    worker = str(Path(__file__).resolve())
+    failures = 0
+    for index, row in enumerate(rows, 1):
+        if (root / "cancel.request").exists():
+            raise RuntimeError("Experiment matrix cancelled.")
+        name = f"row_{index:05d}"
+        case = (output / name).resolve()
+        case.mkdir()
+        work = root / "matrix_work" / name
+        work.mkdir(parents=True)
+        record = dict(experiment=index, execution_target="truba", inputs=row, state="Running")
+        _write(case / "experiment.json", record)
+        _stage(f"Running experiment {index} / {len(rows)}")
+        try:
+            if row["operation"] != request["operation"]:
+                raise ValueError("Inconsistent matrix operation.")
+            required_capability(row)
+            child = dict(row, request_id=request["request_id"], source_sha256=request["source_sha256"],
+                         native_sha256=request["native_sha256"], remote_context=request["remote_context"])
+            path = row["settings"].get("imported_geometry_path")
+            if path:
+                child["imported_geometry_vtp"] = request["matrix_geometries"][path]
+            _write(work / "request.json", child)
+            with (case / "worker.log").open("w") as log:
+                result = subprocess.run([sys.executable, worker, "request.json", "--row-output", str(case)],
+                                        cwd=work, stdout=log, stderr=subprocess.STDOUT)
+            if result.returncode:
+                report = case / "result.json"
+                detail = json.loads(report.read_text(encoding="utf-8")).get("error") if report.is_file() else None
+                raise RuntimeError(detail or f"Worker exited with code {result.returncode}.")
+            record.update(state="Completed", results=".")
+        except Exception as error:
+            failures += 1
+            record.update(state="Failed", error=str(error))
+        _write(case / "experiment.json", record)
+    return dict(experiments=len(rows), failed=failures)
+
+
 def _run_convergence_group(request, output):
     steps = request['convergence_steps']
     allocation = request['remote_context']
@@ -406,7 +451,9 @@ def main():
             raise RuntimeError("Reference tetrahedral mesh is not solve-ready.")
         return 0
     request = json.loads(Path(sys.argv[1]).read_text())
-    if 'directory' in request.get('staged_geometry', {}):
+    if len(sys.argv) == 4 and sys.argv[2] == "--row-output":
+        output = Path(sys.argv[3])
+    elif 'directory' in request.get('staged_geometry', {}):
         output = Path(os.environ['RUSTMECH_BATCH_OUTPUT'])
     else:
         output = Path.cwd()/"output"
@@ -419,6 +466,8 @@ def main():
         if "--missing-runtime" in sys.argv:
             if request["operation"]!="probe": raise RuntimeError("Remote runtime is missing. Prepare it before submitting computations.")
             result["capabilities"] = probe(request,missing=True)
+        elif 'experiment_rows' in request:
+            result.update(_run_experiment_matrix(request, output))
         elif request.get('convergence_steps'):
             result.update(_run_convergence_group(request, output))
         else: result.update(run_operation(request,output))

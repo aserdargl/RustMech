@@ -168,6 +168,17 @@ def run_local(request, directory):
     return str(directory)
 
 
+def matrix_request(rows):
+    from remote_operations import required_capability
+    operation = rows[0]["operation"]
+    for row in rows:
+        if row["operation"] != operation:
+            raise ValueError("All experiments in the matrix must use the same operation.")
+        required_capability(row)
+    largest = max(rows, key=lambda row: row["settings"]["cores"])
+    return dict(operation=operation, settings=largest["settings"], experiment_rows=rows)
+
+
 def launch(request, directory, controller):
     from analysis_process import AnalysisProcess
     if controller is not None:

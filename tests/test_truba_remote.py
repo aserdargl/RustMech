@@ -245,6 +245,16 @@ class RemoteProtocolTests(unittest.TestCase):
                 self.assertEqual(record["slurm_status"], accounting)
                 self.assertEqual(record["failure_memory_mb"], 68000)
 
+    def test_new_doe_matrix_uploads_one_request_to_one_slurm_job(self):
+        from new_doe_operations import matrix_request
+        rows = [dict(operation="fft_solve", settings=asdict(Settings()), grid=n) for n in (16, 24, 32)]
+        _, folder = run_remote_job(matrix_request(rows), RemoteContext(), directory=self.root / "matrix")
+        transport, = FakeTransport.instances
+        self.assertEqual(transport.submissions, 1)
+        self.assertEqual(transport.put_names.count("request.json"), 1)
+        self.assertEqual(transport.request["experiment_rows"], json.loads(json.dumps(rows)))
+        self.assertEqual(json.loads((folder / "remote_job.json").read_text())["experiment_count"], 3)
+
     def test_submission_download_checksum_and_resume_do_not_resubmit(self):
         result,directory = run_remote_job(dict(operation="probe"),RemoteContext(),directory=self.root/"job")
         self.assertTrue(result["capabilities"]["mesh"])
@@ -477,6 +487,37 @@ class RemoteProtocolTests(unittest.TestCase):
 
 
 class ComputeWorkerTests(unittest.TestCase):
+    def test_matrix_worker_runs_rows_sequentially_and_preserves_sibling_results(self):
+        from peridynamic_analysis import CompressionOptions
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = ROOT / "native/bin" / ("rustmech_core.dll" if os.name == "nt" else "librustmech_core.so")
+            if not source.exists():
+                self.skipTest("Native test kernel is not built")
+            library = root / source.name
+            shutil.copy2(source, library)
+            stamp = "a"*64
+            library.with_suffix(".json").write_text(json.dumps(dict(native_sha256=stamp)))
+            settings = Settings(size=6, cell_size=6)
+            rows = [dict(operation="peridynamic_solve", settings=asdict(settings),
+                         options=asdict(CompressionOptions(resolution=12, increments=n))) for n in (2, 0, 3)]
+            request = dict(operation="peridynamic_solve", settings=asdict(settings), experiment_rows=rows,
+                           request_id="matrix", source_sha256="b"*64, native_sha256=stamp,
+                           remote_context=asdict(RemoteContext()))
+            (root / "request.json").write_text(json.dumps(request))
+            env = dict(os.environ, RUSTMECH_CORE_LIBRARY=str(library), SLURM_JOB_ID="99")
+            result = subprocess.run([sys.executable, str(ROOT / "remote_worker.py"), "request.json"],
+                                    cwd=root, env=env, capture_output=True, timeout=120)
+            self.assertEqual(result.returncode, 0, result.stderr.decode(errors="replace"))
+            output = root / "output"
+            self.assertEqual(json.loads((output / "result.json").read_text())["failed"], 1)
+            for index, state in enumerate(("Completed", "Failed", "Completed"), 1):
+                case = output / f"row_{index:05d}"
+                self.assertEqual(json.loads((case / "experiment.json").read_text())["state"], state)
+                self.assertEqual(json.loads((case / "result.json").read_text())["slurm_job_id"], "99")
+                if state == "Completed":
+                    self.assertTrue(list(case.rglob("*.csv")))
+
     def test_real_preview_worker_generates_mesh_and_serializes_vtk_without_desktop(self):
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)
