@@ -8,7 +8,7 @@ from xml.etree import ElementTree
 from zipfile import ZipFile
 from PySide6.QtCore import QPoint, Qt
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QAbstractSpinBox, QLineEdit, QStyle, QStyleOptionComboBox, QTableWidget, QWidget
+from PySide6.QtWidgets import QAbstractSpinBox, QLabel, QLineEdit, QStyle, QStyleOptionComboBox, QTableWidget, QWidget
 
 from tests import test_remote_mode_ui as ui
 from ui_language import LanguageSelector, turkish
@@ -49,9 +49,9 @@ class NewDoeTests(unittest.TestCase):
         analysis = studio.new_doe.operation
         self.assertEqual([analysis.itemText(index) for index in range(analysis.count())],
                          ["FEM", "FFT", "MPM", "Peridynamics", "Flow (CFD)", "Thermal (CHT)"])
-        nav = studio.planner.navigation
-        nav_bottom = nav.mapToGlobal(QPoint(0, nav.height())).y()
-        self.assertLessEqual(analysis.mapToGlobal(QPoint()).y() - nav_bottom, 8)
+        settings_tabs = studio.new_doe.input_tabs.tabBar()
+        tab_bottom = settings_tabs.mapToGlobal(QPoint(0, settings_tabs.height())).y()
+        self.assertIn(analysis.mapToGlobal(QPoint()).y() - tab_bottom, range(9))
         buttons = studio.planner.navigation.layout()
         self.assertEqual(buttons.itemAt(0).widget().text(), "DoE")
         for index in range(buttons.count()):
@@ -363,10 +363,14 @@ class NewDoeTests(unittest.TestCase):
                            page.input_tabs.mapTo(page, QPoint()).x() + page.input_tabs.width())
         self.assertLess(page.input_tabs.width(), page.preview.width())
         self.assertEqual(page.inputs.horizontalScrollBar().maximum(), 0)
-        operation_pos = page.operation.mapTo(page, QPoint())
-        settings_pos = page.input_tabs.mapTo(page, QPoint())
-        self.assertEqual(operation_pos.x(), settings_pos.x())
-        self.assertLessEqual(operation_pos.y() + page.operation.height(), settings_pos.y())
+        self.assertIs(page.input_tabs.currentWidget(), page.analysis_settings)
+        self.assertTrue(page.analysis_settings.isAncestorOf(page.operation))
+        label = next(label for label in page.analysis_settings.findChildren(QLabel)
+                     if label.buddy() is page.operation)
+        self.assertEqual(label.text(), "Analysis Type")
+        self.assertLess(label.geometry().right(), page.operation.x())
+        operation_bottom = page.operation.mapTo(page, page.operation.rect().bottomLeft()).y()
+        self.assertLess(operation_bottom, geometry.mapTo(page, QPoint()).y())
         command_row = (page.run_settings, page.run, page.stop, page.open)
         apply_y = page.apply_button.mapTo(page, QPoint()).y()
         self.assertTrue(all(button.mapTo(page, QPoint()).y() == apply_y for button in command_row))
@@ -395,9 +399,10 @@ class NewDoeTests(unittest.TestCase):
         self.assertFalse(cell.fixed.isEnabled())
         self.assertTrue(page.variations.isRowHidden(fields["grid"].variation_row))
         page.input_tabs.setCurrentWidget(page.variations)
+        self.assertFalse(page.operation.isVisible())
         self.assertTrue(cell.first.isVisible())
         self.assertFalse(page.variations.isRowHidden(cell.variation_row))
-        page.input_tabs.setCurrentWidget(page.inputs)
+        page.input_tabs.setCurrentWidget(page.analysis_settings)
         geometry.setFocus()
         QTest.keyClick(geometry, Qt.Key.Key_Space)
         self.assertFalse(cell.fixed.isVisible())

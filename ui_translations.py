@@ -452,6 +452,7 @@ Fixed|Sabit
 Move to fixed|Sabitlere taşı
 Fixed value|Sabit değer
 Analysis settings|Analiz ayarları
+Analysis Type|Analiz türü
 Variable settings|Değişken ayarları
 Lower bound|Alt sınır
 Upper bound|Üst sınır
