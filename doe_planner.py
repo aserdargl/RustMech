@@ -1,13 +1,11 @@
 """Navigation and saved-plan controls for the DoE workspace."""
 from dataclasses import replace
 
-from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QLabel,
     QButtonGroup, QPushButton, QCheckBox, QListWidget, QTabWidget, QSizePolicy,
 )
 
-from model import MIN_MESH_INPUT_MM
 from studio_style import ActionFlowLayout, CompactComboBox, CONTROL_HEIGHT, NumericLineEdit
 
 
@@ -105,39 +103,14 @@ class SimpleDoEPlanner(QWidget):
             control.setParent(saved_plan_controls)
             control.valueChanged.connect(s._refresh_plan)
 
-        advanced = QWidget()
-        advanced_layout = QFormLayout(advanced)
-        advanced_layout.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.FieldsStayAtSizeHint)
-        for field, label in (('mesh_resolution', 'Global mesh size (mm)'), ('local_mesh_size', 'Local mesh size (mm)')):
-            editor = NumericLineEdit(float(getattr(base, field)), MIN_MESH_INPUT_MM, 100)
-            s.design_value_controls[field] = editor
-            editor.valueChanged.connect(s._edit_design)
-            advanced_layout.addRow(label, editor)
-        s.design_mesh_type = CompactComboBox()
-        s.design_mesh_type.addItems(['HEX8', 'HEX20', 'TET4', 'TET10'])
-        s.design_mesh_type.currentTextChanged.connect(s._edit_design)
-        s.design_mesh_strategy = CompactComboBox()
-        for strategy in ('auto', 'netgen', 'periodic'):
-            s.design_mesh_strategy.addItem(strategy, strategy)
-        s.design_mesh_strategy.currentIndexChanged.connect(s._edit_design)
-        advanced_layout.addRow('Element type', s.design_mesh_type)
-        advanced_layout.addRow('Tetra mesher', s.design_mesh_strategy)
+        self.learning_page = QWidget()
+        ml_layout = QFormLayout(self.learning_page)
+        ml_layout.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.FieldsStayAtSizeHint)
         s.common_strain_check = QCheckBox('Common final strain (%)')
         s.common_strain_check.setChecked(True)
         s.common_strain_spin = NumericLineEdit(10.0, .1, 95)
         s.common_strain_check.toggled.connect(s.common_strain_spin.setEnabled)
-        advanced_layout.addRow(s.common_strain_check, s.common_strain_spin)
-        s.preview_factor = CompactComboBox()
-        s.preview_bounds_btn = QPushButton('Preview bounds')
-        s.preview_bounds_btn.clicked.connect(s._preview_bounds)
-        advanced_layout.addRow(s.preview_factor, s.preview_bounds_btn)
-        s.library_btn = QPushButton('Geometry library')
-        s.library_btn.clicked.connect(s._open_geometry_library)
-        advanced_layout.addRow(s.library_btn)
-        self.tabs.addTab(advanced, 'Mesh')
-        ml = QWidget()
-        ml_layout = QFormLayout(ml)
-        ml_layout.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.FieldsStayAtSizeHint)
+        ml_layout.addRow(s.common_strain_check, s.common_strain_spin)
         s.ml_count_spin = NumericLineEdit(100, 2, 5000)
         s.ml_seed_spin = NumericLineEdit(42, 1, 999999)
         ml_layout.addRow('LHS samples per geometry', s.ml_count_spin)
@@ -149,8 +122,8 @@ class SimpleDoEPlanner(QWidget):
         s.generate_ml_btn.clicked.connect(s.generate_ml_table)
         s.ml_count_spin.valueChanged.connect(s._refresh_plan)
         ml_layout.addRow(s.generate_ml_btn)
-        self.tabs.addTab(ml, 'DeepLearning')
-        s._size_action_group(s.generate_ml_btn, s.preview_bounds_btn)
+        self.tabs.addTab(self.learning_page, 'DeepLearning')
+        s._size_action_group(s.generate_ml_btn)
 
         # Compatibility with existing model-transfer actions.
         # The host connects its validated current-model action to this button.

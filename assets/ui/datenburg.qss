@@ -260,13 +260,6 @@ QToolTip { background: #FFFFFF; color: #111827; border: 1px solid #B8B8B8; paddi
 #cameraToolbar QToolButton:focus { padding: 0; }
 #cameraToolbar QToolButton::menu-indicator { image: none; width: 0; height: 0; }
 
-/* DoE geometry inspection uses the shared viewport and compact controls. */
-#doePreviewTitle { color: #102A4C; font-size: 15px; font-weight: 400; }
-#doePreviewHint { color: #667587; font-size: 11px; }
-#doePreviewDetails {
-    color: #31516F; background: #E5ECF4; border: 1px solid #D1DBE5;
-    border-radius: 4px; padding: 7px 9px; font-size: 12px;
-}
 #doePreviewStatus { color: #526578; font-size: 12px; }
 
 /* Sample workbench shares the planner's compact section and table surfaces. */

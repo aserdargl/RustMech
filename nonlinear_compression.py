@@ -79,7 +79,6 @@ from solver_profiles import MESH_FIELDS, STRUCTURE_FIELDS, SolverProfileStore, p
 from doe_studio import DoEStudioWidget, DoEStudioWindow
 from preview_viewport import MESH_PREVIEW_ACTOR, create_preview_viewport
 from camera_toolbar import CameraToolbar
-from doe_preview import DoEBoundaryPreview
 from mesh_preview_worker import run_mesh_preview, shutdown_mesh_preview
 from model import (
     ANALYSIS_FIELDS,
@@ -1443,7 +1442,6 @@ class RustMechDialog(QDialog):
             QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored
         )
         self.doe_studio.preview_requested.connect(self.load_from_doe_row)
-        self.doe_studio.boundary_preview_requested.connect(self._show_doe_bounds)
         self.doe_studio.model_requested.connect(self._show_geometry_workspace)
         self.doe_studio.use_model_btn.clicked.connect(self._add_current_design)
         self.doe_window = DoEStudioWindow(self.doe_studio, self)
@@ -3777,24 +3775,6 @@ class RustMechDialog(QDialog):
         if self.doe_studio.use_model_btn.isEnabled():
             self.doe_studio.add_design(self.applied_structure_settings())
 
-    def _show_doe_bounds(self, label: str, cases: dict[str, Settings]) -> None:
-        surface_builder = make_surface
-        detach_requested = None
-        if self.remote_controller.requested:
-            try:
-                from truba_remote import run_remote_surface
-                context,auth = self.remote_controller.require("mesh")
-                detach_requested = Event()
-                surface_builder = partial(run_remote_surface, context=context, auth=auth,
-                                          cancelled=None, detach_requested=detach_requested)
-            except (ValueError,RuntimeError) as error:
-                self.status.setText(str(error))
-                return
-        dialog = DoEBoundaryPreview(label, cases, surface_builder, self, detach_requested=detach_requested)
-        dialog.setStyleSheet(STUDIO_STYLESHEET)
-        dialog.exec()
-        dialog.deleteLater()
-
     def load_from_doe_row(self, row_settings: Settings, *, preview=True) -> None:
         self.result_preview_field.setCurrentIndex(0)
         self._edited_test_profile = row_settings.test_profile
@@ -4329,9 +4309,7 @@ class RustMechDialog(QDialog):
             jobs.append(new_doe_job)
         if self._mesh_convergence_dialog is not None:
             jobs.extend(self._mesh_convergence_dialog.study.detach_remote_jobs())
-        pending = [job.detach_remote() for job in jobs]
-        pending.extend(dialog.detach_remote_job() for dialog in self.findChildren(DoEBoundaryPreview))
-        return pending
+        return [job.detach_remote() for job in jobs]
 
     def _prepare_truba_close(self):
         if self.disposed:

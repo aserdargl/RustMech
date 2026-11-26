@@ -515,7 +515,6 @@ Family|Aile
 Morphology|Morfoloji
 Dimensions|Ölçüler
 Size|Boyut
-Size (mm)|Boyut (mm)
 Cube size|Küp boyutu
 Cube size (mm)|Küp boyutu (mm)
 Cell size|Hücre boyutu
@@ -524,7 +523,6 @@ Cell size (mm)|Hücre boyutu (mm)
 Cell / Pore (mm)|Hücre / Gözenek (mm)
 Density|Yoğunluk
 Density (%)|Yoğunluk (%)
-Relative density (%)|Bağıl yoğunluk (%)
 Target Density (%)|Hedef yoğunluk (%)
 Actual Density (%)|Gerçek yoğunluk (%)
 Density / g·cm⁻³|Yoğunluk / g·cm⁻³
@@ -558,7 +556,6 @@ FE mesh|SE ağı
 Mesh diagnostics|Ağ tanılama
 Mesh Convergence|Ağ yakınsaması
 Mesh / analysis settings|Ağ / Analiz ayarları
-Global mesh size (mm)|Genel ağ boyutu (mm)
 Local mesh size (mm)|Yerel ağ boyutu (mm)
 Mesh Size (mm)|Ağ boyutu (mm)
 Mesh Size|Ağ boyutu
@@ -727,12 +724,7 @@ Min from…|Min tasarımı…
 Max from…|Maks tasarımı…
 Generate experiments|Deneyleri oluştur
 Generate ML matrix|ML matrisi oluştur
-Preview bounds|Sınırları göster
 Preview in 3D|3B önizle
-Geometry library|Geometri kitaplığı
-Geometry preview|Geometri önizlemesi
-Geometry · library preview|Geometri · Kitaplık önizlemesi
-Include geometry|Geometriyi ekle
 Remove selected|Seçileni kaldır
 Untitled plan|Adsız plan
 Open DoE plan|DoE planını aç
@@ -810,7 +802,6 @@ Smooth geometry|Pürüzsüz geometri
 Smooth + FE overlay|Geometri + SE üst üste
 Overlay|Üst üste
 Top|Üst
-Front|Ön
 Bottom|Alt
 Advanced|Gelişmiş
 TRUBA connection|TRUBA bağlantısı
@@ -923,10 +914,8 @@ Mesh Ready|Ağ hazır
 Mesh Disconnected|Ağ bağlantısız
 Analysis running...|Analiz sürüyor...
 Analysis cancelled. Analysis and solver processes forcibly terminated.|Analiz iptal edildi. Analiz ve çözücü süreçleri zorla sonlandırıldı.
-Building smooth geometry…|Pürüzsüz geometri oluşturuluyor…
 Building FE mesh in background…|SE ağı arka planda oluşturuluyor…
 Updating geometry…|Geometri güncelleniyor…
-Updating geometry preview…|Geometri önizlemesi güncelleniyor…
 Generating geometry in background...|Geometri arka planda üretiliyor...
 Preparing geometry preview...|Geometri önizlemesi hazırlanıyor...
 Preparing geometry preview…|Geometri önizlemesi hazırlanıyor…
@@ -936,7 +925,6 @@ TRUBA runtime is being checked and prepared automatically. Wait until READY befo
 TRUBA runtime preparation did not complete.|TRUBA çalışma ortamının hazırlığı tamamlanmadı.
 Settings changed — updating geometry preview...|Ayarlar değişti — Geometri önizlemesi güncelleniyor...
 Cancelling mesh generation…|Ağ üretimi iptal ediliyor…
-Smooth geometry · Ready|Pürüzsüz geometri · Hazır
 Ready · uses loading and contact conditions from the main setup|Hazır · Ana ayarlardaki yükleme ve temas koşullarını kullanır
 Geometry or mesh settings have changed. Click Apply to update the preview.|Geometri veya ağ ayarları değişti. Önizlemeyi güncellemek için Uygula'ya tıklayın.
 Structure or dimensions have changed. Click Apply to update the preview.|Yapı veya ölçüler değişti. Önizlemeyi güncellemek için Uygula'ya tıklayın.
@@ -974,7 +962,6 @@ Generating a new plan replaces the current table.|Yeni plan oluşturmak mevcut t
 No Pending Rows|Bekleyen satır yok
 All checked rows are already marked Completed, or no rows are checked.|İşaretli tüm satırlar tamamlanmış veya hiçbir satır işaretlenmemiş.
 No design selected.|Seçili tasarım yok.
-Choose a geometry to preview.|Önizlemek için geometri seçin.
 No flow case yet|Henüz akış senaryosu yok
 Build channel / export case|Kanalı oluştur / Senaryoyu dışa aktar
 Run flow analysis|Akış analizini çalıştır
@@ -1086,12 +1073,8 @@ Open Design of Experiments settings.|Deney tasarımı ayarlarını açın.
 Select settings method|Ayar yöntemini seçin
 Select workspace|Çalışma alanını seçin
 Select a method to open its settings|Ayarlarını açmak için bir yöntem seçin
-Drag to rotate · Scroll to zoom · Middle-drag to pan|Döndürmek için sürükle · Yakınlaştırmak için tekerleği çevir · Kaydırmak için orta tuşla sürükle
 Toggle perspective projection (OFF: orthographic view)|Perspektifi aç/kapat (kapalı: ortografik görünüm)
 3D display mode|3B görüntüleme modu
-View from above (XY)|Üstten görünüm (XY)
-View from the front (XZ)|Önden görünüm (XZ)
-Reset to the isometric comparison view|İzometrik karşılaştırma görünümüne dön
 Lowest value included in this variable's range.|Bu değişkenin aralığına dahil en küçük değer.
 Highest value included in this variable's range.|Bu değişkenin aralığına dahil en büyük değer.
 Number of evenly spaced values, including Min and Max. For example: Min 20, Max 40, Levels 3 gives 20, 30, 40. LHS uses Runs per design instead.|Min ve maks dahil eşit aralıklı değer sayısı. Örnek: Min 20, Maks 40, Seviye 3 → 20, 30, 40. LHS bunun yerine tasarım başına deney sayısını kullanır.
@@ -1132,13 +1115,11 @@ Automatic uses recommended load stepping defaults. Advanced applies the values b
 Budget checked between stages/levels; the active solver finishes its current level.|Süre sınırı aşamalar arasında denetlenir; etkin çözücü mevcut seviyeyi tamamlar.
 Build the channel to inspect the water domain; run explicitly to solve velocity and pressure.|Su bölgesini incelemek için kanalı oluşturun; hız ve basıncı çözmek için analizi ayrıca çalıştırın.
 Cancel the active analysis and forcibly terminate its process tree.|Etkin analizi iptal edin ve süreç ağacını zorla sonlandırın.
-Case|Senaryo
 Checking geometry and transfer integrity...|Geometri ve aktarım bütünlüğü denetleniyor...
 Coarse to fine, e.g. 0.3, 0.2, 0.15 (mm)|Kabadan inceye, ör. 0.3, 0.2, 0.15 (mm)
 Coordinates are mm. Select two opposite parallel planar end faces. Right-click a face to select it.|Koordinatlar mm'dir. Karşılıklı iki paralel düz uç yüzeyi seçin. Seçmek için yüzeye sağ tıklayın.
 Deformation ×|Deformasyon ×
 Displayed results use this saved case. A new run uses the current Model workspace geometry and the flow inputs at left.|Görüntülenen sonuçlar bu kayıtlı senaryoya aittir. Yeni çalışma, mevcut Model geometrisini ve soldaki akış girdilerini kullanır.
-DoE preview case|DoE önizleme senaryosu
 Explicitly install a dedicated per-user Python/Rust computation environment on a SLURM node. Does not change system Python or shell startup files.|Bir SLURM düğümünde kullanıcıya özel Python/Rust hesaplama ortamı kurun. Sistem Python'unu veya kabuk başlangıç dosyalarını değiştirmez.
 FE mesh generation progress|SE ağı üretim ilerlemesi
 Flow operation stopped. Incomplete case files and logs are retained.|Akış işlemi durduruldu. Eksik senaryo dosyaları ve günlükler korundu.
@@ -1160,7 +1141,6 @@ Preparation cancelled. No analysis was queued.|Hazırlık iptal edildi. Kuyruğa
 Remote batch cancellation is not confirmed. Reconnect and retry Stop before closing.|Uzak toplu işin iptali doğrulanmadı. Kapatmadan önce yeniden bağlanıp Durdur'u tekrar deneyin.
 Remote cancellation is not confirmed. Reconnect and retry Stop before closing.|Uzak iptal doğrulanmadı. Kapatmadan önce yeniden bağlanıp Durdur'u tekrar deneyin.
 Right-click to change the time unit.|Zaman birimini değiştirmek için sağ tıklayın.
-Rotate to inspect. Include this geometry to configure its mesh and variables.|İncelemek için döndürün. Ağını ve değişkenlerini ayarlamak için geometriyi ekleyin.
 Select Gitterburg designs. Configure support/loading faces, then material, mesh and solver in the main workspace. Add each configured model to the analysis queue.|Gitterburg tasarımlarını seçin. Ana çalışma alanında mesnet/yükleme yüzeylerini, ardından malzemeyi, ağı ve çözücüyü ayarlayın. Hazırlanan her modeli analiz kuyruğuna ekleyin.
 Select rows to move, remove or preview. Each job retains its saved analysis settings.|Taşımak, kaldırmak veya önizlemek için satırları seçin. Her iş kendi kayıtlı analiz ayarlarını korur.
 Self-contact fields show the maximum active slave-facet traction at each original solid node.|Öz temas alanları, özgün katı düğümlerinde etkin bağımlı yüzeylerin en yüksek temas gerilmesini gösterir.
@@ -1328,7 +1308,6 @@ Outer Z (mm)|Dış ölçü Z (mm)
 For periodic FFT, each outer dimension must be a whole multiple of the cell period.|Periyodik FFT için her dış ölçü, hücre periyodunun tam katı olmalıdır.
 Solid material|Katı malzeme
 Fluid material|Akışkan malzeme
-Click Apply to generate geometry.|Geometriyi oluşturmak için Uygula’ya tıklayın.
 Generate the selected experiment geometry, or the first geometry in the draft.|Seçili deneyin geometrisini veya taslaktaki ilk geometriyi oluşturur.
 Separate values with commas. For decimal commas, use a semicolon between values.|Değerleri virgülle ayırın. Ondalık virgül kullanırken değerleri noktalı virgülle ayırın.
 Maximum / values|Üst sınır / değerler

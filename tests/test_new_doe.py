@@ -37,12 +37,12 @@ class NewDoeTests(unittest.TestCase):
         self.window.doe_window.open_workspace()
         self.app.processEvents()
         tabs = studio.settings_tabs
-        self.assertEqual(tabs.count(), 5)
+        self.assertEqual(tabs.count(), 4)
         self.assertIs(tabs.widget(0), studio.new_doe)
         self.assertIs(tabs.currentWidget(), studio.new_doe)
         self.assertTrue(studio.new_doe.loaded)
         self.assertEqual([tabs.tabText(index) for index in range(tabs.count())],
-                         ["DoE", "Mesh", "DeepLearning", "DoE2", "Settings"])
+                         ["DoE", "DeepLearning", "DoE2", "Settings"])
         self.assertEqual(studio.new_doe.operation.currentText(), "FFT")
         self.assertIsNone(studio.findChild(LanguageSelector))
         self.assertTrue(self.window.language_selector.isVisible())
@@ -59,7 +59,7 @@ class NewDoeTests(unittest.TestCase):
         for index in range(buttons.count()):
             button = buttons.itemAt(index).widget()
             self.assertGreaterEqual(button.width(), button.fontMetrics().horizontalAdvance(button.text()) + 22)
-        tabs.setCurrentIndex(3)
+        tabs.setCurrentIndex(2)
         self.assertTrue(studio.open_plan_btn.isVisible())
         self.assertEqual(studio.open_plan_btn.width(), 64)
         self.assertEqual(studio.save_plan_btn.width(), 64)

@@ -743,7 +743,7 @@ TRUBA modunda mevcut destek:
 
 | İşlem | Yürütme |
 | --- | --- |
-| Model ve DoE sınır geometrisi | Geometri ve FE ağı TRUBA'da; yüzey/mesh yerelde çizilir |
+| Model geometrisi ve FE ağı | Geometri ve FE ağı TRUBA'da; yüzey/mesh yerelde çizilir |
 | Mekanik analiz | Doğrulanmış Kratos adaptörü; önizlemedeki aynı uzak FE ağı yeniden kullanılır |
 | Mesh convergence | Her seviyenin mesh, çözüm ve metrikleri TRUBA'da; sıradaki seviyeyi seçen hafif arayüz mantığı istemcide |
 | DoE mesh kontrolü / analiz | Satırın mesh ve çözüm işlemleri TRUBA'da |

@@ -35,9 +35,6 @@ class DoEWindowTests(unittest.TestCase):
                          side_effect=lambda *_, **kw: MagicMock(interactor=QWidget()))
         viewport.start()
         self.addCleanup(viewport.stop)
-        builder = patch.object(DoEStudioWidget, '_geometry_surface_builder', lambda self: None)
-        builder.start()
-        self.addCleanup(builder.stop)
 
     def tearDown(self):
         for window in self.windows:
@@ -176,14 +173,14 @@ class DoEWindowTests(unittest.TestCase):
         QTest.keyClick(open_plan, Qt.Key.Key_Tab)
         self.assertTrue(save_plan.hasFocus())
         self.assertEqual(studio.settings_tabs.tabText(0), "DoE")
-        self.assertEqual(studio.settings_tabs.tabText(3), "DoE2")
+        self.assertEqual(studio.settings_tabs.tabText(2), "DoE2")
         self.assertFalse(studio.table.isVisible())
         self.assertEqual(studio.vertical_splitter.handleWidth(), 3)
         self.assertFalse(studio.matrix_tabs.expanding())
-        buttons[3].click()
+        buttons[2].click()
         self.app.processEvents()
-        self.assertEqual(studio.settings_tabs.currentIndex(), 3)
-        self.assertTrue(buttons[3].isChecked())
+        self.assertEqual(studio.settings_tabs.currentIndex(), 2)
+        self.assertTrue(buttons[2].isChecked())
         footer_corner = save_plan.mapTo(studio, save_plan.rect().bottomRight())
         margins = studio.layout().contentsMargins()
         self.assertEqual(footer_corner.x(), studio.rect().right() - margins.right())
@@ -198,8 +195,8 @@ class DoEWindowTests(unittest.TestCase):
         self.assertTrue(experiments.isChecked())
         studio.table.setFocus()
         QTest.keyClick(studio.table, Qt.Key.Key_Tab, Qt.KeyboardModifier.ControlModifier)
-        self.assertEqual(studio.settings_tabs.currentIndex(), 4)
-        self.assertTrue(buttons[4].isChecked())
+        self.assertEqual(studio.settings_tabs.currentIndex(), 3)
+        self.assertTrue(buttons[3].isChecked())
         for buttons in studio._action_groups:
             self.assertEqual(len({button.size().width() for button in buttons}), 1)
             for button in buttons:
@@ -258,10 +255,7 @@ class DoEWindowTests(unittest.TestCase):
 
     def test_each_geometry_keeps_mesh_and_variables_in_generated_rows(self):
         _, studio = self.window()
-        studio.add_design(Settings())
-        studio.design_mesh_type.setCurrentText("TET10")
-        studio.design_value_controls["mesh_resolution"].setValue(.4)
-        studio.design_value_controls["local_mesh_size"].setValue(.08)
+        studio.add_design(replace(Settings(), mesh_type="TET10", mesh_resolution=.4, local_mesh_size=.08))
         enabled, low, high, count = studio.factor_controls["solid_fraction"]
         low.setValue(20)
         high.setValue(40)
@@ -269,7 +263,7 @@ class DoEWindowTests(unittest.TestCase):
         enabled.setChecked(True)
         studio.add_design(replace(Settings(), structure_name="Neovius"))
         self.assertFalse(enabled.isChecked())
-        self.assertEqual(studio.design_mesh_type.currentText(), "HEX8")
+        self.assertEqual(studio._designs[studio._selected_design].mesh_type, "HEX8")
         cell_enabled, cell_low, cell_high, cell_count = studio.factor_controls["cell_size"]
         cell_low.setValue(2)
         cell_high.setValue(3)
@@ -278,7 +272,7 @@ class DoEWindowTests(unittest.TestCase):
         studio.design_list.setCurrentRow(0)
         self.assertTrue(enabled.isChecked())
         self.assertFalse(cell_enabled.isChecked())
-        self.assertEqual(studio.design_mesh_type.currentText(), "TET10")
+        self.assertEqual(studio._designs[studio._selected_design].mesh_type, "TET10")
         studio.generate_table()
         self.assertEqual(len(studio.rows), 5)
         first = [row.to_settings(Settings()) for row in studio.rows[:3]]
@@ -390,7 +384,7 @@ class DoEWindowTests(unittest.TestCase):
         self.assertEqual([s.size for s in studio._designs], [9, 12])
         studio.generate_table()
         self.assertEqual([r.to_settings(Settings()).size for r in studio.rows], [9, 12])
-        self.assertEqual(studio.settings_tabs.currentIndex(), 3)
+        self.assertEqual(studio.settings_tabs.currentIndex(), 2)
 
     def test_group_bounds_two_variables_and_unique_experiments(self):
         _, studio = self.window()
@@ -461,13 +455,22 @@ class DoEWindowTests(unittest.TestCase):
         _, restored = self.window()
         restored.open_plan_path(path)
         self.app.processEvents()
-        self.assertEqual(restored.settings_tabs.currentIndex(), 3)
+        self.assertEqual(restored.settings_tabs.currentIndex(), 2)
         self.assertEqual(restored.capture_plan(), expected)
         self.assertEqual(restored._plan_path, path.resolve())
         self.assertEqual(restored.plan_file_label.text(), path.name)
         self.assertEqual(len(restored._matrix_rows[0]), 4)
         self.assertEqual(len(restored._matrix_rows[1]), 5)
         self.assertIsNone(restored._active_future)
+        for saved_tab, label, persisted in ((1, "DoE2", 3), (2, "DeepLearning", 2),
+                                             (3, "DoE2", 3), (4, "Settings", 4)):
+            with self.subTest(saved_tab=saved_tab):
+                previous_plan['selection']['tab'] = saved_tab
+                path.write_text(json.dumps(previous_plan), encoding='utf-8')
+                restored.open_plan_path(path)
+                tabs = restored.settings_tabs
+                self.assertEqual(tabs.tabText(tabs.currentIndex()), label)
+                self.assertEqual(restored.capture_plan()['selection']['tab'], persisted)
 
     def test_invalid_plan_keeps_current_workspace_and_failed_save_keeps_existing_file(self):
         _, studio = self.window()

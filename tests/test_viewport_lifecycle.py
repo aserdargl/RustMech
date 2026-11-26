@@ -76,12 +76,6 @@ PROBE = textwrap.dedent("""
                 _DEFAULT_WORKER.warmup()
                 scratch = _DEFAULT_WORKER._scratch
                 locked_report = (scratch / 'worker-crash.txt').open('ab')
-        elif kind == 'boundary':
-            from doe_preview import DoEBoundaryPreview
-            dialog = DoEBoundaryPreview('Density', {'Reference': Settings()}, lambda _: pv.Sphere(), None)
-        elif kind == 'library':
-            from doe_geometry import GeometryLibraryDialog
-            dialog = GeometryLibraryDialog(Settings(), lambda _: pv.Sphere())
         elif kind == 'results':
             dialog = results_dialog(folder)
         else:
@@ -96,8 +90,6 @@ PROBE = textwrap.dedent("""
                 dialog.plotter.render()
                 dialog.showMaximized()
                 app.processEvents()
-                if kind == 'library':
-                    dialog._ready_revision = dialog._revision
                 if action == 'done':
                     dialog.done(1)
                 elif action == 'hide_close':
@@ -162,11 +154,10 @@ class ViewportLifecycleTests(unittest.TestCase):
     def test_main_caption_closes_with_a_locked_preview_report(self):
         self.probe('main', 'caption_close_locked_preview')
 
-    def test_secondary_dialogs_release_viewports_before_native_windows_hide(self):
-        for kind in ('boundary', 'library', 'import'):
-            for action in ('close', 'accept', 'hide_close'):
-                with self.subTest(kind=kind, action=action):
-                    self.probe(kind, action)
+    def test_geometry_import_releases_viewport_before_native_window_hides(self):
+        for action in ('close', 'accept', 'hide_close'):
+            with self.subTest(action=action):
+                self.probe('import', action)
 
     def test_results_dialog_releases_viewport_before_automatic_deletion(self):
         for action in ('close', 'accept', 'hide_close'):

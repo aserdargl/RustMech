@@ -964,8 +964,8 @@ def retrieve_remote_operation(record_path,remote_auth=None,job_marker=None):
 retrieve_remote_operation.remote_job_target = True
 
 
-def run_remote_surface(settings,context,auth,cancelled,on_progress=None,*,detach_requested=None):
-    result,directory = run_remote_job(dict(operation="surface",settings=asdict(settings)),context,auth,cancelled=cancelled,on_progress=on_progress,detach_requested=detach_requested)
+def run_remote_surface(settings,context,auth,cancelled,*,detach_requested=None):
+    result,directory = run_remote_job(dict(operation="surface",settings=asdict(settings)),context,auth,cancelled=cancelled,detach_requested=detach_requested)
     if result is None:
         return None
     import pyvista as pv

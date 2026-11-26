@@ -62,6 +62,7 @@ DOE_ACTION_WIDTH = 96
 DOE_RUN_WIDTH = 140
 DOE_STOP_WIDTH = 108
 DOE_TOOLBAR_GAP = 6
+PLAN_MATRIX_TAB = 3
 MAX_DOE_ROWS = 5000
 SNAPSHOT_HEADER = "Design settings (JSON)"
 
@@ -380,7 +381,6 @@ class DoEStudioWidget(TrubaParallelMixin, QWidget):
     """Interactive Excel-like Design of Experiments (DoE) table & Batch Solver."""
 
     preview_requested = Signal(object)  # Existing table-row preview.
-    boundary_preview_requested = Signal(str, object)
     model_requested = Signal()
     autosave_recovery_plan = True
 
@@ -577,10 +577,10 @@ class DoEStudioWidget(TrubaParallelMixin, QWidget):
         self._refresh_plan()
         self._refresh_table_view()
         self.sample_settings.restore_state(plan.get("sample_settings", {}))
-        # Version 1 plans may name the removed editor at index zero.
-        self._legacy_plan_tab = selection['tab'] or self._matrix_tab
+        saved_tab = selection['tab']
+        self._legacy_plan_tab = saved_tab if saved_tab in self._legacy_plan_tabs else PLAN_MATRIX_TAB
         if select_tab:
-            self.settings_tabs.setCurrentIndex(self._legacy_plan_tab)
+            self.settings_tabs.setCurrentWidget(self._legacy_plan_tabs[self._legacy_plan_tab])
 
     def save_plan_dialog(self):
         from doe_plan import PLAN_FILTER
@@ -741,15 +741,18 @@ class DoEStudioWidget(TrubaParallelMixin, QWidget):
         self.planner.tabs.insertTab(0, self.new_doe, "DoE")
         self.planner.tabs.setCurrentWidget(self.new_doe)
         self._matrix_tab = self.planner.tabs.addTab(bottom_panel, "DoE2")
-        self._legacy_plan_tab = self._matrix_tab
+        self._legacy_plan_tab = PLAN_MATRIX_TAB
         from doe_sample_settings import SampleSettingsPage
         self.sample_settings = SampleSettingsPage(self)
         self.planner.tabs.addTab(self.sample_settings, "Settings")
+        # Use version 1 plan tab IDs independent of the current navigation order.
+        self._legacy_plan_tabs = {2: self.planner.learning_page, PLAN_MATRIX_TAB: bottom_panel, 4: self.sample_settings}
 
         def select_page(index):
-            legacy = self.planner.tabs.widget(index) is not self.new_doe
+            page = self.planner.tabs.widget(index)
+            legacy = page is not self.new_doe
             if legacy:
-                self._legacy_plan_tab = index
+                self._legacy_plan_tab = next(tab for tab, widget in self._legacy_plan_tabs.items() if widget is page)
             self.planner.plan_footer.setVisible(legacy)
             self.new_doe.size_navigation(self.planner.navigation, not legacy)
 
@@ -855,40 +858,6 @@ class DoEStudioWidget(TrubaParallelMixin, QWidget):
         self.design_list.setCurrentRow(len(self._designs) - 1)
         self._refresh_plan()
 
-    def _open_geometry_library(self):
-        from doe_geometry import GeometryLibraryDialog
-        builder = self._geometry_surface_builder()
-        if builder is None:
-            return
-        dialog = GeometryLibraryDialog(self._settings_provider(), builder, self)
-        if hasattr(builder, "cancel_event"):
-            dialog.finished.connect(lambda *_: builder.cancel_event.set())
-        if dialog.exec():
-            self.add_design(dialog.selected_settings())
-        dialog.deleteLater()
-
-    def _geometry_surface_builder(self):
-        from mesh_engine import make_surface
-        builder = make_surface
-        cancelled = None
-        controller = getattr(self, "remote_controller", None)
-        if controller is not None and controller.requested:
-            from functools import partial
-            from threading import Event
-            from truba_remote import run_remote_surface
-            try:
-                context, auth = controller.require("mesh")
-            except (ValueError, RuntimeError) as error:
-                QMessageBox.warning(self, "Geometry preview", str(error))
-                return
-            cancelled = Event()
-            progress = ['Submitting geometry to the resource session…']
-            builder = partial(run_remote_surface, context=context, auth=auth, cancelled=cancelled,
-                              on_progress=lambda stage: progress.__setitem__(0, stage))
-            builder.cancel_event = cancelled
-            builder.progress_status = lambda: progress[0]
-        return builder
-
     def _select_design(self, index):
         self._selected_design = index
         self._loading_design = True
@@ -898,8 +867,6 @@ class DoEStudioWidget(TrubaParallelMixin, QWidget):
                 settings = self._designs[index]
                 for field, control in self.design_value_controls.items():
                     control.setValue(getattr(settings, field))
-                self.design_mesh_type.setCurrentText(settings.mesh_type)
-                self.design_mesh_strategy.setCurrentIndex(self.design_mesh_strategy.findData(settings.tetra_strategy))
             factors = self._design_factors[index] if has_design else {}
             for spec in (*FACTOR_SPECS, SIZE_FACTOR_SPEC):
                 field, _, _, _, low, high, count = spec
@@ -919,9 +886,7 @@ class DoEStudioWidget(TrubaParallelMixin, QWidget):
             return
         index = self._selected_design
         settings = replace(self._designs[index],
-                           **{field: control.value() for field, control in self.design_value_controls.items()},
-                           mesh_type=self.design_mesh_type.currentText(),
-                           tetra_strategy=self.design_mesh_strategy.currentData())
+                           **{field: control.value() for field, control in self.design_value_controls.items()})
         self._designs[index] = settings
         self._update_design_caption(index)
         self._refresh_plan()
@@ -945,31 +910,16 @@ class DoEStudioWidget(TrubaParallelMixin, QWidget):
             for index, design in enumerate(self._designs):
                 if geometry_group(design) == group:
                     self._design_factors[index] = factors.copy()
-        selected = self.preview_factor.currentData()
-        self.preview_factor.clear()
-        for name, (enabled, low, high, count) in self.factor_controls.items():
+        for name, (_, low, high, count) in self.factor_controls.items():
             varies = name in factors
             low.setEnabled(varies)
             high.setEnabled(varies)
             count.setEnabled(varies and not lhs)
-            if varies:
-                self.preview_factor.addItem(enabled.text(), name)
-        if selected in factors:
-            self.preview_factor.setCurrentIndex(self.preview_factor.findData(selected))
-        elif factors:
-            self.preview_factor.setCurrentIndex(0)
-        has_design = self.design_list.currentRow() >= 0
         idle = self._active_mode is None
         self.design_list.setEnabled(idle)
-        tetra = self.design_mesh_type.currentText() in ("TET4", "TET10")
-        self.design_value_controls["local_mesh_size"].setEnabled(tetra)
-        self.design_mesh_strategy.setEnabled(tetra)
-        self.library_btn.setEnabled(idle)
         self.matrix_tabs.setEnabled(idle)
         self.matrix_navigation.setEnabled(idle)
         self.sample_settings.setEnabled(idle)
-        self.preview_bounds_btn.setEnabled(has_design and bool(factors))
-        self.preview_factor.setEnabled(bool(factors))
         self.open_plan_btn.setEnabled(idle)
         self.save_plan_btn.setEnabled(idle)
         ml_total, ml_message = self._plan_summary(True, self.ml_count_spin.value())
@@ -995,20 +945,6 @@ class DoEStudioWidget(TrubaParallelMixin, QWidget):
         if total > MAX_DOE_ROWS:
             return total, f"{total:,} runs exceed the {MAX_DOE_ROWS:,}-run limit."
         return total, f"{designs} reference configurations · {total:,} experiments"
-
-    def _preview_bounds(self) -> None:
-        index = self.design_list.currentRow()
-        name = self.preview_factor.currentData()
-        if index < 0 or name is None:
-            return
-        base = self._designs[index]
-        low, high, _ = self._active_factors()[name]
-        label = self.preview_factor.currentText()
-        self.boundary_preview_requested.emit(label, {
-            f"Reference · {getattr(base, name):g}": base,
-            f"Min · {low:g}": replace(base, **{name: low}),
-            f"Max · {high:g}": replace(base, **{name: high}),
-        })
 
     def generate_table(self) -> None:
         total, _ = self._plan_summary(self.sampling_combo.currentData() == "lhs")
