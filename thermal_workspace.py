@@ -181,7 +181,8 @@ class ThermalWorkspace(FlowWorkspace):
         from window_state import show_restored_window
         if not hasattr(self, "solid_library_dialog"):
             self.solid_library_dialog = MaterialLibraryDialog(self,
-                required=("density", "heat_capacity", "conductivity"))
+                required=("density", "heat_capacity", "conductivity"),
+                library_settings=self.preferences)
             self.solid_library_dialog.setObjectName("thermalSolidMaterialLibrary")
             self.solid_library_dialog.material_added.connect(self.apply_solid_library_card)
         show_restored_window(self.solid_library_dialog)

@@ -4,9 +4,14 @@ Values are SI. These are homogeneous parent materials, not effective lattice
 properties. No plastic curve is inferred from tensile strength or elongation.
 """
 from dataclasses import dataclass
+import json
+from uuid import uuid4
+
+from PySide6.QtCore import QSettings
 
 from material_library import MaterialCard
 
+CUSTOM_CARDS_KEY = "materials/customCards"
 
 # These are explicitly marked beside their values in the property table.
 ASSUMED_PROPERTIES = {
@@ -31,8 +36,11 @@ class CatalogMaterial:
     assumptions: str = ""
     kind: str = "solid"
     reference_temperature_K: float = 293.15
+    user_card: MaterialCard | None = None
 
     def card(self):
+        if self.user_card is not None:
+            return MaterialCard.from_dict(self.user_card.to_dict())
         source = f"{self.condition}\nReference: {self.reference_temperature_K:g} K. Constant properties.\n"
         source += "\n".join(f"{title} — {location}\n{url}" for title, url, location in self.references)
         if self.notes:
@@ -40,6 +48,40 @@ class CatalogMaterial:
         if self.assumptions:
             source += "\nEngineering assumptions: " + self.assumptions
         return MaterialCard(self.name, self.kind, self.properties, source=source)
+
+
+def catalog_materials(settings):
+    """Combine the bundled catalog with validated, per-user material cards."""
+    settings.sync()
+    entries = list(builtin_materials())
+    prefix = f"{CUSTOM_CARDS_KEY}/"
+    custom = []
+    for key in settings.allKeys():
+        if not key.startswith(prefix):
+            continue
+        try:
+            card = MaterialCard.from_dict(json.loads(settings.value(key)))
+        except (ValueError, TypeError):
+            continue
+        custom.append(CatalogMaterial(
+            f"custom-{key[len(prefix):]}", card.name, "Custom material", "",
+            card.properties, (), kind=card.kind, user_card=card,
+        ))
+    return entries + sorted(custom, key=lambda entry: entry.name.casefold())
+
+
+def save_custom_material(card, settings):
+    if any(entry.kind == card.kind and entry.name.casefold() == card.name.casefold()
+           for entry in catalog_materials(settings)):
+        raise ValueError("A material with this name already exists.")
+    identifier = uuid4().hex
+    key = f"{CUSTOM_CARDS_KEY}/{identifier}"
+    settings.setValue(key, json.dumps(card.to_dict(), ensure_ascii=False))
+    settings.sync()
+    if settings.status() != QSettings.Status.NoError:
+        settings.remove(key)
+        raise OSError("Could not save the material library.")
+    return f"custom-{identifier}"
 
 
 def builtin_materials():

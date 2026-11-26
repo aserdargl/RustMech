@@ -70,9 +70,76 @@ class MaterialCatalogUiTests(unittest.TestCase):
         return editor
 
     def dialog(self, **kwargs):
-        dialog = MaterialLibraryDialog(**kwargs)
+        dialog = MaterialLibraryDialog(library_settings=self.settings, **kwargs)
         self.windows.append(dialog)
         return dialog
+
+    def test_add_saves_custom_solid_and_reopens_it_for_selection(self):
+        editor = self.editor()
+        before = editor.material_settings()
+        editor.library_button.click()
+        dialog = editor.library_dialog
+        dialog.search.setText("Our alloy")
+        self.assertIsNone(dialog.selected_entry())
+        self.assertLess(dialog.material_list.geometry().bottom(), dialog.new_button.geometry().top())
+        dialog.new_button.click()
+        draft = dialog.draft
+        draft.name.setText("Our alloy")
+        draft.fields["density"].setValue(7900)
+        draft.fields["young_modulus"].setValue(204000)
+        draft.fields["poisson_ratio"].setValue(.3)
+        draft.optional["conductivity"].setChecked(True)
+        draft.fields["conductivity"].setValue(16)
+        QTest.keyClick(draft.name, Qt.Key.Key_Return)
+        self.assertIsNone(dialog.selected_entry())
+        dialog.save_button.click()
+        self.assertTrue(dialog.isVisible())
+        self.assertEqual(editor.material_settings(), before)
+        saved = dialog.selected_entry()
+        self.assertEqual(saved.name, "Our alloy")
+        self.assertEqual(saved.card().properties, {
+            "density": 7900, "young_modulus": 204e9, "poisson_ratio": .3, "conductivity": 16,
+        })
+        dialog.close_button.click()
+        self.settings = QSettings(self.settings.fileName(), QSettings.Format.IniFormat)
+        thermal = self.dialog(required=("density", "conductivity", "heat_capacity"))
+        thermal.search.setText("Our alloy")
+        self.assertEqual(thermal.selected_entry().identifier, saved.identifier)
+        self.assertFalse(thermal.add_button.isEnabled())
+        reopened = self.editor()
+        reopened.library_button.click()
+        reopened.library_dialog.search.setText("Our alloy")
+        reopened.library_dialog.add_button.click()
+        self.assertEqual(reopened.material_settings().material_card, saved.card().to_dict())
+        self.assertGreater(self.editor().material_selector.findData(saved.identifier), 0)
+
+    def test_add_fluid_validates_and_cancel_discards_the_draft(self):
+        dialog = self.dialog(kind="fluid")
+        dialog.show()
+        dialog.new_button.click()
+        draft = dialog.draft
+        draft.name.setText("My fluid")
+        dialog.save_button.click()
+        self.assertIn("density", dialog.status.text())
+        draft.fields["density"].setValue(1000)
+        draft.fields["dynamic_viscosity"].setValue(.001)
+        dialog.cancel_button.click()
+        self.assertEqual(len(self.dialog(kind="fluid").entries), 2)
+        dialog.new_button.click()
+        self.assertEqual(draft.name.text(), "")
+        draft.name.setText("My fluid")
+        draft.fields["density"].setValue(1000)
+        draft.fields["dynamic_viscosity"].setValue(.001)
+        dialog.save_button.click()
+        self.assertEqual(dialog.selected_entry().card().properties,
+                         {"density": 1000, "dynamic_viscosity": .001})
+        dialog.new_button.click()
+        draft.name.setText("my fluid")
+        draft.fields["density"].setValue(999)
+        draft.fields["dynamic_viscosity"].setValue(.001)
+        dialog.save_button.click()
+        self.assertIn("already exists", dialog.status.text())
+        self.assertEqual(len(self.dialog(kind="fluid").entries), 3)
 
     def test_constructing_material_panels_shows_no_standalone_window(self):
         shown = []

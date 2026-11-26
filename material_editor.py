@@ -262,9 +262,9 @@ class MaterialEditor(SidebarGroupBox):
         self.material_selector.currentIndexChanged.connect(self.select_material)
 
     def restore_library_choices(self):
-        from material_catalog import builtin_materials
+        from material_catalog import catalog_materials
         identifiers = self._library_identifiers()
-        for entry in builtin_materials():
+        for entry in catalog_materials(self.library_settings):
             if entry.kind == "solid" and entry.identifier in identifiers:
                 self.material_selector.addItem(entry.name, entry.identifier)
                 self._selection_values[entry.identifier] = (entry.card().mechanical_values(), None, False)
@@ -320,13 +320,15 @@ class MaterialEditor(SidebarGroupBox):
         from material_library_dialog import MaterialLibraryDialog
         from window_state import show_restored_window
         if not hasattr(self, "library_dialog"):
-            self.library_dialog = MaterialLibraryDialog(self, selected_name=self.name.text())
+            self.library_dialog = MaterialLibraryDialog(
+                self, selected_name=self.name.text(), library_settings=self.library_settings)
             self.library_dialog.material_added.connect(self.add_library_material)
         show_restored_window(self.library_dialog)
 
     def add_library_material(self, card):
-        from material_catalog import builtin_materials
-        entry = next(entry for entry in builtin_materials() if entry.kind == "solid" and entry.name == card.name)
+        from material_catalog import catalog_materials
+        entry = next(entry for entry in catalog_materials(self.library_settings)
+                     if entry.kind == "solid" and entry.name == card.name)
         index = self.material_selector.findData(entry.identifier)
         if index < 0:
             self._selection_values[entry.identifier] = (card.mechanical_values(), None, False)

@@ -257,7 +257,8 @@ class FlowWorkspace(QWidget):
         from window_state import show_restored_window
         if not hasattr(self, "fluid_library_dialog"):
             self.fluid_library_dialog = MaterialLibraryDialog(self, kind="fluid",
-                required=("density", "dynamic_viscosity", "heat_capacity", "conductivity"))
+                required=("density", "dynamic_viscosity", "heat_capacity", "conductivity"),
+                library_settings=self.preferences)
             self.fluid_library_dialog.setObjectName("fluidMaterialLibrary")
             self.fluid_library_dialog.material_added.connect(self.apply_fluid_library_card)
         show_restored_window(self.fluid_library_dialog)

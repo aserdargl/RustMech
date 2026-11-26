@@ -991,6 +991,7 @@ Cancelling mesh generation…|Ağ üretimi iptal ediliyor…
 Smooth geometry · Ready|Pürüzsüz geometri · Hazır
 Ready · uses loading and contact conditions from the main setup|Hazır · Ana ayarlardaki yükleme ve temas koşullarını kullanır
 Geometry or mesh settings have changed. Click Apply to update the preview.|Geometri veya ağ ayarları değişti. Önizlemeyi güncellemek için Uygula'ya tıklayın.
+Structure or dimensions have changed. Click Apply to update the preview.|Yapı veya ölçüler değişti. Önizlemeyi güncellemek için Uygula'ya tıklayın.
 Export to ANSYS|ANSYS'e Aktar
 Save the generated FE mesh in an ANSYS-compatible format.|Oluşturulan sonlu eleman ağını ANSYS uyumlu bir biçimde kaydet.
 ANSYS mesh (*.cdb)|ANSYS ağı (*.cdb)
@@ -1643,7 +1644,19 @@ TURKISH.update({
     'Conditions and limitations': 'Koşullar ve sınırlamalar',
     'Datasheets and references': 'Teknik föyler ve kaynaklar',
     'Required properties not supplied:': 'Gerekli özellikler sağlanmamış:',
-    'Add selects this material. Analysis does not start.': 'Ekle, bu malzemeyi seçer. Analiz başlatılmaz.',
+    'Add material': 'Malzeme ekle',
+    'New material': 'Yeni malzeme',
+    'Use': 'Kullan',
+    'Temperature-dependent': 'Sıcaklığa bağlı',
+    'Material saved to the library.': 'Malzeme kütüphaneye kaydedildi.',
+    'A material with this name already exists.': 'Bu adda bir malzeme zaten var.',
+    'Could not save the material library.': 'Malzeme kütüphanesi kaydedilemedi.',
+    'Invalid density value.': 'Yoğunluk sıfırdan büyük olmalı.',
+    'Invalid young_modulus value.': 'Elastisite modülü sıfırdan büyük olmalı.',
+    'Invalid poisson_ratio value.': 'Poisson oranı -1 ile 0,5 arasında olmalı.',
+    'Invalid conductivity value.': 'Isıl iletkenlik sıfırdan büyük olmalı.',
+    'Invalid heat_capacity value.': 'Özgül ısı kapasitesi sıfırdan büyük olmalı.',
+    'Invalid dynamic_viscosity value.': 'Dinamik viskozite sıfırdan büyük olmalı.',
     'Includes engineering estimates; see marked values and assumptions below.': 'Mühendislik tahminleri içerir; işaretli değerleri ve aşağıdaki varsayımları inceleyin.',
     'estimate': 'tahmin',
     'Density': 'Yoğunluk',
