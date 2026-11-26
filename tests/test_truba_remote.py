@@ -333,10 +333,13 @@ class RemoteProtocolTests(unittest.TestCase):
             (case / "experiment.json").write_text("{}")
         rows = [dict(operation="fft_solve", settings=asdict(Settings()), grid=n) for n in (16, 24)]
         request = dict(rows[0], experiment_rows=rows, experiment_index=3, experiment_count=5,
-                       paired_experiments=True)
+                       paired_experiments=True, predecessor_job_id="280")
         directory = cases[0] / "truba"
-        record = submit_remote_analysis(request, RemoteContext(), directory=directory)
+        with patch.object(FakeTransport, "command", autospec=True, side_effect=FakeTransport.command) as command:
+            record = submit_remote_analysis(request, RemoteContext(), directory=directory)
         self.assertEqual(FakeTransport.instances[0].submissions, 1)
+        self.assertIn("sbatch --parsable --dependency=afterany:280", command.call_args.args[1])
+        self.assertEqual(record["predecessor_job_id"], "280")
         self.assertIn("DoE 3–4/5", job_description(record))
         self.assertEqual((record["context"]["cores"], record["context"]["memory_mb"]), (1, 131072))
         for offset, state in enumerate(("Completed", "Failed"), 1):

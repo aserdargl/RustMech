@@ -545,26 +545,29 @@ class NewDoeTests(unittest.TestCase):
                 self.assertEqual(saved["slurm_job_id"], record["job_id"])
                 self.assertEqual(saved["state"], "Completed")
 
-    def test_truba_pairs_by_default_and_keeps_the_last_experiment_separate(self):
+    def test_truba_chains_pairs_by_default_and_includes_the_final_single_experiment(self):
         page = self.page()
         self.assertTrue(page.pair_experiments.isChecked())
         grid = next(f for f in page.factors if f.path == ("grid",))
         grid.variable.setChecked(True)
         grid.mode.setCurrentIndex(grid.mode.findData("list"))
-        grid.selection.setText("16, 24, 32")
+        grid.selection.setText("16, 24, 32, 40, 48")
         page.create()
         root = Path(self.temp.name)
         records = []
 
         def submit(request, case, controller):
             first = request["experiment_index"]
-            self.assertEqual(request["experiment_count"], 3)
-            if first == 1:
+            self.assertEqual(request["experiment_count"], 5)
+            expected_predecessor = {1: None, 3: "71", 5: "73"}
+            self.assertEqual(request.get("predecessor_job_id"), expected_predecessor[first])
+            if first in (1, 3):
                 self.assertTrue(request["paired_experiments"])
-                self.assertEqual([row["grid"] for row in request["experiment_rows"]], [16, 24])
+                self.assertEqual([row["grid"] for row in request["experiment_rows"]],
+                                 [16, 24] if first == 1 else [32, 40])
             else:
-                self.assertEqual(first, 3)
-                self.assertEqual(request["grid"], 32)
+                self.assertEqual(first, 5)
+                self.assertEqual(request["grid"], 48)
                 self.assertNotIn("experiment_rows", request)
             folder = case / "truba"
             folder.mkdir()
@@ -585,26 +588,49 @@ class NewDoeTests(unittest.TestCase):
             page.run.menu().actions()[1].trigger()
             page.advance()
             page.advance()
-            self.assertEqual(len(records), 2)
+            page.advance()
+            self.assertEqual(len(records), 3)
             table = page.truba_jobs_window.table
-            self.assertEqual([table.item(row, 0).text() for row in range(2)], ["1–2", "3"])
-            self.assertEqual(page.sheet.states, ["Queued"] * 3)
-            outputs = Path(records[0]["local_directory"]) / "output"
-            for i, state in enumerate(("Failed", "Completed"), 1):
-                folder = outputs / f"row_{i:05d}"
-                folder.mkdir(parents=True)
-                (folder / "experiment.json").write_text(json.dumps(dict(state=state)), encoding="utf-8")
+            self.assertEqual([table.item(row, 0).text() for row in range(3)], ["1–2", "3–4", "5"])
+            self.assertEqual(page.sheet.states, ["Queued"] * 5)
+            for record, states in zip(records[:2], (("Failed", "Completed"), ("Completed", "Completed")), strict=True):
+                outputs = Path(record["local_directory"]) / "output"
+                for i, state in enumerate(states, 1):
+                    folder = outputs / f"row_{i:05d}"
+                    folder.mkdir(parents=True)
+                    (folder / "experiment.json").write_text(json.dumps(dict(state=state)), encoding="utf-8")
             for record in records:
                 record["state"] = "downloaded"
                 (Path(record["local_directory"]) / "remote_job.json").write_text(json.dumps(record), encoding="utf-8")
             clock.return_value = 3
             page.advance()
-            self.assertEqual(page.sheet.states, ["Failed", "Completed", "Completed"])
+            self.assertEqual(page.sheet.states, ["Failed"] + ["Completed"] * 4)
             self.assertEqual(page.failures, 1)
             self.assertFalse(page.timer.isActive())
-            for i, job_id in enumerate(("71", "71", "73"), 1):
+            for i, job_id in enumerate(("71", "71", "73", "73", "75"), 1):
                 record = json.loads((page.directory / f"row_{i:05d}" / "experiment.json").read_text(encoding="utf-8"))
                 self.assertEqual(record["slurm_job_id"], job_id)
+
+    def test_truba_chain_stops_submitting_when_a_predecessor_is_unconfirmed(self):
+        page = self.page()
+        grid = next(f for f in page.factors if f.path == ("grid",))
+        grid.variable.setChecked(True)
+        grid.mode.setCurrentIndex(grid.mode.findData("list"))
+        grid.selection.setText("16, 24, 32")
+        page.create()
+        job = Mock()
+        job.remote_status.return_value = {}
+        job.done.return_value = True
+        job.result.side_effect = RuntimeError("Submission was not confirmed.")
+        with patch("doe_studio.results_directory", return_value=Path(self.temp.name)), \
+                patch.object(self.controller, "auth", return_value=object()), \
+                patch("new_doe_page.launch", return_value=job) as launch:
+            page.start(remote=True)
+            page.advance()
+            page.advance()
+        launch.assert_called_once()
+        self.assertEqual(page.sheet.states, ["Failed", "Failed", "Skipped"])
+        self.assertFalse(page.timer.isActive())
 
     def test_truba_pairing_is_saved_per_analysis(self):
         from new_doe_page import NewDoePage

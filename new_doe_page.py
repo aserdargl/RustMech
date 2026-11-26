@@ -874,6 +874,7 @@ class NewDoePage(QWidget):
         self.submitted_rows.clear()
         self.pending_checks.clear()
         self.remote_id = None
+        self.predecessor_job_id = None
         self.stop_requested = False
         if remote:
             if controller.auth() is None:
@@ -1038,12 +1039,19 @@ class NewDoePage(QWidget):
 
     def track_submission(self, record):
         self.submitted_rows[record["request_id"]] = (self.index, self.submission_size)
+        job_id = record.get("job_id")
         # A fast job can finish between the submission reply and this UI tick.
         path = self.case / "truba" / "remote_job.json"
         if path.is_file():
             record = json.loads(path.read_text(encoding="utf-8"))
         self.update_submitted_row(record)
         self.pending_checks.append((monotonic() + 2, record["request_id"]))
+        return record.get("job_id") or job_id
+
+    def skip_dependent_batches(self, error):
+        for index in range(self.index, len(self.rows)):
+            self.record("Skipped", index=index, error=str(error))
+        self.index = len(self.rows)
 
     def refresh_submitted_rows(self):
         # SSH polling and result downloads are owned by TrubaSession. Read only
@@ -1083,28 +1091,37 @@ class NewDoePage(QWidget):
                     if result is None:
                         raise RuntimeError("Solver returned without results.")
                     if self.separate_remote:
-                        self.track_submission(result)
+                        if self.batch_size == 2 and not result.get("job_id"):
+                            raise RuntimeError("Slurm did not confirm the preceding batch.")
+                        self.predecessor_job_id = self.track_submission(result)
                     else:
                         path = result["directory"] if isinstance(result, dict) else str(result)
                 except Exception as error:
                     durable = self.case / "truba" / "remote_job.json"
                     saved = json.loads(durable.read_text(encoding="utf-8")) if self.separate_remote and durable.is_file() else {}
-                    if saved.get("submission_attempted"):
-                        self.track_submission(saved)
+                    if saved.get("job_id") or saved.get("submission_attempted"):
+                        self.predecessor_job_id = self.track_submission(saved)
                     else:
                         self.failures += self.submission_size
                         for index in range(self.index, self.index + self.submission_size):
                             self.record("Failed", index=index, error=str(error))
+                    if self.batch_size == 2 and not saved.get("job_id"):
+                        self.index += self.submission_size
+                        self.skip_dependent_batches(error)
+                        return
                 else:
                     if not self.separate_remote:
                         self.record("Completed", results=path)
                 self.index += self.submission_size
             if self.index == len(self.rows):
+                skipped = self.sheet.states.count("Skipped")
+                suffix = f" · {skipped} " + translate("not submitted") if skipped else ""
                 if self.submitted_rows:
                     job_count = (len(self.rows) + self.batch_size - 1) // self.batch_size
-                    self.status.setText(f"TRUBA · {len(self.submitted_rows)} / {job_count} " + translate("jobs pending or running"))
+                    self.status.setText(f"TRUBA · {len(self.submitted_rows)} / {job_count} "
+                                        + translate("jobs pending or running") + suffix)
                     return
-                self.finish(f"{self.index} experiments finished · {self.failures} failed.")
+                self.finish(f"{self.index - skipped} experiments finished · {self.failures} failed." + suffix)
                 return
             self.case = self.directory / f"row_{self.index + 1:05d}"
             self.submission_size = min(self.batch_size, len(self.rows) - self.index)
@@ -1123,12 +1140,16 @@ class NewDoePage(QWidget):
                        if self.submission_size > 1 else self.rows[self.index])
                 if self.controller is not None:
                     row = dict(row, experiment_index=self.index + 1, experiment_count=len(self.rows))
+                if self.batch_size == 2 and self.predecessor_job_id is not None:
+                    row["predecessor_job_id"] = self.predecessor_job_id
                 self.job = launch(row, self.case, self.controller)
             except Exception as error:
                 for index in range(self.index, end):
                     self.record("Failed", index=index, error=str(error))
                 self.failures += self.submission_size
                 self.index = end
+                if self.batch_size == 2:
+                    self.skip_dependent_batches(error)
         except OSError as error:
             self.finish(f"Cannot save experiment progress: {error} · {self.directory}")
 
@@ -1189,13 +1210,19 @@ class NewDoePage(QWidget):
                     self.sheet.set_state(i, "Skipped")
             self.index = len(self.rows)
             errors = []
-            for index, _ in list(self.submitted_rows.values()):
+            submitted = list(self.submitted_rows.values())
+            if self.batch_size == 2:
+                # Cancel dependent jobs before their predecessors can release them.
+                submitted.reverse()
+            for index, _ in submitted:
                 path = self.directory / f"row_{index + 1:05d}" / "truba" / "remote_job.json"
                 try:
                     cancel_remote(path, self.controller.auth())
                     self.update_submitted_row(json.loads(path.read_text(encoding="utf-8")))
                 except Exception as error:
                     errors.append(str(error))
+                    if self.batch_size == 2:
+                        break
             if errors:
                 self.status.setText(errors[0])
                 return

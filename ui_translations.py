@@ -344,6 +344,7 @@ Select an ESEN job.|Bir ESEN işi seçin.
 Some files are omitted from this list.|Bazı dosyalar bu listede gösterilmiyor.
 Submitting|Gönderiliyor
 jobs pending or running|iş kuyrukta veya çalışıyor
+not submitted|deney gönderilmedi
 Submitted|Gönderildi
 Preparing|Hazırlanıyor
 Running|Çalışıyor

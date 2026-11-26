@@ -417,6 +417,13 @@ def run_remote_job(request,context,auth=None,marker=None,*,directory=None,resume
     from remote_operations import batch_geometry_name, required_capability
     study_name = context.study_name
     context.validate()
+    submission = resume_record if resume_record is not None else request
+    dependency = ""
+    if "predecessor_job_id" in submission:
+        predecessor = submission["predecessor_job_id"]
+        if not isinstance(predecessor, str) or not re.fullmatch(r"[1-9][0-9]*", predecessor):
+            raise ValueError("Invalid predecessor Slurm job ID.")
+        dependency = f" --dependency=afterany:{predecessor}"
     if not resume_record:
         required_capability(request)
         if request['operation'] in ANALYSIS_OPERATIONS:
@@ -426,6 +433,10 @@ def run_remote_job(request,context,auth=None,marker=None,*,directory=None,resume
             if (not submit_only or len(request.get("experiment_rows", ())) != 2
                     or type(index) is not int or type(count) is not int or not 1 <= index < count):
                 raise ValueError("Paired TRUBA experiments require two consecutive rows in one job.")
+        if "predecessor_job_id" in request and (
+            not submit_only or type(request.get("experiment_index")) is not int or request["experiment_index"] <= 1
+        ):
+            raise ValueError("A Slurm dependency requires a subsequent background DoE job.")
     if context.session_id and not resume_record and request.get('operation') == 'doe_mesh':
         from truba_handover import context_for_request
         context = context_for_request(context, auth, cancelled=cancelled, marker=marker, on_progress=on_progress)
@@ -470,6 +481,8 @@ def run_remote_job(request,context,auth=None,marker=None,*,directory=None,resume
             record["experiment_count"] = len(request["experiment_rows"])
         if request.get("paired_experiments"):
             record["experiment_batch_size"] = len(request["experiment_rows"])
+        if "predecessor_job_id" in request:
+            record["predecessor_job_id"] = request["predecessor_job_id"]
         if study_name and request["operation"] not in ("probe", "prepare", "preview", "surface"):
             record["study_name"] = study_name
         if request['operation'] == 'convergence_level' and request.get('convergence_study'):
@@ -566,7 +579,7 @@ def run_remote_job(request,context,auth=None,marker=None,*,directory=None,resume
         script = "cd "+shlex.quote(remote)+''' && test ! -e cancel.request && {
 if [ ! -s job.id ]; then
  if mkdir submission.lock 2>/dev/null; then
-  job=$(sbatch --parsable '''+shlex.quote(script_name)+'''); job=${job%%;*}
+  job=$(sbatch --parsable'''+dependency+' '+shlex.quote(script_name)+'''); job=${job%%;*}
   [[ "$job" =~ ^[0-9]+$ ]] || exit 2
   printf '%s\n' "$job" > job.id
  else
