@@ -1,11 +1,11 @@
 """Navigation and saved-plan controls for the DoE workspace."""
 from dataclasses import replace
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QSize, Qt
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QGridLayout, QLabel,
     QButtonGroup, QPushButton, QCheckBox, QListWidget, QTabWidget, QSizePolicy,
-    QScrollArea, QSplitter,
+    QScrollArea, QSplitter, QStackedWidget,
 )
 
 from studio_style import ActionFlowLayout, CONTROL_HEIGHT, NumericLineEdit, SidebarGroupBox
@@ -46,6 +46,18 @@ class DoENavigation(QWidget):
             QWidget.setTabOrder(previous.widget(), button)
 
 
+class _LearningModeNavigation(DoENavigation):
+    def __init__(self, tabs):
+        super().__init__(tabs)
+        self.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
+
+    def sizeHint(self):
+        layout = self.layout()
+        count = layout.count()
+        width = max(layout.itemAt(i).sizeHint().width() for i in range(count))
+        return QSize(count * width + (count - 1) * layout.spacing(), CONTROL_HEIGHT)
+
+
 class SimpleDoEPlanner(QWidget):
     def __init__(self, studio, factor_specs):
         super().__init__()
@@ -78,9 +90,20 @@ class SimpleDoEPlanner(QWidget):
         self.learning_page = self.legacy_learning_page
         if s.learning_doe is not None:
             self.learning_page = QTabWidget()
-            self.learning_page.addTab(s.learning_doe, 'LHS sampling')
-            self.learning_page.addTab(self.legacy_learning_page, 'Mechanical dataset plan')
-            layout.addWidget(DoENavigation(self.learning_page))
+            self.learning_page.addTab(s.learning_doe, 'LHS')
+            self.learning_page.addTab(self.legacy_learning_page, 'DataSet')
+            self.mode_navigation = _LearningModeNavigation(self.learning_page)
+            settings_navigation = QStackedWidget()
+            settings_navigation.addWidget(s.learning_doe.input_navigation)
+            settings_navigation.addWidget(self.input_navigation)
+            self.learning_page.currentChanged.connect(settings_navigation.setCurrentIndex)
+            navigation = QHBoxLayout()
+            navigation.setContentsMargins(2, 0, 2, 0)
+            navigation.addWidget(self.mode_navigation, alignment=Qt.AlignmentFlag.AlignTop)
+            navigation.addWidget(settings_navigation, 1)
+            layout.addLayout(navigation)
+        else:
+            layout.addWidget(self.input_navigation)
         layout.addWidget(self.learning_page, 1)
         for button in self.findChildren(QPushButton):
             button.setDefault(False)
@@ -97,22 +120,18 @@ class SimpleDoEPlanner(QWidget):
         layout.addWidget(self.learning_splitter)
 
         settings_panel = QWidget()
-        settings_panel.setMinimumWidth(330)
         settings_layout = QVBoxLayout(settings_panel)
         settings_layout.setContentsMargins(0, 0, 0, 0)
         settings_layout.setSpacing(2)
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        settings_layout.addWidget(scroll, 1)
-        settings = QWidget()
-        scroll.setWidget(settings)
-        sidebar = QVBoxLayout(settings)
-        sidebar.setContentsMargins(2, 2, 2, 2)
-        sidebar.setSpacing(3)
+        self.input_tabs = QTabWidget()
+        self.input_tabs.setMinimumWidth(320)
+        analysis = self._add_settings_tab('Analysis settings')
+        factor_settings = self._add_settings_tab('Variable settings')
+        self.input_navigation = DoENavigation(self.input_tabs)
+        settings_layout.addWidget(self.input_tabs, 1)
 
-        self.designs_group = SidebarGroupBox('Analysis settings')
-        sidebar.addWidget(self.designs_group)
-        designs = QVBoxLayout(self.designs_group.content)
+        designs = QVBoxLayout()
+        analysis.addLayout(designs)
         designs.setContentsMargins(4, 2, 4, 4)
         designs.setSpacing(3)
         s.use_model_btn = QPushButton('Use current model')
@@ -126,9 +145,10 @@ class SimpleDoEPlanner(QWidget):
         s.design_list.itemChanged.connect(s._refresh_plan)
         designs.addWidget(s.design_list)
 
-        self.variables_group = SidebarGroupBox('Variable settings')
-        sidebar.addWidget(self.variables_group)
-        variables = QGridLayout(self.variables_group.content)
+        self.variables_group = QWidget()
+        factor_settings.addWidget(self.variables_group)
+        factor_settings.addStretch()
+        variables = QGridLayout(self.variables_group)
         variables.setContentsMargins(4, 2, 4, 4)
         variables.setSpacing(3)
         for column, title in enumerate(('Fixed value', 'Min', 'Max'), 1):
@@ -140,7 +160,7 @@ class SimpleDoEPlanner(QWidget):
         s.factor_controls = {}
         for row, spec in enumerate(factor_specs, 1):
             field, label, lower, upper, _, _ = spec
-            s._add_factor_controls(self.variables_group.content, spec)
+            s._add_factor_controls(self.variables_group, spec)
             enabled, low, high = s.factor_controls[field]
             editor = NumericLineEdit(float(getattr(self.saved_draft, field)), lower, upper, width=54)
             editor.setAccessibleName(f'{label} · Fixed value')
@@ -152,7 +172,7 @@ class SimpleDoEPlanner(QWidget):
                 variables.addWidget(control, row, column, Qt.AlignmentFlag.AlignLeft)
 
         self.sampling_group = SidebarGroupBox('Deep Learning parameters')
-        sidebar.addWidget(self.sampling_group)
+        settings_layout.addWidget(self.sampling_group)
         ml_layout = QFormLayout(self.sampling_group.content)
         ml_layout.setContentsMargins(4, 2, 4, 4)
         ml_layout.setSpacing(3)
@@ -170,7 +190,7 @@ class SimpleDoEPlanner(QWidget):
         ml_layout.addRow(s.common_strain_check, s.common_strain_spin)
 
         self.material_group = SidebarGroupBox('Solid material')
-        sidebar.addWidget(self.material_group)
+        analysis.addWidget(self.material_group)
         materials = QHBoxLayout(self.material_group.content)
         materials.setContentsMargins(4, 2, 4, 4)
         self.material_name = QLabel()
@@ -182,7 +202,7 @@ class SimpleDoEPlanner(QWidget):
         library.setContentsMargins(6, 0, 6, 0)
         library.clicked.connect(s._open_learning_material_library)
         materials.addWidget(library)
-        sidebar.addStretch()
+        analysis.addStretch()
 
         s.ml_plan_label = QLabel()
         s.ml_plan_label.setObjectName('mutedHintLabel')
@@ -205,11 +225,22 @@ class SimpleDoEPlanner(QWidget):
         title.setFixedHeight(CONTROL_HEIGHT)
         title.setContentsMargins(4, 0, 0, 0)
         matrix.addWidget(title)
-        matrix.addWidget(s._build_experiment_panel(), 1)
+        matrix.addWidget(s._build_experiment_panel(actions_below=True), 1)
         self.learning_splitter.addWidget(matrix_panel)
         self.learning_splitter.setStretchFactor(1, 1)
         self.learning_splitter.setSizes([350, 600])
         s._size_action_group(s.use_model_btn, s.generate_ml_btn)
+
+    def _add_settings_tab(self, title):
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        content = QWidget()
+        scroll.setWidget(content)
+        layout = QVBoxLayout(content)
+        layout.setContentsMargins(2, 2, 2, 2)
+        layout.setSpacing(3)
+        self.input_tabs.addTab(scroll, title)
+        return layout
 
     def show_legacy_learning(self):
         if self.learning_page is not self.legacy_learning_page:

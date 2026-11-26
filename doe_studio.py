@@ -451,7 +451,7 @@ class ExperimentTableWidget(TrubaParallelMixin, QWidget):
             return (*TABLE_COLUMNS, "Dataset split", "Geometry group")
         return TABLE_COLUMNS
 
-    def _build_experiment_panel(self):
+    def _build_experiment_panel(self, *, actions_below=False):
         panel = QWidget()
         panel.setMinimumSize(140, 60)
         panel.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
@@ -523,7 +523,8 @@ class ExperimentTableWidget(TrubaParallelMixin, QWidget):
         self.stop_batch_btn.clicked.connect(self.stop_active_queue)
         bar.addWidget(self.stop_batch_btn)
 
-        layout.addWidget(bar_frame)
+        if not actions_below:
+            layout.addWidget(bar_frame)
 
         # 4. Excel-like QTableWidget
         self.table = QTableWidget(0, len(self.table_columns))
@@ -544,6 +545,8 @@ class ExperimentTableWidget(TrubaParallelMixin, QWidget):
         self.table.itemChanged.connect(self._on_table_item_changed)
         self.table.cellDoubleClicked.connect(self._on_row_double_clicked)
         layout.addWidget(self.table, 1)
+        if actions_below:
+            layout.addWidget(bar_frame)
 
         self.footer_label = QLabel("Edit values directly in the table · Double-click a row to preview · Table data for CSV and Excel")
         self.footer_label.setObjectName("mutedHintLabel")
