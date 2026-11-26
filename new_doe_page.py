@@ -44,6 +44,7 @@ FLOW_MATERIAL_PROPERTIES = {("flow", "density"): "density", ("flow", "dynamic_vi
 FEM_MESH_FIELDS = ("mesh_resolution", "mesh_type", "tetra_strategy", "local_mesh_size")
 FLOW_MESH_FIELDS = ("cells_across", "mesh_method", "surface_refinement", "boundary_layers", "max_fitted_cells")
 FLOW_SOLVER_FIELDS = ("inlet_speed", "iterations", "turbulence", "distribution", "foam_bashrc")
+FFT_GROUP = "FFT Homogenization"
 PREVIEW_BUTTONS = {"Structure": "Preview structure", "Mesh": "Preview mesh"}
 THERMAL_FLUID_PROPERTIES = {("thermal", "water_cp"): "heat_capacity",
                             ("thermal", "water_conductivity"): "conductivity"}
@@ -65,7 +66,7 @@ def material_requirements(path, op):
 
 def parameter_group(path, op):
     key = path[-1]
-    if path in (("grid",), ("options", "resolution"), ("mpm", "grid_mm"), ("mpm", "points_per_axis")):
+    if path in (("options", "resolution"), ("mpm", "grid_mm"), ("mpm", "points_per_axis")):
         return "Mesh"
     if path[0] == "settings":
         if key in ("test_profile", "specimen_architecture", "core_fraction"):
@@ -93,7 +94,7 @@ def parameter_group(path, op):
         if key in FLOW_MESH_FIELDS:
             return "Mesh"
         return "Channel · Isothermal CFD"
-    return "Peridynamics" if path[0] == "options" else "FFT Homogenization"
+    return "Peridynamics" if path[0] == "options" else FFT_GROUP
 
 
 def field_sources(host, op):
@@ -974,19 +975,21 @@ class NewDoePage(QWidget):
                 table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
                 frame = 2 * table.frameWidth()
                 table.setFixedHeight(table.horizontalHeader().sizeHint().height() + table.verticalHeader().length() + frame)
-                if title in PREVIEW_BUTTONS:
+                preview_group = "Mesh" if title == FFT_GROUP else title
+                if preview_group in PREVIEW_BUTTONS:
                     actions = QHBoxLayout()
                     actions.setSpacing(4)
                     actions.addStretch()
-                    preview = QPushButton(PREVIEW_BUTTONS[title])
-                    preview.setObjectName("structurePreviewBtn" if title == "Structure" else "meshPreviewBtn")
+                    preview = QPushButton(PREVIEW_BUTTONS[preview_group])
+                    preview.setObjectName("structurePreviewBtn" if preview_group == "Structure" else "meshPreviewBtn")
                     preview.setAutoDefault(False)
                     preview.setProperty("managesLocalizedWidth", True)
                     width = max(preview.fontMetrics().horizontalAdvance(text)
                                 for label in PREVIEW_BUTTONS.values()
                                 for text in (label, turkish(label))) + 24
                     preview.setFixedSize(width, CONTROL_HEIGHT)
-                    preview.clicked.connect(lambda _checked=False, mesh=title == "Mesh": self.open_input_preview(mesh))
+                    preview.clicked.connect(
+                        lambda _checked=False, mesh=preview_group == "Mesh": self.open_input_preview(mesh))
                     actions.addWidget(preview)
                     body.addLayout(actions)
                 if title == "Structure":
@@ -1038,7 +1041,7 @@ class NewDoePage(QWidget):
                 if group == "settings":
                     relevant = section in ("Standard test", "Structure") or (mesh and section == "Mesh")
                 else:
-                    relevant = mesh and (section == "Mesh" or
+                    relevant = mesh and (section == "Mesh" or (op == "fft_solve" and factor.path == ("grid",)) or
                                          (group == "flow" and section == "Channel · Isothermal CFD"
                                           and key not in FLOW_SOLVER_FIELDS))
                 if not relevant:

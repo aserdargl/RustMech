@@ -131,6 +131,15 @@ class NewDoeTests(unittest.TestCase):
             reopened.close()
             structure_window.close()
 
+            page.operation.setCurrentIndex(page.operation.findData("fft_solve"))
+            grid = next(factor for factor in page.factors if factor.path == ("grid",))
+            grid.fixed.setValue(48)
+            page.sections["FFT Homogenization"].findChild(QPushButton, "meshPreviewBtn").click()
+            _, request, with_mesh, _ = submit.call_args.args
+            self.assertTrue(with_mesh)
+            self.assertEqual(request["grid"], 48)
+            page.findChild(DoeInputPreview, "mesh").close()
+
     def test_numeric_input_commits_on_enter_and_rejects_invalid_bounds(self):
         page = self.page()
         factor = next(factor for factor in page.factors if factor.path == ("settings", "cell_size"))
@@ -424,11 +433,13 @@ class NewDoeTests(unittest.TestCase):
         geometry = page.sections["Structure"]
         structure_apply = geometry.findChild(QPushButton, "structureApplyBtn")
         self.assertFalse(structure_apply.autoDefault())
-        fft = page.sections["Mesh"]
-        grid = fields["grid"]
+        self.assertNotIn("Mesh", page.sections)
+        fft = page.sections["FFT Homogenization"]
         settings_table = fft.findChild(QTableWidget)
-        self.assertIs(settings_table.cellWidget(0, 0), grid.variable)
-        self.assertEqual(settings_table.item(0, 1).text(), grid.label)
+        self.assertEqual(settings_table.rowCount(), 3)
+        for row, key in enumerate(("grid", "void_ratio", "distribution")):
+            self.assertIs(settings_table.cellWidget(row, 0), fields[key].variable)
+            self.assertEqual(settings_table.item(row, 1).text(), fields[key].label)
         self.assertTrue(page.preview.isVisible())
         self.assertGreater(page.preview.mapTo(page, QPoint()).x(),
                            page.input_tabs.mapTo(page, QPoint()).x() + page.input_tabs.width())
