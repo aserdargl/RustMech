@@ -977,7 +977,7 @@ class RustMechDialog(QDialog):
         navigation = QHBoxLayout(command_bar)
         navigation.setContentsMargins(0, 0, 0, 0)
         navigation.setSpacing(2)
-        navigation.addWidget(self.brand_title_label)
+        navigation.addWidget(self.brand_title_label, alignment=Qt.AlignmentFlag.AlignTop)
         command_scroll.setWidget(command_bar)
         header_layout.addWidget(command_scroll)
 

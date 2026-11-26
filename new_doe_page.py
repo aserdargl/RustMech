@@ -570,6 +570,7 @@ class NewDoePage(QWidget):
         settings_layout.setSpacing(2)
         settings_layout.addWidget(self.input_tabs, 1)
         self.apply_button = QPushButton("Apply")
+        self.apply_button.setProperty("primary", True)
         self.apply_button.setFixedHeight(CONTROL_HEIGHT)
         self.apply_button.setAutoDefault(False)
         self.apply_button.setProperty("managesLocalizedWidth", True)
