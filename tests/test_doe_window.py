@@ -105,6 +105,44 @@ class DoEWindowTests(unittest.TestCase):
         self.assertFalse(restored.rows)
         self.assertIs(restored.settings_tabs.currentWidget(), restored.new_doe)
 
+    def test_learning_sidebar_generates_the_matrix_and_restores_its_splitter(self):
+        window, studio = self.window(preferences=self.store.settings)
+        studio.settings_tabs.setCurrentWidget(studio.planner.learning_page)
+        splitter = studio.planner.learning_splitter
+        splitter.setSizes([410, 700])
+        self.app.processEvents()
+        self.assertTrue(splitter.widget(0).isAncestorOf(studio.design_list))
+        self.assertTrue(splitter.widget(1).isAncestorOf(studio.table))
+        self.assertFalse(studio.generate_ml_btn.isEnabled())
+
+        studio.add_design(Settings())
+        enabled, low, high = studio.factor_controls["cell_size"]
+        self.assertTrue(enabled.isVisible())
+        self.assertFalse(low.isEnabled())
+        enabled.click()
+        low.setValue(2.5)
+        high.setValue(4.5)
+        studio.ml_count_spin.setValue(12)
+        studio.ml_seed_spin.setValue(17)
+        studio.common_strain_spin.setValue(15)
+        from material_library import MaterialCard
+        studio._apply_learning_material(MaterialCard(
+            "Learning steel", "solid", dict(density=8000, young_modulus=200e9, poisson_ratio=0.3)))
+        studio.generate_ml_btn.click()
+        self.assertEqual(studio.table.rowCount(), 12)
+        self.assertTrue(all(2.5 <= row.cell_size <= 4.5 for row in studio.rows))
+        self.assertTrue(all(row.target_strain_pct == 15 for row in studio.rows))
+        self.assertTrue(all(row.design_settings.material_name == "Learning steel" for row in studio.rows))
+        self.assertTrue(all(row.design_settings.material_density == 8 for row in studio.rows))
+
+        sizes = splitter.sizes()
+        window.close()
+        _, restored = self.window(preferences=self.store.settings)
+        restored.settings_tabs.setCurrentWidget(restored.planner.learning_page)
+        self.app.processEvents()
+        self.assertEqual(restored.planner.learning_splitter.sizes(), sizes)
+        self.assertEqual(restored.planner.material_name.text(), "Learning steel")
+
     def test_geometry_splitters_and_maximized_normal_bounds_restore(self):
         first, studio = self.window()
         first.resize(1060, 720)

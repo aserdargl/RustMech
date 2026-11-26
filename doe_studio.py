@@ -66,8 +66,8 @@ SNAPSHOT_HEADER = "Design settings (JSON)"
 
 # Field, label, input bounds and default range.
 FACTOR_SPECS = (
-    ("cell_size", "2. Cell Size (mm)", 0.1, 100.0, 2.0, 4.0),
-    ("solid_fraction", "3. Density (%)", 1.0, 99.0, 15.0, 45.0),
+    ("cell_size", "Cell size (mm)", 0.1, 100.0, 2.0, 4.0),
+    ("solid_fraction", "Solid fraction (%)", 1.0, 99.0, 15.0, 45.0),
 )
 SIZE_FACTOR_SPEC = ("size", "Cube size (mm)", 1.0, 100.0, 6.0, 8.0)
 
@@ -1320,7 +1320,6 @@ class DoEStudioWidget(ExperimentTableWidget):
 
         self.planner = SimpleDoEPlanner(self, (*FACTOR_SPECS, SIZE_FACTOR_SPEC))
         self.vertical_splitter.addWidget(self.planner)
-        self.planner.learning_layout.addWidget(self._build_experiment_panel(), 1)
 
         self.new_doe = NewDoePage(self._operation_host, self._preferences)
         self.planner.tabs.insertTab(0, self.new_doe, "DoE")
@@ -1518,8 +1517,8 @@ class DoEStudioWidget(ExperimentTableWidget):
     def _add_factor_controls(self, parent, spec) -> None:
         field, label, lower, upper, minimum, maximum = spec
         enabled = QCheckBox(label, parent)
-        low = NumericLineEdit(minimum, lower, upper)
-        high = NumericLineEdit(maximum, lower, upper)
+        low = NumericLineEdit(minimum, lower, upper, width=54)
+        high = NumericLineEdit(maximum, lower, upper, width=54)
         low.setToolTip("Lowest value included in this variable's range.")
         high.setToolTip("Highest value included in this variable's range.")
         self.factor_controls[field] = (enabled, low, high)
@@ -1604,6 +1603,32 @@ class DoEStudioWidget(ExperimentTableWidget):
         self._update_design_caption(index)
         self._refresh_plan()
 
+    def _open_learning_material_library(self):
+        if self._selected_design < 0 or self._active_mode is not None:
+            return
+        from material_library_dialog import MaterialLibraryDialog
+        from window_state import show_restored_window
+
+        design = self._designs[self._selected_design]
+        dialog = MaterialLibraryDialog(self, selected_name=design.material_name)
+        dialog.setWindowModality(Qt.WindowModality.WindowModal)
+        dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        dialog.material_added.connect(self._apply_learning_material)
+        show_restored_window(dialog)
+
+    def _apply_learning_material(self, card):
+        index = self._selected_design
+        if index < 0 or self._active_mode is not None:
+            return
+        try:
+            values = card.mechanical_values()
+        except ValueError as error:
+            QMessageBox.warning(self, "Material library", str(error))
+            return
+        self._designs[index] = replace(self._designs[index], **values)
+        self._update_design_caption(index)
+        self._refresh_plan()
+
     def _active_factors(self) -> dict[str, tuple[float, float]]:
         return {
             name: (low.value(), high.value())
@@ -1627,12 +1652,18 @@ class DoEStudioWidget(ExperimentTableWidget):
             low.setEnabled(varies)
             high.setEnabled(varies)
         idle = self._active_mode is None
+        selected = self._selected_design >= 0
         self.design_list.setEnabled(idle)
+        self.planner.variables_group.setEnabled(idle and selected)
+        self.planner.sampling_group.setEnabled(idle)
+        self.planner.material_group.setEnabled(idle and selected)
+        self.planner.material_name.setText(
+            self._designs[self._selected_design].material_name if selected else "No design selected.")
         self.sample_settings.setEnabled(idle)
         self.open_plan_btn.setEnabled(idle)
         self.save_plan_btn.setEnabled(idle)
         ml_total, ml_message = self._plan_summary()
-        self.ml_plan_label.setText(ml_message + "\nUses each geometry's selected variables. Without variables, only its reference case is generated.")
+        self.ml_plan_label.setText(ml_message)
         self.generate_ml_btn.setEnabled(0 < ml_total <= MAX_DOE_ROWS and idle)
 
     def _plan_summary(self):

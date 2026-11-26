@@ -58,7 +58,7 @@ class NewDoeTests(unittest.TestCase):
         for index in range(buttons.count()):
             button = buttons.itemAt(index).widget()
             self.assertGreaterEqual(button.width(), button.fontMetrics().horizontalAdvance(button.text()) + 22)
-        tabs.setCurrentIndex(2)
+        tabs.setCurrentWidget(studio.planner.learning_page)
         self.assertTrue(studio.open_plan_btn.isVisible())
         self.assertEqual(studio.open_plan_btn.width(), 64)
         self.assertEqual(studio.save_plan_btn.width(), 64)

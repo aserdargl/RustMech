@@ -703,6 +703,8 @@ Add current model to analysis queue|Mevcut modeli analiz kuyruğuna ekle
 Configure selected...|Seçileni yapılandır...
 1. New geometry|1. Yeni geometri
 2. Saved designs|2. Kaydedilen tasarımlar
+Saved designs|Kaydedilen tasarımlar
+Check the designs to include in the experiment matrix.|Deney matrisine eklenecek tasarımları işaretleyin.
 3. Selected design / variables|3. Seçili tasarım / Değişkenler
 Experiment matrix|Deney matrisi
 Experiment variables|Deney değişkenleri
@@ -713,6 +715,7 @@ Min|Min
 Max|Maks
 Levels|Seviye
 Sampling|Örnekleme
+Deep Learning parameters|Derin öğrenme parametreleri
 LHS samples per geometry|Geometri başına LHS örneği
 Copy from design|Tasarımdan al
 Min from…|Min tasarımı…
