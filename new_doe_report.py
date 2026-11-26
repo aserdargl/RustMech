@@ -8,6 +8,8 @@ from uuid import uuid4
 
 
 REPORT_NAME = "toplu_sonuclar.xlsx"
+LEARNING_CSV_NAME = "deep_learning_dataset.csv"
+LEARNING_RUN_PREFIX = "DeepLearning_"
 FINAL_STATES = {"Completed", "Failed", "Stopped", "Skipped"}
 TABLES = {
     "fft_solve": ("stiffness_mpa.csv",),
@@ -109,10 +111,11 @@ def _named_result_files(folder, names, prefix):
         yield f"{prefix}.{path.stem}{suffix}", path
 
 
-def write_learning_csv(directory, target, *, states, details, grouped_output=None):
+def write_learning_csv(directory, target=None, *, states=None, details=None, grouped_output=None,
+                       only_finished=False):
     """Join frozen inputs and published results, with one CSV record per experiment."""
     directory = Path(directory).resolve()
-    target = Path(target)
+    target = directory / LEARNING_CSV_NAME if target is None else Path(target)
     matrix = directory / "matrix.csv"
     if target.resolve() == matrix:
         raise ValueError("Choose a different file from the saved experiment matrix.")
@@ -121,19 +124,27 @@ def write_learning_csv(directory, target, *, states, details, grouped_output=Non
         reader = csv.reader(stream)
         inputs = next(reader, [])
         experiments = list(reader)
-    if (len(inputs) < 2 or len(experiments) != len(states)
+    if (len(inputs) < 2 or (states is not None and len(experiments) != len(states))
             or any(len(row) != len(inputs) for row in experiments)):
         raise ValueError("Invalid saved experiment matrix.")
 
     output = Path(grouped_output) if grouped_output is not None else directory / "truba" / "output"
+    details = details or {}
+    records = []
+    for index, row in enumerate(experiments):
+        number = int(row[0].removeprefix("EXP-"))
+        record, folder = _experiment(directory, number, output)
+        state = record.get("state")
+        if state not in FINAL_STATES and states is not None:
+            state = states[index]
+        if only_finished and state not in FINAL_STATES:
+            return
+        records.append((record, folder, state))
+
     metric_columns, table_columns = {}, {}
     results = []
-    for index, row in enumerate(experiments):
-        sample, operation = row[:2]
-        number = int(sample.removeprefix("EXP-"))
-        record, folder = _experiment(directory, number, output)
-        saved_state = record.get("state")
-        state = saved_state if saved_state in FINAL_STATES else states[index]
+    for index, (row, (record, folder, state)) in enumerate(zip(experiments, records, strict=True)):
+        operation = row[1]
         error = (record.get("error") or details.get(index)) if state in {"Failed", "Stopped", "Skipped"} else ""
         metrics = {
             f"{name}.{key}": value
@@ -161,6 +172,7 @@ def write_learning_csv(directory, target, *, states, details, grouped_output=Non
         temporary.replace(target)
     finally:
         temporary.unlink(missing_ok=True)
+    return target
 
 
 def _report_rows(columns, experiments, records):

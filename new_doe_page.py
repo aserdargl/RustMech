@@ -22,7 +22,8 @@ from material_library import MaterialCard
 from doe_planner import DoENavigation
 from new_doe_operations import (MAX_ROWS, OPERATIONS, explicit_numbers, launch, lhs_matrix, matrix, matrix_request,
                                 parameters, snapshot, structure_choices, validate)
-from new_doe_report import experiment_name, write_doe_report, write_learning_csv
+from new_doe_report import (LEARNING_CSV_NAME, LEARNING_RUN_PREFIX, experiment_name, write_doe_report,
+                            write_learning_csv)
 from structure_library import ALL_STRUCTURES_BY_FAMILY, STRUCTURE_FAMILIES
 from studio_style import (COMBO_WIDTH, CONTROL_HEIGHT, CompactComboBox, CompactSpinBox, NumericLineEdit,
                           SidebarGroupBox)
@@ -1263,7 +1264,7 @@ class NewDoePage(QWidget):
             except ValueError as error:
                 self.status.setText(translate(str(error)))
                 return
-        prefix = "DeepLearning_" if self.sampling else "DoE_"
+        prefix = LEARNING_RUN_PREFIX if self.sampling else "DoE_"
         directory = results_directory() / (prefix + datetime.now().strftime("%Y%m%d_%H%M%S_") + uuid4().hex[:8])
         try:
             directory.mkdir(parents=True)
@@ -1551,6 +1552,11 @@ class NewDoePage(QWidget):
         except (OSError, ValueError, TypeError, ImportError) as error:
             message += f" · {translate('Excel report could not be saved')}: {error}"
         if self.sampling:
+            try:
+                write_learning_csv(self.directory, states=self.sheet.states, details=self.sheet.details,
+                                   grouped_output=grouped_output, only_finished=True)
+            except (OSError, ValueError, TypeError) as error:
+                message += f" · {translate('CSV export failed')}: {error}"
             self.learning_results_output = grouped_output
             self.export_csv.setEnabled(True)
         self.status.setText(message)
@@ -1641,7 +1647,7 @@ class NewDoePage(QWidget):
         if not self.export_csv.isEnabled():
             return
         filename, _ = QFileDialog.getSaveFileName(
-            self, "Export CSV", str(self.directory / "deep_learning_dataset.csv"), "CSV (*.csv)")
+            self, "Export CSV", str(self.directory / LEARNING_CSV_NAME), "CSV (*.csv)")
         if not filename:
             return
         target = Path(filename if filename.lower().endswith(".csv") else filename + ".csv")

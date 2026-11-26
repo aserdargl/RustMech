@@ -386,17 +386,21 @@ def _doe_terminal_stage(stage):
     return stage == "downloaded" or bool(state and state[0].rstrip("+") in SLURM_TERMINAL_STATES)
 
 
-def _save_doe_workbook(record, directory, stage):
+def _save_doe_reports(record, directory, stage):
     if not record.get("experiment_count") or not _doe_terminal_stage(stage):
         return
     root = directory.parent.parent if record.get("background") else directory.parent
     if (root / "matrix.csv").is_file():
-        from new_doe_report import write_doe_report
+        from new_doe_report import LEARNING_RUN_PREFIX, write_doe_report, write_learning_csv
 
-        try:
-            write_doe_report(root, only_finished=True)
-        except (OSError, ValueError, TypeError, ImportError):
-            logging.getLogger(__name__).exception("Could not save the DoE workbook in %s", root)
+        reports = [(write_doe_report, "DoE workbook")]
+        if root.name.startswith(LEARNING_RUN_PREFIX):
+            reports.append((write_learning_csv, "Deep Learning CSV"))
+        for write_report, name in reports:
+            try:
+                write_report(root, only_finished=True)
+            except (OSError, ValueError, TypeError, ImportError):
+                logging.getLogger(__name__).exception("Could not save the %s in %s", name, root)
 
 
 def run_remote_job(request,context,auth=None,marker=None,*,directory=None,resume_record=None,on_progress=None,cancelled=None,
@@ -522,7 +526,7 @@ def run_remote_job(request,context,auth=None,marker=None,*,directory=None,resume
             record["state"] = stage
             _save_doe_row_result(record, directory, stage)
             _write_paths(paths,record)
-        _save_doe_workbook(record, directory, stage)
+        _save_doe_reports(record, directory, stage)
         if on_progress: on_progress("TRUBA · "+stage)
     code = analysis_code(record)
     script_name = (f"{code}.slurm" if record.get('operation') in ANALYSIS_OPERATIONS

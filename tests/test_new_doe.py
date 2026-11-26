@@ -125,6 +125,7 @@ class NewDoeTests(unittest.TestCase):
 
     def test_learning_csv_exports_matrix_and_results_by_experiment(self):
         from csv import DictReader
+        from new_doe_report import LEARNING_CSV_NAME
 
         self.page()
         studio = self.window.doe_studio
@@ -164,10 +165,13 @@ class NewDoeTests(unittest.TestCase):
 
         self.assertFalse(page.timer.isActive())
         self.assertTrue(page.export_csv.isEnabled())
+        automatic = page.directory / LEARNING_CSV_NAME
+        self.assertTrue(automatic.is_file(), page.status.text())
         target = Path(self.temp.name) / "LHS verisi.csv"
         with patch("file_dialog.QFileDialog.getSaveFileName", return_value=(str(target.with_suffix("")), "")):
             page.export_csv.click()
-        with target.open(encoding="utf-8-sig", newline="") as stream:
+        self.assertEqual(target.read_bytes(), automatic.read_bytes())
+        with automatic.open(encoding="utf-8-sig", newline="") as stream:
             records = list(DictReader(stream))
         self.assertEqual([row["Sample"] for row in records], ["EXP-0001", "EXP-0002", "EXP-0003"])
         self.assertEqual([int(row["grid"]) for row in records], [row["grid"] for row in page.rows])
@@ -185,9 +189,10 @@ class NewDoeTests(unittest.TestCase):
 
     def test_learning_csv_reads_downloaded_truba_results(self):
         from csv import DictReader
-        from new_doe_report import write_learning_csv
+        from new_doe_report import LEARNING_CSV_NAME
+        from truba_remote import _save_doe_reports
 
-        directory = Path(self.temp.name)
+        directory = Path(self.temp.name) / "DeepLearning_test"
         output = directory / "truba" / "output"
         grouped = output / "row_00001"
         separate = directory / "row_00002" / "truba" / "output"
@@ -195,14 +200,17 @@ class NewDoeTests(unittest.TestCase):
             folder.mkdir(parents=True)
             report = {"max_temperature": 310 if folder == grouped else 320}
             (folder / "thermal_summary.json").write_text(json.dumps(report), encoding="utf-8")
-        (grouped / "experiment.json").write_text(json.dumps({"state": "Completed"}), encoding="utf-8")
+        (grouped / "experiment.json").write_text(json.dumps({"state": "Running"}), encoding="utf-8")
         (separate.parent.parent / "experiment.json").write_text(
             json.dumps({"state": "Completed", "results": str(separate)}), encoding="utf-8")
         (directory / "matrix.csv").write_text(
             "Sample,Operation,flow.inlet_speed\nEXP-0001,thermal_solve,0.1\nEXP-0002,thermal_solve,0.2\n",
             encoding="utf-8")
-        target = directory / "export.csv"
-        write_learning_csv(directory, target, states=["Awaiting results"] * 2, details={}, grouped_output=output)
+        target = directory / LEARNING_CSV_NAME
+        _save_doe_reports({"background": True, "experiment_count": 2}, separate.parent, "downloaded")
+        self.assertFalse(target.exists())
+        (grouped / "experiment.json").write_text(json.dumps({"state": "Completed"}), encoding="utf-8")
+        _save_doe_reports({"experiment_count": 2}, output.parent, "downloaded")
         with target.open(encoding="utf-8-sig", newline="") as stream:
             records = list(DictReader(stream))
         self.assertEqual([row["Status"] for row in records], ["Completed", "Completed"])

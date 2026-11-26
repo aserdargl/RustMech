@@ -329,7 +329,7 @@ class RemoteProtocolTests(unittest.TestCase):
     def test_doe_batch_submission_records_all_background_results(self):
         from new_doe_report import REPORT_NAME
         from truba_job_list import job_description
-        from truba_remote import _save_doe_row_result, _save_doe_workbook, submit_remote_analysis
+        from truba_remote import _save_doe_reports, _save_doe_row_result, submit_remote_analysis
 
         cases = [self.root / f"row_{i:05d}" for i in (3, 4, 5)]
         for case in cases:
@@ -362,12 +362,12 @@ class RemoteProtocolTests(unittest.TestCase):
         matrix = self.root / "matrix.csv"
         matrix.write_text("Experiment,Operation,grid\n3,fft_solve,16\n4,fft_solve,24\n5,fft_solve,32\n6,fft_solve,40\n")
         report = self.root / REPORT_NAME
-        _save_doe_workbook(record, directory, "downloaded")
+        _save_doe_reports(record, directory, "downloaded")
         self.assertFalse(report.exists())
         last = self.root / "row_00006"
         last.mkdir()
         (last / "experiment.json").write_text('{"state": "Skipped"}')
-        _save_doe_workbook(record, directory, "downloaded")
+        _save_doe_reports(record, directory, "downloaded")
         self.assertTrue(report.is_file())
 
     def test_submission_download_checksum_and_resume_do_not_resubmit(self):
