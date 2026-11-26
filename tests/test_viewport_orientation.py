@@ -6,7 +6,8 @@ from unittest.mock import Mock, patch
 
 import numpy as np
 import pyvista as pv
-from PySide6.QtCore import QPoint, Qt
+from PySide6.QtCore import QPoint, QPointF, Qt
+from PySide6.QtGui import QWheelEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QFrame, QScrollArea, QToolButton, QWidget
 
@@ -115,6 +116,50 @@ class OrientationTests(unittest.TestCase):
         np.testing.assert_allclose(camera.focal_point, focus)
         self.assertAlmostEqual(camera.parallel_scale, scale)
         self.assertAlmostEqual(camera.distance, distance)
+
+    def test_dense_mesh_uses_reduced_surface_only_while_camera_moves(self):
+        self.plotter.clear()
+        grid = pv.ImageData(dimensions=(250, 250, 3)).cast_to_unstructured_grid()
+        mesh = self.plotter.add_mesh(grid, show_edges=True, color="#60a5fa")
+        overlay = self.plotter.add_mesh(pv.Sphere(), opacity=0.35, show_edges=False)
+        original_mapper = mesh.mapper
+        original_overlay_mapper = overlay.mapper
+        self.plotter.reset_camera()
+        self.plotter.set_motion_meshes((mesh, overlay))
+        viewport = self.plotter.interactor
+        position = QPoint(160, 180)
+        self.assertIs(mesh.mapper, original_mapper)
+
+        for button in (Qt.MouseButton.LeftButton, Qt.MouseButton.MiddleButton):
+            with self.subTest(button=button):
+                QTest.mousePress(viewport, button, pos=position)
+                QTest.mouseMove(viewport, position + QPoint(20, 10))
+                moving_mapper = mesh.mapper
+                self.assertLess(moving_mapper.dataset.n_cells, grid.n_cells // 2)
+                self.assertFalse(mesh.prop.show_edges)
+                self.assertIs(overlay.mapper, original_overlay_mapper)
+                QTest.mouseRelease(viewport, button, pos=position)
+                self.assertIs(mesh.mapper, original_mapper)
+                self.assertTrue(mesh.prop.show_edges)
+                self.assertFalse(overlay.prop.show_edges)
+
+        scale = self.plotter.camera.distance
+        wheel = QWheelEvent(QPointF(position), QPointF(viewport.mapToGlobal(position)),
+                            QPoint(), QPoint(0, 120), Qt.MouseButton.NoButton,
+                            Qt.KeyboardModifier.NoModifier, Qt.ScrollPhase.NoScrollPhase, False)
+        QApplication.sendEvent(viewport, wheel)
+        self.assertIs(mesh.mapper, moving_mapper)
+        self.assertNotEqual(self.plotter.camera.distance, scale)
+        QTest.qWait(250)
+        self.assertIs(mesh.mapper, original_mapper)
+        self.assertTrue(mesh.prop.show_edges)
+
+        align_camera(self.plotter, (1, 0, 0))
+        self.assertIs(mesh.mapper, moving_mapper)
+        self.wait_for_camera_transition()
+        self.assertIs(mesh.mapper, original_mapper)
+        self.assertTrue(mesh.prop.show_edges)
+        self.assertIs(mesh.mapper.dataset, grid)
 
     def test_view_menu_projection_and_presets(self):
         from model import Settings

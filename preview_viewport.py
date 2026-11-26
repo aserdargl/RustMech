@@ -1,15 +1,21 @@
 """Shared mouse controls for the 3D preview windows."""
 
+from time import monotonic
+
+import numpy as np
+import pyvista as pv
 from pyvistaqt import QtInteractor
 from PySide6.QtCore import QEvent, QObject, Qt, QTimer
-import numpy as np
-from time import monotonic
 from scipy.spatial.transform import Rotation, Slerp
+from vtkmodules.vtkFiltersCore import vtkQuadricClustering
 
 
 CAMERA_MOTION_FACTOR = 6.0
 MESH_PREVIEW_ACTOR = "mesh_preview"
 ORIENTATION_RIGHT_INSET = 2
+MOTION_SURFACE_THRESHOLD = 100_000
+MOTION_CLUSTER_DIVISIONS = 32
+WHEEL_IDLE_MS = 150
 
 
 def orientation_cube_size(viewport):
@@ -18,6 +24,15 @@ def orientation_cube_size(viewport):
 
 class _PreviewInteractor(QtInteractor):
     """Release custom VTK widgets before QtInteractor finalizes its context."""
+
+    def set_motion_meshes(self, actors):
+        self._mesh_motion.set_actors(actors)
+
+    def clear(self):
+        motion = getattr(self, "_mesh_motion", None)
+        if motion is not None:
+            motion.layers.clear()
+        super().clear()
 
     def event(self, event):
         if event.type() == QEvent.Type.DeferredDelete:
@@ -31,6 +46,10 @@ class _PreviewInteractor(QtInteractor):
         transition = getattr(self, "_camera_transition", None)
         if transition is not None:
             transition.stop()
+        motion = getattr(self, "_mesh_motion", None)
+        if motion is not None:
+            motion.wheel_timer.stop()
+            motion.layers.clear()
         controls = getattr(self, "_orientation_controls", None)
         if controls is not None:
             self.interactor.removeEventFilter(controls)
@@ -43,6 +62,78 @@ class _PreviewInteractor(QtInteractor):
             marker.SetInteractor(None)
             marker.SetCurrentRenderer(None)
         super().close()
+
+
+def _motion_mapper(dataset):
+    if dataset.n_cells < MOTION_SURFACE_THRESHOLD:
+        return None
+    surface = dataset if isinstance(dataset, pv.PolyData) else dataset.extract_surface(
+        algorithm="dataset_surface", pass_pointid=False, pass_cellid=False,
+    )
+    if surface.n_cells < MOTION_SURFACE_THRESHOLD:
+        return None
+    cluster = vtkQuadricClustering()
+    cluster.SetInputData(surface)
+    divisions = MOTION_CLUSTER_DIVISIONS
+    cluster.SetNumberOfDivisions(divisions, divisions, divisions)
+    cluster.UseInputPointsOn()
+    cluster.Update()
+    reduced = pv.wrap(cluster.GetOutput())
+    if 0 < reduced.n_cells < surface.n_cells // 2:
+        mapper = pv.DataSetMapper(dataset=reduced)
+        mapper.scalar_visibility = False
+        return mapper
+    return None
+
+
+class _MeshMotion(QObject):
+    """Keep the exact actors and mappers ready to restore after camera movement."""
+
+    def __init__(self, plotter):
+        super().__init__(plotter.interactor)
+        self.plotter = plotter
+        self.layers = []
+        self.active = set()
+        self.wheel_timer = QTimer(self)
+        self.wheel_timer.setSingleShot(True)
+        self.wheel_timer.setInterval(WHEEL_IDLE_MS)
+        self.wheel_timer.timeout.connect(lambda: self.finish("wheel"))
+
+    def set_actors(self, actors):
+        for actor in actors:
+            mapper = actor.mapper
+            moving_mapper = _motion_mapper(mapper.dataset)
+            self.layers.append((actor, mapper, moving_mapper, actor.prop.show_edges))
+        if self.active:
+            self._apply_detail()
+
+    def set_active(self, source, active):
+        was_moving = bool(self.active)
+        if active:
+            self.active.add(source)
+        else:
+            self.active.discard(source)
+        if was_moving == bool(self.active) or not self.layers:
+            return False
+        self._apply_detail()
+        return True
+
+    def _apply_detail(self):
+        moving = bool(self.active)
+        for actor, mapper, moving_mapper, show_edges in self.layers:
+            if moving_mapper is not None:
+                actor.mapper = moving_mapper if moving else mapper
+            actor.prop.show_edges = show_edges and not moving
+        if not moving and any(layer[2] is not None for layer in self.layers):
+            self.plotter.reset_camera_clipping_range()
+
+    def wheel(self):
+        self.set_active("wheel", True)
+        self.wheel_timer.start()
+
+    def finish(self, source):
+        if self.set_active(source, False):
+            self.plotter.render()
 
 
 def _camera_frame(direction, up):
@@ -59,6 +150,7 @@ class _CameraTransition(QObject):
     def __init__(self, plotter):
         super().__init__(plotter.interactor)
         self.plotter = plotter
+        self.motion = getattr(plotter, "_mesh_motion", None)
         self.timer = QTimer(self)
         self.timer.setInterval(16)
         self.timer.setTimerType(Qt.TimerType.PreciseTimer)
@@ -66,10 +158,8 @@ class _CameraTransition(QObject):
 
     def stop(self):
         self.timer.stop()
-        actor = getattr(self, "edge_actor", None)
-        if actor is not None:
-            actor.prop.show_edges = self.edges_visible
-            self.edge_actor = None
+        if self.motion is not None:
+            self.motion.set_active("transition", False)
 
     def start(self, direction, up, duration_ms):
         camera = self.plotter.camera
@@ -80,10 +170,8 @@ class _CameraTransition(QObject):
         self.rotation = Slerp([0, 1], Rotation.from_matrix(np.stack((start, end))))
         self.duration = max(duration_ms / 1000, 0.001)
         self.started = monotonic()
-        self.edge_actor = self.plotter.renderer.actors.get(MESH_PREVIEW_ACTOR)
-        if self.edge_actor is not None:
-            self.edges_visible = self.edge_actor.prop.show_edges
-            self.edge_actor.prop.show_edges = False
+        if self.motion is not None:
+            self.motion.set_active("transition", True)
         self.timer.start()
 
     def _tick(self):
@@ -114,10 +202,10 @@ def align_camera(plotter, direction, *, animate=True, up=None, duration_ms=480):
     if not hasattr(plotter, "_camera_transition"):
         plotter._camera_transition = _CameraTransition(plotter)
     transition = plotter._camera_transition
-    transition.stop()
     if animate:
         transition.start(direction, up, duration_ms)
     else:
+        transition.stop()
         camera.position = focus + direction * distance
         camera.up = up
         camera.OrthogonalizeViewUp()
@@ -181,6 +269,8 @@ class _OrientationCubeControls(QObject):
         kind = event.type()
         if kind in (QEvent.Type.Resize, QEvent.Type.Show):
             self.resize_marker(watched)
+        if kind == QEvent.Type.Wheel and event.angleDelta().y():
+            self.plotter._mesh_motion.wheel()
         if kind in (QEvent.Type.MouseButtonPress, QEvent.Type.Close, QEvent.Type.Wheel):
             if hasattr(self.plotter, "_camera_transition"):
                 self.plotter._camera_transition.stop()
@@ -230,12 +320,13 @@ def create_preview_viewport(
     style.SetMotionFactor(CAMERA_MOTION_FACTOR)
 
     if simplify_mesh_during_drag:
+        motion = plotter._mesh_motion = _MeshMotion(plotter)
         plotter.orientation_cube = _create_orientation_cube(plotter)
         style.add_observer(
-            "StartInteractionEvent", lambda *_: _show_mesh_edges(plotter, False)
+            "StartInteractionEvent", lambda *_: motion.set_active("trackball", True)
         )
         style.add_observer(
-            "EndInteractionEvent", lambda *_: _show_mesh_edges(plotter, True)
+            "EndInteractionEvent", lambda *_: motion.finish("trackball")
         )
     return plotter
 
@@ -246,7 +337,6 @@ def _create_orientation_cube(plotter):
     from vtkmodules.vtkInteractionWidgets import vtkOrientationMarkerWidget
     from vtkmodules.vtkRenderingAnnotation import vtkAnnotatedCubeActor
     from vtkmodules.vtkRenderingCore import vtkActor, vtkPolyDataMapper, vtkPropAssembly
-    import pyvista as pv
 
     cube = vtkAnnotatedCubeActor()
     for axis in ("X", "Y", "Z"):
@@ -306,12 +396,3 @@ def _create_orientation_cube(plotter):
         "Click a marked face, edge or corner for a smooth view change. Drag the cube to rotate the model."
     )
     return widget
-
-
-def _show_mesh_edges(plotter: QtInteractor, visible: bool) -> None:
-    actor = plotter.renderer.actors.get(MESH_PREVIEW_ACTOR)
-    if actor is None or actor.prop.show_edges == visible:
-        return
-    actor.prop.show_edges = visible
-    if visible:
-        plotter.render()

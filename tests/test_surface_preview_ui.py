@@ -126,6 +126,7 @@ class SurfacePreviewUITests(unittest.TestCase):
                     for call in plotter.add_mesh.call_args_list
                 }
                 if mode == 0:
+                    plotter.set_motion_meshes.assert_not_called()
                     self.assertNotIn(MESH_PREVIEW_ACTOR, layers)
                     self.assertNotIn("excluded_fragments", layers)
                     self.assertIs(layers[None].args[0], preview.surface)
@@ -133,6 +134,7 @@ class SurfacePreviewUITests(unittest.TestCase):
                     self.assertTrue(self.window.fragment_status.isHidden())
                     self.assertNotIn("RED = removed fragments", self.window.stats.text())
                 else:
+                    plotter.set_motion_meshes.assert_called_once()
                     self.assertIn(MESH_PREVIEW_ACTOR, layers)
                     self.assertIs(layers["excluded_fragments"].args[0], fragment)
                     self.assertFalse(self.window.fragment_status.isHidden())
