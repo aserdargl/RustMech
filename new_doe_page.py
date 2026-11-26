@@ -420,6 +420,7 @@ class DoeTrubaJobsWindow(QMainWindow):
         self.table.setHorizontalHeaderLabels(["Experiments", "Slurm ID", "Status"])
         self.table.setAlternatingRowColors(True)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.verticalHeader().hide()
         self.table.verticalHeader().setDefaultSectionSize(CONTROL_HEIGHT)
@@ -432,12 +433,38 @@ class DoeTrubaJobsWindow(QMainWindow):
         self.notice.setTextFormat(Qt.TextFormat.PlainText)
         self.notice.setWordWrap(True)
         layout.addWidget(self.notice)
+        self.results_button = QPushButton("Open result folder")
+        self.results_button.setStyleSheet("padding: 0 8px;")
+        self.results_button.setAutoDefault(False)
+        self.results_button.setEnabled(False)
+        self.results_button.clicked.connect(self.open_selected_results)
+        layout.addWidget(self.results_button, alignment=Qt.AlignmentFlag.AlignRight)
+        self.table.itemSelectionChanged.connect(self.update_results_button)
         self.setCentralWidget(content)
         self.job_rows = {}
+
+    def selected_results_directory(self):
+        rows = self.table.selectionModel().selectedRows(0)
+        if rows:
+            directory = rows[0].data(Qt.ItemDataRole.UserRole)
+            if directory and Path(directory).is_dir():
+                return directory
+        return None
+
+    def update_results_button(self):
+        self.results_button.setEnabled(self.selected_results_directory() is not None)
+
+    def open_selected_results(self):
+        directory = self.selected_results_directory()
+        if directory is None:
+            self.results_button.setEnabled(False)
+            return
+        QDesktopServices.openUrl(QUrl.fromLocalFile(directory))
 
     def begin(self):
         self.job_rows.clear()
         self.table.setRowCount(0)
+        self.results_button.setEnabled(False)
         self.notice.setText("Submitting analysis to TRUBA…")
         show_restored_window(self)
 
@@ -457,6 +484,10 @@ class DoeTrubaJobsWindow(QMainWindow):
             self.table.setItem(row, 2, QTableWidgetItem())
         self.table.item(row, 1).setText(str(job_id))
         state = record.get("state", "")
+        local_directory = record.get("local_directory")
+        results = str(Path(local_directory) / "output") if state == "downloaded" and local_directory else None
+        self.table.item(row, 0).setData(Qt.ItemDataRole.UserRole, results)
+        self.update_results_button()
         stage = state.partition(" · Running experiment ")[0]
         status = "Cancelled" if stage.lower() == "cancelled" else background_status({"state": stage})
         self.table.item(row, 2).setText(status)

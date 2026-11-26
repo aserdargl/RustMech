@@ -465,13 +465,16 @@ class NewDoeTests(unittest.TestCase):
             jobs = page.truba_jobs_window
             self.assertTrue(jobs.isVisible())
             self.assertEqual(jobs.table.rowCount(), 0)
-            job.remote_status.return_value = dict(job_id="71", state="RUNNING", experiment_index=2)
+            job.remote_status.return_value = dict(job_id="71", state="RUNNING", experiment_index=2,
+                                                  local_directory=str(root))
             page.advance()
             self.assertEqual(jobs.table.rowCount(), 1)
             self.assertEqual([jobs.table.item(0, col).text() for col in range(3)],
                              ["1–2", "71", "Analysis started and running"])
             self.assertIn("2/2", page.status.text())
             self.assertEqual(page.sheet.states, ["Awaiting results", "Running"])
+            jobs.table.selectRow(0)
+            self.assertFalse(jobs.results_button.isEnabled())
             job.done.return_value = True
             job.result.return_value = str(output)
             job.remote_status.return_value["state"] = "downloaded"
@@ -482,6 +485,11 @@ class NewDoeTests(unittest.TestCase):
             self.assertEqual(launch.call_args.args[0]["experiment_rows"], page.rows)
             self.assertEqual(page.sheet.states, ["Failed", "Completed"])
             self.assertFalse(page.timer.isActive())
+            self.assertTrue(jobs.results_button.isEnabled())
+            with patch("new_doe_page.QDesktopServices.openUrl") as open_url:
+                jobs.results_button.click()
+            open_url.assert_called_once()
+            self.assertEqual(Path(open_url.call_args.args[0].toLocalFile()), output)
 
     def test_separate_jobs_queue_before_completion_and_finish_out_of_order(self):
         page = self.page()
@@ -592,7 +600,8 @@ class NewDoeTests(unittest.TestCase):
             page.advance()
             page.advance()
             self.assertEqual(len(records), 3)
-            table = page.truba_jobs_window.table
+            jobs = page.truba_jobs_window
+            table = jobs.table
             self.assertEqual([table.item(row, 0).text() for row in range(3)], ["1–2", "3–4", "5"])
             self.assertEqual(page.sheet.states, ["Queued"] * 5)
             for record, states in zip(records[:2], (("Failed", "Completed"), ("Completed", "Completed")), strict=True):
@@ -604,6 +613,7 @@ class NewDoeTests(unittest.TestCase):
             for record in records:
                 record["state"] = "downloaded"
                 (Path(record["local_directory"]) / "remote_job.json").write_text(json.dumps(record), encoding="utf-8")
+            (Path(records[-1]["local_directory"]) / "output").mkdir()
             clock.return_value = 3
             page.advance()
             self.assertEqual(page.sheet.states, ["Failed"] + ["Completed"] * 4)
@@ -612,6 +622,17 @@ class NewDoeTests(unittest.TestCase):
             for i, job_id in enumerate(("71", "71", "73", "73", "75"), 1):
                 record = json.loads((page.directory / f"row_{i:05d}" / "experiment.json").read_text(encoding="utf-8"))
                 self.assertEqual(record["slurm_job_id"], job_id)
+            self.assertFalse(jobs.results_button.isEnabled())
+            for row in (1, 2, 0):
+                table.selectRow(row)
+                output = Path(records[row]["local_directory"]) / "output"
+                self.assertTrue(jobs.results_button.isEnabled())
+                with patch("new_doe_page.QDesktopServices.openUrl") as open_url:
+                    jobs.results_button.click()
+                open_url.assert_called_once()
+                self.assertEqual(Path(open_url.call_args.args[0].toLocalFile()), output)
+            table.clearSelection()
+            self.assertFalse(jobs.results_button.isEnabled())
 
     def test_truba_chain_stops_submitting_when_a_predecessor_is_unconfirmed(self):
         page = self.page()
