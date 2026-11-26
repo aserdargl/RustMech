@@ -2,6 +2,7 @@
 
 import ctypes
 from ctypes import wintypes
+from functools import cache
 
 from shiboken6 import createdByPython as python_created
 from PySide6.QtCore import QAbstractNativeEventFilter, QEvent, QMargins, QObject, QPoint, QPointF, QRect, Qt
@@ -13,10 +14,14 @@ CAPTION_HEIGHT = 25
 FRAME_GRIP = 4
 FRAME_INSET = 1
 CAPTION_PROPERTY = "rustmechCaption"
+FRAME_SUBCLASS_ID = 1
 WM_GETMINMAXINFO = 0x0024
 WM_STYLECHANGING = 0x007C
+WM_NCDESTROY = 0x0082
 WM_NCCALCSIZE = 0x0083
 WM_NCHITTEST = 0x0084
+WM_NCPAINT = 0x0085
+WM_NCACTIVATE = 0x0086
 WM_NCLBUTTONDBLCLK = 0x00A3
 WM_DWMCOMPOSITIONCHANGED = 0x031E
 HTCLIENT = 1
@@ -28,8 +33,12 @@ WS_CAPTION = 0x00C00000
 WS_THICKFRAME = 0x00040000
 WS_EX_APPWINDOW = 0x00040000
 WS_EX_DLGMODALFRAME = 0x00000001
+WS_EX_CLIENTEDGE = 0x00000200
+WS_EX_STATICEDGE = 0x00020000
+DWMWA_NCRENDERING_POLICY = 2
 DWMWA_WINDOW_CORNER_PREFERENCE = 33
 DWMWA_BORDER_COLOR = 34
+DWMNCRP_ENABLED = 2
 DWMWCP_ROUND = 2
 FRAME_BORDER_COLOR = 0x00A0A0A0
 ACTION_HINTS = (
@@ -71,6 +80,36 @@ class WindowStyle(ctypes.Structure):
 class DwmMargins(ctypes.Structure):
     _fields_ = (("left", ctypes.c_int), ("right", ctypes.c_int),
                 ("top", ctypes.c_int), ("bottom", ctypes.c_int))
+
+
+@cache
+def native_frame_paint_guard():
+    api = ctypes.WinDLL("comctl32")
+    subclass_type = ctypes.WINFUNCTYPE(ctypes.c_ssize_t, wintypes.HWND, wintypes.UINT, wintypes.WPARAM,
+                                     wintypes.LPARAM, ctypes.c_size_t, ctypes.c_size_t)
+    install = api.SetWindowSubclass
+    install.argtypes = (wintypes.HWND, subclass_type, ctypes.c_size_t, ctypes.c_size_t)
+    install.restype = wintypes.BOOL
+    remove = api.RemoveWindowSubclass
+    remove.argtypes = (wintypes.HWND, subclass_type, ctypes.c_size_t)
+    remove.restype = wintypes.BOOL
+    default = api.DefSubclassProc
+    default.argtypes = (wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM)
+    default.restype = ctypes.c_ssize_t
+
+    @subclass_type
+    def guard(hwnd, message, wparam, lparam, subclass_id, data):
+        if message == WM_NCPAINT:
+            return 0
+        if message == WM_NCACTIVATE:
+            # Preserve activation without letting Windows repaint its chrome.
+            lparam = -1
+        elif message == WM_NCDESTROY:
+            remove(hwnd, guard, subclass_id)
+        return default(hwnd, message, wparam, lparam)
+
+    # The callback must outlive every HWND that has it installed.
+    return install, remove, guard
 
 
 class WindowsCaptionFrame(QAbstractNativeEventFilter):
@@ -118,7 +157,7 @@ class WindowsCaptionFrame(QAbstractNativeEventFilter):
                 # Keep Win32's move/size loop and leave caption painting to Qt.
                 style |= WS_THICKFRAME
         elif index == GWL_EXSTYLE:
-            style &= ~WS_EX_DLGMODALFRAME
+            style &= ~(WS_EX_DLGMODALFRAME | WS_EX_CLIENTEDGE | WS_EX_STATICEDGE)
             # Windows otherwise minimizes owned windows to a classic title strip on the desktop.
             if (window.windowFlags() & Qt.WindowType.WindowMinimizeButtonHint
                     and (window.parentWidget() is not None or window.windowType() == Qt.WindowType.Tool)):
@@ -129,6 +168,8 @@ class WindowsCaptionFrame(QAbstractNativeEventFilter):
         hwnd = int(window.internalWinId())
         if not hwnd:
             return
+        install, _, guard = native_frame_paint_guard()
+        install(hwnd, guard, FRAME_SUBCLASS_ID, 0)
         for index in (GWL_STYLE, GWL_EXSTYLE):
             style = self._get_style(hwnd, index) & 0xFFFFFFFF
             desired = self.frame_style(window, index, style)
@@ -143,12 +184,18 @@ class WindowsCaptionFrame(QAbstractNativeEventFilter):
             self.configure_dwm(hwnd)
 
     def configure_dwm(self, hwnd):
-        for attribute, value in ((DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND),
+        for attribute, value in ((DWMWA_NCRENDERING_POLICY, DWMNCRP_ENABLED),
+                                 (DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND),
                                  (DWMWA_BORDER_COLOR, FRAME_BORDER_COLOR)):
             native_value = wintypes.DWORD(value)
             self._set_dwm_attribute(hwnd, attribute, ctypes.byref(native_value), ctypes.sizeof(native_value))
         # Give DWM a frame to compose without changing Qt's client bounds.
         self._extend_dwm_frame(hwnd, ctypes.byref(DwmMargins(bottom=1)))
+
+    def detach(self, window):
+        if hwnd := int(window.internalWinId()):
+            _, remove, guard = native_frame_paint_guard()
+            remove(hwnd, guard, FRAME_SUBCLASS_ID)
 
     def _change_owner(self, hwnd, owner):
         ctypes.set_last_error(0)
@@ -487,6 +534,8 @@ class WindowCaptionService(QObject):
                 delattr(watched, CAPTION_PROPERTY)
                 watched.setProperty(CAPTION_PROPERTY, None)
                 watched.setContentsMargins(caption.base_margins)
+                if self._native_frame is not None:
+                    self._native_frame.detach(watched)
                 caption.hide()
                 caption.deleteLater()
                 if caption.outline is not None:

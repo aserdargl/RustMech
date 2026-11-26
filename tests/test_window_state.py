@@ -11,7 +11,11 @@ from PySide6.QtWidgets import (
     QApplication, QDialog, QFileDialog, QMainWindow, QMenu, QMessageBox, QSplitter, QVBoxLayout, QWidget,
 )
 
-from window_caption import CAPTION_PROPERTY, WM_NCHITTEST, WS_CAPTION, CaptionButton, MonitorInfo, install_window_captions
+from window_caption import (
+    CAPTION_PROPERTY, FRAME_SUBCLASS_ID, GWL_EXSTYLE, WM_NCHITTEST, WS_CAPTION,
+    WS_EX_CLIENTEDGE, WS_EX_DLGMODALFRAME, WS_EX_STATICEDGE,
+    CaptionButton, MonitorInfo, install_window_captions, native_frame_paint_guard,
+)
 from window_state import WindowStateStore
 
 DWMWA_NCRENDERING_ENABLED = 1
@@ -208,7 +212,13 @@ class WindowStateTests(unittest.TestCase):
             frame = service._native_frame
             hwnd = int(window.winId())
             self.assertEqual(frame._get_style(hwnd, -16) & WS_CAPTION, 0)
-            self.assertEqual(frame._get_style(hwnd, -20) & 0x00000001, 0)
+            native_edges = WS_EX_DLGMODALFRAME | WS_EX_CLIENTEDGE | WS_EX_STATICEDGE
+            self.assertEqual(frame._get_style(hwnd, GWL_EXSTYLE) & native_edges, 0)
+            _, _, guard = native_frame_paint_guard()
+            get_subclass = ctypes.windll.comctl32.GetWindowSubclass
+            get_subclass.argtypes = (wintypes.HWND, type(guard), ctypes.c_size_t, ctypes.POINTER(ctypes.c_size_t))
+            get_subclass.restype = wintypes.BOOL
+            self.assertTrue(get_subclass(hwnd, guard, FRAME_SUBCLASS_ID, ctypes.byref(ctypes.c_size_t())))
             if not window.isMinimized():
                 bounds, _ = native_bounds(window)
                 client_rect = wintypes.RECT()
