@@ -2,10 +2,12 @@
 
 import atexit
 import faulthandler
+import logging
 import shutil
 import signal
-import tempfile
 import sys
+import tempfile
+import time
 import traceback
 from concurrent.futures import CancelledError
 from multiprocessing import get_context
@@ -14,7 +16,10 @@ from pathlib import Path
 from threading import Lock
 
 _CANCEL_POLL_SECONDS = 0.05
+_WORKER_EXIT_GRACE_SECONDS = 0.2
+_SCRATCH_CLEANUP_ATTEMPTS = 4
 _CRASH_REPORT = "worker-crash.txt"
+_LOGGER = logging.getLogger(__name__)
 
 
 def _serve_preview(connection, scratch):
@@ -97,8 +102,7 @@ class PreviewWorker:
         except BaseException:
             parent.close()
             process.close()
-            shutil.rmtree(self._scratch)
-            self._scratch = None
+            self._clean_scratch()
             raise
         finally:
             child.close()
@@ -109,15 +113,33 @@ class PreviewWorker:
             self._connection.close()
             self._connection = None
         if self._process is not None:
+            # EOF lets an idle worker close the crash report before it exits.
+            self._process.join(timeout=_WORKER_EXIT_GRACE_SECONDS)
             if self._process.is_alive():
                 self._process.terminate()
-            self._process.join()
+                self._process.join()
             self._process.close()
             self._process = None
         self._release_segment()
-        if self._scratch is not None:
-            shutil.rmtree(self._scratch)
-            self._scratch = None
+        self._clean_scratch()
+
+    def _clean_scratch(self):
+        scratch, self._scratch = self._scratch, None
+        if scratch is None:
+            return
+        for attempt in range(_SCRATCH_CLEANUP_ATTEMPTS):
+            try:
+                shutil.rmtree(scratch)
+                return
+            except FileNotFoundError:
+                return
+            except OSError as exc:
+                # Windows can still have a handle open after the worker exits.
+                if (getattr(exc, "winerror", None) not in (5, 32)
+                        or attempt == _SCRATCH_CLEANUP_ATTEMPTS - 1):
+                    _LOGGER.warning("Could not remove mesh preview directory %s: %s", scratch, exc)
+                    return
+                time.sleep(_CANCEL_POLL_SECONDS)
 
     def _release_segment(self):
         if self._segment is not None:

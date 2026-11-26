@@ -10,6 +10,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 PROBE = textwrap.dedent("""
     import sys
+    import shutil
     from pathlib import Path
     from tempfile import TemporaryDirectory
     from unittest.mock import patch
@@ -42,6 +43,7 @@ PROBE = textwrap.dedent("""
         store = WindowStateStore(app, QSettings(str(Path(folder) / 'windows.ini'), QSettings.IniFormat))
         app._rustmech_window_state = store
         kind, action = sys.argv[1:]
+        locked_report = None
         if kind == 'main':
             import nonlinear_compression as studio
             from window_caption import CAPTION_PROPERTY
@@ -69,6 +71,11 @@ PROBE = textwrap.dedent("""
                 plotter.render()
             dialog._kratos_result_dialog = results_dialog(folder, dialog)
             dialog._kratos_result_dialog.show()
+            if action == 'caption_close_locked_preview':
+                from mesh_preview_worker import _DEFAULT_WORKER
+                _DEFAULT_WORKER.warmup()
+                scratch = _DEFAULT_WORKER._scratch
+                locked_report = (scratch / 'worker-crash.txt').open('ab')
         elif kind == 'boundary':
             from doe_preview import DoEBoundaryPreview
             dialog = DoEBoundaryPreview('Density', {'Reference': Settings()}, lambda _: pv.Sphere(), None)
@@ -96,6 +103,11 @@ PROBE = textwrap.dedent("""
                 elif action == 'hide_close':
                     dialog.hide()
                     dialog.close()
+                elif action == 'caption_close_locked_preview':
+                    from window_caption import CaptionButton
+                    caption = dialog.property(CAPTION_PROPERTY)
+                    next(button for button in caption.findChildren(CaptionButton)
+                         if button.action == 'close').click()
                 else:
                     getattr(dialog, action)()
                 assert dialog.plotter._closed, 'viewport was not released'
@@ -104,10 +116,18 @@ PROBE = textwrap.dedent("""
             except Exception as error:
                 failures.append(str(error))
                 dialog.reject()
+            finally:
+                if locked_report is not None:
+                    locked_report.close()
         QTimer.singleShot(350, finish)
         dialog.exec()
         if kind == 'main':
             dialog.dispose()  # Repeated cleanup must remain safe.
+        if locked_report is not None:
+            if scratch.exists():
+                shutil.rmtree(scratch)
+            assert _DEFAULT_WORKER._process is None
+            assert _DEFAULT_WORKER._scratch is None
         if isValid(dialog):
             dialog.deleteLater()
         QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
@@ -138,6 +158,9 @@ class ViewportLifecycleTests(unittest.TestCase):
         for action in ('close', 'reject', 'accept', 'done', 'hide_close'):
             with self.subTest(action=action):
                 self.probe('main', action)
+
+    def test_main_caption_closes_with_a_locked_preview_report(self):
+        self.probe('main', 'caption_close_locked_preview')
 
     def test_secondary_dialogs_release_viewports_before_native_windows_hide(self):
         for kind in ('boundary', 'library', 'import'):
