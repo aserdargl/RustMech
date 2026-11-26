@@ -1076,7 +1076,7 @@ class RustMechDialog(QDialog):
         self.result_history_button.clicked.connect(self.show_result_history)
         self._workspace_commands = (
             (self.project_button, self.designs_button),
-            (self.workspace_button, self.sidebar_toggle),
+            (self.sidebar_toggle, self.workspace_button),
             (self.doe_button, self.folder_batch_button, self.esen_button, self.result_history_button),
         )
         for index, group in enumerate(self._workspace_commands):
