@@ -459,7 +459,7 @@ class NewDoeTests(unittest.TestCase):
         self.assertEqual(len({(button.width(), button.height()) for button in page.commands}), 1)
         self.assertEqual(page.open.mapTo(page, page.open.rect().bottomRight()).x(),
                          page.preview.mapTo(page, page.preview.rect().bottomRight()).x())
-        self.assertLess(page.preview.mapTo(page, page.preview.rect().bottomRight()).y(), apply_y)
+        self.assertEqual(page.preview.mapTo(page, QPoint(0, page.preview.height())).y(), apply_y)
         self.assertLess(page.operation.width(), 150)
         apply_right = page.apply_button.mapTo(page, page.apply_button.rect().bottomRight()).x()
         settings_right = page.input_tabs.mapTo(page, page.input_tabs.rect().bottomRight()).x()
@@ -494,6 +494,11 @@ class NewDoeTests(unittest.TestCase):
         self.assertEqual([row["settings"]["size"] for row in page.rows], [2, 4])
         self.assertTrue(page.run.isEnabled())
         self.app.processEvents()
+        self.assertEqual(page.status.text(), "2 experiments ready.")
+        self.assertEqual(page.status.mapTo(page, page.status.rect().center()).y(),
+                         page.run.mapTo(page, page.run.rect().center()).y())
+        self.assertEqual(page.preview.mapTo(page, QPoint(0, page.preview.height())).y(),
+                         page.run.mapTo(page, QPoint()).y())
         self.assertEqual(page.splitter.geometry().bottom(),
                          page.rect().bottom() - page.layout().contentsMargins().bottom())
         QTest.keyClick(geometry, Qt.Key.Key_Space)
