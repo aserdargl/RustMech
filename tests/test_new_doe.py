@@ -237,6 +237,7 @@ class NewDoeTests(unittest.TestCase):
 
     def test_fft_geometry_and_material_controls_are_local_to_doe(self):
         from material_catalog import builtin_materials
+        from studio_style import COMBO_WIDTH, CONTROL_HEIGHT, CompactComboBox
         from window_caption import CAPTION_PROPERTY
 
         page = self.page()
@@ -252,7 +253,18 @@ class NewDoeTests(unittest.TestCase):
 
         card = next(entry.card() for entry in builtin_materials() if entry.kind == "solid")
         original = self.window.fft_material_editor.material_settings()
-        page.apply_fft_material(card)
+        material = fields["material_card"].fixed
+        self.assertIsInstance(material, CompactComboBox)
+        self.assertEqual((material.width(), material.height()), (COMBO_WIDTH, CONTROL_HEIGHT))
+        index = material.findText(card.name)
+        self.assertGreater(index, 0)
+        page.inputs.ensureWidgetVisible(material)
+        material.showPopup()
+        self.app.processEvents()
+        option = material.model().index(index, 0)
+        material.view().setCurrentIndex(option)
+        QTest.keyClick(material.view(), Qt.Key.Key_Return)
+        self.assertEqual(material.currentText(), card.name)
         modulus = fields["young_modulus"]
         modulus.variable.setChecked(True)
         modulus.first.setValue(1000)
@@ -260,6 +272,7 @@ class NewDoeTests(unittest.TestCase):
         page.create()
         self.assertEqual([row["settings"]["young_modulus"] for row in page.rows], [1000, 2000])
         self.assertTrue(all(row["settings"]["material_name"] == card.name for row in page.rows))
+        self.assertTrue(all(row["settings"]["material_card"] == card.to_dict() for row in page.rows))
         self.assertEqual(self.window.fft_material_editor.material_settings(), original)
         modulus.variable.setChecked(False)
         page.create()
@@ -280,6 +293,57 @@ class NewDoeTests(unittest.TestCase):
             [tuple(row["settings"][axis] for axis in ("size_x", "size_y", "size")) for row in page.rows],
             [(4, 8, 12), (4, 8, 12)],
         )
+
+    def test_material_dropdowns_keep_card_and_properties_in_the_experiment(self):
+        from material_library import MaterialCard
+        from studio_style import CompactComboBox
+
+        page = self.page()
+        for operation, path, property_paths in (
+            ("mechanical", ("settings", "material_card"), {("settings", "young_modulus"): ("young_modulus", 1e-6)}),
+            ("flow_solve", ("flow", "fluid_material_card"), {("flow", "density"): ("density", 1)}),
+            ("thermal_solve", ("flow", "fluid_material_card"), {("thermal", "water_cp"): ("heat_capacity", 1)}),
+            ("thermal_solve", ("thermal", "solid_material_card"), {("thermal", "solid_cp"): ("heat_capacity", 1)}),
+        ):
+            with self.subTest(operation=operation, path=path):
+                page.operation.setCurrentIndex(page.operation.findData(operation))
+                fields = {factor.path: factor for factor in page.factors}
+                self.assertIsInstance(fields["settings", "imported_geometry_role"].fixed, CompactComboBox)
+                if operation == "mechanical":
+                    automatic = fields["settings", "automatic_cores"].fixed
+                    self.assertEqual(automatic.currentData(), page.base["settings"]["automatic_cores"])
+                    self.assertEqual(automatic.itemText(0), "Automatic")
+                    self.assertEqual([automatic.itemData(i) for i in range(automatic.count())], [None, True, False])
+                material = fields[path].fixed
+                self.assertIsInstance(material, CompactComboBox)
+                self.assertGreater(material.count(), 1)
+                material.setCurrentIndex(1)
+                material.activated.emit(1)
+                data = material.currentData()
+                values = MaterialCard.from_dict(data).properties
+                page.create()
+                self.assertTrue(page.matrix_current, page.status.text())
+                self.assertEqual(page.rows[0][path[0]][path[1]], data)
+                for (group, key), (prop, scale) in property_paths.items():
+                    self.assertAlmostEqual(page.rows[0][group][key], values[prop] * scale)
+
+    def test_fft_restores_legacy_json_material_draft(self):
+        from material_library import MaterialCard
+
+        page = self.page()
+        path = "settings/material_card"
+        card = MaterialCard("Imported solid", "solid", dict(young_modulus=123e9, poisson_ratio=0.29))
+        page.apply_fft_material(card)
+        page.save_draft()
+        page.operation.setCurrentIndex(page.operation.findData("mechanical"))
+        page._drafts["fft_solve"][path]["fixed"] = json.dumps(card.to_dict())
+        page.operation.setCurrentIndex(page.operation.findData("fft_solve"))
+        fields = {factor.path[-1]: factor for factor in page.factors}
+        self.assertEqual(fields["material_card"].fixed.currentText(), card.name)
+        page.create()
+        self.assertTrue(page.matrix_current, page.status.text())
+        self.assertEqual(page.rows[0]["settings"]["material_card"], card.to_dict())
+        self.assertEqual(page.rows[0]["settings"]["young_modulus"], 123000.0)
 
     def test_apply_replaces_the_matrix_from_the_left_column(self):
         page = self.page()

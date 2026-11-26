@@ -17,6 +17,8 @@ from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDialog,
                                QStackedWidget, QTabWidget, QTableView, QTableWidget, QTableWidgetItem,
                                QVBoxLayout, QWidget)
 
+from material_catalog import builtin_materials
+from material_library import MaterialCard
 from new_doe_operations import (MAX_ROWS, OPERATIONS, explicit_numbers, launch, matrix, matrix_request,
                                 parameters, snapshot, structure_choices, validate)
 from new_doe_report import write_doe_report
@@ -33,7 +35,28 @@ LABELS = {"grid": "Voxels per axis", "void_ratio": "Void / solid stiffness", "di
           "structure_name": "Structure family / type", "tpms_morphology": "Morphology",
           "young_modulus": "Young’s modulus (MPa)", "cell_size": "Cell size (mm)",
           "solid_fraction": "Solid fraction (%)", "size_x": "Outer X (mm)", "size_y": "Outer Y (mm)",
-          "size": "Outer Z (mm)", "material_card": "Material card"}
+          "size": "Outer Z (mm)", "material_card": "Material card",
+          "fluid_material_card": "Material card", "solid_material_card": "Material card"}
+
+MATERIAL_CARD_FIELDS = {("settings", "material_card"), ("flow", "fluid_material_card"),
+                        ("thermal", "solid_material_card")}
+FLOW_MATERIAL_PROPERTIES = {("flow", "density"): "density", ("flow", "dynamic_viscosity"): "dynamic_viscosity"}
+THERMAL_FLUID_PROPERTIES = {("thermal", "water_cp"): "heat_capacity",
+                            ("thermal", "water_conductivity"): "conductivity"}
+THERMAL_SOLID_PROPERTIES = {("thermal", "solid_density"): "density", ("thermal", "solid_cp"): "heat_capacity",
+                            ("thermal", "solid_conductivity"): "conductivity"}
+
+
+def material_requirements(path, op):
+    if path[0] == "settings":
+        required = ("young_modulus", "poisson_ratio")
+        return "solid", required if op == "fft_solve" else (*required, "density")
+    if path[0] == "thermal":
+        return "solid", tuple(THERMAL_SOLID_PROPERTIES.values())
+    required = tuple(FLOW_MATERIAL_PROPERTIES.values())
+    if op == "thermal_solve":
+        required += tuple(THERMAL_FLUID_PROPERTIES.values())
+    return "fluid", required
 
 
 def parameter_group(path, op):
@@ -145,11 +168,19 @@ class Factor:
         self.variations = variations
         self.variation_row = variation_row
         self.choices = []
+        self.material_card = path in MATERIAL_CARD_FIELDS
         if key == "structure_name":
             self.choices = structure_choices(op)
         elif isinstance(source, QComboBox):
             self.choices = [(source.itemText(i), source.itemData(i)) for i in range(source.count())
                             if source.itemData(i) is not None and source.model().item(i).isEnabled()]
+            if not self.choices and isinstance(value, str) and source.findText(value) >= 0:
+                self.choices = [(source.itemText(i), source.itemText(i)) for i in range(source.count())
+                                if source.model().item(i).isEnabled()]
+        elif key in ("automatic_contact_parameters", "automatic_cores"):
+            self.choices = [("Automatic", None), ("True", True), ("False", False)]
+        elif key == "imported_geometry_role":
+            self.choices = [("Compression", "compression"), ("General geometry", "general")]
         elif type(value) is bool:
             self.choices = [("True", True), ("False", False)]
         self.numeric = not self.choices and type(value) in (int, float)
@@ -204,8 +235,21 @@ class Factor:
             self.mode.currentIndexChanged.connect(self.update_level_entry)
             self.mode.currentIndexChanged.connect(changed)
         else:
-            self.fixed = text_field(display(value))
-            self.fixed.textChanged.connect(changed)
+            if self.material_card:
+                # Keep the existing JSON level editor and stored sweeps for material cards.
+                self.fixed = CompactComboBox()
+                self.fixed.addItem("Custom material", None)
+                kind, required = material_requirements(path, op)
+                for entry in builtin_materials():
+                    if entry.kind == kind and all(prop in entry.properties for prop in required):
+                        self.fixed.addItem(entry.name, entry.card().to_dict())
+                self.select_material(value)
+                self.fixed.setToolTip(translate(self.fixed.currentText()))
+                self.fixed.currentTextChanged.connect(lambda title: self.fixed.setToolTip(translate(title)))
+                self.fixed.currentIndexChanged.connect(changed)
+            else:
+                self.fixed = text_field(display(value))
+                self.fixed.textChanged.connect(changed)
             self.selection = text_field()
             self.selection.setPlaceholderText('["value 1", "value 2"]')
             self.selection.setToolTip("Enter the levels as a JSON list.")
@@ -282,6 +326,8 @@ class Factor:
         if self.choices:
             state.update(fixed=self.fixed.currentData(),
                          choices=[action.data() for action in self.menu.actions() if action.isChecked()])
+        elif self.material_card:
+            state.update(fixed=self.fixed.currentData(), levels=self.selection.text())
         else:
             state.update(fixed=self.fixed.value() if self.numeric else self.fixed.text(),
                          levels=self.selection.text())
@@ -294,6 +340,15 @@ class Factor:
             return
         fixed = state.get("fixed")
         if self.choices:
+            choices = state.get("choices")
+            legacy_levels = state.get("levels")
+            if isinstance(legacy_levels, str):
+                if fixed == "null" and self.value is None:
+                    fixed = None
+                try:
+                    choices = json.loads(legacy_levels)
+                except ValueError:
+                    pass
             if self.path[-1] == "structure_name":
                 for family, members in ALL_STRUCTURES_BY_FAMILY.items():
                     if fixed in members and self.family.findData(family) >= 0:
@@ -302,12 +357,19 @@ class Factor:
             index = self.fixed.findData(fixed)
             if index >= 0:
                 self.fixed.setCurrentIndex(index)
-            choices = state.get("choices")
             if isinstance(choices, list):
                 for action in self.menu.actions():
                     action.setChecked(action.data() in choices)
         else:
-            if self.numeric:
+            if self.material_card and "fixed" in state:
+                if isinstance(fixed, str):
+                    try:
+                        fixed = json.loads(fixed)
+                    except ValueError:
+                        fixed = self.value
+                if fixed is None or isinstance(fixed, dict):
+                    self.select_material(fixed)
+            elif self.numeric:
                 self.restore_number(self.fixed, fixed)
             elif isinstance(fixed, str):
                 self.fixed.setText(fixed)
@@ -324,6 +386,15 @@ class Factor:
                     self.mode.setCurrentIndex(index)
         self.levels_seeded = state.get("seeded") is True or state.get("variable") is True
         self.variable.setChecked(state.get("variable") is True)
+
+    def select_material(self, data):
+        self.selected_material = data
+        for index in range(self.fixed.count()):
+            if self.fixed.itemData(index) == data:
+                self.fixed.setCurrentIndex(index)
+                return
+        self.fixed.addItem(data.get("name") or "Material card", data)
+        self.fixed.setCurrentIndex(self.fixed.count() - 1)
 
     @staticmethod
     def restore_number(control, value):
@@ -347,6 +418,8 @@ class Factor:
             values = [self.fixed.value()]
         elif varying:
             values = json.loads(self.selection.text())
+        elif self.material_card:
+            values = [self.fixed.currentData()]
         else:
             text = self.fixed.text()
             values = [text if isinstance(self.value, str) else json.loads(text)]
@@ -882,6 +955,11 @@ class NewDoePage(QWidget):
                 section.set_expanded(expanded.get(title, op == "fft_solve" or title == "Structure / Dimensions"))
             # Keep matrix combinations and CSV columns in the operation's parameter order.
             self.factors = [factors[path] for path, _ in fields]
+            for factor in self.factors:
+                if factor.material_card:
+                    factor.fixed.activated.connect(
+                        lambda index, factor=factor: self.apply_selected_material(factor.fixed.itemData(index),
+                                                                                 factor.path))
             values_width = 2 * NUMBER_WIDTH + CONTROL_GAP
             for button in self.variations.findChildren(QPushButton):
                 button.ensurePolished()
@@ -926,12 +1004,58 @@ class NewDoePage(QWidget):
     def apply_fft_material(self, card):
         if self.operation.currentData() != "fft_solve" or self.timer.isActive():
             return
-        values = card.evaluate(293.15, ("young_modulus", "poisson_ratio"))
-        fields = {factor.path[-1]: factor for factor in self.factors}
-        fields["material_name"].fixed.setText(card.name)
-        fields["material_card"].fixed.setText(display(card.to_dict()))
-        fields["young_modulus"].fixed.setValue(values["young_modulus"] / 1e6)
-        fields["poisson_ratio"].fixed.setValue(values["poisson_ratio"])
+        self.apply_selected_material(card.to_dict(), ("settings", "material_card"))
+
+    def apply_selected_material(self, data, path):
+        fields = {factor.path: factor for factor in self.factors}
+        factor = fields[path]
+        if data is None:
+            factor.select_material(data)
+            return
+        op = self.operation.currentData()
+        try:
+            card = MaterialCard.from_dict(data)
+            kind, required = material_requirements(path, op)
+            if card.kind != kind:
+                raise ValueError(f"Expected a {kind} material card.")
+            if path[0] == "settings":
+                if op == "fft_solve":
+                    properties = card.evaluate(293.15, required)
+                    values = dict(material_name=card.name, young_modulus=properties["young_modulus"] / 1e6,
+                                  poisson_ratio=properties["poisson_ratio"])
+                else:
+                    values = card.mechanical_values()
+                    del values["material_card"]
+                assignments = {("settings", key): value for key, value in values.items()}
+            else:
+                temperature = 293.15
+                if path[0] == "thermal":
+                    properties = THERMAL_SOLID_PROPERTIES
+                    temperature = fields[("thermal", "initial_solid_c")].fixed.value() + 273.15
+                else:
+                    properties = FLOW_MATERIAL_PROPERTIES
+                    if op == "thermal_solve":
+                        properties = {**properties, **THERMAL_FLUID_PROPERTIES}
+                        temperature = fields[("thermal", "inlet_temperature_c")].fixed.value() + 273.15
+                values = card.evaluate(temperature, required)
+                assignments = {field: values[key] for field, key in properties.items()}
+            for field, value in assignments.items():
+                editor = fields[field].fixed
+                if isinstance(editor, NumericLineEdit) and not editor.minimum() <= value <= editor.maximum():
+                    raise ValueError(f"{fields[field].label}: material value is outside the supported range.")
+        except (TypeError, ValueError) as error:
+            factor.select_material(factor.selected_material)
+            self.status.setText(str(error))
+            return
+        factor.select_material(data)
+        for field, value in assignments.items():
+            editor = fields[field].fixed
+            if isinstance(editor, QComboBox):
+                editor.setCurrentIndex(editor.findData(value))
+            elif isinstance(editor, NumericLineEdit):
+                editor.setValue(value)
+            else:
+                editor.setText(display(value))
 
     def create(self):
         if not self.loaded or self.timer.isActive():

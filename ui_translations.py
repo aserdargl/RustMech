@@ -622,6 +622,7 @@ Result field|Sonuç alanı
 Model preview|Model önizlemesi
 von Mises stress / MPa|von Mises gerilmesi / MPa
 Compression|Basma
+General geometry|Genel geometri
 Compression (mm)|Basma (mm)
 Compression / mm|Basma / mm
 Compression force (N)|Basma kuvveti (N)
