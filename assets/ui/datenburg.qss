@@ -27,7 +27,7 @@ QLabel:disabled { color: #808080; }
 #brandHeader[computeState="ready"], #brandHeader[computeState="allocated"] { background: #E7F3E8; border-color: #329447; }
 #brandHeader[computeState="pending"] { background: #FFF4CE; border-color: #C8A044; }
 #brandTitle {
-    background: #BFDBFE; border: 1px solid #2563EB; border-radius: 6px;
+    background: #BFDBFE; border: 1px solid #2563EB; border-radius: 0px;
     color: #0F172A; font-size: 14px; padding: 0 6px;
 }
 #brandSubtitle, #unitBadge { color: #475569; font-size: 12px; }
