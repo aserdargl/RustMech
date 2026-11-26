@@ -33,6 +33,11 @@ from model import CONTACT_NUMERICAL_FIELDS, GEOMETRY_FIELDS, MATERIAL_FIELDS
 
 NUMBER_WIDTH = 110
 CONTROL_GAP = 3
+SETTINGS_PADDING = 1
+DEFAULT_SETTINGS_WIDTH = 350
+# The shared table style uses 3 px of horizontal padding, 1 px vertically and a 1 px grid line.
+CELL_HORIZONTAL_ALLOWANCE = 7 + 2 * SETTINGS_PADDING
+CELL_VERTICAL_ALLOWANCE = 3 + 2 * SETTINGS_PADDING
 LABELS = {"grid": "Voxels per axis", "void_ratio": "Void / solid stiffness", "distribution": "WSL distribution",
           "structure_name": "Structure family / type", "tpms_morphology": "Morphology",
           "young_modulus": "Young’s modulus (MPa)", "cell_size": "Cell size (mm)",
@@ -274,21 +279,24 @@ class Factor:
             self.selection.setPlaceholderText('["value 1", "value 2"]')
             self.selection.setToolTip("Enter the levels as a JSON list.")
             self.selection.textChanged.connect(changed)
+        levels = QWidget()
+        controls = QVBoxLayout(levels)
+        controls.setContentsMargins(SETTINGS_PADDING, SETTINGS_PADDING, SETTINGS_PADDING, SETTINGS_PADDING)
+        controls.setSpacing(1)
+        height = CONTROL_HEIGHT
         if self.numeric or self.optional_number:
-            levels = QWidget()
-            controls = QVBoxLayout(levels)
-            controls.setContentsMargins(0, 0, 0, 0)
-            controls.setSpacing(1)
             if sampling:
                 self.mode.setParent(levels)
                 self.mode.hide()
             else:
                 controls.addWidget(self.mode)
+                height += CONTROL_HEIGHT + controls.spacing()
             controls.addWidget(self.level_entry)
-            variations.setCellWidget(variation_row, 1, levels)
-            variations.setRowHeight(variation_row, CONTROL_HEIGHT + 2 if sampling else 2 * CONTROL_HEIGHT + 2)
         else:
-            variations.setCellWidget(variation_row, 1, self.selection)
+            alignment = Qt.AlignmentFlag.AlignLeft if self.choices else Qt.AlignmentFlag(0)
+            controls.addWidget(self.selection, alignment=alignment)
+        variations.setCellWidget(variation_row, 1, levels)
+        variations.setRowHeight(variation_row, height + CELL_VERTICAL_ALLOWANCE)
         self.fixed_panel = self.fixed
         if key == "structure_name":
             self.add_structure_family(value)
@@ -719,6 +727,8 @@ class NewDoePage(QWidget):
         self.variations.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         self.input_tabs.addTab(self.variations, "Variable settings")
         self.input_navigation = DoENavigation(self.input_tabs)
+        if not sampling:
+            self.input_navigation.setMinimumWidth(DEFAULT_SETTINGS_WIDTH - 2 * SETTINGS_PADDING)
         self.sections = {}
         self.run = QPushButton("Run")
         self.run.clicked.connect(lambda: self.open_run_options(run=True))
@@ -744,7 +754,7 @@ class NewDoePage(QWidget):
 
         settings_panel = QWidget()
         settings_layout = QVBoxLayout(settings_panel)
-        settings_layout.setContentsMargins(2, 0, 2, 0)
+        settings_layout.setContentsMargins(SETTINGS_PADDING, 0, SETTINGS_PADDING, 0)
         settings_layout.setSpacing(2)
         settings_layout.addWidget(self.input_navigation)
         settings_layout.addWidget(self.input_tabs, 1)
@@ -805,7 +815,7 @@ class NewDoePage(QWidget):
         self.splitter.addWidget(settings_panel)
         self.splitter.addWidget(matrix_panel)
         self.splitter.setStretchFactor(1, 1)
-        self.splitter.setSizes([350, 600])
+        self.splitter.setSizes([DEFAULT_SETTINGS_WIDTH, 600])
         layout.addWidget(self.splitter, 1)
         self.status = QLabel()
         self.status.setWordWrap(True)
@@ -1012,8 +1022,7 @@ class NewDoePage(QWidget):
                 header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
                 header.setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
                 table.setColumnWidth(0, 24)
-                # Account for the cell's 6 px padding and 1 px grid line, plus 2 px of clearance.
-                table.setColumnWidth(2, COMBO_WIDTH + 9)
+                table.setColumnWidth(2, COMBO_WIDTH + CELL_HORIZONTAL_ALLOWANCE)
                 body.addWidget(table)
                 table.setRowCount(len(members))
                 for row, (path, value) in enumerate(members):
@@ -1066,7 +1075,7 @@ class NewDoePage(QWidget):
                 button.setProperty("managesLocalizedWidth", True)
                 button.setFixedWidth(width)
                 values_width = max(values_width, width)
-            self.variations.setColumnWidth(1, values_width + 4)
+            self.variations.setColumnWidth(1, values_width + CELL_HORIZONTAL_ALLOWANCE)
             self.loaded = True
             self._loaded_operation = op
             if self.preferences is not None:
