@@ -77,9 +77,10 @@ def _request_desktop(command):
     executable, arguments, directory = _desktop_launch_command(command)
     with system_dll_search():
         if sys.platform == "win32":
-            # ShellExecute starts TRUBA without inheriting PyCharm's console pipes.
+            # Some virtual environments use a console-subsystem launcher even for pythonw.exe.
             try:
-                os.startfile(str(executable), "open", subprocess.list2cmdline(arguments), str(directory))
+                subprocess.Popen([str(executable), *arguments], cwd=directory, creationflags=subprocess.CREATE_NO_WINDOW,
+                                 stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             except OSError as exc:
                 raise OSError("Could not start the TRUBA application.") from exc
             return

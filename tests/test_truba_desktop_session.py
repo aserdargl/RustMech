@@ -32,15 +32,18 @@ def test_desktop_requests_keep_show_and_connect_separate(tmp_path, monkeypatch, 
     monkeypatch.setenv("TRUBA_DESKTOP_EXE", str(executable))
     monkeypatch.delenv("TRUBA_DESKTOP_SOURCE", raising=False)
     with patch("truba_desktop._request_running_desktop", return_value=running) as send, \
-            patch("truba_desktop.os.startfile", create=True) as shell, \
+            patch("truba_desktop.subprocess.Popen") as spawn, \
             patch("truba_desktop.QProcess.startDetached", return_value=(True, 123)) as start:
         launch()
     send.assert_called_once_with(command)
     if running:
-        shell.assert_not_called()
+        spawn.assert_not_called()
         start.assert_not_called()
     elif sys.platform == "win32":
-        shell.assert_called_once_with(str(executable), "open", command, str(tmp_path))
+        spawn.assert_called_once_with(
+            [str(executable), command], cwd=tmp_path, creationflags=subprocess.CREATE_NO_WINDOW,
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
     else:
         start.assert_called_once_with(str(executable), [command], str(tmp_path))
 
@@ -62,12 +65,14 @@ def test_desktop_starts_truba_source_with_its_own_python(tmp_path, monkeypatch, 
     if explicit_source:
         monkeypatch.setenv("TRUBA_DESKTOP_SOURCE", str(source))
     with patch("truba_desktop._request_running_desktop", return_value=False), \
-            patch("truba_desktop.os.startfile", create=True) as shell, \
+            patch("truba_desktop.subprocess.Popen") as spawn, \
             patch("truba_desktop.QProcess.startDetached", return_value=(True, 123)) as start:
         connect_truba_desktop()
     if sys.platform == "win32":
-        parameters = subprocess.list2cmdline([str(script), CONNECT_TRUBA])
-        shell.assert_called_once_with(str(python), "open", parameters, str(source))
+        spawn.assert_called_once_with(
+            [str(python), str(script), CONNECT_TRUBA], cwd=source, creationflags=subprocess.CREATE_NO_WINDOW,
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
     else:
         start.assert_called_once_with(str(python), [str(script), CONNECT_TRUBA], str(source))
 
@@ -75,9 +80,11 @@ def test_desktop_starts_truba_source_with_its_own_python(tmp_path, monkeypatch, 
 @pytest.mark.skipif(sys.platform != "win32", reason="requires a Windows detached process")
 def test_truba_can_stay_open_after_rustmech_console_closes(tmp_path):
     (tmp_path / "companion.py").write_text(dedent("""\
+        import ctypes
         from pathlib import Path
         import time
 
+        Path("has-console").write_text(str(bool(ctypes.windll.kernel32.GetConsoleWindow())))
         Path("ready").touch()
         try:
             deadline = time.monotonic() + 20
@@ -93,7 +100,7 @@ def test_truba_can_stay_open_after_rustmech_console_closes(tmp_path):
         from truba_desktop import open_truba_desktop
 
         folder = Path(sys.argv[1])
-        python = Path(sys.executable).with_name("pythonw.exe")
+        python = Path(sys.executable)
         command = (python, [str(folder / "companion.py")], folder)
         with patch("truba_desktop._request_running_desktop", return_value=False), \\
                 patch("truba_desktop._desktop_launch_command", return_value=command):
@@ -113,6 +120,7 @@ def test_truba_can_stay_open_after_rustmech_console_closes(tmp_path):
         while not (tmp_path / "ready").exists() and time.monotonic() < deadline:
             time.sleep(0.05)
         assert (tmp_path / "ready").exists()
+        assert (tmp_path / "has-console").read_text() == "False"
         assert not (tmp_path / "stopped").exists()
     finally:
         (tmp_path / "release").touch()
