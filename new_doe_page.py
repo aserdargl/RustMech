@@ -21,7 +21,7 @@ from material_catalog import builtin_materials
 from material_library import MaterialCard
 from new_doe_operations import (MAX_ROWS, OPERATIONS, explicit_numbers, launch, lhs_matrix, matrix, matrix_request,
                                 parameters, snapshot, structure_choices, validate)
-from new_doe_report import experiment_name, write_doe_report
+from new_doe_report import experiment_name, write_doe_report, write_learning_csv
 from structure_library import ALL_STRUCTURES_BY_FAMILY, STRUCTURE_FAMILIES
 from studio_style import (COMBO_WIDTH, CONTROL_HEIGHT, CompactComboBox, CompactSpinBox, NumericLineEdit,
                           SidebarGroupBox)
@@ -135,6 +135,10 @@ def field_sources(host, op):
 
 def display(value):
     return value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
+
+
+def parameter_value(request, path):
+    return (request if len(path) == 1 else request[path[0]])[path[-1]]
 
 
 def number(value, source):
@@ -486,8 +490,7 @@ class ExperimentMatrix(QAbstractTableModel):
                 return self.details[row]
             return translate(self.states[row])
         path = self.columns[column - 1].path
-        data = self.rows[row]
-        return display((data if len(path) == 1 else data[path[0]])[path[-1]])
+        return display(parameter_value(self.rows[row], path))
 
     def set_state(self, row, state, detail=""):
         self.states[row] = state
@@ -773,7 +776,18 @@ class NewDoePage(QWidget):
         matrix_title.setObjectName("sectionSubheader")
         matrix_title.setFixedHeight(CONTROL_HEIGHT)
         matrix_title.setContentsMargins(4, 0, 0, 0)
-        matrix_layout.addWidget(matrix_title)
+        if sampling:
+            self.export_csv = QPushButton("Export CSV")
+            self.export_csv.setFixedHeight(CONTROL_HEIGHT)
+            self.export_csv.setAutoDefault(False)
+            self.export_csv.setEnabled(False)
+            self.export_csv.clicked.connect(self.export_learning_results)
+            matrix_heading = QHBoxLayout()
+            matrix_heading.addWidget(matrix_title, 1)
+            matrix_heading.addWidget(self.export_csv)
+            matrix_layout.addLayout(matrix_heading)
+        else:
+            matrix_layout.addWidget(matrix_title)
         self.preview = QTableView()
         self.preview.setAccessibleName("Experiment matrix")
         self.preview.setMinimumWidth(220)
@@ -945,6 +959,8 @@ class NewDoePage(QWidget):
         self.loaded = False
         self.rows = []
         self.sheet.reset([], [])
+        if self.sampling:
+            self.export_csv.setEnabled(False)
         self.invalidate()
         expanded = {title: not section.content.isHidden() for title, section in self.sections.items()}
         self.sections.clear()
@@ -1230,6 +1246,8 @@ class NewDoePage(QWidget):
             return
         self.rows = rows
         self.sheet.reset(rows, self.factors)
+        if self.sampling:
+            self.export_csv.setEnabled(False)
         for i, factor in enumerate(self.sheet.columns, 1):
             width = max(self.fontMetrics().horizontalAdvance(label) for label in (factor.label, turkish(factor.label)))
             self.preview.setColumnWidth(i, max(100, width + 20))
@@ -1274,7 +1292,8 @@ class NewDoePage(QWidget):
                 writer = csv.writer(stream)
                 writer.writerow(["Sample", "Operation", *[".".join(f.path) for f in self.factors]])
                 for i, row in enumerate(self.rows, 1):
-                    writer.writerow([experiment_name(i), row["operation"], *(display(v) for _, v in parameters(row))])
+                    writer.writerow([experiment_name(i), row["operation"],
+                                     *(display(parameter_value(row, factor.path)) for factor in self.factors)])
         except OSError as error:
             self.status.setText(str(error))
             return
@@ -1313,6 +1332,8 @@ class NewDoePage(QWidget):
             widget.setEnabled(not busy)
         self.run.setEnabled(not busy and self.matrix_current)
         self.stop.setEnabled(busy)
+        if busy and self.sampling:
+            self.export_csv.setEnabled(False)
 
     def record(self, state, *, index=None, **details):
         index = self.index if index is None else index
@@ -1550,6 +1571,9 @@ class NewDoePage(QWidget):
                              grouped_output=grouped_output)
         except (OSError, ValueError, TypeError, ImportError) as error:
             message += f" · {translate('Excel report could not be saved')}: {error}"
+        if self.sampling:
+            self.learning_results_output = grouped_output
+            self.export_csv.setEnabled(True)
         self.status.setText(message)
         if self.controller is not None and self.truba_jobs_window is not None:
             self.truba_jobs_window.notice.setText(message)
@@ -1631,3 +1655,21 @@ class NewDoePage(QWidget):
 
     def open_results(self):
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(self.directory)))
+
+    def export_learning_results(self):
+        from file_dialog import QFileDialog
+
+        if not self.export_csv.isEnabled():
+            return
+        filename, _ = QFileDialog.getSaveFileName(
+            self, "Export CSV", str(self.directory / "deep_learning_dataset.csv"), "CSV (*.csv)")
+        if not filename:
+            return
+        target = Path(filename if filename.lower().endswith(".csv") else filename + ".csv")
+        try:
+            write_learning_csv(self.directory, target, states=self.sheet.states, details=self.sheet.details,
+                               grouped_output=self.learning_results_output)
+        except (OSError, ValueError, TypeError) as error:
+            self.status.setText(f"{translate('CSV export failed')}: {error}")
+            return
+        self.status.setText(translate("CSV exported."))

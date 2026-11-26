@@ -134,6 +134,91 @@ class NewDoeTests(unittest.TestCase):
         self.assertTrue(restored.matrix_current, restored.status.text())
         self.assertEqual([(row["grid"], row["void_ratio"]) for row in restored.rows], original)
 
+    def test_learning_csv_exports_matrix_and_results_by_experiment(self):
+        from csv import DictReader
+
+        self.page()
+        studio = self.window.doe_studio
+        self.window.deep_learning_button.click()
+        page = studio.learning_doe
+        grid = next(factor for factor in page.factors if factor.path == ("grid",))
+        grid.variable.click()
+        grid.first.setValue(16)
+        grid.last.setValue(32)
+        page.lhs_count.setValue(3)
+        page.apply_button.click()
+        self.assertEqual(len(page.rows), 3, page.status.text())
+        self.assertFalse(page.export_csv.isEnabled())
+
+        def solve(request, folder, _controller):
+            job = Mock()
+            job.done.return_value = True
+            index = int(folder.name.split("_")[1])
+            if index == 2:
+                job.result.side_effect = RuntimeError("Solver failed")
+                return job
+            output = folder / "output"
+            output.mkdir()
+            report = {"moduli": {"E_mpa": request["grid"] * 100}, "settings": {"unneeded": True}}
+            if index == 3:
+                report["shear_mpa"] = 150
+            (output / "status.json").write_text(json.dumps(report), encoding="utf-8")
+            (output / "stiffness_mpa.csv").write_text(f"MPa,XX\nXX,{index * 500}\n", encoding="utf-8")
+            job.result.return_value = str(output)
+            return job
+
+        with patch("doe_studio.results_directory", return_value=Path(self.temp.name)), \
+                patch("new_doe_page.launch", side_effect=solve):
+            page.start(remote=False)
+            for _ in range(3):
+                page.advance()
+
+        self.assertFalse(page.timer.isActive())
+        self.assertTrue(page.export_csv.isEnabled())
+        target = Path(self.temp.name) / "LHS verisi.csv"
+        with patch("file_dialog.QFileDialog.getSaveFileName", return_value=(str(target.with_suffix("")), "")):
+            page.export_csv.click()
+        with target.open(encoding="utf-8-sig", newline="") as stream:
+            records = list(DictReader(stream))
+        self.assertEqual([row["Sample"] for row in records], ["EXP-0001", "EXP-0002", "EXP-0003"])
+        self.assertEqual([int(row["grid"]) for row in records], [row["grid"] for row in page.rows])
+        self.assertEqual([row["Operation"] for row in records], ["fft_solve"] * 3)
+        self.assertEqual([row["Status"] for row in records], ["Completed", "Failed", "Completed"])
+        self.assertEqual(records[1]["Error"], "Solver failed")
+        column = "result.status.moduli.E_mpa"
+        self.assertEqual([row[column] for row in records],
+                         [str(page.rows[0]["grid"] * 100), "", str(page.rows[2]["grid"] * 100)])
+        self.assertEqual([row["result.status.shear_mpa"] for row in records], ["", "", "150"])
+        self.assertEqual(json.loads(records[2]["table.stiffness_mpa"]), [["MPa", "XX"], ["XX", 1500]])
+        self.assertEqual(records[1]["table.stiffness_mpa"], "")
+        page.apply_button.click()
+        self.assertFalse(page.export_csv.isEnabled())
+
+    def test_learning_csv_reads_downloaded_truba_results(self):
+        from csv import DictReader
+        from new_doe_report import write_learning_csv
+
+        directory = Path(self.temp.name)
+        output = directory / "truba" / "output"
+        grouped = output / "row_00001"
+        separate = directory / "row_00002" / "truba" / "output"
+        for folder in (grouped, separate):
+            folder.mkdir(parents=True)
+            report = {"max_temperature": 310 if folder == grouped else 320}
+            (folder / "thermal_summary.json").write_text(json.dumps(report), encoding="utf-8")
+        (grouped / "experiment.json").write_text(json.dumps({"state": "Completed"}), encoding="utf-8")
+        (separate.parent.parent / "experiment.json").write_text(
+            json.dumps({"state": "Completed", "results": str(separate)}), encoding="utf-8")
+        (directory / "matrix.csv").write_text(
+            "Sample,Operation,flow.inlet_speed\nEXP-0001,thermal_solve,0.1\nEXP-0002,thermal_solve,0.2\n",
+            encoding="utf-8")
+        target = directory / "export.csv"
+        write_learning_csv(directory, target, states=["Awaiting results"] * 2, details={}, grouped_output=output)
+        with target.open(encoding="utf-8-sig", newline="") as stream:
+            records = list(DictReader(stream))
+        self.assertEqual([row["Status"] for row in records], ["Completed", "Completed"])
+        self.assertEqual([row["result.thermal_summary.max_temperature"] for row in records], ["310", "320"])
+
     def test_input_preview_order_current_values_and_window_geometry(self):
         from concurrent.futures import Future
         from types import SimpleNamespace

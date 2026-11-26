@@ -738,6 +738,9 @@ Table data|Tablo verileri
 Copy for Excel|Excel için kopyala
 Import CSV|CSV içe aktar
 Export CSV|CSV dışa aktar
+CSV exported.|CSV dosyası dışa aktarıldı.
+CSV export failed|CSV dışa aktarılamadı
+Choose a different file from the saved experiment matrix.|Kayıtlı deney matrisinden farklı bir dosya seçin.
 Check meshes|Ağları denetle
 Run batch (ANSYS)|Toplu çalıştır (ANSYS)
 Exp ID|Deney no

@@ -1,4 +1,4 @@
-"""Single-sheet Excel export of a DoE matrix and its published results."""
+"""Exports of experiment matrices and their published results."""
 import csv
 import json
 from math import isfinite
@@ -35,9 +35,12 @@ def experiment_name(number):
 
 def _read_json(path):
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        report = json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError:
         return {}
+    if not isinstance(report, dict):
+        raise ValueError(f"Invalid analysis record: {path}")
+    return report
 
 
 def _cell(value):
@@ -76,22 +79,88 @@ def _experiment(directory, number, grouped_output):
     return record, case
 
 
+def _result_files(folder, names):
+    for name in names:
+        for path in sorted(folder.rglob(name)):
+            if path.is_file() and "Raw" not in path.relative_to(folder).parts:
+                yield path
+
+
 def _result_rows(folder, operation):
-    for name in SUMMARIES.get(operation, ()):
-        for path in sorted(folder.rglob(name)):
-            if "Raw" not in path.relative_to(folder).parts:
-                yield [path.name], "table"
-                for label, value in _metrics(_read_json(path)):
-                    yield [label, value], None
-    for name in TABLES.get(operation, ()):
-        for path in sorted(folder.rglob(name)):
-            if "Raw" not in path.relative_to(folder).parts:
-                with path.open(encoding="utf-8-sig", newline="") as stream:
-                    reader = csv.reader(stream)
-                    yield [path.name], "table"
-                    yield next(reader, []), "table"
-                    for values in reader:
-                        yield [_cell(value) for value in values], None
+    for path in _result_files(folder, SUMMARIES.get(operation, ())):
+        yield [path.name], "table"
+        for label, value in _metrics(_read_json(path)):
+            yield [label, value], None
+    for path in _result_files(folder, TABLES.get(operation, ())):
+        with path.open(encoding="utf-8-sig", newline="") as stream:
+            reader = csv.reader(stream)
+            yield [path.name], "table"
+            yield next(reader, []), "table"
+            for values in reader:
+                yield [_cell(value) for value in values], None
+
+
+def _named_result_files(folder, names, prefix):
+    counts = {}
+    for path in _result_files(folder, names):
+        number = counts.get(path.name, 0) + 1
+        counts[path.name] = number
+        suffix = f".{number}" if number > 1 else ""
+        yield f"{prefix}.{path.stem}{suffix}", path
+
+
+def write_learning_csv(directory, target, *, states, details, grouped_output=None):
+    """Join frozen inputs and published results, with one CSV record per experiment."""
+    directory = Path(directory).resolve()
+    target = Path(target)
+    matrix = directory / "matrix.csv"
+    if target.resolve() == matrix:
+        raise ValueError("Choose a different file from the saved experiment matrix.")
+
+    with matrix.open(encoding="utf-8-sig", newline="") as stream:
+        reader = csv.reader(stream)
+        inputs = next(reader, [])
+        experiments = list(reader)
+    if (len(inputs) < 2 or len(experiments) != len(states)
+            or any(len(row) != len(inputs) for row in experiments)):
+        raise ValueError("Invalid saved experiment matrix.")
+
+    output = Path(grouped_output) if grouped_output is not None else directory / "truba" / "output"
+    metric_columns, table_columns = {}, {}
+    results = []
+    for index, row in enumerate(experiments):
+        sample, operation = row[:2]
+        number = int(sample.removeprefix("EXP-"))
+        record, folder = _experiment(directory, number, output)
+        saved_state = record.get("state")
+        state = saved_state if saved_state in FINAL_STATES else states[index]
+        error = (record.get("error") or details.get(index)) if state in {"Failed", "Stopped", "Skipped"} else ""
+        metrics = {
+            f"{name}.{key}": value
+            for name, path in _named_result_files(folder, SUMMARIES.get(operation, ()), "result")
+            for key, value in _metrics(_read_json(path))
+        }
+        tables = dict(_named_result_files(folder, TABLES.get(operation, ()), "table"))
+        metric_columns.update(dict.fromkeys(metrics))
+        table_columns.update(dict.fromkeys(tables))
+        results.append((state, error, metrics, tables))
+
+    temporary = target.with_name(f".{target.name}.{uuid4().hex}.tmp")
+    try:
+        with temporary.open("w", encoding="utf-8-sig", newline="") as stream:
+            writer = csv.writer(stream)
+            writer.writerow([*inputs, "Status", "Error", *metric_columns, *table_columns])
+            for row, (state, error, metrics, tables) in zip(experiments, results, strict=True):
+                tabular = {}
+                for name, path in tables.items():
+                    with path.open(encoding="utf-8-sig", newline="") as table:
+                        values = [[_cell(value) for value in line] for line in csv.reader(table)]
+                    tabular[name] = json.dumps(values, ensure_ascii=False, separators=(",", ":"))
+                writer.writerow([*row, state, error, *(metrics.get(key) for key in metric_columns),
+                                 *(tabular.get(key) for key in table_columns)])
+        temporary.replace(target)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def _report_rows(columns, experiments, records):
