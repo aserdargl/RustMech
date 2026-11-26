@@ -499,6 +499,18 @@ Structure|Yapı
 Structure family|Yapı ailesi
 Structure type|Yapı türü
 Structure / Dimensions|Yapı / Ölçüler
+Preview structure|Yapıyı önizle
+Preview mesh|Ağı önizle
+Structure preview|Yapı önizlemesi
+The preview uses the first configured level for each variable.|Önizleme her değişken için tanımlanan ilk seviyeyi kullanır.
+Building preview…|Önizleme oluşturuluyor…
+No geometry to display.|Görüntülenecek geometri yok.
+Cartesian grid|Kartezyen ağ
+Cartesian precheck|Kartezyen ön kontrol
+Cells|Hücreler
+Boundary layers|Sınır katmanları
+Solid voxels|Katı vokseller
+Particles|Parçacıklar
 Family|Aile
 Morphology|Morfoloji
 Dimensions|Ölçüler

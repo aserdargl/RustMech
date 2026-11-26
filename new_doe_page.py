@@ -12,7 +12,7 @@ from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt, QTimer, QUrl
 from PySide6.QtGui import QDesktopServices, QIcon
 from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDialog, QDoubleSpinBox,
                                QFormLayout, QHeaderView,
-                               QHBoxLayout, QLabel, QLineEdit, QMainWindow, QMenu, QPushButton,
+                               QHBoxLayout, QLabel, QLayout, QLineEdit, QMainWindow, QMenu, QPushButton,
                                QScrollArea, QSpinBox, QSplitter,
                                QStackedWidget, QTabWidget, QTableView, QTableWidget, QTableWidgetItem,
                                QVBoxLayout, QWidget)
@@ -41,6 +41,10 @@ LABELS = {"grid": "Voxels per axis", "void_ratio": "Void / solid stiffness", "di
 MATERIAL_CARD_FIELDS = {("settings", "material_card"), ("flow", "fluid_material_card"),
                         ("thermal", "solid_material_card")}
 FLOW_MATERIAL_PROPERTIES = {("flow", "density"): "density", ("flow", "dynamic_viscosity"): "dynamic_viscosity"}
+FEM_MESH_FIELDS = ("mesh_resolution", "mesh_type", "tetra_strategy", "local_mesh_size")
+FLOW_MESH_FIELDS = ("cells_across", "mesh_method", "surface_refinement", "boundary_layers", "max_fitted_cells")
+FLOW_SOLVER_FIELDS = ("inlet_speed", "iterations", "turbulence", "distribution", "foam_bashrc")
+PREVIEW_BUTTONS = {"Structure": "Preview structure", "Mesh": "Preview mesh"}
 THERMAL_FLUID_PROPERTIES = {("thermal", "water_cp"): "heat_capacity",
                             ("thermal", "water_conductivity"): "conductivity"}
 THERMAL_SOLID_PROPERTIES = {("thermal", "solid_density"): "density", ("thermal", "solid_cp"): "heat_capacity",
@@ -61,13 +65,15 @@ def material_requirements(path, op):
 
 def parameter_group(path, op):
     key = path[-1]
+    if path in (("grid",), ("options", "resolution"), ("mpm", "grid_mm"), ("mpm", "points_per_axis")):
+        return "Mesh"
     if path[0] == "settings":
         if key in ("test_profile", "specimen_architecture", "core_fraction"):
             return "Standard test"
-        if key in ("mesh_resolution", "mesh_type", "tetra_strategy", "local_mesh_size"):
+        if key in FEM_MESH_FIELDS:
             return "Mesh"
         if key in GEOMETRY_FIELDS:
-            return "Structure / Dimensions"
+            return "Structure"
         if key in MATERIAL_FIELDS:
             return "Solid phase material" if op == "fft_solve" else "Solid material"
         if key.startswith("kratos_"):
@@ -84,7 +90,7 @@ def parameter_group(path, op):
     if path[0] == "flow":
         if key in ("density", "dynamic_viscosity", "fluid_material_card"):
             return "Fluid material"
-        if key in ("cells_across", "mesh_method", "surface_refinement", "boundary_layers", "max_fitted_cells"):
+        if key in FLOW_MESH_FIELDS:
             return "Mesh"
         return "Channel · Isothermal CFD"
     return "Peridynamics" if path[0] == "options" else "FFT Homogenization"
@@ -904,6 +910,7 @@ class NewDoePage(QWidget):
         stack.setContentsMargins(2, 2, 2, 2)
         stack.setSpacing(2)
         stack.setAlignment(Qt.AlignmentFlag.AlignTop)
+        stack.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
         self.inputs.setWidget(panel)
         try:
             op = self.operation.currentData()
@@ -918,7 +925,7 @@ class NewDoePage(QWidget):
             self._drafts[op] = draft
             self.base = snapshot(self.host, op)
             sources = field_sources(self.host, op)
-            groups = {"Structure / Dimensions": []}
+            groups = {title: [] for title in ("Standard test", "Structure", "Mesh")}
             fields = list(parameters(self.base))
             variation_rows = {path: index for index, (path, _) in enumerate(fields)}
             self.variations.setRowCount(len(fields))
@@ -926,6 +933,8 @@ class NewDoePage(QWidget):
                 groups.setdefault(parameter_group(path, op), []).append((path, value))
             factors = {}
             for title, members in groups.items():
+                if not members:
+                    continue
                 section = SidebarGroupBox(title)
                 self.sections[title] = section
                 stack.addWidget(section)
@@ -965,15 +974,30 @@ class NewDoePage(QWidget):
                 table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
                 frame = 2 * table.frameWidth()
                 table.setFixedHeight(table.horizontalHeader().sizeHint().height() + table.verticalHeader().length() + frame)
-                if title == "Structure / Dimensions":
+                if title in PREVIEW_BUTTONS:
+                    actions = QHBoxLayout()
+                    actions.setSpacing(4)
+                    actions.addStretch()
+                    preview = QPushButton(PREVIEW_BUTTONS[title])
+                    preview.setObjectName("structurePreviewBtn" if title == "Structure" else "meshPreviewBtn")
+                    preview.setAutoDefault(False)
+                    preview.setProperty("managesLocalizedWidth", True)
+                    width = max(preview.fontMetrics().horizontalAdvance(text)
+                                for label in PREVIEW_BUTTONS.values()
+                                for text in (label, turkish(label))) + 24
+                    preview.setFixedSize(width, CONTROL_HEIGHT)
+                    preview.clicked.connect(lambda _checked=False, mesh=title == "Mesh": self.open_input_preview(mesh))
+                    actions.addWidget(preview)
+                    body.addLayout(actions)
+                if title == "Structure":
                     button = QPushButton("Apply")
                     button.setObjectName("structureApplyBtn")
                     button.setAutoDefault(False)
                     button.setFixedSize(max(button.fontMetrics().horizontalAdvance(text)
                                             for text in ("Apply", turkish("Apply"))) + 24, CONTROL_HEIGHT)
                     button.clicked.connect(self.create)
-                    body.addWidget(button, alignment=Qt.AlignmentFlag.AlignRight)
-                section.set_expanded(expanded.get(title, op == "fft_solve" or title == "Structure / Dimensions"))
+                    actions.addWidget(button)
+                section.set_expanded(expanded.get(title, op == "fft_solve" or title == "Structure"))
             # Keep matrix combinations and CSV columns in the operation's parameter order.
             self.factors = [factors[path] for path, _ in fields]
             for factor in self.factors:
@@ -998,6 +1022,47 @@ class NewDoePage(QWidget):
             self.status.setText(str(error))
             self.loaded = False
         self.apply_button.setEnabled(self.loaded)
+
+    def open_input_preview(self, mesh):
+        from doe_preview import DoeInputPreview
+
+        if not self.loaded:
+            return
+        op = self.base["operation"]
+        dimensions = {}
+        varying = False
+        try:
+            for factor in self.factors:
+                group, key = factor.path[0], factor.path[-1]
+                section = parameter_group(factor.path, op)
+                if group == "settings":
+                    relevant = section in ("Standard test", "Structure") or (mesh and section == "Mesh")
+                else:
+                    relevant = mesh and (section == "Mesh" or
+                                         (group == "flow" and section == "Channel · Isothermal CFD"
+                                          and key not in FLOW_SOLVER_FIELDS))
+                if not relevant:
+                    continue
+                if isinstance(factor.fixed, NumericLineEdit):
+                    factor.fixed.interpretText()
+                if factor.variable.isChecked() and (factor.numeric or factor.optional_number):
+                    factor.first.interpretText()
+                    factor.last.interpretText()
+                try:
+                    dimensions[factor.path] = factor.levels_for_matrix()[:1]
+                except (ValueError, TypeError) as error:
+                    raise ValueError(f"{factor.label}: {error}") from error
+                varying |= factor.variable.isChecked()
+            request = next(matrix(self.base, dimensions))
+        except (TypeError, ValueError) as error:
+            self.status.setText(str(error))
+            return
+        for previous in self.findChildren(DoeInputPreview, options=Qt.FindChildOption.FindDirectChildrenOnly):
+            if previous.objectName() == ("mesh" if mesh else "structure"):
+                previous.close()
+        dialog = DoeInputPreview(self, request, mesh=mesh, varying=varying)
+        show_restored_window(dialog)
+        return dialog
 
     def open_fft_material_library(self):
         from material_library_dialog import MaterialLibraryDialog

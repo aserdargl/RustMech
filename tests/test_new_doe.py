@@ -64,6 +64,73 @@ class NewDoeTests(unittest.TestCase):
         self.assertEqual(studio.open_plan_btn.width(), 64)
         self.assertEqual(studio.save_plan_btn.width(), 64)
 
+    def test_input_preview_order_current_values_and_window_geometry(self):
+        from concurrent.futures import Future
+        from types import SimpleNamespace
+
+        from doe_preview import DoeInputPreview
+
+        page = self.page()
+        page.operation.setCurrentIndex(page.operation.findData("mechanical"))
+        self.assertEqual(list(page.sections)[:3], ["Standard test", "Structure", "Mesh"])
+        fields = {factor.path[-1]: factor for factor in page.factors}
+        fields["cell_size"].fixed.setValue(2.5)
+        fields["mesh_resolution"].variable.setChecked(True)
+        fields["mesh_resolution"].first.setValue(0.4)
+        fields["mesh_resolution"].last.setValue(0.8)
+        structure = page.sections["Structure"].findChild(QPushButton, "structurePreviewBtn")
+        mesh = page.sections["Mesh"].findChild(QPushButton, "meshPreviewBtn")
+        self.assertFalse(structure.autoDefault())
+        self.assertFalse(mesh.autoDefault())
+        self.assertEqual(structure.size(), mesh.size())
+        for name, button in (("Structure", structure), ("Mesh", mesh)):
+            section = page.sections[name]
+            section.set_expanded(True)
+            self.app.processEvents()
+            self.assertGreater(button.y(), section.findChild(QTableWidget).geometry().bottom())
+
+        with patch("doe_preview.create_preview_viewport",
+                   side_effect=lambda parent: MagicMock(interactor=QWidget(parent))), \
+                patch("doe_preview.ThreadPoolExecutor") as pool:
+            future = Future()
+            future.set_result((SimpleNamespace(n_points=8), "edges", "One element"))
+            submit = pool.return_value.submit
+            submit.return_value = future
+            structure.click()
+            structure_window = page.findChild(DoeInputPreview, "structure")
+            self.assertTrue(structure_window.isVisible())
+            _, request, with_mesh, _ = submit.call_args.args
+            self.assertFalse(with_mesh)
+            self.assertEqual(request["settings"]["cell_size"], 2.5)
+            self.assertEqual(request["settings"]["mesh_resolution"], page.base["settings"]["mesh_resolution"])
+            mesh.click()
+            mesh_window = page.findChild(DoeInputPreview, "mesh")
+            _, request, with_mesh, _ = submit.call_args.args
+            self.assertTrue(with_mesh)
+            self.assertEqual(request["settings"]["mesh_resolution"], 0.4)
+            mesh_window._poll()
+            self.assertTrue(mesh_window.plotter.add_mesh.call_args.kwargs["show_edges"])
+            self.assertEqual(mesh_window.status.text(), "One element")
+            self.assertFalse(page.rows)
+            mesh_window.resize(420, 320)
+            mesh_window.move(32, 40)
+            self.app.processEvents()
+            normal_size = mesh_window.size()
+            normal_pos = mesh_window.pos()
+            mesh_window.showMaximized()
+            self.app.processEvents()
+            mesh_window.close()
+
+            reopened = page.open_input_preview(True)
+            self.app.processEvents()
+            self.assertTrue(reopened.isMaximized())
+            reopened.showNormal()
+            self.app.processEvents()
+            self.assertEqual(reopened.size(), normal_size)
+            self.assertEqual(reopened.pos(), normal_pos)
+            reopened.close()
+            structure_window.close()
+
     def test_numeric_input_commits_on_enter_and_rejects_invalid_bounds(self):
         page = self.page()
         factor = next(factor for factor in page.factors if factor.path == ("settings", "cell_size"))
@@ -354,10 +421,10 @@ class NewDoeTests(unittest.TestCase):
         fields["size_x"].fixed.setValue(6)
         fields["size_y"].fixed.setValue(3)
         cell = fields["size"]
-        geometry = page.sections["Structure / Dimensions"]
+        geometry = page.sections["Structure"]
         structure_apply = geometry.findChild(QPushButton, "structureApplyBtn")
         self.assertFalse(structure_apply.autoDefault())
-        fft = page.sections["FFT Homogenization"]
+        fft = page.sections["Mesh"]
         grid = fields["grid"]
         settings_table = fft.findChild(QTableWidget)
         self.assertIs(settings_table.cellWidget(0, 0), grid.variable)
