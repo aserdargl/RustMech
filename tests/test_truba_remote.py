@@ -323,42 +323,45 @@ class RemoteProtocolTests(unittest.TestCase):
             self.assertEqual(manifest["slurm_job_id"], record["job_id"])
             self.assertEqual(Path(manifest["results"]), folder / "output")
 
-    def test_paired_doe_submission_records_both_background_results(self):
+    def test_doe_batch_submission_records_all_background_results(self):
         from new_doe_report import REPORT_NAME
         from truba_job_list import job_description
         from truba_remote import _save_doe_row_result, _save_doe_workbook, submit_remote_analysis
 
-        cases = [self.root / f"row_{i:05d}" for i in (3, 4)]
+        cases = [self.root / f"row_{i:05d}" for i in (3, 4, 5)]
         for case in cases:
             case.mkdir()
             (case / "experiment.json").write_text("{}")
-        rows = [dict(operation="fft_solve", settings=asdict(Settings()), grid=n) for n in (16, 24)]
-        request = dict(rows[0], experiment_rows=rows, experiment_index=3, experiment_count=5,
-                       paired_experiments=True, predecessor_job_id="280")
+        rows = [dict(operation="fft_solve", settings=asdict(Settings()), grid=n) for n in (16, 24, 32)]
+        request = dict(rows[0], experiment_rows=rows, experiment_index=3, experiment_count=6,
+                       predecessor_job_id="280")
         directory = cases[0] / "truba"
         with patch.object(FakeTransport, "command", autospec=True, side_effect=FakeTransport.command) as command:
             record = submit_remote_analysis(request, RemoteContext(), directory=directory)
         self.assertEqual(FakeTransport.instances[0].submissions, 1)
         self.assertIn("sbatch --parsable --dependency=afterany:280", command.call_args.args[1])
         self.assertEqual(record["predecessor_job_id"], "280")
-        self.assertIn("DoE 3–4/5", job_description(record))
+        self.assertIn("DoE 3–5/6", job_description(record))
+        self.assertIn("DoE-3-5-of-6", (directory / record["script_name"]).read_text())
         self.assertEqual((record["context"]["cores"], record["context"]["memory_mb"]), (1, 131072))
-        for offset, state in enumerate(("Completed", "Failed"), 1):
+        for offset, state in enumerate(("Completed", "Failed", "Completed"), 1):
             output = directory / "output" / f"row_{offset:05d}"
             output.mkdir(parents=True)
             (output / "experiment.json").write_text(json.dumps(dict(state=state, error="solver error")))
         _save_doe_row_result(record, directory, "downloaded")
-        first, second = (json.loads((case / "experiment.json").read_text()) for case in cases)
+        first, second, third = (json.loads((case / "experiment.json").read_text()) for case in cases)
         self.assertEqual(first["state"], "Completed")
         self.assertEqual(Path(first["results"]), directory / "output" / "row_00001")
         self.assertEqual((second["state"], second["error"]), ("Failed", "solver error"))
         self.assertEqual(first["slurm_job_id"], second["slurm_job_id"])
+        self.assertEqual(third["slurm_job_id"], first["slurm_job_id"])
+        self.assertEqual(third["state"], "Completed")
         matrix = self.root / "matrix.csv"
-        matrix.write_text("Experiment,Operation,grid\n3,fft_solve,16\n4,fft_solve,24\n5,fft_solve,32\n")
+        matrix.write_text("Experiment,Operation,grid\n3,fft_solve,16\n4,fft_solve,24\n5,fft_solve,32\n6,fft_solve,40\n")
         report = self.root / REPORT_NAME
         _save_doe_workbook(record, directory, "downloaded")
         self.assertFalse(report.exists())
-        last = self.root / "row_00005"
+        last = self.root / "row_00006"
         last.mkdir()
         (last / "experiment.json").write_text('{"state": "Skipped"}')
         _save_doe_workbook(record, directory, "downloaded")

@@ -8,19 +8,20 @@ from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
 
-from PySide6.QtCore import QAbstractTableModel, QModelIndex, QSignalBlocker, Qt, QTimer, QUrl
-from PySide6.QtGui import QDesktopServices
-from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDoubleSpinBox, QHeaderView,
+from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt, QTimer, QUrl
+from PySide6.QtGui import QDesktopServices, QIcon
+from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDialog, QDoubleSpinBox,
+                               QFormLayout, QHeaderView,
                                QHBoxLayout, QLabel, QLineEdit, QMainWindow, QMenu, QPushButton,
                                QScrollArea, QSpinBox, QSplitter,
                                QStackedWidget, QTabWidget, QTableView, QTableWidget, QTableWidgetItem,
                                QVBoxLayout, QWidget)
 
-from new_doe_operations import (OPERATIONS, explicit_numbers, launch, matrix, matrix_request,
+from new_doe_operations import (MAX_ROWS, OPERATIONS, explicit_numbers, launch, matrix, matrix_request,
                                 parameters, snapshot, structure_choices, validate)
 from new_doe_report import write_doe_report
 from structure_library import ALL_STRUCTURES_BY_FAMILY, STRUCTURE_FAMILIES
-from studio_style import (COMBO_WIDTH, CONTROL_HEIGHT, CompactComboBox, NumericLineEdit,
+from studio_style import (COMBO_WIDTH, CONTROL_HEIGHT, CompactComboBox, CompactSpinBox, NumericLineEdit,
                           SidebarGroupBox)
 from window_state import show_restored_window
 from ui_language import translate, turkish
@@ -496,6 +497,64 @@ class DoeTrubaJobsWindow(QMainWindow):
         self.notice.clear()
 
 
+class DoeRunDialog(QDialog):
+    def __init__(self, parent, target, batch_size, *, run):
+        super().__init__(parent)
+        self.setObjectName("doeRunSettings")
+        self.setWindowTitle("Run settings")
+        self.setWindowFlag(Qt.WindowType.WindowMaximizeButtonHint)
+        self.setWindowModality(Qt.WindowModality.WindowModal)
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(7)
+        form = QFormLayout()
+        form.setVerticalSpacing(3)
+        layout.addLayout(form)
+        self.target = CompactComboBox()
+        self.target.addItem("Local", "local")
+        self.target.addItem("TRUBA", "truba")
+        self.target.addItem("TRUBA (one job)", "truba_matrix")
+        self.target.setCurrentIndex(max(0, self.target.findData(target)))
+        target_label = QLabel("Run location")
+        target_label.setBuddy(self.target)
+        self.target.setAccessibleName(target_label.text())
+        form.addRow(target_label, self.target)
+
+        self.batch_size = CompactSpinBox()
+        self.batch_size.setFixedSize(NUMBER_WIDTH, CONTROL_HEIGHT)
+        self.batch_size.setRange(1, MAX_ROWS)
+        self.batch_size.setValue(batch_size)
+        batch_label = QLabel("Experiments per script")
+        batch_label.setBuddy(self.batch_size)
+        self.batch_size.setAccessibleName(batch_label.text())
+        form.addRow(batch_label, self.batch_size)
+
+        def update_batch_size():
+            self.batch_size.setEnabled(self.target.currentData() == "truba")
+            batch_label.setEnabled(self.batch_size.isEnabled())
+
+        self.target.currentIndexChanged.connect(update_batch_size)
+        update_batch_size()
+        layout.addStretch()
+        actions = QHBoxLayout()
+        actions.addStretch()
+        cancel = QPushButton("Cancel")
+        self.confirm = QPushButton("Run" if run else "Save")
+        self.confirm.setProperty("primary", True)
+        width = max(button.fontMetrics().horizontalAdvance(label)
+                    for button in (cancel, self.confirm)
+                    for label in (button.text(), turkish(button.text()))) + 24
+        for button in (cancel, self.confirm):
+            button.setAutoDefault(False)
+            button.setProperty("managesLocalizedWidth", True)
+            button.setFixedSize(width, CONTROL_HEIGHT)
+            actions.addWidget(button)
+        cancel.clicked.connect(self.reject)
+        self.confirm.clicked.connect(self.accept)
+        layout.addLayout(actions)
+
+
 class NewDoePage(QWidget):
     def __init__(self, host, preferences=None):
         super().__init__()
@@ -503,7 +562,7 @@ class NewDoePage(QWidget):
         self.preferences = preferences
         self._loaded_operation = None
         self._drafts = {}
-        self._pairing = {}
+        self._run_options = {}
         self._draft_timer = QTimer(self, interval=300, singleShot=True)
         self._draft_timer.timeout.connect(self.save_draft)
         self.rows = []
@@ -540,11 +599,7 @@ class NewDoePage(QWidget):
         self.input_tabs.addTab(self.variations, "Variable settings")
         self.sections = {}
         self.run = QPushButton("Run")
-        menu = QMenu(self.run)
-        menu.addAction("Run locally", lambda: self.start(remote=False))
-        menu.addAction("Run on TRUBA", lambda: self.start(remote=True))
-        menu.addAction("Run on TRUBA as one job", lambda: self.start(remote=True, separate=False))
-        self.run.setMenu(menu)
+        self.run.clicked.connect(lambda: self.open_run_options(run=True))
         self.stop = QPushButton("Stop")
         self.stop.clicked.connect(self.cancel)
         self.open = QPushButton("Results")
@@ -556,12 +611,16 @@ class NewDoePage(QWidget):
             button.setProperty("managesLocalizedWidth", True)
             button.setFixedHeight(CONTROL_HEIGHT)
             bar.addWidget(button)
-        self.pair_experiments = QCheckBox("Pair TRUBA experiments")
-        self.pair_experiments.setToolTip(
-            "Run two experiments in sequence per Slurm job. Turn off to run one experiment per job."
-        )
-        self.pair_experiments.toggled.connect(self.save_pairing)
-        bar.addWidget(self.pair_experiments)
+        gear = QIcon(str(Path(__file__).resolve().parent / "assets" / "ui" / "run-settings.svg"))
+        self.run_settings = QPushButton(gear, "")
+        self.run_settings.setToolTip("Run settings")
+        self.run_settings.setAccessibleName("Run settings")
+        self.run_settings.setAutoDefault(False)
+        self.run_settings.setProperty("managesLocalizedWidth", True)
+        self.run_settings.setFixedSize(CONTROL_HEIGHT, CONTROL_HEIGHT)
+        self.run_settings.setStyleSheet("QPushButton { padding: 0; }")
+        self.run_settings.clicked.connect(lambda: self.open_run_options())
+        bar.addWidget(self.run_settings)
         bar.addStretch()
 
         settings_panel = QWidget()
@@ -620,29 +679,41 @@ class NewDoePage(QWidget):
         self.open.setEnabled(False)
         if host is None:
             self.operation.setEnabled(False)
-            self.pair_experiments.setEnabled(False)
+            self.run_settings.setEnabled(False)
         if self.preferences is not None:
             last_operation = self.preferences.value("doe/lastOperation", "", type=str)
             index = self.operation.findData(last_operation)
             if index >= 0:
                 self.operation.setCurrentIndex(index)
-        self.restore_pairing()
-        self.operation.currentIndexChanged.connect(self.restore_pairing)
         self.operation.currentIndexChanged.connect(self.load)
 
-    def restore_pairing(self):
-        operation = self.operation.currentData()
-        enabled = self._pairing.get(operation, True)
-        if self.preferences is not None:
-            enabled = self.preferences.value(f"doe/pairTrubaExperiments/{operation}", True, type=bool)
-        with QSignalBlocker(self.pair_experiments):
-            self.pair_experiments.setChecked(enabled)
+    def run_options(self, operation):
+        target = "truba" if self.host is not None and self.host.remote_controller.requested else "local"
+        if self.preferences is None:
+            return self._run_options.get(operation, (target, 2))
+        key = f"doe/runOptions/{operation}"
+        paired = self.preferences.value(f"doe/pairTrubaExperiments/{operation}", True, type=bool)
+        return (self.preferences.value(f"{key}/target", target, type=str),
+                self.preferences.value(f"{key}/batchSize", 2 if paired else 1, type=int))
 
-    def save_pairing(self, enabled):
+    def open_run_options(self, *, run=False):
         operation = self.operation.currentData()
-        self._pairing[operation] = enabled
-        if self.preferences is not None:
-            self.preferences.setValue(f"doe/pairTrubaExperiments/{operation}", enabled)
+        dialog = DoeRunDialog(self, *self.run_options(operation), run=run)
+
+        def confirm():
+            target, size = dialog.target.currentData(), dialog.batch_size.value()
+            if self.preferences is None:
+                self._run_options[operation] = (target, size)
+            else:
+                key = f"doe/runOptions/{operation}"
+                self.preferences.setValue(f"{key}/target", target)
+                self.preferences.setValue(f"{key}/batchSize", size)
+            if run:
+                self.start(remote=target != "local", separate=target != "truba_matrix", batch_size=size)
+
+        dialog.accepted.connect(confirm)
+        show_restored_window(dialog)
+        return dialog
 
     def size_navigation(self, navigation, active):
         nav = navigation.findChildren(QPushButton)
@@ -892,7 +963,7 @@ class NewDoePage(QWidget):
         self.run.setEnabled(True)
         self.status.setText(f"{len(rows)} experiments ready.")
 
-    def start(self, *, remote=None, separate=True):
+    def start(self, *, remote=None, separate=True, batch_size=None):
         from doe_studio import results_directory
         if not self.matrix_current or not self.rows or self.timer.isActive():
             return
@@ -902,7 +973,9 @@ class NewDoePage(QWidget):
         self.controller = controller if remote else None
         self.grouped_remote = remote and not separate
         self.separate_remote = remote and separate
-        self.batch_size = 2 if self.separate_remote and self.pair_experiments.isChecked() else 1
+        if batch_size is None:
+            _, batch_size = self.run_options(self.operation.currentData())
+        self.batch_size = batch_size if self.separate_remote else 1
         self.submission_size = 1
         self.submitted_rows.clear()
         self.pending_checks.clear()
@@ -956,7 +1029,7 @@ class NewDoePage(QWidget):
             show_restored_window(self.truba_jobs_window)
 
     def lock(self, busy):
-        for widget in (self.operation, self.input_tabs, self.apply_button, self.pair_experiments):
+        for widget in (self.operation, self.input_tabs, self.apply_button, self.run_settings):
             widget.setEnabled(not busy)
         self.run.setEnabled(not busy and self.matrix_current)
         self.stop.setEnabled(busy)
@@ -1124,7 +1197,7 @@ class NewDoePage(QWidget):
                     if result is None:
                         raise RuntimeError("Solver returned without results.")
                     if self.separate_remote:
-                        if self.batch_size == 2 and not result.get("job_id"):
+                        if self.batch_size > 1 and not result.get("job_id"):
                             raise RuntimeError("Slurm did not confirm the preceding batch.")
                         self.predecessor_job_id = self.track_submission(result)
                     else:
@@ -1138,7 +1211,7 @@ class NewDoePage(QWidget):
                         self.failures += self.submission_size
                         for index in range(self.index, self.index + self.submission_size):
                             self.record("Failed", index=index, error=str(error))
-                    if self.batch_size == 2 and not saved.get("job_id"):
+                    if self.batch_size > 1 and not saved.get("job_id"):
                         self.index += self.submission_size
                         self.skip_dependent_batches(error)
                         return
@@ -1169,11 +1242,11 @@ class NewDoePage(QWidget):
             else:
                 self.status.setText(f"Running experiment {self.index + 1} / {len(self.rows)}")
             try:
-                row = (dict(matrix_request(self.rows[self.index:end]), paired_experiments=True)
+                row = (matrix_request(self.rows[self.index:end])
                        if self.submission_size > 1 else self.rows[self.index])
                 if self.controller is not None:
                     row = dict(row, experiment_index=self.index + 1, experiment_count=len(self.rows))
-                if self.batch_size == 2 and self.predecessor_job_id is not None:
+                if self.batch_size > 1 and self.predecessor_job_id is not None:
                     row["predecessor_job_id"] = self.predecessor_job_id
                 self.job = launch(row, self.case, self.controller)
             except Exception as error:
@@ -1181,7 +1254,7 @@ class NewDoePage(QWidget):
                     self.record("Failed", index=index, error=str(error))
                 self.failures += self.submission_size
                 self.index = end
-                if self.batch_size == 2:
+                if self.batch_size > 1:
                     self.skip_dependent_batches(error)
         except OSError as error:
             self.finish(f"Cannot save experiment progress: {error} · {self.directory}")
@@ -1253,7 +1326,7 @@ class NewDoePage(QWidget):
             self.index = len(self.rows)
             errors = []
             submitted = list(self.submitted_rows.values())
-            if self.batch_size == 2:
+            if self.batch_size > 1:
                 # Cancel dependent jobs before their predecessors can release them.
                 submitted.reverse()
             for index, _ in submitted:
@@ -1263,7 +1336,7 @@ class NewDoePage(QWidget):
                     self.update_submitted_row(json.loads(path.read_text(encoding="utf-8")))
                 except Exception as error:
                     errors.append(str(error))
-                    if self.batch_size == 2:
+                    if self.batch_size > 1:
                         break
             if errors:
                 self.status.setText(errors[0])

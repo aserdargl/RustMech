@@ -409,15 +409,27 @@ class NewDoeTests(unittest.TestCase):
         self.assertEqual(page.sheet.states, ["Failed", "Stopped", "Skipped"])
         self.assertIn("Solver failed", (page.directory / "row_00001/experiment.json").read_text())
 
-    def test_run_menu_selects_target_for_the_matrix(self):
+    def select_run_target(self, page, target, batch_size=None):
+        from new_doe_page import DoeRunDialog
+
+        page.run.click()
+        dialog, = (dialog for dialog in page.findChildren(DoeRunDialog) if dialog.isVisible())
+        dialog.target.setCurrentIndex(dialog.target.findData(target))
+        if batch_size is not None:
+            dialog.batch_size.setValue(batch_size)
+        return dialog
+
+    def test_run_dialog_selects_target_for_the_matrix(self):
         page = self.page()
         page.create()
-        local, _, remote = page.run.menu().actions()
         controller = self.window.remote_controller
         with patch("doe_studio.results_directory", return_value=Path(self.temp.name)), \
                 patch.object(controller, "auth", return_value=None) as auth, \
                 patch("new_doe_page.launch") as launch:
-            remote.trigger()
+            dialog = self.select_run_target(page, "truba_matrix")
+            self.assertFalse(dialog.batch_size.isEnabled())
+            launch.assert_not_called()
+            dialog.confirm.click()
             self.assertIsNone(page.directory)
             self.assertIsNone(page.truba_jobs_window)
             self.assertFalse(page.timer.isActive())
@@ -428,7 +440,7 @@ class NewDoeTests(unittest.TestCase):
             context, credentials = controller.require_analysis("damask", explicit_target=True)
             self.assertEqual(credentials, auth.return_value)
             self.assertTrue(context.partition)
-            remote.trigger()
+            self.select_run_target(page, "truba_matrix").confirm.click()
             self.assertIs(launch.call_args.args[2], controller)
             self.assertTrue(page.truba_jobs_window.isVisible())
             self.assertFalse(controller.requested)
@@ -440,7 +452,7 @@ class NewDoeTests(unittest.TestCase):
             page.truba_jobs_window.close()
 
             with patch.object(controller, "requested", True):
-                local.trigger()
+                self.select_run_target(page, "local").confirm.click()
                 self.assertIsNone(launch.call_args.args[2])
                 self.assertFalse(page.truba_jobs_window.isVisible())
                 page.cancel()
@@ -495,7 +507,6 @@ class NewDoeTests(unittest.TestCase):
 
     def test_separate_jobs_queue_before_completion_and_finish_out_of_order(self):
         page = self.page()
-        page.pair_experiments.setChecked(False)
         grid = next(f for f in page.factors if f.path == ("grid",))
         grid.variable.setChecked(True)
         grid.first.setValue(16)
@@ -524,7 +535,7 @@ class NewDoeTests(unittest.TestCase):
                 patch.object(self.controller, "auth", return_value=object()), \
                 patch("new_doe_page.launch", side_effect=submit), \
                 patch("new_doe_page.monotonic", return_value=0) as clock:
-            page.run.menu().actions()[1].trigger()
+            self.select_run_target(page, "truba", 1).confirm.click()
             jobs = page.truba_jobs_window
             self.assertTrue(jobs.isVisible())
             page.advance()
@@ -559,7 +570,7 @@ class NewDoeTests(unittest.TestCase):
 
     def test_truba_chains_pairs_by_default_and_includes_the_final_single_experiment(self):
         page = self.page()
-        self.assertTrue(page.pair_experiments.isChecked())
+        self.assertEqual(page.run_options("fft_solve")[1], 2)
         grid = next(f for f in page.factors if f.path == ("grid",))
         grid.variable.setChecked(True)
         grid.mode.setCurrentIndex(grid.mode.findData("list"))
@@ -574,7 +585,6 @@ class NewDoeTests(unittest.TestCase):
             expected_predecessor = {1: None, 3: "71", 5: "73"}
             self.assertEqual(request.get("predecessor_job_id"), expected_predecessor[first])
             if first in (1, 3):
-                self.assertTrue(request["paired_experiments"])
                 self.assertEqual([row["grid"] for row in request["experiment_rows"]],
                                  [16, 24] if first == 1 else [32, 40])
             else:
@@ -597,7 +607,7 @@ class NewDoeTests(unittest.TestCase):
                 patch.object(self.controller, "auth", return_value=object()), \
                 patch("new_doe_page.launch", side_effect=submit), \
                 patch("new_doe_page.monotonic", return_value=0) as clock:
-            page.run.menu().actions()[1].trigger()
+            self.select_run_target(page, "truba").confirm.click()
             page.advance()
             page.advance()
             page.advance()
@@ -673,20 +683,44 @@ class NewDoeTests(unittest.TestCase):
         self.assertEqual(page.sheet.states, ["Failed", "Failed", "Skipped"])
         self.assertFalse(page.timer.isActive())
 
-    def test_truba_pairing_is_saved_per_analysis(self):
-        from new_doe_page import NewDoePage
+    def test_run_settings_are_saved_per_analysis_and_restore_window_bounds(self):
+        from new_doe_page import DoeRunDialog, NewDoePage
 
         page = self.page()
-        self.assertTrue(page.pair_experiments.isChecked())
-        fft = page.operation.currentIndex()
-        page.pair_experiments.setChecked(False)
-        page.operation.setCurrentIndex(page.operation.findData("flow_solve"))
-        self.assertTrue(page.pair_experiments.isChecked())
-        page.operation.setCurrentIndex(fft)
-        self.assertFalse(page.pair_experiments.isChecked())
+        page.preferences.setValue("doe/pairTrubaExperiments/fft_solve", False)
+        with patch("new_doe_page.launch") as launch:
+            page.run_settings.click()
+            dialog, = page.findChildren(DoeRunDialog)
+            self.assertEqual(dialog.batch_size.value(), 1)
+            self.assertFalse(dialog.batch_size.isEnabled())
+            self.assertFalse(page.run_settings.icon().isNull())
+            self.assertEqual(dialog.rustmechCaption.height(), 25)
+            dialog.target.setCurrentIndex(dialog.target.findData("truba"))
+            dialog.batch_size.lineEdit().selectAll()
+            QTest.keyClicks(dialog.batch_size.lineEdit(), "3")
+            QTest.keyClick(dialog.batch_size.lineEdit(), Qt.Key.Key_Return)
+            self.assertEqual(dialog.batch_size.value(), 3)
+            self.assertTrue(dialog.isVisible())
+            dialog.resize(430, 220)
+            dialog.move(45, 55)
+            self.app.processEvents()
+            expected = dialog.geometry()
+            dialog.showMaximized()
+            self.app.processEvents()
+            dialog.confirm.click()
+            launch.assert_not_called()
+
+        self.assertEqual(page.run_options("flow_solve"), ("local", 2))
+        dialog = page.open_run_options()
+        self.assertTrue(dialog.isMaximized())
+        dialog.showNormal()
+        self.app.processEvents()
+        self.assertEqual(dialog.geometry(), expected)
+        dialog.batch_size.setValue(4)
+        dialog.reject()
         reopened = NewDoePage(None, page.preferences)
         try:
-            self.assertFalse(reopened.pair_experiments.isChecked())
+            self.assertEqual(reopened.run_options("fft_solve"), ("truba", 3))
         finally:
             reopened.deleteLater()
 

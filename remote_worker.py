@@ -388,9 +388,8 @@ def _run_experiment_matrix(request, output):
     if not 1 <= len(rows) <= 10000:
         raise ValueError("Invalid experiment count.")
     root = Path.cwd()
-    first_experiment, experiment_count = 1, len(rows)
-    if request.get("paired_experiments"):
-        first_experiment, experiment_count = request["experiment_index"], request["experiment_count"]
+    first_experiment = request.get("experiment_index", 1)
+    experiment_count = request.get("experiment_count", len(rows))
     job_id = os.environ.get("SLURM_JOB_ID", "")
     scontrol = shutil.which("scontrol") if job_id.isdecimal() and os.environ.get("SLURMD_NODENAME") else None
     failures = 0

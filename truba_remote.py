@@ -249,7 +249,8 @@ def slurm_script(context,username,request):
         job_name = analysis_code(request) or job_name
     if type(request.get("experiment_index")) is int and type(request.get("experiment_count")) is int:
         first = request["experiment_index"]
-        experiments = f"{first}-{first + 1}" if request.get("paired_experiments") else str(first)
+        size = len(request.get("experiment_rows", ()))
+        experiments = f"{first}-{first + size - 1}" if size > 1 else str(first)
         job_name += f"-DoE-{experiments}-of-{request['experiment_count']}"
     return f'''#!/bin/bash -l
 #SBATCH --job-name={job_name}
@@ -447,11 +448,12 @@ def run_remote_job(request,context,auth=None,marker=None,*,directory=None,resume
         required_capability(request)
         if request['operation'] in ANALYSIS_OPERATIONS:
             context = _standalone_analysis_context(context, request['operation'])
-        if request.get("paired_experiments"):
+        if request.get("paired_experiments") or ("experiment_rows" in request and "experiment_index" in request):
             index, count = request.get("experiment_index"), request.get("experiment_count")
-            if (not submit_only or len(request.get("experiment_rows", ())) != 2
-                    or type(index) is not int or type(count) is not int or not 1 <= index < count):
-                raise ValueError("Paired TRUBA experiments require two consecutive rows in one job.")
+            size = len(request.get("experiment_rows", ()))
+            if (not submit_only or not 2 <= size <= 10000
+                    or type(index) is not int or type(count) is not int or not 1 <= index <= count - size + 1):
+                raise ValueError("A TRUBA batch must fit within the experiment matrix.")
         if "predecessor_job_id" in request and (
             not submit_only or type(request.get("experiment_index")) is not int or request["experiment_index"] <= 1
         ):
@@ -496,10 +498,10 @@ def run_remote_job(request,context,auth=None,marker=None,*,directory=None,resume
                       operation=request["operation"],request_id=request["request_id"],source_sha256=source_hash)
         if "experiment_index" in request:
             record.update(experiment_index=request["experiment_index"], experiment_count=request["experiment_count"])
+            if "experiment_rows" in request:
+                record["experiment_batch_size"] = len(request["experiment_rows"])
         elif "experiment_rows" in request:
             record["experiment_count"] = len(request["experiment_rows"])
-        if request.get("paired_experiments"):
-            record["experiment_batch_size"] = len(request["experiment_rows"])
         if "predecessor_job_id" in request:
             record["predecessor_job_id"] = request["predecessor_job_id"]
         if study_name and request["operation"] not in ("probe", "prepare", "preview", "surface"):

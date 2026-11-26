@@ -1351,8 +1351,11 @@ Run locally|Bu bilgisayarda çalıştır
 Run on TRUBA|TRUBA’da çalıştır
 Run on TRUBA as one job|TRUBA’ya tek iş olarak gönder
 Run on TRUBA as separate jobs|TRUBA’ya ayrı işler olarak gönder
-Pair TRUBA experiments|TRUBA’da betik başına iki deney
-Run two experiments in sequence per Slurm job. Turn off to run one experiment per job.|Her Slurm işinde iki deney sırayla çalışır. Her betikte tek deney çalıştırmak için seçimi kaldırın.
+Run settings|Çalıştırma ayarları
+Run location|Çalıştırma yeri
+Experiments per script|Betik başına deney
+TRUBA (one job)|TRUBA (tek iş)
+A TRUBA batch must fit within the experiment matrix.|TRUBA işindeki deneyler matrisin sınırları içinde olmalıdır.
 Paired TRUBA experiments require two rows, CPUs and MiB of RAM.|İkili TRUBA gönderimi için iki deney, en az iki çekirdek ve 2 MiB RAM gerekir.
 Running two experiments in parallel|İki deney paralel çalışıyor
 Awaiting results|Sonuçlar bekleniyor
