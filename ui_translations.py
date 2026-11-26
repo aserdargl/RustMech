@@ -1358,6 +1358,7 @@ Connect to TRUBA, then run the matrix again.|TRUBA bağlantısını kurduktan so
 Running experiment matrix on TRUBA.|Deney matrisi TRUBA’da çalıştırılıyor.
 Experiment matrix stopped.|Deney matrisi durduruldu.
 Remote experiment detached.|TRUBA işi arka planda izlemeye alındı.
+Excel report could not be saved|Excel raporu kaydedilemedi
 Create matrix|Matris oluştur
 Fixed / minimum|Sabit / alt sınır
 Min / max|Min / maks

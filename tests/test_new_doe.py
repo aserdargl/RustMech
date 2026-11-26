@@ -4,6 +4,8 @@ from pathlib import Path
 import time
 import unittest
 from unittest.mock import MagicMock, Mock, patch
+from xml.etree import ElementTree
+from zipfile import ZipFile
 from PySide6.QtCore import QPoint, Qt
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QAbstractSpinBox, QLineEdit, QStyle, QStyleOptionComboBox, QTableWidget, QWidget
@@ -610,6 +612,9 @@ class NewDoeTests(unittest.TestCase):
                     folder = outputs / f"row_{i:05d}"
                     folder.mkdir(parents=True)
                     (folder / "experiment.json").write_text(json.dumps(dict(state=state)), encoding="utf-8")
+                    if state == "Completed":
+                        value = 100 * int(record["request_id"]) + i
+                        (folder / "stiffness_mpa.csv").write_text(f"MPa,XX\nXX,{value}\n", encoding="utf-8")
             for record in records:
                 record["state"] = "downloaded"
                 (Path(record["local_directory"]) / "remote_job.json").write_text(json.dumps(record), encoding="utf-8")
@@ -622,6 +627,19 @@ class NewDoeTests(unittest.TestCase):
             for i, job_id in enumerate(("71", "71", "73", "73", "75"), 1):
                 record = json.loads((page.directory / f"row_{i:05d}" / "experiment.json").read_text(encoding="utf-8"))
                 self.assertEqual(record["slurm_job_id"], job_id)
+            from new_doe_report import REPORT_NAME
+            with ZipFile(page.directory / REPORT_NAME) as workbook:
+                sheet = ElementTree.fromstring(workbook.read("xl/worksheets/sheet1.xml"))
+                result_rows = [[cell.findtext(".//{*}t") or cell.findtext("{*}v") for cell in row]
+                               for row in sheet.findall(".//{*}row")]
+            self.assertEqual(result_rows[0], ["Numune parametreleri"])
+            self.assertIn(["grid", "16", "24", "32", "40", "48"], result_rows)
+            starts = [result_rows.index([f"Deney {i}", f"grid = {grid}"])
+                      for i, grid in enumerate((16, 24, 32, 40, 48), 1)]
+            self.assertEqual(starts, sorted(starts))
+            self.assertIn(["Durum", "Failed"], result_rows[starts[0]:starts[1]])
+            for start, end, value in zip(starts[1:4], starts[2:], ("102", "301", "302"), strict=True):
+                self.assertIn(["XX", value], result_rows[start:end])
             self.assertFalse(jobs.results_button.isEnabled())
             for row in (1, 2, 0):
                 table.selectRow(row)

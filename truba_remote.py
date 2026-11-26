@@ -9,6 +9,7 @@ import gzip
 import hashlib
 import io
 import json
+import logging
 from pathlib import Path, PurePosixPath
 import re
 import shlex
@@ -379,7 +380,7 @@ def doe_row_result(output):
         if record["state"] == "Completed":
             return "Completed", {"results": str(output)}
         if record["state"] == "Failed":
-            return "Failed", {"error": record.get("error") or "Analysis failed."}
+            return "Failed", {"error": record.get("error") or "Analysis failed.", "results": str(output)}
         raise ValueError("Incomplete experiment record.")
     except (OSError, KeyError, ValueError) as error:
         return "Failed", {"error": str(error)}
@@ -388,7 +389,7 @@ def doe_row_result(output):
 def _save_doe_row_result(record, directory, stage):
     if not record.get("background") or not record.get("experiment_index"):
         return
-    if stage != "downloaded" and stage.upper().partition("|")[0] not in SLURM_TERMINAL_STATES:
+    if not _doe_terminal_stage(stage):
         return
     first = record["experiment_index"]
     size = record.get("experiment_batch_size", 1)
@@ -410,6 +411,24 @@ def _save_doe_row_result(record, directory, stage):
         else:
             row.update(state="Stopped" if stage.upper().startswith("CANCELLED") else "Failed", error=stage)
         write_record(manifest, row)
+
+
+def _doe_terminal_stage(stage):
+    state = stage.partition("|")[0].upper().split()
+    return stage == "downloaded" or bool(state and state[0].rstrip("+") in SLURM_TERMINAL_STATES)
+
+
+def _save_doe_workbook(record, directory, stage):
+    if not record.get("experiment_count") or not _doe_terminal_stage(stage):
+        return
+    root = directory.parent.parent if record.get("background") else directory.parent
+    if (root / "matrix.csv").is_file():
+        from new_doe_report import write_doe_report
+
+        try:
+            write_doe_report(root, only_finished=True)
+        except (OSError, ValueError, TypeError, ImportError):
+            logging.getLogger(__name__).exception("Could not save the DoE workbook in %s", root)
 
 
 def run_remote_job(request,context,auth=None,marker=None,*,directory=None,resume_record=None,on_progress=None,cancelled=None,
@@ -534,6 +553,7 @@ def run_remote_job(request,context,auth=None,marker=None,*,directory=None,resume
             record["state"] = stage
             _save_doe_row_result(record, directory, stage)
             _write_paths(paths,record)
+        _save_doe_workbook(record, directory, stage)
         if on_progress: on_progress("TRUBA · "+stage)
     code = analysis_code(record)
     script_name = (f"{code}.slurm" if record.get('operation') in ANALYSIS_OPERATIONS

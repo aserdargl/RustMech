@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDoubleS
 
 from new_doe_operations import (OPERATIONS, explicit_numbers, launch, matrix, matrix_request,
                                 parameters, snapshot, structure_choices, validate)
+from new_doe_report import write_doe_report
 from structure_library import ALL_STRUCTURES_BY_FAMILY, STRUCTURE_FAMILIES
 from studio_style import (COMBO_WIDTH, CONTROL_HEIGHT, CompactComboBox, NumericLineEdit,
                           SidebarGroupBox)
@@ -1030,7 +1031,7 @@ class NewDoePage(QWidget):
                 state, detail = "Failed", str(error)
             self.sheet.set_state(index, state, detail)
             self.failures += state == "Failed"
-        self.finish(f"{len(self.rows)} experiments finished · {self.failures} failed.")
+        self.finish(f"{len(self.rows)} experiments finished · {self.failures} failed.", grouped_output=output)
 
     def update_submitted_row(self, record):
         request_id = record.get("request_id")
@@ -1184,9 +1185,14 @@ class NewDoePage(QWidget):
         except OSError as error:
             self.finish(f"Cannot save experiment progress: {error} · {self.directory}")
 
-    def finish(self, message):
+    def finish(self, message, *, grouped_output=None):
         self.timer.stop()
         self.lock(False)
+        try:
+            write_doe_report(self.directory, states=self.sheet.states, details=self.sheet.details,
+                             grouped_output=grouped_output)
+        except (OSError, ValueError, TypeError, ImportError) as error:
+            message += f" · {translate('Excel report could not be saved')}: {error}"
         self.status.setText(message)
         if self.controller is not None and self.truba_jobs_window is not None:
             self.truba_jobs_window.notice.setText(message)
@@ -1195,10 +1201,14 @@ class NewDoePage(QWidget):
         if self.separate_remote and self.timer.isActive():
             # Slurm and the durable background monitor now own every accepted job.
             first_unsent = self.index + (self.submission_size if self.job is not None else 0)
-            for i in range(first_unsent, len(self.rows)):
-                self.sheet.set_state(i, "Skipped")
+            message = translate("Remote experiment detached.")
+            try:
+                for i in range(first_unsent, len(self.rows)):
+                    self.record("Skipped", index=i)
+            except OSError as error:
+                message += f" · {error}"
             self.submitted_rows.clear()
-            self.finish(translate("Remote experiment detached."))
+            self.finish(message)
         elif self.job is not None and self.job.is_remote:
             self.finish_remote("Detached", translate("Remote experiment detached."))
         else:

@@ -25,6 +25,10 @@ if ($LASTEXITCODE -ne 0) {
 if ($LASTEXITCODE -ne 0) {
     throw "TRUBA dependencies are missing. Run: & '$Python' -m pip install -r '$PSScriptRoot\requirements-truba.txt'"
 }
+& $Python -c 'import xlsxwriter'
+if ($LASTEXITCODE -ne 0) {
+    throw "Excel export dependency is missing. Run: & '$Python' -m pip install -r '$PSScriptRoot\requirements-base.txt'"
+}
 & (Join-Path $PSScriptRoot 'Build-MeshKernel.ps1') -Check
 if ($LASTEXITCODE -ne 0) { throw 'RustMech native build failed.' }
 $arguments = @(
