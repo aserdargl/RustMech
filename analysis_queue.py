@@ -12,7 +12,7 @@ from PySide6.QtWidgets import QLabel, QPushButton, QTableWidgetItem
 
 from design_exchange import pool_directory
 from doe_studio import (COL_RUN, COL_STRUCTURE, ExperimentTableWidget, ExperimentWindow,
-                        ExperimentRow, TABLE_COLUMNS, generate_doe_rows)
+                        ExperimentRow, TABLE_COLUMNS)
 from model import settings_from_dict, validate_settings
 
 
@@ -35,6 +35,7 @@ class QueueStore:
             # Version 1 files can contain entries from the retired folder workflow.
             if raw.pop("folder_job", None) is not None:
                 continue
+            raw.pop("target_strain_pct", None)  # Version 1 included an unused field.
             raw["design_settings"] = settings_from_dict(raw["design_settings"])
             row = ExperimentRow(**raw)
             if row.status.startswith(("Checking", "Solving", "TRUBA")):
@@ -85,6 +86,7 @@ class AnalysisQueueWidget(ExperimentTableWidget):
         self._storage_ready = False
         self.storage_error = ""
         super().__init__(settings_provider, mesh_generator, batch_solver_runner, parent)
+        self.table.itemChanged.connect(self._on_table_item_changed)
         self.setObjectName("analysisQueueWorkspace")
         self.footer_label.setText("Select rows to move, remove or preview. Each job retains its saved analysis settings.")
         for delta, label in ((-1, "Move up"), (1, "Move down")):
@@ -137,8 +139,7 @@ class AnalysisQueueWidget(ExperimentTableWidget):
             self.storage_error = str(error)
             self.notice.setText("Queue not saved: " + str(error))
 
-    def _new_dataset_path(self):
-        # The queue's results never share a file with a DoE session dataset.
+    def _new_results_path(self):
         return self.store.path.parent / "analysis_queue_results.csv"
 
     def add_snapshot(self, settings):
@@ -150,8 +151,13 @@ class AnalysisQueueWidget(ExperimentTableWidget):
         if errors:
             raise ValueError("\n".join(errors))
         snapshot = settings_from_dict(asdict(settings))
-        row = generate_doe_rows([snapshot], {}, 1, 42)[0]
-        row.exp_id = "JOB-" + uuid4().hex[:10].upper()
+        row = ExperimentRow(
+            exp_id="JOB-" + uuid4().hex[:10].upper(), enabled=True,
+            structure_family=snapshot.structure_family, structure_name=snapshot.structure_name,
+            tpms_morphology=snapshot.tpms_morphology, size=snapshot.size, cell_size=snapshot.cell_size,
+            solid_fraction=snapshot.solid_fraction, mesh_resolution=snapshot.mesh_resolution,
+            compression=snapshot.compression, random_seed=snapshot.random_seed, design_settings=snapshot,
+        )
         # Save before displaying success. A failed write must not enqueue a job.
         self.store.save([*self._rows, row])
         self._rows.append(row)

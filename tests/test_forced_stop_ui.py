@@ -126,9 +126,13 @@ class ForcedStopUiTests(unittest.TestCase):
                 self.assertTrue(dialog.local_analysis_progress.isHidden())
 
     def test_batch_stop_kills_current_job_and_clears_remaining_queue(self):
-        study = self.dialog.doe_studio
-        study.add_design(Settings())
-        study.add_blank_row()
+        import tempfile
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        with patch.dict("os.environ", RUSTMECH_ANALYSIS_QUEUE=str(Path(directory.name) / "queue.json")):
+            self.dialog._ensure_analysis_queue()
+        study = self.dialog.analysis_queue_widget
+        study.add_snapshot(Settings())
         job = MagicMock()
         with patch("doe_studio.AnalysisProcess", return_value=job):
             study.start_batch_solve()

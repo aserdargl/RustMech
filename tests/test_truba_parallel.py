@@ -68,7 +68,7 @@ class ParallelBatchTests(unittest.TestCase):
         studio._poll_worker()
         self.assertIsNone(studio._active_mode)
         self.assertEqual(studio.rows_to_run(), [])
-        self.assertTrue(studio._dataset_path.is_file())
+        self.assertTrue(studio._results_path.is_file())
         self.assertTrue(all(row.duration_s is not None for row in studio.rows))
 
     def test_retry_targets_only_failed_row(self):

@@ -3,7 +3,8 @@ from dataclasses import asdict
 from itertools import product
 from math import floor, prod
 from pathlib import Path
-from random import Random
+
+import numpy as np
 
 from model import GEOMETRY_FIELDS, settings_from_dict
 from structure_library import ALL_STRUCTURES_BY_FAMILY, STRUCTURE_FAMILIES
@@ -149,27 +150,46 @@ def matrix(base, dimensions):
         yield request
 
 
-def lhs_matrix(base, dimensions, count, seed):
-    """Stratify numeric ranges and distribute the selected families across the samples."""
-    from doe_studio import _lhs_samples
+def _lhs_samples(
+    n_samples: int,
+    ranges: list[tuple[float, float]],
+    seed: int = 42,
+) -> np.ndarray:
+    """Generate Latin Hypercube Samples in [low, high] for each dimension."""
+    rng = np.random.default_rng(int(seed))
+    dims = len(ranges)
+    result = np.zeros((n_samples, dims), dtype=float)
+    for d, (low, high) in enumerate(ranges):
+        if low == high:
+            result[:, d] = low
+            continue
+        cut = np.linspace(0.0, 1.0, n_samples + 1)
+        u = rng.uniform(low=cut[:-1], high=cut[1:], size=n_samples)
+        rng.shuffle(u)
+        result[:, d] = low + u * (high - low)
+    return result
 
+
+def lhs_matrix(base, dimensions, count, seed):
+    """Stratify each numeric range independently within each selected structure."""
     varying = {path: values for path, values in dimensions.items() if len(values) == 2
                and path not in (FAMILY_PATH, TYPE_PATH)}
     if not varying:
         yield from matrix(base, dimensions)
         return
     geometry = structure_levels(base, dimensions)
-    if count < len(geometry):
-        raise ValueError("Set the LHS sample count to at least the number of selected structure families.")
-    Random(seed).shuffle(geometry)
+    if count * len(geometry) > MAX_ROWS:
+        raise ValueError(f"Reduce the number of levels to at most {MAX_ROWS:,} experiments.")
     limits = [(low, high + 1 if type(low) is int else high) for low, high in varying.values()]
-    for index, sample in enumerate(_lhs_samples(count, limits, seed)):
+    samples = _lhs_samples(count, limits, seed)
+    for family, name in geometry:
+        # Use the same sampled values for each structure so results are comparable.
         levels = dimensions.copy()
-        family, name = geometry[index % len(geometry)]
         levels[FAMILY_PATH], levels[TYPE_PATH] = [family], [name]
-        for (path, (low, high)), value in zip(varying.items(), sample):
-            levels[path] = [min(high, floor(value)) if type(low) is int else float(value)]
-        yield next(matrix(base, levels))
+        for sample in samples:
+            for (path, (low, high)), value in zip(varying.items(), sample):
+                levels[path] = [min(high, floor(value)) if type(low) is int else float(value)]
+            yield next(matrix(base, levels))
 
 
 def validate(request):

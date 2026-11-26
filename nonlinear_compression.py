@@ -76,7 +76,6 @@ from peridynamic_workspace import PeridynamicResults, PeridynamicSettingsPanel
 from kratos_settings import KratosSettingsPanel
 from local_kratos import INSTALL_REQUIRED, local_kratos_python
 from solver_profiles import MESH_FIELDS, STRUCTURE_FIELDS, SolverProfileStore, profile_values
-from doe_studio import DeepLearningStudioWindow, DoEStudioWidget, DoEStudioWindow
 from preview_viewport import MESH_PREVIEW_ACTOR, create_preview_viewport
 from camera_toolbar import CameraToolbar
 from mesh_preview_worker import run_mesh_preview, shutdown_mesh_preview
@@ -1053,8 +1052,6 @@ class RustMechDialog(QDialog):
         self.doe_button = _WorkspaceCommandButton("DoE")
         self.doe_button.setToolTip("Open Design of Experiments settings.")
         self.doe_button.clicked.connect(self._show_doe_workspace)
-        self.deep_learning_button = _WorkspaceCommandButton("DeepLearning")
-        self.deep_learning_button.clicked.connect(self._show_deep_learning_workspace)
         self.designs_button = _WorkspaceCommandMenu()
         self.designs_button.setObjectName("headerMenu")
         self.designs_button.setText("Designs")
@@ -1076,7 +1073,7 @@ class RustMechDialog(QDialog):
         self._workspace_commands = (
             (self.project_button, self.designs_button),
             (self.sidebar_toggle, self.workspace_button),
-            (self.doe_button, self.deep_learning_button, self.esen_button, self.result_history_button),
+            (self.doe_button, self.esen_button, self.result_history_button),
         )
         for index, group in enumerate(self._workspace_commands):
             if index:
@@ -1426,25 +1423,10 @@ class RustMechDialog(QDialog):
         self.preview_error_details.hide()
         right.addWidget(self.preview_error_details)
 
-        from new_doe_page import NewDoePage
-        self.doe_page = NewDoePage(self, preferences)
-        self.doe_window = DoEStudioWindow(self.doe_page, self)
-        self.doe_studio = DoEStudioWidget(
-            settings_provider=self.applied_structure_settings,
-            mesh_generator=generate_volume_mesh,
-            batch_solver_runner=run_batch_experiment,
-            parent=self,
-            operation_host=self,
-            preferences=preferences,
-        )
-        self.doe_studio.setObjectName("doeWorkspace")
-        self.doe_studio.setMinimumSize(220, 140)
-        self.doe_studio.setSizePolicy(
-            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored
-        )
-        self.doe_studio.preview_requested.connect(self.load_from_doe_row)
-        self.doe_studio.use_model_btn.clicked.connect(self._add_current_design)
-        self.deep_learning_window = DeepLearningStudioWindow(self.doe_studio, self)
+        from new_doe_page import DoEStudioWindow
+        self.doe_window = DoEStudioWindow(self, preferences)
+        self.doe_page = self.doe_window.doe
+        self.lhs_page = self.doe_window.lhs
         self.design_pool = None
         self.analysis_queue_widget = None
         self.analysis_queue_window = None
@@ -1577,7 +1559,6 @@ class RustMechDialog(QDialog):
         self.flow_workspace.remote_controller = self.remote_controller
         self.thermal_workspace.remote_controller = self.remote_controller
         self.mpm_workspace.remote_controller = self.remote_controller
-        self.doe_studio.remote_controller = self.remote_controller
         self.remote_controller.mode_changed.connect(self._remote_mode_changed)
         self.remote_controller.changed.connect(self._remote_state_changed)
         self.remote_controller.close_ready.connect(self.reject)
@@ -1623,21 +1604,16 @@ class RustMechDialog(QDialog):
         }
         commands = (*(button for group in self._workspace_commands for button in group),
                     *self._compute_commands, self.about_button)
-        experiment_buttons = (self.doe_button, self.deep_learning_button)
         # Reserve one common width for the longest word and its menu arrow.
         command_width = max(button.fontMetrics().horizontalAdvance(word)
                             + (23 if isinstance(button, QToolButton) else 16)
                             for button in commands
-                            if button not in experiment_buttons
                             for label in selector_labels.get(button, (button.text(),))
                             for word in label.split())
         command_width = max(command_width, WORKSPACE_COMMAND_WIDTH)
-        experiment_width = max(command_width, self.deep_learning_button.fontMetrics().horizontalAdvance(
-            self.deep_learning_button.text()) + 16)
         for button in commands:
             button.setProperty("managesLocalizedWidth", True)
-            button.setFixedSize(experiment_width if button in experiment_buttons else command_width,
-                                WORKSPACE_COMMAND_HEIGHT)
+            button.setFixedSize(command_width, WORKSPACE_COMMAND_HEIGHT)
         self.compute_resources_button.setProperty("managesLocalizedWidth", True)
         resources_width = self.compute_resources_button.fontMetrics().horizontalAdvance(
             self.compute_resources_button.text()) + 16
@@ -2977,7 +2953,6 @@ class RustMechDialog(QDialog):
         self.failed_key = None
         self.debounce.stop()
         self._set_analysis_blocker("Preparing geometry preview…")
-        self.doe_studio.use_model_btn.setEnabled(True)
         self.start_preview()
 
     def apply_mesh(self, *_) -> None:
@@ -3095,7 +3070,6 @@ class RustMechDialog(QDialog):
             bool(current and self.preview.mesh is not None and not pending
                  and self._mesh_export_future is None)
         )
-        self.doe_studio.use_model_btn.setEnabled(applied_geometry_valid)
         method = self.setup_tabs.currentIndex()
         idle = self.analysis_job is None and self.future is None
         if method == self._fft_method_index:
@@ -3200,8 +3174,6 @@ class RustMechDialog(QDialog):
         self.failed_key = None
         message = "Preparing geometry preview…"
         self._set_analysis_blocker(message)
-        self.doe_studio.use_model_btn.setEnabled(
-            not validate_geometry(self.applied_structure_settings(), include_mesh=False))
         self.status.setText(message)
         self._update_status_visuals(
             "working", "● UPDATING PREVIEW", self.has_pending_geometry()
@@ -3692,10 +3664,6 @@ class RustMechDialog(QDialog):
         self.refresh_validity()
         self.doe_window.open_workspace()
 
-    def _show_deep_learning_workspace(self) -> None:
-        self.refresh_validity()
-        self.deep_learning_window.open_workspace()
-
     def _show_design_pool(self):
         if self.design_pool is None:
             from design_pool import DesignPoolDialog
@@ -3777,11 +3745,6 @@ class RustMechDialog(QDialog):
             self.design_pool.prepare_next()
         else:
             self.analysis_queue_window.open_workspace()
-
-    def _add_current_design(self) -> None:
-        self.refresh_validity()
-        if self.doe_studio.use_model_btn.isEnabled():
-            self.doe_studio.add_design(self.applied_structure_settings())
 
     def load_from_doe_row(self, row_settings: Settings, *, preview=True) -> None:
         self.result_preview_field.setCurrentIndex(0)
@@ -4308,14 +4271,12 @@ class RustMechDialog(QDialog):
                 jobs.append(workspace.job)
                 workspace.job = None
                 workspace.timer.stop()
-        for queue in (self.doe_studio, self.analysis_queue_widget):
-            if queue is not None:
-                jobs.extend(queue.detach_remote_queue())
-        for planner in (self.doe_page, self.doe_studio.learning_doe):
-            if planner is not None:
-                job = planner.detach_remote()
-                if job is not None:
-                    jobs.append(job)
+        if self.analysis_queue_widget is not None:
+            jobs.extend(self.analysis_queue_widget.detach_remote_queue())
+        for planner in (self.doe_page, self.lhs_page):
+            job = planner.detach_remote()
+            if job is not None:
+                jobs.append(job)
         if self._mesh_convergence_dialog is not None:
             jobs.extend(self._mesh_convergence_dialog.study.detach_remote_jobs())
         return [job.detach_remote() for job in jobs]
@@ -4394,12 +4355,10 @@ class RustMechDialog(QDialog):
         shutdown_mesh_preview()
         if self._kratos_result_dialog is not None:
             self._kratos_result_dialog.close()
-        if hasattr(self, "doe_studio"):
-            self.doe_page.save_draft(commit=True)
-            self.doe_page.cancel()
-            self.doe_studio.dispose()
+        if hasattr(self, "doe_window"):
+            for planner in (self.doe_page, self.lhs_page):
+                planner.cancel()
             self.doe_window.close()
-            self.deep_learning_window.close()
         if self.analysis_queue_widget is not None:
             self.analysis_queue_widget.dispose()
             self.analysis_queue_window.close()

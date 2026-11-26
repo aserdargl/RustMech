@@ -498,7 +498,6 @@ Geometry|Geometri
 Structure|Yapı
 Structure Family|Yapı ailesi
 Structure family|Yapı ailesi
-Set the LHS sample count to at least the number of selected structure families.|LHS örnek sayısı en az seçilen yapı ailesi sayısı kadar olmalı.
 Structure type|Yapı türü
 Type|Tür
 Structure / Dimensions|Yapı / Ölçüler
@@ -635,7 +634,6 @@ Actuator travel (mm)|Aktüatör hareketi (mm)
 Final strain (%)|Son şekil değiştirme (%)
 Final nominal strain (%)|Son nominal şekil değiştirme (%)
 Target strain (%)|Hedef şekil değiştirme (%)
-Common final strain (%)|Ortak son şekil değiştirme (%)
 Substeps|Alt adımlar
 Initial substeps|Başlangıç alt adımları
 Minimum substeps|En az alt adım
@@ -718,28 +716,12 @@ Min|Min
 Max|Maks
 Levels|Seviye
 Sampling|Örnekleme
-Deep Learning parameters|Derin öğrenme parametreleri
-LHS sampling|LHS örnekleme
-LHS sample count|LHS örnek sayısı
-Mechanical dataset plan|Mekanik veri planı
-LHS samples per geometry|Geometri başına LHS örneği
-Copy from design|Tasarımdan al
-Min from…|Min tasarımı…
-Max from…|Maks tasarımı…
+LHS parameters|LHS parametreleri
+LHS samples per structure|Yapı başına LHS örneği
 Generate experiments|Deneyleri oluştur
-Use current model|Mevcut modeli kullan
 Generate ML matrix|ML matrisi oluştur
 Preview in 3D|3B önizle
 Remove selected|Seçileni kaldır
-Untitled plan|Adsız plan
-Open DoE plan|DoE planını aç
-Save DoE plan|DoE planını kaydet
-Cannot open DoE plan|DoE planı açılamadı
-Cannot save DoE plan|DoE planı kaydedilemedi
-Unsaved DoE plan|Kaydedilmemiş DoE planı
-Table data|Tablo verileri
-Copy for Excel|Excel için kopyala
-Import CSV|CSV içe aktar
 Export CSV|CSV dışa aktar
 CSV exported.|CSV dosyası dışa aktarıldı.
 CSV export failed|CSV dışa aktarılamadı
@@ -754,8 +736,6 @@ Max Force (N)|En yüksek kuvvet (N)
 Max von Mises (MPa)|En yüksek von Mises (MPa)
 Effective E* (MPa)|Etkin E* (MPa)
 Effective modulus (MPa)|Etkin modül (MPa)
-Dataset split|Veri kümesi bölümü
-Geometry group|Geometri grubu
 Run folder|Çalışma klasörü
 Results|Sonuçlar
 Browse saved analysis results|Kayıtlı analiz sonuçlarını görüntüle
@@ -952,23 +932,10 @@ ANSYS mesh export failed|ANSYS ağı dışa aktarılamadı
 ANSYS mesh saved to|ANSYS ağı kaydedildi
 Geometry preview unavailable.|Geometri önizlemesi kullanılamıyor.
 Geometry is empty; adjust its parameters.|Geometri boş; parametreleri düzenleyin.
-Plan opened. Click Apply to preview geometry.|Plan açıldı. Geometriyi önizlemek için Uygula'ya tıklayın.
 Dimensions changed. Click Apply to generate geometry.|Ölçüler değişti. Geometriyi üretmek için Uygula'ya tıklayın.
-Add geometry → select a saved design → choose variables and their limits.|Geometri ekle → Kayıtlı tasarımı seç → Değişkenleri ve sınırlarını belirle.
-Checked variables apply to this geometry group. Enter limits or copy them from a saved design.|İşaretli değişkenler bu geometri grubuna uygulanır. Sınırları girin veya kayıtlı tasarımdan alın.
-Select a saved design to edit its dimensions.|Ölçülerini düzenlemek için kayıtlı bir tasarım seçin.
-Add a geometry, then select it here to edit dimensions and variables.|Bir geometri ekleyin; ölçülerini ve değişkenlerini düzenlemek için buradan seçin.
-Add a geometry and check the saved designs to include in your experiment plan.|Bir geometri ekleyin ve deney planına dahil edilecek tasarımları işaretleyin.
-Add the current structure and dimensions to DoE without generating an FE mesh.|SE ağı üretmeden mevcut yapıyı ve ölçüleri DoE planına ekleyin.
 Generate the geometry preview using the entered structure and dimensions.|Girilen yapı ve ölçülerle geometri önizlemesini oluşturun.
-Opening this file replaces your unsaved plan. Continue?|Bu dosya kaydedilmemiş planınızın yerine açılacak. Devam edilsin mi?
-Wait for the current batch to finish or stop it before opening a plan.|Plan açmadan önce toplu işin bitmesini bekleyin veya durdurun.
-Wait for the current batch to finish or stop it before saving the plan.|Planı kaydetmeden önce toplu işin bitmesini bekleyin veya durdurun.
-Replace experiments?|Deneyler değiştirilsin mi?
-Generating a new plan replaces the current table.|Yeni plan oluşturmak mevcut tablonun yerine geçer.
 No Pending Rows|Bekleyen satır yok
 All checked rows are already marked Completed, or no rows are checked.|İşaretli tüm satırlar tamamlanmış veya hiçbir satır işaretlenmemiş.
-No design selected.|Seçili tasarım yok.
 No flow case yet|Henüz akış senaryosu yok
 Build channel / export case|Kanalı oluştur / Senaryoyu dışa aktar
 Run flow analysis|Akış analizini çalıştır

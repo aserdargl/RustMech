@@ -405,22 +405,12 @@ konumlar kullanilabilir. Uretimde havuzu degistirirken iki uygulamaya da ayni
 
 ## Geometri önizlemesi ve isteğe bağlı analiz ağı
 
-DoE **New geometry > Add**, güncel yapı ve ölçüleri parametre kopyası
-olarak plana ekler. Yüzey önizlemesinin tamamlanmasını beklemez; ekleme
-sırasında önizleme, FE hacim ağı veya analiz işi başlatmaz. Sayısal alana
-yazılan son değer Add tıklamasında onaylanır; geçersiz ölçüler eklenmez.
-DoE ekleme, deney/ML tablosu oluşturma ve yüzey önizlemelerinde yalnız yapı ve
-ölçüler doğrulanır. Mesh türü/stratejisi, global/yerel ağ boyutu ve eleman
-sayısı bu adımları engellemez; ayarlar değiştirilmeden saklanır. Mesh
-kontrolü/üretimi veya analiz istendiğinde tam FE doğrulaması uygulanır.
-
-**DeepLearning** sayfasındaki **Save** ve **Open**,
-planı `.rustmech-doe.json` dosyasına kaydeder ve geri açar. Dosya, tasarımları,
-değişken aralıklarını, örnekleme ve adlandırma ayarlarını, deney satırlarını
-ve sonuç değerlerini saklar. Eski planlardan gelen deneyler DeepLearning
-tablosuna alınır. Geometri ve sonuç dosyalarının yolları korunur. Açılış
-analiz başlatmaz. Çalışan işler bitene veya durdurulana kadar Save ve Open
-devre dışıdır.
+Ana ekrandaki **DoE** düğmesi **Analysis settings**, **Variable settings** ve
+**LHS** sekmelerini açar. DoE’de seçilen değişken seviyelerinin kombinasyonları
+oluşturulur. LHS’de sayısal aralıklar seçilen her yapı için ayrı ayrı
+örneklenir. İki yapı seçip yapı başına 100 örnek girmek 200 deney oluşturur.
+Sayısal aralık seçilmediğinde her yapı için bir deney oluşturulur. LHS
+sonuçları CSV olarak dışa aktarılabilir.
 
 Ana çalışma alanı artık **Geometry** görünümüyle açılır. Geometri/Structure
 **Apply** yalnız yüzeyi hazırlar; Netgen veya HEX hacim ağı üretimini beklemez.

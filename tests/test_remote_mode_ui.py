@@ -28,6 +28,9 @@ class RemoteModeUiTests(unittest.TestCase):
         session_patch.start()
         self.addCleanup(session_patch.stop)
         self.temp=tempfile.TemporaryDirectory()
+        queue_path = patch.dict("os.environ", RUSTMECH_ANALYSIS_QUEUE=str(Path(self.temp.name) / "queue.json"))
+        queue_path.start()
+        self.addCleanup(queue_path.stop)
         # Use a private endpoint so the open desktop cannot change mocked session state.
         desktop_patch = patch("truba_desktop._desktop_server_name",
                               return_value=Path(self.temp.name).name + "-truba-test")
@@ -1003,12 +1006,14 @@ class RemoteModeUiTests(unittest.TestCase):
         self.window.analysis_job = analysis
         self.window.flow_workspace.job = flow
         self.window.thermal_workspace.job = thermal
-        self.window.doe_studio._active_future = first_row
-        self.window.doe_studio._parallel_futures = {0: (first_row, 0), 1: (second_row, 0)}
+        self.window._ensure_analysis_queue()
+        queue = self.window.analysis_queue_widget
+        queue._active_future = first_row
+        queue._parallel_futures = {0: (first_row, 0), 1: (second_row, 0)}
         self.window.close()
         self.assertTrue(self.window.isVisible())
         self.assertIsNone(self.window.analysis_job)
-        self.assertFalse(self.window.doe_studio._parallel_futures)
+        self.assertFalse(queue._parallel_futures)
         pending.set_result(None)
         self.controller.poll_close()
         self.assertFalse(self.window.isVisible())
@@ -1283,7 +1288,7 @@ class RemoteModeUiTests(unittest.TestCase):
             study.force_stop()
         dialog.reject()
 
-    def test_convergence_and_doe_do_not_call_local_mesh_generator(self):
+    def test_convergence_and_queue_do_not_call_local_mesh_generator(self):
         from mesh_convergence import MeshConvergenceDialog
         local=MagicMock()
         dialog=MeshConvergenceDialog(self.window.collect(),local,local,self.window)
@@ -1306,21 +1311,21 @@ class RemoteModeUiTests(unittest.TestCase):
             self.assertTrue(study.run_on_truba.isEnabled())
         study.dispose()
         dialog.deleteLater()
-        doe=self.window.doe_studio
-        doe.add_design(self.window.collect())
-        doe.add_blank_row()
+        self.window._ensure_analysis_queue()
+        doe = self.window.analysis_queue_widget
+        doe.add_snapshot(self.window.collect())
         with patch("doe_studio.AnalysisProcess") as start:
             doe.start_mesh_precheck()
             self.assertIs(start.call_args.args[0],run_remote_doe)
             self.assertFalse(start.call_args.args[4])
             doe.stop_active_queue()
 
-    def test_legacy_doe_solve_uses_current_remote_solver(self):
+    def test_queue_solve_uses_current_remote_solver(self):
         from dataclasses import replace
-        doe = self.window.doe_studio
+        self.window._ensure_analysis_queue()
+        doe = self.window.analysis_queue_widget
         old = replace(self.window.collect(), solver_backend='ansys_mapdl', self_contact_mode='disabled')
-        doe.add_design(old)
-        doe.add_blank_row()
+        doe.add_snapshot(old)
         self.enable()
         self.assertEqual(self.window.collect().solver_backend, 'kratos')
         with patch('doe_studio.AnalysisProcess') as start:

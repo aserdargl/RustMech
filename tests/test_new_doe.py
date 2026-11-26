@@ -25,7 +25,7 @@ class NewDoeTests(unittest.TestCase):
         self.window.doe_button.click()
         page = self.window.doe_page
         self.app.processEvents()
-        self.assertIs(page, self.window.doe_window.centralWidget())
+        self.assertIs(page.window(), self.window.doe_window)
         return page
 
     def test_doe_uses_command_buttons_for_the_settings_tabs(self):
@@ -41,9 +41,9 @@ class NewDoeTests(unittest.TestCase):
         nav = page.input_navigation
         tab_bottom = nav.mapToGlobal(QPoint(0, nav.height())).y()
         self.assertIn(analysis.mapToGlobal(QPoint()).y() - tab_bottom, range(9))
-        analysis_button, variables_button = nav.buttons.buttons()
-        self.assertEqual([analysis_button.text(), variables_button.text()],
-                         ["Analysis settings", "Variable settings"])
+        analysis_button, variables_button, lhs_button = nav.buttons.buttons()
+        self.assertEqual([analysis_button.text(), variables_button.text(), lhs_button.text()],
+                         ["Analysis settings", "Variable settings", "LHS"])
         self.assertTrue(page.input_tabs.tabBar().isHidden())
         self.assertEqual(analysis_button.size(), variables_button.size())
         self.assertTrue(analysis_button.isChecked())
@@ -54,18 +54,27 @@ class NewDoeTests(unittest.TestCase):
         QTest.keyClick(page.variations, Qt.Key.Key_Tab, Qt.KeyboardModifier.ControlModifier)
         self.assertIs(page.input_tabs.currentWidget(), page.analysis_settings)
         self.assertTrue(analysis_button.isChecked())
+        lhs_button.click()
+        self.assertTrue(lhs_button.isChecked())
+        self.assertTrue(self.window.lhs_page.isVisible())
+        self.assertIs(self.window.lhs_page.window(), self.window.doe_window)
+        variables_button.click()
+        self.assertTrue(page.variations.isVisible())
+
+    def lhs_page(self):
+        self.page().input_navigation.buttons.button(2).click()
+        self.app.processEvents()
+        return self.window.lhs_page
 
     def test_learning_samples_the_selected_operation_and_restores_its_ranges(self):
         doe = self.page()
-        studio = self.window.doe_studio
-        self.window.deep_learning_button.click()
-        page = studio.learning_doe
+        page = self.lhs_page()
         self.assertTrue(page.loaded, page.status.text())
         self.assertEqual(page.operation.currentData(), "fft_solve")
         fields = {factor.path: factor for factor in page.factors}
         grid = fields["grid",]
         stiffness = fields["void_ratio",]
-        self.assertFalse(fields["settings", "structure_name"].variable.isEnabled())
+        self.assertTrue(fields["settings", "structure_name"].variable.isEnabled())
         self.assertTrue(page.variations.isRowHidden(grid.variation_row))
         grid.variable.click()
         stiffness.variable.click()
@@ -128,9 +137,7 @@ class NewDoeTests(unittest.TestCase):
         from new_doe_report import LEARNING_CSV_NAME
 
         self.page()
-        studio = self.window.doe_studio
-        self.window.deep_learning_button.click()
-        page = studio.learning_doe
+        page = self.lhs_page()
         grid = next(factor for factor in page.factors if factor.path == ("grid",))
         grid.variable.click()
         grid.first.setValue(16)
@@ -389,7 +396,7 @@ class NewDoeTests(unittest.TestCase):
             self.assertEqual(value, 8.0)
 
     def test_structure_fields_follow_the_selected_family_and_preserve_hidden_drafts(self):
-        for page in (self.page(), self.window.doe_studio.learning_doe):
+        for page in (self.page(), self.window.lhs_page):
             with self.subTest(sampling=page.sampling):
                 page.operation.setCurrentIndex(page.operation.findData("mechanical"))
                 fields = {factor.path: factor for factor in page.factors}
@@ -492,12 +499,11 @@ class NewDoeTests(unittest.TestCase):
         self.assertFalse(page.matrix_current)
         self.assertIn("Truss Lattice", page.status.text())
 
-    def test_learning_balances_structure_families_in_the_lhs_sample_count(self):
+    def test_learning_samples_each_selected_structure(self):
         from collections import Counter
         from structure_library import ALL_STRUCTURES_BY_FAMILY
 
-        self.window.deep_learning_button.click()
-        page = self.window.doe_studio.learning_doe
+        page = self.lhs_page()
         fields = {factor.path[-1]: factor for factor in page.factors}
         family = fields["structure_family"]
         family.variable.setChecked(True)
@@ -516,9 +522,19 @@ class NewDoeTests(unittest.TestCase):
         self.assertTrue(page.matrix_current, page.status.text())
         choices = [(row["settings"]["structure_family"], row["settings"]["structure_name"])
                    for row in page.rows]
-        self.assertEqual(sorted(Counter(family for family, _ in choices).values()), [4, 5])
+        self.assertEqual(sorted(Counter(family for family, _ in choices).values()), [9, 9])
         self.assertTrue(all(name in ALL_STRUCTURES_BY_FAMILY[family] for family, name in choices))
-        self.assertEqual(sorted(row["grid"] for row in page.rows), list(range(16, 25)))
+        self.assertEqual(sorted(row["grid"] for row in page.rows), sorted(list(range(16, 25)) * 2))
+        family.variable.setChecked(False)
+        structure = fields["structure_name"]
+        structure.variable.setChecked(True)
+        names = ALL_STRUCTURES_BY_FAMILY["tpms"][:2]
+        for action in structure.menu.actions():
+            action.setChecked(action.data() in names)
+        page.create()
+        self.assertTrue(page.matrix_current, page.status.text())
+        self.assertEqual(Counter(row["settings"]["structure_name"] for row in page.rows),
+                         {name: 9 for name in names})
         rows = page.rows
         page.create()
         self.assertEqual(page.rows, rows)
@@ -568,7 +584,7 @@ class NewDoeTests(unittest.TestCase):
         page.create()
         self.assertEqual([r["settings"]["cell_size"] for r in page.rows], [1.5, 3.0] * 3)
         self.assertTrue(all(r["void_ratio"] == self.window.fft_void_ratio.value() for r in page.rows))
-        self.assertFalse(self.window.doe_studio.rows)
+        self.assertFalse(self.window.lhs_page.rows)
         previous_rows = page.rows
         grid.selection.setText("16, 24.5")
         page.apply_button.click()

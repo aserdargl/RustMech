@@ -21,7 +21,7 @@ GUI = {
     "test_dialog_keyboard", "test_flow_workspace", "test_forced_stop_ui",
     "test_geometry_import_ui", "test_standard_tests", "test_truba_parallel_controls",
     "test_thermal_workspace", "test_viewport_orientation", "test_remote_mode_ui",
-    "test_doe_window", "test_doe_sample_settings", "test_design_pool",
+    "test_doe_window", "test_design_pool",
     "test_viewport_lifecycle",
     # Konsola gercek Ctrl+C gonderir; konsolu olmayan surecte takilir.
     "test_desktop_interrupt",

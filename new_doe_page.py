@@ -10,7 +10,7 @@ from uuid import uuid4
 
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, QSignalBlocker, Qt, QTimer, QUrl
 from PySide6.QtGui import QDesktopServices, QIcon
-from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDialog, QDoubleSpinBox,
+from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QComboBox, QDialog, QDoubleSpinBox,
                                QFormLayout, QHeaderView,
                                QHBoxLayout, QLabel, QLayout, QLineEdit, QMainWindow, QMenu, QPushButton,
                                QScrollArea, QSpinBox, QSplitter,
@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDialog,
 from material_catalog import builtin_materials
 from material_library import MaterialCard
 from doe_planner import DoENavigation
+from doe_studio import ExperimentWindow
 from new_doe_operations import (FAMILY_PATH, MAX_ROWS, OPERATIONS, TYPE_PATH, explicit_numbers, launch, lhs_matrix,
                                 matrix, matrix_request, parameters, snapshot, structure_choices, structure_families,
                                 structure_levels, validate)
@@ -212,7 +213,7 @@ class Factor:
         self.optional_number = value is None and key in ("minimum_substeps", "maximum_substeps", "stl_resolution")
         self.sampling = sampling
         self.can_vary = not sampling or self.numeric or self.optional_number
-        if path == FAMILY_PATH:
+        if path in (FAMILY_PATH, TYPE_PATH):
             self.can_vary = len(self.choices) > 1
         if self.can_vary:
             table.setCellWidget(row, 0, self.variable)
@@ -665,7 +666,7 @@ class DoeRunDialog(QDialog):
 
 
 class NewDoePage(QWidget):
-    def __init__(self, host, preferences=None, *, sampling=False):
+    def __init__(self, host, preferences=None, *, sampling=False, open_lhs=None):
         super().__init__()
         self.host = host
         self.preferences = preferences
@@ -718,7 +719,7 @@ class NewDoePage(QWidget):
         self.variations.setAccessibleName("Variable settings")
         self.variations.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         self.input_tabs.addTab(self.variations, "Variable settings")
-        self.input_navigation = DoENavigation(self.input_tabs)
+        self.input_navigation = DoENavigation(self.input_tabs, open_lhs)
         if not sampling:
             self.input_navigation.setMinimumWidth(DEFAULT_SETTINGS_WIDTH - 2 * SETTINGS_PADDING)
         self.sections = {}
@@ -753,12 +754,12 @@ class NewDoePage(QWidget):
         if sampling:
             self.lhs_count = NumericLineEdit(100, 2, 5000)
             self.lhs_seed = NumericLineEdit(42, 1, 999999)
-            sampling_group = SidebarGroupBox("Deep Learning parameters")
+            sampling_group = SidebarGroupBox("LHS parameters")
             form = QFormLayout(sampling_group.content)
             form.setContentsMargins(4, 2, 4, 4)
             form.setSpacing(CONTROL_GAP)
             form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.FieldsStayAtSizeHint)
-            form.addRow("LHS sample count", self.lhs_count)
+            form.addRow("LHS samples per structure", self.lhs_count)
             form.addRow("Seed", self.lhs_seed)
             settings_layout.addWidget(sampling_group)
             for control in (self.lhs_count, self.lhs_seed):
@@ -1722,3 +1723,39 @@ class NewDoePage(QWidget):
             self.status.setText(f"{translate('CSV export failed')}: {error}")
             return
         self.status.setText(translate("CSV exported."))
+
+
+class DoEStudioWindow(ExperimentWindow):
+    def __init__(self, host, preferences):
+        workspace = QWidget()
+        super().__init__(workspace, host)
+        self.setObjectName("doeStudioWindow")
+        self.setWindowTitle("DoE · RustMech")
+
+        layout = QVBoxLayout(workspace)
+        layout.setContentsMargins(2, 1, 2, 1)
+        layout.setSpacing(2)
+        pages = QStackedWidget()
+        self.lhs = NewDoePage(host, preferences, sampling=True)
+        self.doe = NewDoePage(host, preferences, open_lhs=lambda: pages.setCurrentWidget(self.lhs))
+        navigation = self.doe.input_navigation
+        layout.addWidget(navigation)
+        layout.addWidget(pages, 1)
+        pages.addWidget(self.doe)
+        pages.addWidget(self.lhs)
+        navigation.buttons.idClicked.connect(
+            lambda index: pages.setCurrentWidget(self.doe) if index < self.doe.input_tabs.count() else None)
+
+        store = getattr(QApplication.instance(), "_rustmech_window_state", None)
+        if store is None:
+            return
+        key = f"{store.key(self)}/splitters/{self.lhs.splitter.objectName()}"
+        previous = ("windows/DeepLearningStudioWindow/deepLearningStudioWindow/splitters/"
+                    + self.lhs.splitter.objectName())
+        if not store.settings.contains(key) and store.settings.contains(previous):
+            store.settings.setValue(key, store.settings.value(previous))
+
+    def closeEvent(self, event):
+        for page in (self.doe, self.lhs):
+            page.save_draft(commit=True)
+        super().closeEvent(event)

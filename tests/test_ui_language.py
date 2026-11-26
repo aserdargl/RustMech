@@ -143,7 +143,7 @@ class LanguageTests(unittest.TestCase):
         self.windows.append(window)
         before = window.collect()
         context = window.remote_controller.context()
-        plan = window.doe_studio.capture_plan()
+        lhs_settings = (window.lhs_page.lhs_count.value(), window.lhs_page.lhs_seed.value())
         controller = window.remote_controller
         panel = controller.resource_window
         controller.study_name.setText('sample-study')
@@ -162,14 +162,11 @@ class LanguageTests(unittest.TestCase):
             commands = (window.project_button, window.designs_button, window.workspace_button,
                         window.sidebar_toggle,
                         window.esen_button, window.result_history_button, window.truba_button,
-                        window.truba_connect_button, window.sync_button, window.about_button)
-            experiment_buttons = (window.doe_button, window.deep_learning_button)
+                        window.truba_connect_button, window.sync_button, window.about_button, window.doe_button)
 
             def assert_toolbar_layout():
                 self.assertEqual(len({button.size().toTuple() for button in commands}), 1)
-                self.assertEqual(window.doe_button.size(), window.deep_learning_button.size())
-                self.assertEqual(window.deep_learning_button.height(), window.project_button.height())
-                for button in (*commands, *experiment_buttons):
+                for button in commands:
                     if button.isVisible():
                         self.assertTrue(button.parentWidget().rect().contains(button.geometry()))
                 self.assertLess(window.esen_button.geometry().right(), window.about_button.x())
@@ -239,7 +236,7 @@ class LanguageTests(unittest.TestCase):
             self.assertEqual(window.collect(), before)
             self.assertEqual(window.remote_controller.context(), context)
             self.assertEqual(window.geometry(), normal_bounds)
-            self.assertEqual(window.doe_studio.capture_plan(), plan)
+            self.assertEqual((window.lhs_page.lhs_count.value(), window.lhs_page.lhs_seed.value()), lhs_settings)
             self.manager.set_language('en')
             self.assertEqual(window.sidebar_toggle.text(), 'FFT')
             finite_element.trigger()

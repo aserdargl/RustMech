@@ -395,17 +395,6 @@ class SurfacePreviewUITests(unittest.TestCase):
             finally:
                 restored.close()
 
-    def test_doe_select_ignores_mesh_errors_and_pending_main_preview(self):
-        self.window.controls['mesh_resolution'].setValue(2)
-        self.window.preview = None
-        self.window.refresh_validity()
-        self.assertTrue(self.window.doe_studio.use_model_btn.isEnabled())
-        self.assertFalse(self.window.mesh_apply_button.isEnabled())
-        self.assertFalse(self.window.apply_button.isEnabled())
-        with patch('nonlinear_compression.generate_volume_mesh', side_effect=AssertionError('mesh')):
-            self.window._add_current_design()
-        self.assertEqual(len(self.window.doe_studio._designs), 1)
-        self.assertEqual(self.window.doe_studio._designs[0].mesh_resolution, 2)
 
     def test_analysis_waits_for_mesh_and_forwards_it_without_remeshing(self):
         with patch('nonlinear_compression.AnalysisProcess') as process, patch('nonlinear_compression.save_settings'):

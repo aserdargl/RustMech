@@ -627,7 +627,7 @@ class RemoteController(QObject):
     def _physics_busy(self):
         window = self.window
         convergence = window._mesh_convergence_dialog
-        return bool(window.analysis_job or getattr(window.doe_studio,"_active_future",None) or
+        return bool(window.analysis_job or any(page.timer.isActive() for page in (window.doe_page, window.lhs_page)) or
                     getattr(getattr(window, 'analysis_queue_widget', None), '_active_future', None) or
                     window.flow_workspace.job or window.thermal_workspace.job or
                     getattr(getattr(window, 'mpm_workspace', None), 'running_analysis', False) or

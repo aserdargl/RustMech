@@ -22,8 +22,8 @@ class ProjectWorkspace:
         w = self.window
         return (w.analysis_job is not None or w.future is not None
                 or any(area.job is not None for area in (w.flow_workspace, w.thermal_workspace, w.mpm_workspace))
-                or any(getattr(area, "_active_mode", None) is not None
-                       for area in (w.doe_studio, w.analysis_queue_widget) if area is not None))
+                or any(page.timer.isActive() for page in (w.doe_page, w.lhs_page))
+                or getattr(w.analysis_queue_widget, "_active_mode", None) is not None)
 
     def capture(self):
         w = self.window

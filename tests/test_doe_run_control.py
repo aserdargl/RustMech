@@ -1,19 +1,18 @@
 """DoE Run denetimi: durum siniflari, kapsam, ayar dondurma, hata politikasi, zaman asimi, sureler."""
 import dataclasses
-import os
 import time
 import unittest
 from concurrent.futures import Future
 from pathlib import Path
 from unittest.mock import patch
 
-from doe_studio import (POLICY_STOP_AFTER, RESULTS_ENV, RUN_SCOPE_FAILED, RUN_SCOPE_PARTIAL,
+from doe_studio import (POLICY_STOP_AFTER, RUN_SCOPE_FAILED, RUN_SCOPE_PARTIAL,
                         STATE_CANCELLED, STATE_COMPLETED, STATE_DISCONNECTED, STATE_FAILED,
                         STATE_INTERRUPTED, STATE_INVALID, STATE_PARTIAL, STATE_PENDING,
-                        STATE_RUNNING, TIMEOUT_STATUS, DoEStudioWidget, DeepLearningStudioWindow,
+                        STATE_RUNNING, TIMEOUT_STATUS,
                         classify_status)
+from analysis_queue import AnalysisQueueWidget
 from model import Settings
-from studio_style import STUDIO_STYLESHEET
 from tests import test_doe_window as helpers
 
 
@@ -51,23 +50,12 @@ class DoERunControlTests(unittest.TestCase):
 
     def setUp(self):
         helpers.DoEWindowTests.setUp(self)
-        patcher = patch.dict(os.environ, {RESULTS_ENV: str(Path(self.temp.name) / "results")})
-        patcher.start()
-        self.addCleanup(patcher.stop)
-
     def studio(self, rows=3, provider=Settings):
-        studio = DoEStudioWidget(provider, lambda _: None, lambda settings, mesh: {})
-        window = DeepLearningStudioWindow(studio)
-        window.setStyleSheet(STUDIO_STYLESHEET)
-        self.windows.append(window)
-        window.open_workspace()
-        self.app.processEvents()
-        studio.add_design(Settings())
-        studio.generate_ml_table()
-        first = studio._rows[0]
-        for number in range(2, rows + 1):
-            studio._rows.append(dataclasses.replace(first, exp_id=f"EXP-{number:04d}"))
-        studio._refresh_table_view()
+        studio = AnalysisQueueWidget(provider, lambda _: None, lambda settings, mesh: {},
+                                     queue_path=Path(self.temp.name) / "queue.json")
+        self.addCleanup(studio.dispose)
+        for _ in range(rows):
+            studio.add_snapshot(Settings())
         self.assertEqual(len(studio._rows), rows)
         return studio
 
@@ -193,27 +181,12 @@ class DoERunControlTests(unittest.TestCase):
         self.assertEqual(classify_status(studio.rows[1].status), STATE_INVALID)
         self.assertEqual((studio.rows[0].status, studio.rows[2].status), ("Completed", "Completed"))
 
-    def test_timings_are_recorded_exported_and_restored(self):
-        studio = self.studio(rows=1)
-        self.run_queue(studio, [dict(status="Completed")])
-        row = studio.rows[0]
-        self.assertTrue(row.started_at)
-        self.assertGreaterEqual(row.duration_s, 0)
-        path = Path(self.temp.name) / "timed.csv"
-        studio.export_csv_path(path)
-        studio.import_csv_path(path)
-        again = studio.rows[0]
-        self.assertEqual(again.started_at, row.started_at)
-        self.assertAlmostEqual(again.duration_s, row.duration_s, places=3)
-
-    def test_saved_plan_keeps_timings_and_attempts(self):
+    def test_queue_keeps_timings_and_attempts(self):
         studio = self.studio(rows=1)
         row = studio.rows[0]
         row.started_at, row.duration_s, row.attempts = "2026-11-16T22:00:00", 12.5, 2
-        plan = Path(self.temp.name) / "timed.rustmech-doe.json"
-        studio.save_plan_path(plan)
-        studio.open_plan_path(plan)
-        again = studio.rows[0]
+        studio.save_queue()
+        again = studio.store.load()[0]
         self.assertEqual((again.started_at, again.duration_s, again.attempts),
                          ("2026-11-16T22:00:00", 12.5, 2))
 
