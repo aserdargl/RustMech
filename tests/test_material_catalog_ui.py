@@ -20,7 +20,7 @@ from window_state import WindowStateStore
 class MaterialCatalogTests(unittest.TestCase):
     def test_all_cards_are_valid_sourced_and_independent(self):
         entries = builtin_materials()
-        self.assertEqual(len(entries), 13)
+        self.assertEqual(len(entries), 14)
         self.assertEqual(len({entry.identifier for entry in entries}), len(entries))
         for entry in entries:
             with self.subTest(entry=entry.identifier):

@@ -19,7 +19,8 @@ ASSUMED_PROPERTIES = {
     "alsi10mg": ("young_modulus", "poisson_ratio"),
     "6061t6": ("density", "young_modulus", "poisson_ratio"),
     "s355": ("poisson_ratio",), "c110": ("poisson_ratio",),
-    "pla": ("poisson_ratio",), "pa12": ("poisson_ratio",),
+    "pla": ("poisson_ratio",), "esun_pla_plus": ("young_modulus", "poisson_ratio"),
+    "pa12": ("poisson_ratio",),
     "abs_resin": ("density", "poisson_ratio"),
 }
 
@@ -143,6 +144,22 @@ def builtin_materials():
               "pp. 2–3: density 1.24 g/cm³; horizontal printed tensile modulus 2.3 ± 0.1 GPa."),),
             "Printed response depends on orientation, porosity and print settings. No thermal data or failure model.",
             "Poisson ratio 0.35 is an engineering estimate. Isotropic approximation; filament density used for fully dense printed material."),
+        CatalogMaterial("esun_pla_plus", "Esun PLA+", "Polymer",
+            "eSUN PLA+ filament, FDM printed; isotropic linear-elastic reference.",
+            dict(density=1240, young_modulus=3061.7e6, poisson_ratio=.35),
+            (("eSUN EU — PLA+ product page", "https://eu.esun3d.com/pla-pro-product",
+              "Physical and mechanical properties and recommended printing settings."),
+             ("eSUN — PLA+ technical data sheet, February 2026 v1.0",
+              "https://eu.esun3d.com/media/esun/catalog/certification/product/PLA/PLA_-TDS-en.pdf",
+              "pp. 1–3: density 1.24 g/cm³, directional test data and 100% infill specimen settings."),
+             ("Polymers — Mechanical characterization of eSUN PLA+",
+              "https://www.mdpi.com/2073-4360/18/2/243",
+              "Section 2.5.2: tensile Young's modulus 3061.7 MPa and assumed Poisson ratio 0.35.")),
+            "eSUN reports XY/Z tensile strengths of 70.37/36.36 MPa and flexural moduli of "
+            "3259.39/2873.94 MPa. Printed response depends on orientation and print settings.",
+            "Young's modulus comes from independently tested eSUN PLA+ specimens and is a reference "
+            "estimate for the current formulation. Poisson ratio is a modeling assumption from the same study. "
+            "Nominal density is used for fully dense material."),
         CatalogMaterial("pa12", "PA12 / EOS PA 2200, SLS dry XY", "Polymer",
             "EOS PA 2200 on HELIOR; dry, X/Y direction, ISO 527.",
             dict(density=980, young_modulus=1.95e9, poisson_ratio=.39),
