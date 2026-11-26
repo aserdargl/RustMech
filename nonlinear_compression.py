@@ -1201,7 +1201,7 @@ class RustMechDialog(QDialog):
         camera_controls.add_camera_action(self.perspective_button, "perspective")
         camera_controls.add_camera_action(camera_menu.addAction("Reset view", self.reset_view), "reset")
 
-        self.plotter = create_preview_viewport(self, simplify_mesh_during_drag=True)
+        self.plotter = create_preview_viewport(self, show_orientation_cube=True)
         self.plotter.on_orientation_selected = lambda: self.orthographic_button.setChecked(True)
         self.plotter.enable_parallel_projection()
         self.plotter.interactor.setMinimumSize(100, 70)
@@ -3586,9 +3586,8 @@ class RustMechDialog(QDialog):
         self.plotter.set_background("#f0f0f0", top="#ffffff")
         mode = self.mode.currentIndex()
         mesh = self.preview.mesh
-        motion_actors = []
         if mode in (0, 2) or mesh is None:
-            surface_actor = self.plotter.add_mesh(
+            self.plotter.add_mesh(
                 self.preview.surface,
                 color="#4ea8de",
                 smooth_shading=True,
@@ -3597,10 +3596,9 @@ class RustMechDialog(QDialog):
                 specular_power=20,
                 opacity=0.35 if mode == 2 else 1,
             )
-            motion_actors.append(surface_actor)
         removed = None
         if mode in (1, 2) and mesh is not None:
-            mesh_actor = self.plotter.add_mesh(
+            self.plotter.add_mesh(
                 mesh.grid,
                 color="#60a5fa",
                 show_edges=True,
@@ -3609,7 +3607,6 @@ class RustMechDialog(QDialog):
                 smooth_shading=False,
                 name=MESH_PREVIEW_ACTOR,
             )
-            motion_actors.append(mesh_actor)
             removed = mesh.removed_grid
         if self.preview_settings().imported_geometry_path and mode in (0, 2):
             faces = self.preview.surface.cell_data.get('compression_face')
@@ -3623,14 +3620,13 @@ class RustMechDialog(QDialog):
                         actor.mapper.SetRelativeCoincidentTopologyPolygonOffsetParameters(-2, -2)
         removed_count = removed.n_cells if removed is not None else 0
         if removed_count:
-            fragment_actor = self.plotter.add_mesh(
+            self.plotter.add_mesh(
                 removed,
                 color="#dc2626",
                 show_edges=True,
                 edge_color="#7f1d1d",
                 name="excluded_fragments",
             )
-            motion_actors.append(fragment_actor)
         if self.show_platens_cb.isChecked():
             cube_sz = float(self.preview_settings().size)
             from standard_tests import fixture_surfaces
@@ -3643,8 +3639,6 @@ class RustMechDialog(QDialog):
             "Red pieces are excluded from the ANSYS mesh."
         )
         self._finish_preview_view(camera, reset)
-        if mode in (1, 2) and mesh is not None:
-            self.plotter.set_motion_meshes(motion_actors)
 
         if mesh is None:
             for name in ("elements", "nodes", "fraction", "spacing"):

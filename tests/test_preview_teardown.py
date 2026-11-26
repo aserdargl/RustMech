@@ -18,7 +18,7 @@ PROBE = textwrap.dedent("""
     app = QApplication([])
     owner = QDialog()
     layout = QVBoxLayout(owner)
-    plotter = create_preview_viewport(owner, simplify_mesh_during_drag=True)
+    plotter = create_preview_viewport(owner, show_orientation_cube=True)
     layout.addWidget(plotter)
     plotter.add_mesh(pv.Sphere())
     plotter.add_axes()
@@ -27,6 +27,8 @@ PROBE = textwrap.dedent("""
     plotter.render()
     align_camera(plotter, (1, 0, 0))
     assert plotter._camera_transition.timer.isActive()
+    plotter.iren.interactor.Render()
+    assert plotter._interaction_frame.isActive()
     if sys.argv[1] in ('delete_owner', 'delete_plotter'):
         target = owner if sys.argv[1] == 'delete_owner' else plotter
         target.deleteLater()
@@ -34,6 +36,7 @@ PROBE = textwrap.dedent("""
     else:
         plotter.close()
         assert not plotter._camera_transition.timer.isActive(), 'camera still running'
+        assert not plotter._interaction_frame.isActive(), 'render still pending'
         plotter.close()  # Cleanup must be idempotent.
         owner.close()
     assert plotter._closed
