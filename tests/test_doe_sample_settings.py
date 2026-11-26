@@ -38,7 +38,7 @@ class SampleSettingsTests(unittest.TestCase):
         self.assertEqual(len(batch._rows), 4)
         self.assertEqual(batch._rows[0].exp_id, 'Gyroid-2-20')
         batch.transfer()
-        self.assertIs(studio.settings_tabs.currentWidget(), studio.planner.learning_page)
+        self.assertTrue(studio.planner.legacy_learning_page.isVisible())
         self.assertEqual(len(studio.rows), 4)
         self.assertEqual(studio.rows[0].design_settings.cell_size, 2)
         batch.transfer()
@@ -124,7 +124,7 @@ class SampleSettingsTests(unittest.TestCase):
         self.assertEqual(restored.sample_settings.state(), saved)
         self.assertTrue(restored.sample_settings.batch.build_matrix())
         self.assertEqual([r.cell_size for r in restored.sample_settings.batch._rows], [2, 3])
-        self.assertIs(restored.settings_tabs.currentWidget(), restored.planner.learning_page)
+        self.assertTrue(restored.planner.legacy_learning_page.isVisible())
         self.assertTrue(restored.sample_settings.isHidden())
 
     def test_generated_sample_names_follow_table_order_with_legacy_rules(self):

@@ -10,7 +10,7 @@ from unittest.mock import patch
 from doe_studio import (POLICY_STOP_AFTER, RESULTS_ENV, RUN_SCOPE_FAILED, RUN_SCOPE_PARTIAL,
                         STATE_CANCELLED, STATE_COMPLETED, STATE_DISCONNECTED, STATE_FAILED,
                         STATE_INTERRUPTED, STATE_INVALID, STATE_PARTIAL, STATE_PENDING,
-                        STATE_RUNNING, TIMEOUT_STATUS, DoEStudioWidget, DoEStudioWindow,
+                        STATE_RUNNING, TIMEOUT_STATUS, DoEStudioWidget, DeepLearningStudioWindow,
                         classify_status)
 from model import Settings
 from studio_style import STUDIO_STYLESHEET
@@ -57,7 +57,7 @@ class DoERunControlTests(unittest.TestCase):
 
     def studio(self, rows=3, provider=Settings):
         studio = DoEStudioWidget(provider, lambda _: None, lambda settings, mesh: {})
-        window = DoEStudioWindow(studio)
+        window = DeepLearningStudioWindow(studio)
         window.setStyleSheet(STUDIO_STYLESHEET)
         self.windows.append(window)
         window.open_workspace()

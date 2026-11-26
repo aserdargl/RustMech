@@ -6,7 +6,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from doe_plan import read_plan
-from doe_studio import (INTERRUPTED_STATUS, RESULTS_ENV, DoEStudioWidget, DoEStudioWindow,
+from doe_studio import (INTERRUPTED_STATUS, RESULTS_ENV, DoEStudioWidget, DeepLearningStudioWindow,
                         results_directory)
 from model import Settings
 from studio_style import STUDIO_STYLESHEET
@@ -35,7 +35,7 @@ class DoEResultsPersistenceTests(unittest.TestCase):
             _, studio = self.window()
         else:
             studio = DoEStudioWidget(Settings, lambda _: None, runner)
-            window = DoEStudioWindow(studio)
+            window = DeepLearningStudioWindow(studio)
             window.setStyleSheet(STUDIO_STYLESHEET)
             self.windows.append(window)
             window.open_workspace()

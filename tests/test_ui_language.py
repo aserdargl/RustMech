@@ -160,13 +160,16 @@ class LanguageTests(unittest.TestCase):
             self.assertEqual(self.preferences.value('ui/meshDisplayDecimals', type=int), 4)
             normal_bounds = window.geometry()
             commands = (window.project_button, window.designs_button, window.workspace_button,
-                        window.sidebar_toggle, window.doe_button,
+                        window.sidebar_toggle,
                         window.esen_button, window.result_history_button, window.truba_button,
                         window.truba_connect_button, window.sync_button, window.about_button)
+            experiment_buttons = (window.doe_button, window.deep_learning_button)
 
             def assert_toolbar_layout():
                 self.assertEqual(len({button.size().toTuple() for button in commands}), 1)
-                for button in commands:
+                self.assertEqual(window.doe_button.size(), window.deep_learning_button.size())
+                self.assertEqual(window.deep_learning_button.height(), window.project_button.height())
+                for button in (*commands, *experiment_buttons):
                     if button.isVisible():
                         self.assertTrue(button.parentWidget().rect().contains(button.geometry()))
                 self.assertLess(window.esen_button.geometry().right(), window.about_button.x())

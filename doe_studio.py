@@ -360,6 +360,26 @@ class DoEStudioWindow(ExperimentWindow):
         self.setWindowTitle("DoE · RustMech")
 
     def closeEvent(self, event):
+        self.centralWidget().save_draft(commit=True)
+        super().closeEvent(event)
+
+
+class DeepLearningStudioWindow(ExperimentWindow):
+    def __init__(self, studio, parent=None):
+        super().__init__(studio, parent)
+        self.setObjectName("deepLearningStudioWindow")
+        self.setWindowTitle("DeepLearning · RustMech")
+        store = QApplication.instance()._rustmech_window_state
+        key = store.key(self)
+        old_key = "windows/DoEStudioWindow/doeStudioWindow"
+        # Reuse the saved DeepLearning panel ratios from the combined window.
+        for splitter in store.splitters(self):
+            suffix = f"splitters/{splitter.objectName()}"
+            state = store.settings.value(f"{old_key}/{suffix}")
+            if state is not None and not store.settings.contains(f"{key}/{suffix}"):
+                store.settings.setValue(f"{key}/{suffix}", state)
+
+    def closeEvent(self, event):
         self.centralWidget().save_workspace_draft()
         super().closeEvent(event)
 
@@ -1280,7 +1300,7 @@ class ExperimentTableWidget(TrubaParallelMixin, QWidget):
 
 
 class DoEStudioWidget(ExperimentTableWidget):
-    """Operation-specific DoE and DeepLearning dataset generation."""
+    """Operation-specific DeepLearning and saved mechanical dataset plans."""
 
     editable_experiments = True
     autosave_recovery_plan = True
@@ -1320,40 +1340,30 @@ class DoEStudioWidget(ExperimentTableWidget):
         self.planner = SimpleDoEPlanner(self, (*FACTOR_SPECS, SIZE_FACTOR_SPEC))
         self.vertical_splitter.addWidget(self.planner)
 
-        self.new_doe = NewDoePage(self._operation_host, self._preferences)
-        self.planner.tabs.insertTab(0, self.new_doe, "DoE")
-        self.planner.tabs.setCurrentWidget(self.new_doe)
         # Keep saved sample rules and combinations available to legacy plans.
         self.sample_settings = SampleSettingsPage(self)
         self.sample_settings.hide()
 
         def select_page(*_):
-            doe = self.planner.tabs.currentWidget() is self.new_doe
-            legacy = not doe and (self.learning_doe is None or
-                                  self.planner.learning_page.currentWidget() is self.planner.legacy_learning_page)
+            legacy = (self.learning_doe is None or
+                      self.planner.learning_page.currentWidget() is self.planner.legacy_learning_page)
             self.planner.plan_footer.setVisible(legacy)
-            self.new_doe.size_navigation(self.planner.navigation, doe)
             self.footer_label.setVisible(legacy)
 
-        self.planner.navigation.add_tabs(self.planner.tabs)
-        self.planner.tabs.currentChanged.connect(select_page)
         if self.learning_doe is not None:
             self.planner.learning_page.currentChanged.connect(select_page)
         self.vertical_splitter.setStretchFactor(0, 0)
         self.vertical_splitter.setSizes([730])
         root.addWidget(self.vertical_splitter, 1)
         root.addWidget(self.footer_label)
-        select_page(self.planner.tabs.currentIndex())
+        select_page()
 
     def showEvent(self, event):
         super().showEvent(event)
         self.restore_workspace_draft()
-        if self.settings_tabs.currentWidget() is self.new_doe:
-            self.new_doe.size_navigation(self.planner.navigation, True)
 
     def dispose(self):
         self.save_workspace_draft()
-        self.new_doe.cancel()
         if self.learning_doe is not None:
             self.learning_doe.cancel()
         self.sample_settings.save_preferences()
@@ -1399,7 +1409,6 @@ class DoEStudioWidget(ExperimentTableWidget):
         self._workspace_draft = self.capture_plan(inputs_only=True)
 
     def save_workspace_draft(self):
-        self.new_doe.save_draft(commit=True)
         if self.learning_doe is not None:
             self.learning_doe.save_draft(commit=True)
         if self._workspace_draft is None:

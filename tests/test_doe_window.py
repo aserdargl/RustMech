@@ -11,7 +11,7 @@ from PySide6.QtCore import QSettings, Qt
 from PySide6.QtTest import QSignalSpy, QTest
 from PySide6.QtWidgets import QApplication, QMessageBox, QPushButton, QScrollArea, QWidget
 
-from doe_studio import DoEStudioWidget, DoEStudioWindow
+from doe_studio import DoEStudioWidget, DeepLearningStudioWindow
 from model import Settings
 from studio_style import STUDIO_STYLESHEET
 from window_state import WindowStateStore
@@ -50,7 +50,7 @@ class DoEWindowTests(unittest.TestCase):
 
     def window(self, *, preferences=None):
         studio = DoEStudioWidget(Settings, lambda _: None, preferences=preferences)
-        window = DoEStudioWindow(studio)
+        window = DeepLearningStudioWindow(studio)
         window.setStyleSheet(STUDIO_STYLESHEET)
         self.windows.append(window)
         window.open_workspace()
@@ -67,7 +67,6 @@ class DoEWindowTests(unittest.TestCase):
         self.assertEqual(len(studio.rows), 1)
         buttons = studio.findChildren(QPushButton)
         spies = [QSignalSpy(button.clicked) for button in buttons]
-        studio.settings_tabs.setCurrentIndex(1)
         field = studio.common_strain_spin
         field.setFocus()
         field.selectAll()
@@ -84,7 +83,6 @@ class DoEWindowTests(unittest.TestCase):
     def test_classic_inputs_restore_without_restoring_generated_experiments(self):
         first, studio = self.window(preferences=self.store.settings)
         studio.add_design(replace(Settings(), cell_size=3.5, stl_resolution=0.075))
-        studio.settings_tabs.setCurrentIndex(1)
         studio.ml_count_spin.setValue(14)
         studio.ml_seed_spin.setValue(23)
         enabled, low, high = studio.factor_controls["cell_size"]
@@ -103,11 +101,10 @@ class DoEWindowTests(unittest.TestCase):
         self.assertTrue(enabled.isChecked())
         self.assertEqual((low.value(), high.value()), (2.5, 4.5))
         self.assertFalse(restored.rows)
-        self.assertIs(restored.settings_tabs.currentWidget(), restored.new_doe)
+        self.assertTrue(restored.planner.legacy_learning_page.isVisible())
 
     def test_learning_sidebar_generates_the_matrix_and_restores_its_splitter(self):
         window, studio = self.window(preferences=self.store.settings)
-        studio.settings_tabs.setCurrentWidget(studio.planner.learning_page)
         splitter = studio.planner.learning_splitter
         splitter.setSizes([410, 700])
         self.app.processEvents()
@@ -137,8 +134,13 @@ class DoEWindowTests(unittest.TestCase):
 
         sizes = splitter.sizes()
         window.close()
+        # Simulate settings saved before DeepLearning had its own window.
+        suffix = f"splitters/{splitter.objectName()}"
+        current_key = f"{self.store.key(window)}/{suffix}"
+        self.store.settings.setValue(f"windows/DoEStudioWindow/doeStudioWindow/{suffix}",
+                                     self.store.settings.value(current_key))
+        self.store.settings.remove(current_key)
         _, restored = self.window(preferences=self.store.settings)
-        restored.settings_tabs.setCurrentWidget(restored.planner.learning_page)
         self.app.processEvents()
         self.assertEqual(restored.planner.learning_splitter.sizes(), sizes)
         self.assertEqual(restored.planner.material_name.text(), "Learning steel")
@@ -149,16 +151,16 @@ class DoEWindowTests(unittest.TestCase):
         first.move(90, 80)
         self.app.processEvents()
         studio.vertical_splitter.setSizes([280, 340])
-        studio.new_doe.splitter.setSizes([360, 660])
+        studio.planner.learning_splitter.setSizes([360, 660])
         self.app.processEvents()
         frame = first.frameGeometry()
         vertical = studio.vertical_splitter.sizes()
-        horizontal = studio.new_doe.splitter.sizes()
+        horizontal = studio.planner.learning_splitter.sizes()
         first.close()
         second, restored = self.window()
         self.assertEqual(second.frameGeometry(), frame)
         self.assertEqual(restored.vertical_splitter.sizes(), vertical)
-        self.assertEqual(restored.new_doe.splitter.sizes(), horizontal)
+        self.assertEqual(restored.planner.learning_splitter.sizes(), horizontal)
         normal_size = second.size()
         second.showMaximized()
         self.app.processEvents()
@@ -174,50 +176,33 @@ class DoEWindowTests(unittest.TestCase):
         window.resize(720, 600)
         for _ in range(5):
             self.app.processEvents()
-        for tab in range(studio.settings_tabs.count()):
-            studio.settings_tabs.setCurrentIndex(tab)
-            self.app.processEvents()
-            for button in studio.findChildren(QPushButton):
-                if button.isVisible():
-                    with self.subTest(tab=tab, action=button.text()):
-                        ancestor = button.parentWidget()
-                        while ancestor is not None:
-                            if isinstance(ancestor, QScrollArea):
-                                ancestor.ensureWidgetVisible(button)
-                                self.app.processEvents()
-                            ancestor = ancestor.parentWidget()
-                        self.assertEqual(button.visibleRegion().boundingRect(), button.rect())
+        for button in studio.findChildren(QPushButton):
+            if button.isVisible():
+                with self.subTest(action=button.text()):
+                    ancestor = button.parentWidget()
+                    while ancestor is not None:
+                        if isinstance(ancestor, QScrollArea):
+                            ancestor.ensureWidgetVisible(button)
+                            self.app.processEvents()
+                        ancestor = ancestor.parentWidget()
+                    self.assertEqual(button.visibleRegion().boundingRect(), button.rect())
 
-    def test_geometry_actions_and_navigation_fit_their_content(self):
+    def test_geometry_actions_fit_their_content(self):
         _, studio = self.window()
-        studio.settings_tabs.setCurrentIndex(1)
         self.app.processEvents()
-        navigation = studio.planner.navigation.layout()
-        buttons = [navigation.itemAt(index).widget() for index in range(navigation.count())]
-        self.assertEqual([button.text() for button in buttons],
-                         [studio.settings_tabs.tabText(index)
-                          for index in range(studio.settings_tabs.count())])
         open_plan, save_plan = studio.open_plan_btn, studio.save_plan_btn
         self.assertEqual(open_plan.size(), save_plan.size())
-        self.assertLess(save_plan.width(), buttons[0].width())
         self.assertEqual(save_plan.x() - open_plan.geometry().right() - 1,
                          studio.planner.plan_footer.layout().spacing())
-        self.assertEqual(len({button.width() for button in buttons}), 1)
-        self.assertTrue(studio.settings_tabs.tabBar().isHidden())
         open_plan.setFocus()
         QTest.keyClick(open_plan, Qt.Key.Key_Tab)
         self.assertTrue(save_plan.hasFocus())
-        self.assertEqual([button.text() for button in buttons], ["DoE", "DeepLearning"])
         self.assertTrue(studio.table.isVisible())
         self.assertEqual(studio.vertical_splitter.handleWidth(), 3)
         footer_corner = save_plan.mapTo(studio, save_plan.rect().bottomRight())
         margins = studio.layout().contentsMargins()
         self.assertEqual(footer_corner.x(), studio.rect().right() - margins.right())
         self.assertEqual(footer_corner.y(), studio.rect().bottom() - margins.bottom())
-        studio.table.setFocus()
-        QTest.keyClick(studio.table, Qt.Key.Key_Tab, Qt.KeyboardModifier.ControlModifier)
-        self.assertIs(studio.settings_tabs.currentWidget(), studio.new_doe)
-        self.assertTrue(buttons[0].isChecked())
         for buttons in studio._action_groups:
             self.assertEqual(len({button.size().width() for button in buttons}), 1)
             for button in buttons:
@@ -225,7 +210,7 @@ class DoEWindowTests(unittest.TestCase):
                 self.assertNotIn("...", button.text())
                 self.assertGreaterEqual(button.width(), button.fontMetrics().horizontalAdvance(button.text()) + 24)
 
-    def test_doe_button_opens_settings_and_model_selection_stays_inside(self):
+    def test_toolbar_opens_independent_doe_and_deep_learning_windows(self):
         from nonlinear_compression import RustMechDialog
         from solver_profiles import SolverProfileStore
         with patch.object(RustMechDialog, "start_preview", lambda self: None):
@@ -235,24 +220,40 @@ class DoEWindowTests(unittest.TestCase):
             self.app.processEvents()
             self.assertEqual(dialog.doe_button.text(), "DoE")
             navigation = dialog.doe_button.parentWidget().layout()
-            self.assertEqual(navigation.indexOf(dialog.esen_button),
+            self.assertEqual(navigation.indexOf(dialog.deep_learning_button),
                              navigation.indexOf(dialog.doe_button) + 1)
             self.assertFalse(dialog.doe_button.autoDefault())
+            self.assertFalse(dialog.deep_learning_button.autoDefault())
             dialog.doe_button.click()
             self.assertTrue(dialog.doe_window.isVisible())
-            self.assertIs(dialog.doe_studio.window(), dialog.doe_window)
+            self.assertIs(dialog.doe_page.window(), dialog.doe_window)
+            self.assertFalse(dialog.deep_learning_window.isVisible())
             self.assertEqual(dialog.workspace_tabs.currentIndex(), 0)
+            dialog.deep_learning_button.click()
+            self.assertTrue(dialog.deep_learning_window.isVisible())
+            self.assertTrue(dialog.doe_window.isVisible())
             self.assertEqual(len(dialog.doe_studio._designs), 0)
-            self.assertIs(dialog.doe_studio.use_model_btn.window(), dialog.doe_window)
+            self.assertIs(dialog.doe_studio.use_model_btn.window(), dialog.deep_learning_window)
             studio = dialog.doe_studio
-            studio.planner.show_legacy_learning()
+            self.assertTrue(studio.learning_doe.isVisible())
+            self.assertTrue(studio.learning_doe.input_navigation.isVisible())
+            self.assertFalse(studio.open_plan_btn.isVisible())
+            self.assertNotEqual(self.store.key(dialog.doe_window), self.store.key(dialog.deep_learning_window))
+            learning_tabs = studio.planner.learning_page
+            self.assertTrue(learning_tabs.tabBar().isHidden())
+            mechanical = next(button for button in studio.findChildren(QPushButton)
+                              if button.text() == "Mechanical dataset plan")
+            mechanical.click()
             self.assertTrue(studio.use_model_btn.isVisible())
             self.assertTrue(studio.table.isVisible())
+            self.assertEqual(studio.open_plan_btn.width(), 64)
+            self.assertEqual(studio.save_plan_btn.width(), 64)
             with patch.object(dialog, "refresh_validity"):
                 dialog.doe_studio.use_model_btn.setEnabled(True)
                 dialog.doe_studio.use_model_btn.click()
             self.assertEqual(len(dialog.doe_studio._designs), 1)
             dialog.doe_window.close()
+            self.assertTrue(dialog.deep_learning_window.isVisible())
             dialog.workspace_actions.actions()[1].trigger()
             self.app.processEvents()
             self.assertTrue(dialog.doe_window.isVisible())
@@ -396,7 +397,6 @@ class DoEWindowTests(unittest.TestCase):
         self.assertEqual([s.size for s in studio._designs], [9, 12])
         studio.generate_ml_table()
         self.assertEqual([r.to_settings(Settings()).size for r in studio.rows], [9, 12])
-        self.assertEqual(studio.settings_tabs.currentIndex(), 0)
 
     def test_group_bounds_two_variables_and_unique_experiments(self):
         _, studio = self.window()
@@ -446,7 +446,6 @@ class DoEWindowTests(unittest.TestCase):
         studio._rows[0].max_force_n = 123.4
         studio._rows[0].status = 'Completed'
         studio._rows[0].run_folder = 'D:/results/experiment-1'
-        studio.settings_tabs.setCurrentIndex(0)
         studio.planner.saved_draft = replace(studio.planner.saved_draft, size=9, solid_fraction=42)
         path = Path(self.temp.name) / 'plan.rustmech-doe.json'
         studio.save_plan_path(path)
@@ -455,7 +454,6 @@ class DoEWindowTests(unittest.TestCase):
         previous_plan = json.loads(path.read_text(encoding='utf-8'))
         _, restored = self.window()
         restored.open_plan_path(path)
-        self.assertEqual(restored.settings_tabs.currentIndex(), 1)
         self.assertEqual(restored.capture_plan(), expected)
         self.assertEqual(restored._plan_path, path.resolve())
         self.assertEqual(restored.plan_file_label.text(), path.name)
@@ -472,7 +470,7 @@ class DoEWindowTests(unittest.TestCase):
                 previous_plan['selection']['tab'] = saved_tab
                 path.write_text(json.dumps(previous_plan), encoding='utf-8')
                 restored.open_plan_path(path)
-                self.assertIs(restored.settings_tabs.currentWidget(), restored.planner.learning_page)
+                self.assertTrue(restored.planner.legacy_learning_page.isVisible())
                 self.assertEqual(len(restored.rows), 6)
                 self.assertEqual(restored.rows[-1].exp_id, 'EXP-0001')
                 self.assertEqual(restored.rows[-1].max_force_n, 123.4)

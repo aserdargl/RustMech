@@ -22,54 +22,43 @@ class NewDoeTests(unittest.TestCase):
     tearDown = ui.RemoteModeUiTests.tearDown
 
     def page(self):
-        studio = self.window.doe_studio
-        self.window.doe_window.open_workspace()
-        page = studio.new_doe
-        studio.settings_tabs.setCurrentWidget(page)
+        self.window.doe_button.click()
+        page = self.window.doe_page
         self.app.processEvents()
-        self.assertEqual(studio.settings_tabs.tabText(studio.settings_tabs.currentIndex()), "DoE")
-        self.assertFalse(studio.save_plan_btn.isVisible())
-        self.assertLess(studio.capture_plan()["selection"]["tab"], 5)
+        self.assertIs(page, self.window.doe_window.centralWidget())
         return page
 
-    def test_new_doe_is_the_first_and_initial_page(self):
-        studio = self.window.doe_studio
-        self.window.doe_window.open_workspace()
-        self.app.processEvents()
-        tabs = studio.settings_tabs
-        self.assertIs(tabs.widget(0), studio.new_doe)
-        self.assertIs(tabs.currentWidget(), studio.new_doe)
-        self.assertTrue(studio.new_doe.loaded)
-        self.assertEqual([tabs.tabText(index) for index in range(tabs.count())],
-                         ["DoE", "DeepLearning"])
-        self.assertEqual(studio.new_doe.operation.currentText(), "FFT")
-        self.assertIsNone(studio.findChild(LanguageSelector))
+    def test_doe_uses_command_buttons_for_the_settings_tabs(self):
+        page = self.page()
+        self.assertTrue(page.loaded)
+        self.assertEqual(page.operation.currentText(), "FFT")
+        self.assertIsNone(page.findChild(LanguageSelector))
         self.assertTrue(self.window.language_selector.isVisible())
-        self.assertFalse(studio.plan_file_label.isVisible())
-        self.assertFalse(studio.findChildren(QAbstractSpinBox))
-        analysis = studio.new_doe.operation
+        self.assertFalse(page.findChildren(QAbstractSpinBox))
+        analysis = page.operation
         self.assertEqual([analysis.itemText(index) for index in range(analysis.count())],
                          ["FEM", "FFT", "MPM", "Peridynamics", "Flow (CFD)", "Thermal (CHT)"])
-        settings_tabs = studio.new_doe.input_tabs.tabBar()
-        tab_bottom = settings_tabs.mapToGlobal(QPoint(0, settings_tabs.height())).y()
+        nav = page.input_navigation
+        tab_bottom = nav.mapToGlobal(QPoint(0, nav.height())).y()
         self.assertIn(analysis.mapToGlobal(QPoint()).y() - tab_bottom, range(9))
-        buttons = studio.planner.navigation.layout()
-        self.assertEqual(buttons.itemAt(0).widget().text(), "DoE")
-        for index in range(buttons.count()):
-            button = buttons.itemAt(index).widget()
-            self.assertGreaterEqual(button.width(), button.fontMetrics().horizontalAdvance(button.text()) + 22)
-        tabs.setCurrentWidget(studio.planner.learning_page)
-        self.assertTrue(studio.learning_doe.isVisible())
-        self.assertFalse(studio.open_plan_btn.isVisible())
-        studio.planner.show_legacy_learning()
-        self.assertTrue(studio.open_plan_btn.isVisible())
-        self.assertEqual(studio.open_plan_btn.width(), 64)
-        self.assertEqual(studio.save_plan_btn.width(), 64)
+        analysis_button, variables_button = nav.buttons.buttons()
+        self.assertEqual([analysis_button.text(), variables_button.text()],
+                         ["Analysis settings", "Variable settings"])
+        self.assertTrue(page.input_tabs.tabBar().isHidden())
+        self.assertEqual(analysis_button.size(), variables_button.size())
+        self.assertTrue(analysis_button.isChecked())
+        variables_button.setFocus()
+        QTest.keyClick(variables_button, Qt.Key.Key_Space)
+        self.assertIs(page.input_tabs.currentWidget(), page.variations)
+        self.assertTrue(variables_button.isChecked())
+        QTest.keyClick(page.variations, Qt.Key.Key_Tab, Qt.KeyboardModifier.ControlModifier)
+        self.assertIs(page.input_tabs.currentWidget(), page.analysis_settings)
+        self.assertTrue(analysis_button.isChecked())
 
     def test_learning_samples_the_selected_operation_and_restores_its_ranges(self):
         doe = self.page()
         studio = self.window.doe_studio
-        studio.settings_tabs.setCurrentWidget(studio.planner.learning_page)
+        self.window.deep_learning_button.click()
         page = studio.learning_doe
         self.assertTrue(page.loaded, page.status.text())
         self.assertEqual(page.operation.currentData(), "fft_solve")
@@ -363,7 +352,7 @@ class NewDoeTests(unittest.TestCase):
         try:
             reopened.doe_window.open_workspace()
             self.app.processEvents()
-            page = reopened.doe_studio.new_doe
+            page = reopened.doe_page
             self.assertEqual(page.operation.currentData(), "flow_solve")
             self.assertEqual(factor(page, "size").fixed.value(), 9.75)
             self.assertFalse(page.rows)
@@ -625,10 +614,6 @@ class NewDoeTests(unittest.TestCase):
                          page.splitter.mapTo(page, QPoint(0, page.splitter.height())).y())
         self.assertEqual(page.splitter.geometry().bottom(),
                          page.rect().bottom() - page.layout().contentsMargins().bottom())
-        studio = self.window.doe_studio
-        bottom_gap = studio.rect().bottom() - page.apply_button.mapTo(
-            studio, page.apply_button.rect().bottomRight()).y()
-        self.assertLessEqual(bottom_gap, studio.layout().contentsMargins().bottom() + 3)
         self.assertEqual(page.status.text(), "")
         self.assertTrue(cell.fixed.isVisible())
         cell.fixed.setValue(2)

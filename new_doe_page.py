@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDialog,
 
 from material_catalog import builtin_materials
 from material_library import MaterialCard
+from doe_planner import DoENavigation
 from new_doe_operations import (MAX_ROWS, OPERATIONS, explicit_numbers, launch, lhs_matrix, matrix, matrix_request,
                                 parameters, snapshot, structure_choices, validate)
 from new_doe_report import experiment_name, write_doe_report, write_learning_csv
@@ -717,6 +718,7 @@ class NewDoePage(QWidget):
         self.variations.setAccessibleName("Variable settings")
         self.variations.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         self.input_tabs.addTab(self.variations, "Variable settings")
+        self.input_navigation = DoENavigation(self.input_tabs)
         self.sections = {}
         self.run = QPushButton("Run")
         self.run.clicked.connect(lambda: self.open_run_options(run=True))
@@ -744,6 +746,7 @@ class NewDoePage(QWidget):
         settings_layout = QVBoxLayout(settings_panel)
         settings_layout.setContentsMargins(0, 0, 0, 0)
         settings_layout.setSpacing(2)
+        settings_layout.addWidget(self.input_navigation)
         settings_layout.addWidget(self.input_tabs, 1)
         if sampling:
             self.lhs_count = NumericLineEdit(100, 2, 5000)
@@ -767,7 +770,6 @@ class NewDoePage(QWidget):
         self.apply_button.setEnabled(False)
         self.apply_button.clicked.connect(self.create)
         settings_layout.addWidget(self.apply_button, alignment=Qt.AlignmentFlag.AlignRight)
-        self._nav_sizes = []
         matrix_panel = QWidget()
         matrix_layout = QVBoxLayout(matrix_panel)
         matrix_layout.setContentsMargins(0, 0, 0, 0)
@@ -866,29 +868,6 @@ class NewDoePage(QWidget):
         dialog.accepted.connect(confirm)
         show_restored_window(dialog)
         return dialog
-
-    def size_navigation(self, navigation, active):
-        nav = navigation.findChildren(QPushButton)
-        if active:
-            if not self._nav_sizes:
-                self._nav_sizes = [(button, button.minimumWidth(), button.maximumWidth(),
-                                    button.property("managesLocalizedWidth")) for button in nav]
-            widths = []
-            for button in nav:
-                button.ensurePolished()
-                padding = 26 + (12 if button.menu() else 0)
-                widths.extend(button.fontMetrics().horizontalAdvance(text) + padding
-                              for text in (button.text(), turkish(button.text())))
-            width = max(widths)
-            for button in nav:
-                button.setProperty("managesLocalizedWidth", True)
-                button.setFixedWidth(width)
-        else:
-            for button, low, high, managed in self._nav_sizes:
-                button.setMinimumWidth(low)
-                button.setMaximumWidth(high)
-                button.setProperty("managesLocalizedWidth", managed)
-            self._nav_sizes = []
 
     @staticmethod
     def table(headers):
@@ -1328,7 +1307,7 @@ class NewDoePage(QWidget):
             show_restored_window(self.truba_jobs_window)
 
     def lock(self, busy):
-        for widget in (self.operation, self.input_tabs, self.apply_button, self.run_settings):
+        for widget in (self.operation, self.input_navigation, self.input_tabs, self.apply_button, self.run_settings):
             widget.setEnabled(not busy)
         self.run.setEnabled(not busy and self.matrix_current)
         self.stop.setEnabled(busy)

@@ -20,11 +20,22 @@ def geometry_group(settings):
 class DoENavigation(QWidget):
     """Show tab selections as command buttons while retaining the tab model."""
 
-    def __init__(self):
+    def __init__(self, tabs):
         super().__init__()
         self.setObjectName('doeNavigation')
         self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
         ActionFlowLayout(self, equal_width=True)
+        tabs.tabBar().hide()
+        self.buttons = QButtonGroup(self)
+        for index in range(tabs.count()):
+            button = QPushButton(tabs.tabText(index))
+            button.setCheckable(True)
+            button.setAutoDefault(False)
+            self.buttons.addButton(button, index)
+            self.add_button(button)
+        self.buttons.button(tabs.currentIndex()).setChecked(True)
+        self.buttons.idClicked.connect(tabs.setCurrentIndex)
+        tabs.currentChanged.connect(lambda index: self.buttons.button(index).setChecked(True))
 
     def add_button(self, button):
         button.setFixedHeight(CONTROL_HEIGHT)
@@ -33,18 +44,6 @@ class DoENavigation(QWidget):
         layout.addWidget(button)
         if previous is not None:
             QWidget.setTabOrder(previous.widget(), button)
-
-    def add_tabs(self, tabs):
-        group = QButtonGroup(self)
-        for index in range(tabs.count()):
-            button = QPushButton(tabs.tabText(index))
-            button.setCheckable(True)
-            group.addButton(button, index)
-            self.add_button(button)
-        group.button(tabs.currentIndex()).setChecked(True)
-        group.idClicked.connect(tabs.setCurrentIndex)
-        tabs.currentChanged.connect(lambda index: group.button(index).setChecked(True))
-        return group
 
 
 class SimpleDoEPlanner(QWidget):
@@ -55,8 +54,6 @@ class SimpleDoEPlanner(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(2)
-        self.navigation = DoENavigation()
-        layout.addWidget(self.navigation)
         s.open_plan_btn = QPushButton('Open')
         s.save_plan_btn = QPushButton('Save')
         s.open_plan_btn.clicked.connect(s.open_plan_dialog)
@@ -73,9 +70,6 @@ class SimpleDoEPlanner(QWidget):
             button.setFixedSize(64, CONTROL_HEIGHT)
             button.setAutoDefault(False)
             plan_layout.addWidget(button)
-        self.tabs = s.settings_tabs = QTabWidget()
-        self.tabs.tabBar().hide()
-        layout.addWidget(self.tabs)
         # Preserve the legacy draft when reopening and saving older plans.
         self.saved_draft = replace(s._settings_provider(), imported_geometry_path='',
                                           imported_geometry_name='', test_profile='custom',
@@ -86,7 +80,8 @@ class SimpleDoEPlanner(QWidget):
             self.learning_page = QTabWidget()
             self.learning_page.addTab(s.learning_doe, 'LHS sampling')
             self.learning_page.addTab(self.legacy_learning_page, 'Mechanical dataset plan')
-        self.tabs.addTab(self.learning_page, 'DeepLearning')
+            layout.addWidget(DoENavigation(self.learning_page))
+        layout.addWidget(self.learning_page, 1)
         for button in self.findChildren(QPushButton):
             button.setDefault(False)
             button.setAutoDefault(False)
@@ -219,4 +214,3 @@ class SimpleDoEPlanner(QWidget):
     def show_legacy_learning(self):
         if self.learning_page is not self.legacy_learning_page:
             self.learning_page.setCurrentWidget(self.legacy_learning_page)
-        self.tabs.setCurrentWidget(self.learning_page)
