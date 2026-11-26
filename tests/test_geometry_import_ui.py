@@ -101,6 +101,9 @@ class GeometryImportUITests(unittest.TestCase):
                     dialog.family_combo.setCurrentIndex(dialog.family_combo.findData('lattice'))
                     self.assertFalse(dialog.collect().imported_geometry_path)
                     self.assertEqual(dialog.collect().structure_family, 'lattice')
+                    self.assertEqual(dialog.preview_settings().imported_geometry_path, result[0])
+                    dialog.structure_apply_button.click()
+                    self.assertFalse(dialog.preview_settings().imported_geometry_path)
                     with patch('geometry_import_dialog.choose_geometry', return_value=None):
                         dialog.family_combo.setCurrentIndex(import_index)
                         dialog.family_combo.activated.emit(import_index)
@@ -111,6 +114,7 @@ class GeometryImportUITests(unittest.TestCase):
                         dialog.family_combo.activated.emit(import_index)
                     self.assertEqual(dialog.family_combo.currentData(), 'imported')
                     self.assertEqual(dialog.collect().structure_family, 'lattice')
+                    self.assertFalse(dialog.preview_settings().imported_geometry_path)
                     dialog.clear_imported_geometry()
                     self.assertFalse(dialog.collect().imported_geometry_path)
                     self.assertTrue(dialog.controls['size'].isEnabled())

@@ -816,7 +816,7 @@ class LiveConvergenceTests(unittest.TestCase):
         owner.self_contact_combo = QComboBox()
         owner.contact_formulation_combo = QComboBox()
         owner.platen_contact_combos = {}
-        owner.collect = MagicMock(return_value=SETTINGS)
+        owner.applied_structure_settings = MagicMock(return_value=SETTINGS)
         owner.controls = {key: CompactDoubleSpinBox() for key in ("mesh_resolution", "local_mesh_size")}
         for control in owner.controls.values():
             control.setRange(.1, 10)
@@ -835,7 +835,7 @@ class LiveConvergenceTests(unittest.TestCase):
         self.assertIs(owner._mesh_convergence_dialog, dialog)
         self.assertFalse(dialog.isMinimized())
         self.assertTrue(dialog.isMaximized())
-        owner.collect.assert_called_once()
+        owner.applied_structure_settings.assert_called_once()
         self.assertAlmostEqual(owner.controls["mesh_resolution"].value(), .1)
         dialog.selected_settings = replace(SETTINGS, mesh_type="TET4", mesh_resolution=.08, local_mesh_size=.02)
         with patch.object(dialog.study, "dispose", wraps=dialog.study.dispose) as dispose:

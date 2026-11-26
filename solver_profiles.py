@@ -4,7 +4,10 @@ from dataclasses import asdict, replace
 from pathlib import Path
 
 from PySide6.QtCore import QSettings
-from model import ANALYSIS_FIELDS, SETTINGS_FILE, Settings, load_settings, settings_from_dict
+from model import ANALYSIS_FIELDS, GEOMETRY_FIELDS, SETTINGS_FILE, Settings, load_settings, settings_from_dict
+
+MESH_FIELDS = ("mesh_resolution", "local_mesh_size", "mesh_type", "tetra_strategy")
+STRUCTURE_FIELDS = tuple(name for name in GEOMETRY_FIELDS if name not in MESH_FIELDS)
 
 KRATOS_FIELDS = tuple(name for name in Settings.__dataclass_fields__ if name.startswith(("kratos_", "truba_")))
 PROFILE_FIELDS = tuple(dict.fromkeys((*ANALYSIS_FIELDS, "mesh_type", "mesh_resolution",
@@ -38,8 +41,26 @@ class SolverProfileStore:
     def __init__(self, settings=None):
         self.settings = settings if settings is not None else QSettings("RustMech", "RustMech")
 
-    def save_workspace(self, draft):
+    def save_workspace(self, draft, *, applied=None):
         self.settings.setValue("mechanical/workspaceDraft", json.dumps(asdict(draft), allow_nan=False))
+        if applied is not None:
+            self.settings.setValue("mechanical/appliedStructure", json.dumps(
+                {name: getattr(applied, name) for name in STRUCTURE_FIELDS}, allow_nan=False))
+
+    def restore_applied_structure(self, draft):
+        """Restore the geometry used by previews, with the legacy draft as a fallback."""
+        raw = self.settings.value("mechanical/appliedStructure")
+        if raw:
+            try:
+                saved = json.loads(raw)
+                applied = settings_from_dict(asdict(draft) | {name: saved[name] for name in STRUCTURE_FIELDS})
+                if applied.imported_geometry_path and not Path(applied.imported_geometry_path).is_file():
+                    applied = replace(applied, imported_geometry_path="", imported_geometry_name="",
+                                      imported_geometry_role="compression")
+                return applied
+            except (TypeError, ValueError, KeyError):
+                pass
+        return draft
 
     def restore_workspace(self, legacy_path=SETTINGS_FILE):
         """Restore editable inputs, which may be unfinished or fail solve validation."""

@@ -75,7 +75,7 @@ from peridynamic_analysis import run_local_compression, validate_compression
 from peridynamic_workspace import PeridynamicResults, PeridynamicSettingsPanel
 from kratos_settings import KratosSettingsPanel
 from local_kratos import INSTALL_REQUIRED, local_kratos_python
-from solver_profiles import SolverProfileStore, profile_values
+from solver_profiles import MESH_FIELDS, STRUCTURE_FIELDS, SolverProfileStore, profile_values
 from doe_studio import DoEStudioWidget, DoEStudioWindow
 from preview_viewport import MESH_PREVIEW_ACTOR, create_preview_viewport
 from camera_toolbar import CameraToolbar
@@ -142,6 +142,7 @@ from structure_library import (
 PREVIEW_DELAY_MS = 300
 WORKSPACE_COMMAND_WIDTH = 65
 WORKSPACE_COMMAND_HEIGHT = 50
+PENDING_STRUCTURE = "Structure or dimensions have changed. Click Apply to update the preview."
 MESH_TYPE_LABELS = {
     "HEX20": "Voxel hexahedral (HEX20)",
     "TET10": "Netgen tetrahedral (TET10)",
@@ -330,7 +331,11 @@ class RustMechDialog(QDialog):
             or get_solver_capabilities(settings.solver_backend)
         )
         self._active_solver_id = self.solver_capabilities.identifier
-        self.active_geometry = settings
+        self.active_geometry = (
+            self.solver_profile_store.restore_applied_structure(settings)
+            if self._persist_solver_profiles else settings
+        )
+        self._edited_test_profile = settings.test_profile
         self._custom_experiment = settings if settings.test_profile == 'custom' else Settings()
         self.imported_geometry_path = settings.imported_geometry_path
         self.imported_geometry_name = settings.imported_geometry_name
@@ -571,10 +576,6 @@ class RustMechDialog(QDialog):
         geometry_form.insertRow(3, self.structure_hint_label)
         geometry_form.setRowVisible(self.structure_hint_label, False)
         self.structure_apply_button = QPushButton("Apply")
-        self.structure_apply_button.setObjectName("structureApplyBtn")
-        self.structure_apply_button.setAutoDefault(False)
-        self.structure_apply_button.setDefault(False)
-        self.structure_apply_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.structure_apply_button.setToolTip(
             "Apply the selected structure and geometry settings to the 3D preview."
         )
@@ -586,7 +587,6 @@ class RustMechDialog(QDialog):
         structure_action_row.addWidget(self.stl_resolution_input)
         structure_action_row.addWidget(self.stl_auto_button)
         structure_action_row.addStretch()
-        structure_action_row.addWidget(self.structure_apply_button)
         geometry_form.addRow(structure_actions)
         self.structure_apply_button.ensurePolished()
         structure_action_width = max(80, max(
@@ -603,6 +603,7 @@ class RustMechDialog(QDialog):
         self.import_geometry_label.setWordWrap(True)
         self.import_geometry_label.setObjectName('mutedHintLabel')
         geometry_form.addRow(self.import_geometry_label)
+        self._add_structure_apply_row(geometry_form, self.structure_apply_button)
         if self.imported_geometry_path:
             self.controls['size'].setRange(min(.000001, settings.size), max(100, settings.size))
             self.controls['size'].setValue(settings.size)
@@ -682,10 +683,7 @@ class RustMechDialog(QDialog):
         self.geometry_apply_button.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_BrowserReload))
         self.geometry_apply_button.setIconSize(QSize(16, 16))
         self.geometry_apply_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.geometry_apply_button.setToolTip(
-            "Apply geometry settings and refresh the 3D preview."
-        )
-        self.geometry_apply_button.clicked.connect(self.apply_geometry)
+        self.geometry_apply_button.clicked.connect(self.schedule_preview)
         geometry_actions = QWidget()
         action_row = ActionFlowLayout(geometry_actions)
         action_row.addWidget(self.geometry_apply_button)
@@ -1435,7 +1433,7 @@ class RustMechDialog(QDialog):
         right.addWidget(self.preview_error_details)
 
         self.doe_studio = DoEStudioWidget(
-            settings_provider=self.collect,
+            settings_provider=self.applied_structure_settings,
             mesh_generator=generate_volume_mesh,
             batch_solver_runner=run_batch_experiment,
             parent=self,
@@ -1466,13 +1464,13 @@ class RustMechDialog(QDialog):
         # this entry opens the independent window and returns to the model.
         self.workspace_tabs.addTab(QWidget(), "&Experiments (DoE)")
         from flow_workspace import FlowWorkspace
-        self.flow_workspace = FlowWorkspace(self.collect, self, preferences=self.solver_profile_store.settings,viewport_factory=create_preview_viewport)
+        self.flow_workspace = FlowWorkspace(self.applied_structure_settings, self, preferences=self.solver_profile_store.settings,viewport_factory=create_preview_viewport)
         self.workspace_tabs.addTab(self.flow_workspace, "&Flow (CFD)")
         from thermal_workspace import ThermalWorkspace
-        self.thermal_workspace = ThermalWorkspace(self.collect, self, preferences=self.solver_profile_store.settings,viewport_factory=create_preview_viewport)
+        self.thermal_workspace = ThermalWorkspace(self.applied_structure_settings, self, preferences=self.solver_profile_store.settings,viewport_factory=create_preview_viewport)
         self.workspace_tabs.addTab(self.thermal_workspace, "&Thermal (CHT)")
         from mpm_workspace import MPMWorkspace
-        self.mpm_workspace = MPMWorkspace(self.collect, self, self.solver_profile_store.settings)
+        self.mpm_workspace = MPMWorkspace(self.applied_structure_settings, self, self.solver_profile_store.settings)
         self.mpm_workspace_index = self.workspace_tabs.addTab(self.mpm_workspace, "MPM")
         def sync_workspace_context(index):
             if index == 1:
@@ -1665,13 +1663,13 @@ class RustMechDialog(QDialog):
     def _test_profile_changed(self, *_):
         from standard_tests import apply_profile
         identifier = self.test_profile_combo.currentData()
-        current = replace(self.collect(),test_profile=self.active_geometry.test_profile,
+        current = replace(self.collect(),test_profile=self._edited_test_profile,
             size=self.controls['size'].value(),
             bottom_platen_contact=self.platen_contact_combos['bottom'].currentData(),
             top_platen_contact=self.platen_contact_combos['top'].currentData())
         self._switching_solver = True
         try:
-            if self.active_geometry.test_profile == 'custom' and identifier != 'custom':
+            if self._edited_test_profile == 'custom' and identifier != 'custom':
                 self._custom_experiment = replace(current, test_profile='custom', size=self.controls['size'].value())
             selected = (replace(current, **{name:getattr(self._custom_experiment,name) for name in
                          (*GEOMETRY_FIELDS,'compression','loading_mode','applied_force','bottom_platen_contact','top_platen_contact','self_contact_mode')})
@@ -1703,12 +1701,13 @@ class RustMechDialog(QDialog):
             self._switching_solver = False
         self._sync_test_profile_ui()
         self._sync_contact_ui()
-        self.apply_geometry()
+        self._edited_test_profile = identifier
+        self.geometry_changed()
 
     def _architecture_changed(self, *_):
         if self._switching_solver:return
         self._sync_test_profile_ui()
-        self.apply_geometry()
+        self.geometry_changed()
 
     def _sync_test_profile_ui(self):
         from standard_tests import profile, kind
@@ -2074,6 +2073,7 @@ class RustMechDialog(QDialog):
             tooltip = GEOMETRY_HELP[key] if key == "solid_fraction" else ""
             form.addRow(field_label(label, control, tooltip=tooltip),
                         stepper_with_unit(control, unit))
+            control.setKeyboardTracking(False)
             control.valueChanged.connect(self.refresh_validity)
 
         self.fft_outer_sizes = {}
@@ -2090,6 +2090,7 @@ class RustMechDialog(QDialog):
             control.setValue(length if isinstance(length, (int, float)) and np.isfinite(length)
                              and length > 0 else defaults.size)
             self.fft_outer_sizes[key] = control
+            control.setKeyboardTracking(False)
             form.addRow(field_label(f"Outer {axis} (mm)", control), control)
             control.valueChanged.connect(self.refresh_validity)
 
@@ -2099,10 +2100,47 @@ class RustMechDialog(QDialog):
             form.setRowVisible(self.fft_morphology_combo, family == "tpms")
             self.refresh_validity()
 
-        form.setRowVisible(self.fft_morphology_combo, family == "tpms")
+        self._applied_fft_geometry = self._fft_geometry_values()
+        if self._persist_solver_profiles:
+            try:
+                draft = json.loads(preferences.value("fft/geometryDraft", "null", type=str))
+                if draft is not None:
+                    draft = settings_from_dict(draft)
+                    family, name = resolve_family_and_name(draft.structure_family, draft.structure_name)
+                    if self.fft_family_combo.findData(family) >= 0:
+                        self.fft_family_combo.setCurrentIndex(self.fft_family_combo.findData(family))
+                        self._populate_structure_items(family, name, combo=self.fft_structure_combo)
+                        self.fft_morphology_combo.setCurrentIndex(
+                            max(0, self.fft_morphology_combo.findData(draft.tpms_morphology)))
+                        controls = dict(self.fft_outer_sizes, cell_size=self.fft_cell_size,
+                                        solid_fraction=self.fft_solid_fraction)
+                        for key, control in controls.items():
+                            value = getattr(draft, key)
+                            if isinstance(value, (int, float)) and np.isfinite(value):
+                                with QSignalBlocker(control):
+                                    control.setValue(value)
+            except (TypeError, ValueError):
+                pass
+        form.setRowVisible(self.fft_morphology_combo, self.fft_family_combo.currentData() == "tpms")
         self.fft_family_combo.currentIndexChanged.connect(family_changed)
         self.fft_structure_combo.currentIndexChanged.connect(self.refresh_validity)
         self.fft_morphology_combo.currentIndexChanged.connect(self.refresh_validity)
+        self.fft_structure_apply_button = QPushButton("Apply")
+        self._add_structure_apply_row(form, self.fft_structure_apply_button)
+        self.fft_structure_apply_button.clicked.connect(self.apply_fft_geometry)
+
+    @staticmethod
+    def _add_structure_apply_row(form, button):
+        button.setObjectName("structureApplyBtn")
+        button.setAutoDefault(False)
+        button.setDefault(False)
+        button.setCursor(Qt.CursorShape.PointingHandCursor)
+        width = max(button.fontMetrics().horizontalAdvance(label) for label in ("Apply", "Uygula")) + 24
+        button.setFixedSize(max(width, button.minimumWidth()), CONTROL_HEIGHT)
+        row = QHBoxLayout()
+        row.addStretch()
+        row.addWidget(button)
+        form.addRow(row)
 
     def _fft_geometry_values(self):
         family = self.fft_family_combo.currentData()
@@ -2114,6 +2152,20 @@ class RustMechDialog(QDialog):
             cell_size=self.fft_cell_size.value(),
             solid_fraction=self.fft_solid_fraction.value(),
         )
+
+    def apply_fft_geometry(self):
+        for control in (self.fft_cell_size, self.fft_solid_fraction, *self.fft_outer_sizes.values()):
+            control.interpretText()
+        geometry = self._fft_geometry_values()
+        errors = validate_periodic_fft(self._fft_settings(self.collect(), geometry=geometry))
+        if errors:
+            self.status.setText("\n".join(errors))
+            self._update_status_visuals("error", "● VALIDATION ERROR")
+            return
+        self._applied_fft_geometry = geometry
+        if self._persist_solver_profiles:
+            self._save_fft_preferences()
+        self.refresh_validity()
 
     def _add_fft_controls(self, fields) -> None:
         preferences = self.solver_profile_store.settings
@@ -2211,11 +2263,12 @@ class RustMechDialog(QDialog):
         if self.fft_result_folder is not None:
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(self.fft_result_folder)))
 
-    def _fft_settings(self, settings: Settings) -> Settings:
+    def _fft_settings(self, settings: Settings, *, geometry=None) -> Settings:
         material = self.fft_material_editor.material_settings()
         values = {name: getattr(material, name) for name in MATERIAL_FIELDS}
         values.update(material_model="linear_elastic", hardening_curve=())
-        geometry = self._fft_geometry_values()
+        if geometry is None:
+            geometry = self._applied_fft_geometry
         return replace(
             settings, **geometry, **values, stl_resolution=None,
             imported_geometry_path="", imported_geometry_name="", imported_geometry_role="compression",
@@ -2397,7 +2450,6 @@ class RustMechDialog(QDialog):
             self._sync_import_controls()
             return
         self._generated_family = family_key
-        had_import = bool(self.imported_geometry_path)
         self.imported_geometry_path = ''
         self.imported_geometry_name = ''
         self.imported_geometry_height = None
@@ -2405,8 +2457,6 @@ class RustMechDialog(QDialog):
         self._sync_import_controls()
         self._sync_structure_ui_visibility()
         self.geometry_changed()
-        if had_import:
-            self.apply_geometry()
 
     def _on_structure_selection_changed(self, *_) -> None:
         self._sync_structure_ui_visibility()
@@ -2731,7 +2781,8 @@ class RustMechDialog(QDialog):
         if dialog is None:
             preferences = self.solver_profile_store.settings if getattr(self, "_persist_solver_profiles", False) else None
             dialog = MeshConvergenceDialog(
-                self.collect(), generate_volume_mesh, run_batch_experiment, owner=self, preferences=preferences,
+                self.applied_structure_settings(), generate_volume_mesh, run_batch_experiment,
+                owner=self, preferences=preferences,
             )
             self._mesh_convergence_dialog = dialog
             dialog.finished.connect(self._finish_mesh_convergence)
@@ -2781,7 +2832,7 @@ class RustMechDialog(QDialog):
         value = self.collect().automatic_surface_resolution
         self.stl_resolution_input.setText(f"{value:.12g}")
 
-    def collect(self, *, draft=False) -> Settings:
+    def collect(self, *, draft=False, applied_structure=False) -> Settings:
         stl_resolution = self._stl_resolution_value()
         if draft and stl_resolution is not None and not np.isfinite(stl_resolution):
             stl_resolution = None
@@ -2821,6 +2872,10 @@ class RustMechDialog(QDialog):
                                minimum_substeps=None, maximum_substeps=None)
         if self.imported_geometry_path:
             settings = replace(settings, size=self.imported_geometry_height)
+        if applied_structure:
+            settings = replace(settings, **{
+                name: getattr(self.active_geometry, name) for name in STRUCTURE_FIELDS
+            })
         if draft:
             return settings
         if settings.test_profile != 'custom':
@@ -2852,7 +2907,7 @@ class RustMechDialog(QDialog):
             self._sync_import_controls()
             self.mesh_type_combo.setCurrentIndex(self.mesh_type_combo.findData('TET4'))
             self.tetra_strategy_combo.setCurrentIndex(self.tetra_strategy_combo.findData('netgen'))
-            self.apply_geometry()
+            self.geometry_changed()
         except Exception as error:
             QMessageBox.warning(self, 'Geometry import', str(error))
 
@@ -2864,7 +2919,7 @@ class RustMechDialog(QDialog):
         self.import_geometry_label.setText('No imported geometry')
         self.controls['size'].setEnabled(True)
         self._sync_import_controls()
-        self.apply_geometry()
+        self.geometry_changed()
 
     def _sync_import_controls(self):
         generated = not bool(self.imported_geometry_path)
@@ -2904,19 +2959,18 @@ class RustMechDialog(QDialog):
                 self._sync_contact_ui()
             self.geometry_changed()
 
-    def preview_settings(self) -> Settings:
-        geometry = {
-            name: getattr(self.active_geometry, name)
-            for name in GEOMETRY_FIELDS
-        }
-        return replace(self.collect(), **geometry)
+    def applied_structure_settings(self) -> Settings:
+        return self.collect(applied_structure=True)
 
-    def has_pending_geometry(self) -> bool:
-        return any(
-            getattr(self.collect(), name)
-            != getattr(self.active_geometry, name)
-            for name in GEOMETRY_FIELDS
-        )
+    def preview_settings(self) -> Settings:
+        return replace(self.applied_structure_settings(), **{
+            name: getattr(self.active_geometry, name) for name in MESH_FIELDS
+        })
+
+    def has_pending_geometry(self, fields=GEOMETRY_FIELDS, *, edited=None) -> bool:
+        if edited is None:
+            edited = self.collect()
+        return any(getattr(edited, name) != getattr(self.active_geometry, name) for name in fields)
 
     def geometry_changed(self, *_) -> None:
         self.refresh_validity()
@@ -2929,6 +2983,9 @@ class RustMechDialog(QDialog):
             self._update_status_visuals("error", "● VALIDATION ERROR", True)
             return
         self.active_geometry = settings
+        if self._persist_solver_profiles:
+            self.solver_profile_store.save_workspace(self.collect(draft=True), applied=settings)
+            self.solver_profile_store.settings.sync()
         self._mesh_requested = False
         self._analysis_after_mesh = None
         self.result_preview_field.setCurrentIndex(0)
@@ -2940,6 +2997,8 @@ class RustMechDialog(QDialog):
         self.start_preview()
 
     def apply_mesh(self, *_) -> None:
+        if self.has_pending_geometry(STRUCTURE_FIELDS):
+            return
         self.apply_geometry()
         if not validate_geometry(self.collect()):
             self._mesh_requested = True
@@ -3032,9 +3091,11 @@ class RustMechDialog(QDialog):
         elif settings.solver_backend == "kratos" and local_kratos_python() is None:
             errors.append(INSTALL_REQUIRED)
         geometry_valid = not validate_geometry(settings, include_mesh=False)
-        self.geometry_apply_button.setEnabled(geometry_valid)
-        self.structure_apply_button.setEnabled(self.geometry_apply_button.isEnabled())
-        self.mesh_apply_button.setEnabled(not validate_geometry(settings))
+        applied_geometry_valid = not validate_geometry(self.applied_structure_settings(), include_mesh=False)
+        self.geometry_apply_button.setEnabled(applied_geometry_valid)
+        self.structure_apply_button.setEnabled(geometry_valid)
+        self.mesh_apply_button.setEnabled(
+            not self.has_pending_geometry(STRUCTURE_FIELDS, edited=settings) and not validate_geometry(settings))
         if remote_error:
             self.mesh_apply_button.setEnabled(False)
             if not direct:
@@ -3045,12 +3106,12 @@ class RustMechDialog(QDialog):
             and self.preview.key == preview_key(settings)
         )
         mesh_errors = self.preview.mesh.solve_errors if current and self.preview.mesh is not None else []
-        pending = self.has_pending_geometry()
+        pending = self.has_pending_geometry(edited=settings)
         self.mesh_export_button.setEnabled(
             bool(current and self.preview.mesh is not None and not pending
                  and self._mesh_export_future is None)
         )
-        self.doe_studio.use_model_btn.setEnabled(geometry_valid)
+        self.doe_studio.use_model_btn.setEnabled(applied_geometry_valid)
         method = self.setup_tabs.currentIndex()
         idle = self.analysis_job is None and self.future is None
         if method == self._fft_method_index:
@@ -3064,7 +3125,9 @@ class RustMechDialog(QDialog):
                     controller.require_analysis("damask")
                 except (ValueError, RuntimeError) as error:
                     fft_errors.append(str(error))
-            blockers = fft_errors
+            fft_pending = self._fft_geometry_values() != self._applied_fft_geometry
+            self.fft_structure_apply_button.setEnabled(fft_pending)
+            blockers = [PENDING_STRUCTURE] if fft_pending else fft_errors
         elif method == self._peridynamic_method_index:
             blockers = validate_compression(*self.peridynamic_settings.inputs())
             if remote:
@@ -3072,6 +3135,8 @@ class RustMechDialog(QDialog):
                     controller.require_analysis("peridynamics")
                 except (ValueError, RuntimeError) as error:
                     blockers.append(str(error))
+            if self.peridynamic_settings.has_pending_geometry():
+                blockers.insert(0, PENDING_STRUCTURE)
         elif method != 0:
             blockers = ["The selected analysis method is not available."]
         else:
@@ -3096,14 +3161,18 @@ class RustMechDialog(QDialog):
             return
         if method == self._fft_method_index:
             ready_text = "Ready to submit DAMASK FFT to TRUBA." if remote_fft else "Ready to run local DAMASK FFT."
-            self.status.setText("\n".join(fft_errors) if fft_errors else ready_text)
-            state, badge = ("error", "● VALIDATION ERROR") if fft_errors else ("ready", "● READY TO SOLVE")
+            self.status.setText("\n".join(blockers) if blockers else ready_text)
+            state, badge = ("error", "● VALIDATION ERROR") if blockers else ("ready", "● READY TO SOLVE")
+            if fft_pending:
+                state, badge = "pending", "● PENDING APPLY"
             self._update_status_visuals(state, badge, False)
             return
         if method == self._peridynamic_method_index:
             ready = "Ready to submit TPMS compression to TRUBA." if remote else "Ready to run local TPMS compression."
             self.status.setText("\n".join(blockers) if blockers else ready)
             state, badge = ("error", "● VALIDATION ERROR") if blockers else ("ready", "● READY TO SOLVE")
+            if self.peridynamic_settings.has_pending_geometry():
+                state, badge = "pending", "● PENDING APPLY"
             self._update_status_visuals(state, badge, False)
             return
         if method != 0:
@@ -3145,9 +3214,10 @@ class RustMechDialog(QDialog):
 
     def schedule_preview(self, *_) -> None:
         self.failed_key = None
-        message = "Settings changed — updating geometry preview..."
+        message = "Preparing geometry preview…"
         self._set_analysis_blocker(message)
-        self.doe_studio.use_model_btn.setEnabled(not validate_geometry(self.collect(), include_mesh=False))
+        self.doe_studio.use_model_btn.setEnabled(
+            not validate_geometry(self.applied_structure_settings(), include_mesh=False))
         self.status.setText(message)
         self._update_status_visuals(
             "working", "● UPDATING PREVIEW", self.has_pending_geometry()
@@ -3700,7 +3770,7 @@ class RustMechDialog(QDialog):
         if self.analysis_queue_widget is None:
             from analysis_queue import AnalysisQueueWidget, AnalysisQueueWindow
             self.analysis_queue_widget = AnalysisQueueWidget(
-                self.collect, generate_volume_mesh, run_batch_experiment, self)
+                self.applied_structure_settings, generate_volume_mesh, run_batch_experiment, self)
             self.analysis_queue_widget.remote_controller = self.remote_controller
             self.analysis_queue_widget.preview_requested.connect(self.load_from_doe_row)
             self.analysis_queue_window = AnalysisQueueWindow(self.analysis_queue_widget, self)
@@ -3718,7 +3788,7 @@ class RustMechDialog(QDialog):
         from folder_batch import FolderBatchDialog
         if not hasattr(self, "folder_batch_dialog"):
             self.folder_batch_dialog = FolderBatchDialog(
-                self.collect, generate_volume_mesh, run_batch_experiment, self.remote_controller,
+                self.applied_structure_settings, generate_volume_mesh, run_batch_experiment, self.remote_controller,
                 self._migrate_folder_batch_workspace, self)
         from window_state import show_restored_window
         show_restored_window(self.folder_batch_dialog)
@@ -3729,7 +3799,7 @@ class RustMechDialog(QDialog):
             return
         try:
             self._ensure_analysis_queue()
-            row = self.analysis_queue_widget.add_snapshot(self.collect())
+            row = self.analysis_queue_widget.add_snapshot(self.applied_structure_settings())
         except (OSError, ValueError) as error:
             QMessageBox.warning(self, "Analysis queue", str(error))
             return
@@ -3742,7 +3812,7 @@ class RustMechDialog(QDialog):
     def _add_current_design(self) -> None:
         self.refresh_validity()
         if self.doe_studio.use_model_btn.isEnabled():
-            self.doe_studio.add_design(self.collect())
+            self.doe_studio.add_design(self.applied_structure_settings())
 
     def _show_doe_bounds(self, label: str, cases: dict[str, Settings]) -> None:
         surface_builder = make_surface
@@ -3764,6 +3834,7 @@ class RustMechDialog(QDialog):
 
     def load_from_doe_row(self, row_settings: Settings, *, preview=True) -> None:
         self.result_preview_field.setCurrentIndex(0)
+        self._edited_test_profile = row_settings.test_profile
         for combo,value in ((self.test_profile_combo,row_settings.test_profile),(self.architecture_combo,row_settings.specimen_architecture)):
             combo.blockSignals(True)
             combo.setCurrentIndex(max(0,combo.findData(value)))
@@ -3918,9 +3989,10 @@ class RustMechDialog(QDialog):
 
     def _save_fft_preferences(self):
         preferences = self.solver_profile_store.settings
-        for axis, control in zip("XYZ", self.fft_outer_sizes.values()):
-            preferences.setValue(f"fft/outer{axis}", control.value())
-        preferences.setValue("fft/geometry", json.dumps(self._fft_geometry_values()))
+        for axis, key in zip("XYZ", self.fft_outer_sizes):
+            preferences.setValue(f"fft/outer{axis}", self._applied_fft_geometry[key])
+        preferences.setValue("fft/geometry", json.dumps(self._applied_fft_geometry))
+        preferences.setValue("fft/geometryDraft", json.dumps(self._fft_geometry_values()))
         material = self.fft_material_editor.material_settings()
         preferences.setValue("fft/solidMaterial", json.dumps(
             {key: getattr(material, key) for key in MATERIAL_FIELDS}))
@@ -4335,7 +4407,7 @@ class RustMechDialog(QDialog):
             return
         if self._solver_profiles_ready and self._persist_solver_profiles:
             draft = self.collect(draft=True)
-            self.solver_profile_store.save_workspace(draft)
+            self.solver_profile_store.save_workspace(draft, applied=self.active_geometry)
             self.solver_profile_store.save(self._active_solver_id, profile_values(draft))
             self._save_fft_preferences()
             self.peridynamic_settings.save()

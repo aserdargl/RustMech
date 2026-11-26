@@ -15,8 +15,11 @@ from PySide6.QtWidgets import (
 from model import Settings
 from peridynamic_analysis import CompressionOptions, POISSON_RATIO
 from structure_library import TPMS_FUNCTIONS, TPMS_MORPHOLOGIES
-from studio_style import CompactComboBox, CompactDoubleSpinBox, CompactSpinBox, configure_form, field_label
-from ui_language import translate
+from studio_style import (CONTROL_HEIGHT, CompactComboBox, CompactDoubleSpinBox, CompactSpinBox,
+                          SidebarGroupBox, configure_form, field_label)
+from ui_language import translate, turkish
+
+GEOMETRY_KEYS = ("structure_name", "tpms_morphology", "size", "cell_size", "solid_fraction")
 
 
 class PeridynamicSettingsPanel(QWidget):
@@ -57,9 +60,10 @@ class PeridynamicSettingsPanel(QWidget):
         self.plan_button.toggled.connect(plan.setVisible)
         layout.addWidget(plan)
 
-        form = QFormLayout()
-        configure_form(form)
-        layout.addLayout(form)
+        geometry_group = SidebarGroupBox("Structure / Dimensions")
+        geometry_form = QFormLayout(geometry_group.content)
+        configure_form(geometry_form)
+        layout.addWidget(geometry_group)
         self.controls = {}
         for key, label, choices in (
             ("structure_name", "TPMS type", {name: name for name in TPMS_FUNCTIONS}),
@@ -70,9 +74,11 @@ class PeridynamicSettingsPanel(QWidget):
             for value, name in choices.items():
                 control.addItem(name, value)
             control.setCurrentIndex(max(0, control.findData(defaults[key])))
-            control.currentIndexChanged.connect(self.changed)
-            form.addRow(field_label(label, control), control)
+            geometry_form.addRow(field_label(label, control), control)
             self.controls[key] = control
+        form = QFormLayout()
+        configure_form(form)
+        layout.addLayout(form)
         for key, label, minimum, maximum, decimals, step in (
             ("size", "Specimen size / mm", 0.01, 10000, 3, 0.25),
             ("cell_size", "TPMS period / mm", 0.01, 10000, 3, 0.25),
@@ -95,9 +101,32 @@ class PeridynamicSettingsPanel(QWidget):
                 control.setValue(int(value) if decimals is None else value)
             if key == "young_modulus":
                 control.setFixedWidth(control.fontMetrics().horizontalAdvance("10000000.000") + 26)
-            control.valueChanged.connect(self.changed)
-            form.addRow(field_label(label, control), control)
+            target_form = geometry_form if key in GEOMETRY_KEYS else form
+            target_form.addRow(field_label(label, control), control)
             self.controls[key] = control
+
+        self._applied_geometry = self.geometry_values()
+        if preferences is not None:
+            try:
+                applied = json.loads(preferences.value("peridynamics/appliedGeometry", "null", type=str))
+                if isinstance(applied, dict) and applied.keys() == self._applied_geometry.keys():
+                    self._applied_geometry = applied
+            except (TypeError, ValueError):
+                pass
+        self.structure_apply_button = QPushButton("Apply")
+        button = self.structure_apply_button
+        button.setObjectName("structureApplyBtn")
+        button.setAutoDefault(False)
+        button.setFixedSize(max(button.fontMetrics().horizontalAdvance(text)
+                                for text in ("Apply", turkish("Apply"))) + 24, CONTROL_HEIGHT)
+        actions = QHBoxLayout()
+        actions.addStretch()
+        actions.addWidget(button)
+        geometry_form.addRow(actions)
+        button.clicked.connect(self.apply_geometry)
+        for control in self.controls.values():
+            signal = control.currentIndexChanged if isinstance(control, QComboBox) else control.valueChanged
+            signal.connect(self.changed)
 
         self.spacing = QLabel()
         self.spacing.setWordWrap(True)
@@ -110,16 +139,33 @@ class PeridynamicSettingsPanel(QWidget):
         self.changed.connect(self.update_spacing)
         self.update_spacing()
 
+    def geometry_values(self):
+        values = self.values()
+        return {key: values[key] for key in GEOMETRY_KEYS}
+
+    def has_pending_geometry(self):
+        return self.geometry_values() != self._applied_geometry
+
+    def apply_geometry(self):
+        for key in GEOMETRY_KEYS:
+            control = self.controls[key]
+            if not isinstance(control, QComboBox):
+                control.interpretText()
+        self._applied_geometry = self.geometry_values()
+        self.save()
+        self.changed.emit()
+
     def values(self):
         return {key: control.currentData() if isinstance(control, QComboBox) else control.value()
                 for key, control in self.controls.items()}
 
     def inputs(self):
-        values = self.values()
+        values = self.values() | self._applied_geometry
         options = CompressionOptions(**{key: values.pop(key) for key in asdict(CompressionOptions())})
         return Settings(**values, poisson_ratio=POISSON_RATIO, material_model="linear_elastic"), options
 
     def update_spacing(self):
+        self.structure_apply_button.setEnabled(self.has_pending_geometry())
         settings, options = self.inputs()
         spacing = settings.size / options.resolution
         self.spacing.setText(translate("Spacing {spacing} mm · Horizon {horizon} mm").format(
@@ -128,6 +174,8 @@ class PeridynamicSettingsPanel(QWidget):
     def save(self):
         if self.preferences is not None:
             self.preferences.setValue("peridynamics/settings", json.dumps(self.values()))
+            self.preferences.setValue("peridynamics/appliedGeometry", json.dumps(self._applied_geometry))
+            self.preferences.sync()
 
 
 class PeridynamicResults(QWidget):

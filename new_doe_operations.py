@@ -21,7 +21,7 @@ MAX_ROWS = 10000
 
 def snapshot(host, operation):
     """Read the same committed settings the corresponding workspace submits."""
-    settings = host.collect()
+    settings = host.applied_structure_settings()
     request = {"operation": operation}
     if operation == "fft_solve":
         settings = host._fft_settings(settings)

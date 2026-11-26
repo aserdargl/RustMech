@@ -965,6 +965,14 @@ class NewDoePage(QWidget):
                 table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
                 frame = 2 * table.frameWidth()
                 table.setFixedHeight(table.horizontalHeader().sizeHint().height() + table.verticalHeader().length() + frame)
+                if title == "Structure / Dimensions":
+                    button = QPushButton("Apply")
+                    button.setObjectName("structureApplyBtn")
+                    button.setAutoDefault(False)
+                    button.setFixedSize(max(button.fontMetrics().horizontalAdvance(text)
+                                            for text in ("Apply", turkish("Apply"))) + 24, CONTROL_HEIGHT)
+                    button.clicked.connect(self.create)
+                    body.addWidget(button, alignment=Qt.AlignmentFlag.AlignRight)
                 section.set_expanded(expanded.get(title, op == "fft_solve" or title == "Structure / Dimensions"))
             # Keep matrix combinations and CSV columns in the operation's parameter order.
             self.factors = [factors[path] for path, _ in fields]
@@ -1101,6 +1109,7 @@ class NewDoePage(QWidget):
         self.matrix_current = True
         self.run.setEnabled(True)
         self.status.setText(f"{len(rows)} experiments ready.")
+        self.save_draft()
 
     def start(self, *, remote=None, separate=True, batch_size=None):
         from doe_studio import results_directory

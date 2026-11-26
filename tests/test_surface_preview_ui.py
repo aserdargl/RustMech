@@ -310,6 +310,7 @@ class SurfacePreviewUITests(unittest.TestCase):
                 window._select_settings_method(window._fft_method_index)
                 self.assertEqual(window.fft_cell_size.value(), fe_settings.cell_size)
                 self.assertEqual(window._fft_settings(fe_settings).dimensions, (3, 6, 6))
+                initial_preview = window._fft_preview_request
                 family = window.fft_family_combo
                 family.setCurrentIndex(family.findData('lattice'))
                 self.assertTrue(window.fft_morphology_combo.isHidden())
@@ -328,6 +329,11 @@ class SurfacePreviewUITests(unittest.TestCase):
                     window.fft_outer_sizes['size'].setValue(4.5)
                     window.fft_outer_sizes['size_x'].setValue(9)
                     window.fft_outer_sizes['size_y'].setValue(13.5)
+                    self.assertIs(window._fft_preview_request, initial_preview)
+                    self.assertEqual(window._fft_settings(fe_settings).structure_family, 'tpms')
+                    window.apply()
+                    process.assert_not_called()
+                    window.fft_structure_apply_button.click()
                     preview_request = window._fft_preview_request
                     self.assertEqual(preview_request[1].dimensions, (9, 13.5, 4.5))
                     fe_draft = window.collect()
@@ -341,6 +347,7 @@ class SurfacePreviewUITests(unittest.TestCase):
                     self.assertEqual(assigned, preview_request[1])
                     self.assertEqual((assigned.structure_family, assigned.structure_name), ('lattice', name))
                     self.assertEqual((assigned.size, assigned.cell_size, assigned.solid_fraction), (4.5, 4.5, 42))
+                    window.fft_solid_fraction.setValue(55)
             finally:
                 window.analysis_job = None
                 window.close()
@@ -349,9 +356,44 @@ class SurfacePreviewUITests(unittest.TestCase):
             try:
                 self.assertEqual(restored.fft_family_combo.currentData(), 'lattice')
                 self.assertEqual(restored.fft_structure_combo.currentData(), name)
-                self.assertEqual((restored.fft_cell_size.value(), restored.fft_solid_fraction.value()), (4.5, 42))
+                self.assertEqual((restored.fft_cell_size.value(), restored.fft_solid_fraction.value()), (4.5, 55))
                 self.assertEqual(restored._fft_settings(fe_settings).dimensions, (9, 13.5, 4.5))
+                self.assertEqual(restored._fft_settings(fe_settings).solid_fraction, 42)
                 self.assertEqual(restored.collect().cell_size, fe_settings.cell_size)
+            finally:
+                restored.close()
+
+    def test_fem_and_peridynamics_restore_applied_geometry(self):
+        with TemporaryDirectory() as directory:
+            path = str(Path(directory) / "preferences.ini")
+            store = SolverProfileStore(QSettings(path, QSettings.Format.IniFormat))
+            initial = Settings()
+            window = RustMechDialog(initial, solver_profile_store=store)
+            try:
+                window.controls["size"].setValue(8)
+                self.assertEqual(window.preview_settings().size, initial.size)
+                self.assertEqual(window.flow_workspace.settings_provider().size, initial.size)
+                self.assertFalse(window.mesh_apply_button.isEnabled())
+                window.structure_apply_button.click()
+                self.assertEqual(window.preview_settings().size, 8)
+                window.controls["size"].setValue(9)
+
+                window._select_settings_method(window._peridynamic_method_index)
+                panel = window.peridynamic_settings
+                panel.controls["size"].setValue(7)
+                self.assertEqual(panel.inputs()[0].size, initial.size)
+                self.assertFalse(window.apply_button.isEnabled())
+                panel.structure_apply_button.click()
+                self.assertEqual(panel.inputs()[0].size, 7)
+                panel.controls["size"].setValue(10)
+            finally:
+                window.close()
+            restored = RustMechDialog(store.restore_workspace(), solver_profile_store=store)
+            try:
+                self.assertEqual(restored.controls["size"].value(), 9)
+                self.assertEqual(restored.preview_settings().size, 8)
+                self.assertEqual(restored.peridynamic_settings.controls["size"].value(), 10)
+                self.assertEqual(restored.peridynamic_settings.inputs()[0].size, 7)
             finally:
                 restored.close()
 

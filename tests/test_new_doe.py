@@ -8,7 +8,9 @@ from xml.etree import ElementTree
 from zipfile import ZipFile
 from PySide6.QtCore import QPoint, Qt
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QAbstractSpinBox, QLabel, QLineEdit, QStyle, QStyleOptionComboBox, QTableWidget, QWidget
+from PySide6.QtWidgets import (
+    QAbstractSpinBox, QLabel, QLineEdit, QPushButton, QStyle, QStyleOptionComboBox, QTableWidget, QWidget,
+)
 
 from tests import test_remote_mode_ui as ui
 from ui_language import LanguageSelector, turkish
@@ -353,6 +355,8 @@ class NewDoeTests(unittest.TestCase):
         fields["size_y"].fixed.setValue(3)
         cell = fields["size"]
         geometry = page.sections["Structure / Dimensions"]
+        structure_apply = geometry.findChild(QPushButton, "structureApplyBtn")
+        self.assertFalse(structure_apply.autoDefault())
         fft = page.sections["FFT Homogenization"]
         grid = fields["grid"]
         settings_table = fft.findChild(QTableWidget)
@@ -421,7 +425,8 @@ class NewDoeTests(unittest.TestCase):
         self.assertEqual(page.sheet.rowCount(), 2)
         self.assertFalse(page.run.isEnabled())
         self.assertEqual(page.status.text(), "")
-        page.apply_button.click()
+        self.assertTrue(structure_apply.isVisible())
+        structure_apply.click()
         self.assertEqual([row["settings"]["size"] for row in page.rows], [5])
         self.assertEqual(page.sheet.rowCount(), 1)
         self.assertTrue(page.run.isEnabled())
