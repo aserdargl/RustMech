@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import re
+import subprocess
 import sys
 
 from PySide6.QtCore import QObject, QProcess, QTimer, Signal
@@ -75,6 +76,13 @@ def _request_desktop(command):
         return
     executable, arguments, directory = _desktop_launch_command(command)
     with system_dll_search():
+        if sys.platform == "win32":
+            # ShellExecute starts TRUBA without inheriting PyCharm's console pipes.
+            try:
+                os.startfile(str(executable), "open", subprocess.list2cmdline(arguments), str(directory))
+            except OSError as exc:
+                raise OSError("Could not start the TRUBA application.") from exc
+            return
         started, _ = QProcess.startDetached(str(executable), arguments, str(directory))
     if not started:
         raise OSError("Could not start the TRUBA application.")
