@@ -526,7 +526,7 @@ class NewDoePage(QWidget):
             bar.addWidget(button)
         self.pair_experiments = QCheckBox("Pair TRUBA experiments")
         self.pair_experiments.setToolTip(
-            "Run two experiments per Slurm job, sharing CPUs and RAM. Turn off to run one experiment per job."
+            "Run two experiments in sequence per Slurm job. Turn off to run one experiment per job."
         )
         self.pair_experiments.toggled.connect(self.save_pairing)
         bar.addWidget(self.pair_experiments)

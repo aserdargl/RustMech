@@ -424,9 +424,8 @@ def run_remote_job(request,context,auth=None,marker=None,*,directory=None,resume
         if request.get("paired_experiments"):
             index, count = request.get("experiment_index"), request.get("experiment_count")
             if (not submit_only or len(request.get("experiment_rows", ())) != 2
-                    or type(index) is not int or type(count) is not int or not 1 <= index < count
-                    or min(context.cores, context.memory_mb) < 2):
-                raise ValueError("Paired TRUBA experiments require two rows, CPUs and MiB of RAM.")
+                    or type(index) is not int or type(count) is not int or not 1 <= index < count):
+                raise ValueError("Paired TRUBA experiments require two consecutive rows in one job.")
     if context.session_id and not resume_record and request.get('operation') == 'doe_mesh':
         from truba_handover import context_for_request
         context = context_for_request(context, auth, cancelled=cancelled, marker=marker, on_progress=on_progress)

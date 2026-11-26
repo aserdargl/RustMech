@@ -3,7 +3,6 @@
 The module itself uses only the standard library so a missing runtime can be
 reported by the cluster's bootstrap Python without importing the application.
 """
-from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack
 from dataclasses import asdict,replace
 from functools import partial
@@ -350,7 +349,7 @@ def _run_operation(request,output):
     raise ValueError("Unsupported remote operation.")
 
 
-def _run_experiment_row(request, output, root, index, row, resources=None):
+def _run_experiment_row(request, output, root, index, row):
     from remote_operations import required_capability
 
     name = f"row_{index:05d}"
@@ -367,27 +366,12 @@ def _run_experiment_row(request, output, root, index, row, resources=None):
         child = dict(row, request_id=request["request_id"], source_sha256=request["source_sha256"],
                      native_sha256=request["native_sha256"], remote_context=allocation)
         command = [sys.executable, str(Path(__file__).resolve()), "request.json", "--row-output", str(case)]
-        environment = None
-        if resources is not None:
-            cores, memory = resources
-            child["remote_context"] = dict(allocation, cores=cores, memory_mb=memory)
-            settings = row["settings"]
-            child["settings"] = dict(settings, cores=min(settings.get("cores", cores), cores),
-                                     automatic_cores=False)
-            record["resources"] = dict(cores=cores, memory_mb=memory)
-            environment = dict(os.environ, OMP_NUM_THREADS=str(cores), RUSTMECH_THREADS=str(cores))
-            environment.pop("SLURM_MEM_PER_CPU", None)
-            environment.pop("SLURM_MEM_PER_GPU", None)
-            command = [
-                "srun", "--exact", "--nodes=1", "--ntasks=1", "--cpu-bind=cores",
-                f"--cpus-per-task={cores}", f"--mem={memory}M", f"--job-name=doe-{index}", *command,
-            ]
         path = row["settings"].get("imported_geometry_path")
         if path:
             child["imported_geometry_vtp"] = request["matrix_geometries"][path]
         _write(work / "request.json", child)
         with (case / "worker.log").open("w") as log:
-            result = subprocess.run(command, cwd=work, env=environment, stdout=log, stderr=subprocess.STDOUT)
+            result = subprocess.run(command, cwd=work, stdout=log, stderr=subprocess.STDOUT)
         if result.returncode:
             report = case / "result.json"
             detail = json.loads(report.read_text(encoding="utf-8")).get("error") if report.is_file() else None
@@ -404,33 +388,21 @@ def _run_experiment_matrix(request, output):
     if not 1 <= len(rows) <= 10000:
         raise ValueError("Invalid experiment count.")
     root = Path.cwd()
+    first_experiment, experiment_count = 1, len(rows)
     if request.get("paired_experiments"):
-        allocation = request["remote_context"]
-        cores, memory = allocation["cores"], allocation["memory_mb"]
-        if len(rows) != 2 or min(cores, memory) < 2:
-            raise ValueError("Paired TRUBA experiments require two rows, CPUs and MiB of RAM.")
-        if (root / "cancel.request").exists():
-            raise RuntimeError("Experiment matrix cancelled.")
-        _stage("Running two experiments in parallel")
-        with ThreadPoolExecutor(max_workers=2) as executor:
-            tasks = [
-                executor.submit(_run_experiment_row, request, output, root, index, row, resources)
-                for index, (row, resources) in enumerate(zip(rows, (
-                    (cores // 2, memory // 2),
-                    (cores - cores // 2, memory - memory // 2),
-                )), 1)
-            ]
-            return dict(experiments=2, failed=sum(task.result() for task in tasks))
+        first_experiment, experiment_count = request["experiment_index"], request["experiment_count"]
     job_id = os.environ.get("SLURM_JOB_ID", "")
     scontrol = shutil.which("scontrol") if job_id.isdecimal() and os.environ.get("SLURMD_NODENAME") else None
     failures = 0
     for index, row in enumerate(rows, 1):
         if (root / "cancel.request").exists():
             raise RuntimeError("Experiment matrix cancelled.")
-        _stage(f"Running experiment {index} / {len(rows)}")
+        experiment = first_experiment + index - 1
+        _stage(f"Running experiment {experiment} / {experiment_count}")
         if scontrol:
             try:
-                update = subprocess.run([scontrol, "update", f"JobId={job_id}", f"Comment=DoE {index}/{len(rows)}"],
+                update = subprocess.run([scontrol, "update", f"JobId={job_id}",
+                                         f"Comment=DoE {experiment}/{experiment_count}"],
                                         capture_output=True, timeout=5)
                 if update.returncode:
                     scontrol = None

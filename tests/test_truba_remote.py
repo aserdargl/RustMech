@@ -11,7 +11,6 @@ import subprocess
 import sys
 import tarfile
 import tempfile
-from threading import Barrier
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -336,10 +335,10 @@ class RemoteProtocolTests(unittest.TestCase):
         request = dict(rows[0], experiment_rows=rows, experiment_index=3, experiment_count=5,
                        paired_experiments=True)
         directory = cases[0] / "truba"
-        record = submit_remote_analysis(request, RemoteContext(partition="hamsi", cores=56),
-                                        directory=directory)
+        record = submit_remote_analysis(request, RemoteContext(), directory=directory)
         self.assertEqual(FakeTransport.instances[0].submissions, 1)
         self.assertIn("DoE 3–4/5", job_description(record))
+        self.assertEqual((record["context"]["cores"], record["context"]["memory_mb"]), (1, 131072))
         for offset, state in enumerate(("Completed", "Failed"), 1):
             output = directory / "output" / f"row_{offset:05d}"
             output.mkdir(parents=True)
@@ -584,35 +583,39 @@ class RemoteProtocolTests(unittest.TestCase):
 
 
 class ComputeWorkerTests(unittest.TestCase):
-    def test_paired_experiment_workers_start_together_and_split_cpu_and_memory(self):
+    def test_paired_experiment_workers_run_in_order_with_the_full_allocation(self):
         from remote_worker import _run_experiment_matrix
 
-        barrier = Barrier(2, timeout=5)
         settings = dict(solver_backend="kratos", cores=52)
         rows = [dict(operation="mechanical", settings=settings) for _ in range(2)]
+        allocation = {"cores": 56, "memory_mb": 131073}
         request = dict(operation="mechanical", experiment_rows=rows, paired_experiments=True,
-                       remote_context={"cores": 56, "memory_mb": 131073}, request_id="pair",
+                       experiment_index=3, experiment_count=5, remote_context=allocation, request_id="pair",
                        source_sha256="a" * 64, native_sha256="b" * 64)
 
-        def execute(command, *, cwd, env, **kwargs):
+        def execute(command, *, cwd, **kwargs):
             row = int(cwd.name[-1])
             child = json.loads((cwd / "request.json").read_text())
-            self.assertEqual(command[0], "srun")
-            self.assertIn("--cpus-per-task=28", command)
-            self.assertIn(f"--mem={65535 + row}M", command)
-            self.assertEqual(child["settings"]["cores"], 28)
-            self.assertEqual(env["OMP_NUM_THREADS"], "28")
-            barrier.wait()
+            self.assertEqual(command[0], sys.executable)
+            self.assertEqual(child["remote_context"], allocation)
+            self.assertEqual(child["settings"]["cores"], 52)
+            if row == 2:
+                first = json.loads((output / "row_00001" / "experiment.json").read_text())
+                self.assertEqual(first["state"], "Completed")
             return subprocess.CompletedProcess(command, row - 1)
 
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
             output = root / "output"
             with patch("remote_worker.Path.cwd", return_value=root), \
+                    patch("remote_worker.shutil.which", return_value=None), \
+                    patch("remote_worker._stage") as stage, \
                     patch("remote_worker.subprocess.run", side_effect=execute) as run:
                 result = _run_experiment_matrix(request, output)
             self.assertEqual(result, {"experiments": 2, "failed": 1})
             self.assertEqual(run.call_count, 2)
+            self.assertEqual([call.args[0] for call in stage.call_args_list],
+                             ["Running experiment 3 / 5", "Running experiment 4 / 5"])
             for offset, state in enumerate(("Completed", "Failed"), 1):
                 saved = json.loads((output / f"row_{offset:05d}" / "experiment.json").read_text())
                 self.assertEqual(saved["state"], state)
