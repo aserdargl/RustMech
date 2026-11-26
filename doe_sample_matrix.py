@@ -51,7 +51,7 @@ class SampleCombinationPage(QWidget):
         buttons = QHBoxLayout()
         self.build_button = QPushButton('Build matrix')
         self.build_button.clicked.connect(self.build_matrix)
-        self.transfer_button = QPushButton('Add to DoE matrix')
+        self.transfer_button = QPushButton('Add to ML matrix')
         self.transfer_button.setProperty('primary', True)
         self.transfer_button.setObjectName('primaryLaunchBtn')
         self.transfer_button.clicked.connect(self.transfer)
@@ -121,7 +121,7 @@ class SampleCombinationPage(QWidget):
             if count > MAX_DOE_ROWS:
                 raise ValueError(f'Too many combinations; maximum is {MAX_DOE_ROWS}.')
             rows = []
-            existing = self.studio.rows if self.studio._matrix_index == 0 else self.studio._matrix_rows[0]
+            existing = self.studio.rows
             used = {row.exp_id for row in existing}
             for combination in product(*(values for _, values in axes)):
                 settings = replace(self.base, **dict(zip((key for key, _ in axes), combination)))
@@ -133,7 +133,7 @@ class SampleCombinationPage(QWidget):
                 errors = validate_geometry(settings, include_mesh=False)
                 if errors:
                     raise ValueError(f'Combination {len(rows) + 1}: {errors[0]}')
-                row = generate_doe_rows([settings], {}, 'grid', 1, 42)[0]
+                row = generate_doe_rows([settings], {}, 1, 42)[0]
                 name = sample_name(self.naming.rule(), asdict(settings)) or f'EXP-{len(used) + 1:04d}'
                 row.exp_id = unique_name(name, used)
                 used.add(row.exp_id)
@@ -153,7 +153,7 @@ class SampleCombinationPage(QWidget):
             self.matrix_filter.set_columns(headers)
             self._rows = rows
             self.transfer_button.setEnabled(self.studio._active_mode is None)
-            self._status(f'{len(rows)} combinations. Ready to add to the DoE matrix.')
+            self._status(f'{len(rows)} combinations. Ready to add to the ML matrix.')
             self.filter_matrix()
             return True
         except (ValueError, TypeError, OverflowError) as error:
@@ -170,17 +170,13 @@ class SampleCombinationPage(QWidget):
         if self.studio._active_mode is not None or not self.build_matrix():
             return
         studio = self.studio
-        existing = studio._rows if studio._matrix_index == 0 else studio._matrix_rows[0]
+        existing = studio.rows
         if len(existing) + len(self._rows) > MAX_DOE_ROWS:
             self._status(f'Too many experiments; maximum is {MAX_DOE_ROWS}.')
             return
-        studio._matrix_rows[studio._matrix_index] = studio._rows
-        studio._matrix_rows[0] = existing + self._rows
-        studio.matrix_tabs.setCurrentIndex(0)
-        studio._matrix_index = 0
-        studio._rows = studio._matrix_rows[0]
+        studio._rows.extend(self._rows)
         studio._refresh_table_view()
-        studio.settings_tabs.setCurrentIndex(3)
+        studio.settings_tabs.setCurrentWidget(studio.planner.learning_page)
         self.save_preferences()
 
     def restore_state(self, state):

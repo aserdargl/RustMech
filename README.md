@@ -414,15 +414,13 @@ DoE ekleme, deney/ML tablosu oluşturma ve yüzey önizlemelerinde yalnız yapı
 sayısı bu adımları engellemez; ayarlar değiştirilmeden saklanır. Mesh
 kontrolü/üretimi veya analiz istendiğinde tam FE doğrulaması uygulanır.
 
-DoE üst çubuğundaki **Save** ve **Open**, planı `.rustmech-doe.json`
-dosyasına kaydeder ve geri açar. Dosya; tasarımları ve dahil edilme seçimlerini,
-grupların değişken aralıklarını, örnekleme/şekil değiştirme ayarlarını, New
-Geometry taslağını, DoE ve ML tablolarını ve tablolardaki sonuç değerlerini
-saklar. Geometri ve sonuç dosyalarının kendisi pakete eklenmez; mevcut dosya
-yolları korunur. Open analiz veya önizleme işi başlatmaz; geri yüklenen
-geometriyi görmek için **Apply** kullanılır. Kaydedilmemiş değişiklikler varsa
-Open önce uyarır; geçersiz dosya mevcut planı değiştirmez. Save/Open, çalışan
-toplu iş bitene veya durdurulana kadar devre dışıdır.
+**DeepLearning** ve **Settings** sayfalarındaki **Save** ve **Open**,
+planı `.rustmech-doe.json` dosyasına kaydeder ve geri açar. Dosya, tasarımları,
+değişken aralıklarını, örnekleme ve adlandırma ayarlarını, deney satırlarını
+ve sonuç değerlerini saklar. Eski planlardan gelen deneyler DeepLearning
+tablosuna alınır. Geometri ve sonuç dosyalarının yolları korunur. Açılış
+analiz başlatmaz. Çalışan işler bitene veya durdurulana kadar Save ve Open
+devre dışıdır.
 
 Ana çalışma alanı artık **Geometry** görünümüyle açılır. Geometri/Structure
 **Apply** yalnız yüzeyi hazırlar; Netgen veya HEX hacim ağı üretimini beklemez.

@@ -10,7 +10,7 @@ from model import Settings, settings_from_dict
 from structure_library import ALL_STRUCTURES_BY_FAMILY, TPMS_MORPHOLOGIES
 
 PLAN_FORMAT = 'rustmech-doe-plan'
-PLAN_VERSION = 1
+PLAN_VERSION = 2
 PLAN_FILTER = 'RustMech DoE plan (*.rustmech-doe.json);;JSON files (*.json)'
 FACTOR_LIMITS = {'size': (1, 100), 'cell_size': (.1, 100), 'solid_fraction': (1, 99)}
 
@@ -68,16 +68,17 @@ def _settings(data):
     return settings
 
 
-def _factors(data):
+def _factors(data, *, legacy=False):
     if not isinstance(data, dict) or set(data) - FACTOR_LIMITS.keys():
         raise ValueError('The plan contains an unknown experiment variable.')
     result = {}
     for name, limits in data.items():
-        if not isinstance(limits, (list, tuple)) or len(limits) != 3:
+        if not isinstance(limits, (list, tuple)) or len(limits) != (3 if legacy else 2):
             raise ValueError('Invalid experiment variable limits.')
         low, high = FACTOR_LIMITS[name]
-        result[name] = (_number(limits[0], low, high), _number(limits[1], low, high),
-                        _number(limits[2], 2, 50, integer=True))
+        result[name] = (_number(limits[0], low, high), _number(limits[1], low, high))
+        if legacy:
+            _number(limits[2], 2, 50, integer=True)
     return result
 
 
@@ -86,38 +87,41 @@ def decode_plan(payload):
     from doe_studio import ExperimentRow, MAX_DOE_ROWS
     try:
         if (not isinstance(payload, dict) or payload.get('format') != PLAN_FORMAT
-                or type(payload.get('version')) is not int or payload['version'] != PLAN_VERSION):
+                or type(payload.get('version')) is not int or payload['version'] not in (1, PLAN_VERSION)):
             raise ValueError('Unsupported RustMech DoE plan format or version.')
+        legacy = payload['version'] == 1
         entries = payload['designs']
         if not isinstance(entries, list) or len(entries) > MAX_DOE_ROWS:
             raise ValueError('Invalid saved design list.')
         designs = [dict(settings=_settings(entry['settings']), enabled=_boolean(entry['enabled']),
-                        factors=_factors(entry['factors'])) for entry in entries]
+                        factors=_factors(entry['factors'], legacy=legacy)) for entry in entries]
         options = payload['options']
-        if options['sampling'] not in ('full_factorial', 'lhs'):
-            raise ValueError('Unknown sampling method.')
-        for name, low, high in (('lhs_count', 2, 500), ('seed', 1, 999999),
-                                ('ml_count', 2, 5000), ('ml_seed', 1, 999999)):
+        for name, low, high in (('ml_count', 2, 5000), ('ml_seed', 1, 999999)):
             _number(options[name], low, high, integer=True)
         _boolean(options['common_strain_enabled'])
         _number(options['common_strain'], .1, 95)
         selection = payload['selection']
         _number(selection['design'], -1, len(designs) - 1, integer=True)
-        _number(selection['matrix'], 0, 1, integer=True)
         _number(selection['tab'], 0, 4, integer=True)
+        if not legacy and selection['tab'] not in (2, 4):
+            raise ValueError('Unknown saved experiment planner page.')
         editor = payload['variable_editor']
         if not isinstance(editor, dict) or set(editor) != FACTOR_LIMITS.keys():
             raise ValueError('Invalid saved variable editor.')
         for name, state in editor.items():
             _boolean(state['enabled'])
-            _factors({name: (state['min'], state['max'], state['levels'])})
-        matrices = {}
-        for key in ('doe', 'ml'):
-            rows = payload['matrices'][key]
-            if not isinstance(rows, list) or len(rows) > MAX_DOE_ROWS:
+            limits = (state['min'], state['max'])
+            _factors({name: (*limits, state['levels']) if legacy else limits}, legacy=legacy)
+        if legacy:
+            matrices = payload['matrices']
+            groups = (matrices['ml'], matrices['doe'])
+        else:
+            groups = (payload['rows'],)
+        rows = []
+        for group in groups:
+            if not isinstance(group, list) or len(group) + len(rows) > 2 * MAX_DOE_ROWS:
                 raise ValueError('Invalid saved experiment matrix.')
-            matrices[key] = []
-            for raw in rows:
+            for raw in group:
                 values = dict(raw)
                 # Older plans serialized this unused field on every experiment.
                 if values.get('folder_job') is None:
@@ -140,11 +144,11 @@ def decode_plan(payload):
                 if any(getattr(row, name) is None for name in
                        ('size', 'cell_size', 'solid_fraction', 'mesh_resolution', 'compression', 'random_seed')):
                     raise ValueError('Missing experiment dimensions.')
-                matrices[key].append(row)
+                rows.append(row)
         from doe_sample_rules import validate_sample_state
         sample_settings = validate_sample_state(payload.get('sample_settings', {}))
         return dict(sample_settings=sample_settings, designs=designs, options=dict(options), selection=dict(selection),
-                    draft=_settings(payload['draft']), variable_editor=editor, matrices=matrices)
+                    draft=_settings(payload['draft']), variable_editor=editor, rows=rows)
     except (KeyError, TypeError, AttributeError, OverflowError) as error:
         raise ValueError('The DoE plan is incomplete or malformed.') from error
 

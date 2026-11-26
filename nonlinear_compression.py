@@ -1442,7 +1442,6 @@ class RustMechDialog(QDialog):
             QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored
         )
         self.doe_studio.preview_requested.connect(self.load_from_doe_row)
-        self.doe_studio.model_requested.connect(self._show_geometry_workspace)
         self.doe_studio.use_model_btn.clicked.connect(self._add_current_design)
         self.doe_window = DoEStudioWindow(self.doe_studio, self)
         self.design_pool = None

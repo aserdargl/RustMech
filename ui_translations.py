@@ -451,7 +451,7 @@ Material card|Malzeme kartı
 + Value column|+ Değer sütunu
 - Last column|- Son sütun
 Build matrix|Matrisi oluştur
-Add to DoE matrix|DoE matrisine ekle
+Add to ML matrix|Makine öğrenmesi matrisine ekle
 Sample name|Numune adı
 Settings changed; rebuild the matrix.|Ayarlar değişti; matrisi yeniden oluşturun.
 Enter fixed properties and one value per variable cell.|Sabit özellikleri girin; değişkenlerin her hücresine bir değer yazın.
@@ -707,22 +707,18 @@ Configure selected...|Seçileni yapılandır...
 Experiment matrix|Deney matrisi
 Experiment variables|Deney değişkenleri
 Machine learning|Makine öğrenmesi
-Machine learning matrix|Makine öğrenmesi matrisi
-DoE experiment matrix|DoE deney matrisi
 Design · Size / Cell / Density|Tasarım · Boyut / Hücre / Yoğunluk
 Vary|Değişken
 Min|Min
 Max|Maks
 Levels|Seviye
 Sampling|Örnekleme
-Full factorial grid|Tam faktöriyel
-Latin hypercube (LHS)|Latin hiperküp (LHS)
-Runs per design|Tasarım başına deney
 LHS samples per geometry|Geometri başına LHS örneği
 Copy from design|Tasarımdan al
 Min from…|Min tasarımı…
 Max from…|Maks tasarımı…
 Generate experiments|Deneyleri oluştur
+Use current model|Mevcut modeli kullan
 Generate ML matrix|ML matrisi oluştur
 Preview in 3D|3B önizle
 Remove selected|Seçileni kaldır
@@ -1077,7 +1073,6 @@ Toggle perspective projection (OFF: orthographic view)|Perspektifi aç/kapat (ka
 3D display mode|3B görüntüleme modu
 Lowest value included in this variable's range.|Bu değişkenin aralığına dahil en küçük değer.
 Highest value included in this variable's range.|Bu değişkenin aralığına dahil en büyük değer.
-Number of evenly spaced values, including Min and Max. For example: Min 20, Max 40, Levels 3 gives 20, 30, 40. LHS uses Runs per design instead.|Min ve maks dahil eşit aralıklı değer sayısı. Örnek: Min 20, Maks 40, Seviye 3 → 20, 30, 40. LHS bunun yerine tasarım başına deney sayısını kullanır.
 Edit values directly in the table · Double-click a row to preview · Table data for CSV and Excel|Değerleri tabloda düzenleyin · Önizlemek için satıra çift tıklayın · CSV ve Excel için tablo verileri
 Units: mm  N  MPa|Birimler: mm  N  MPa
 Units: mm  m/s  Pa|Birimler: mm  m/s  Pa

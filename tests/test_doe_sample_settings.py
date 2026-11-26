@@ -21,7 +21,7 @@ class SampleSettingsTests(unittest.TestCase):
     def test_names_combinations_transfer_and_export(self):
         _, studio = self.window()
         page = studio.sample_settings
-        self.assertEqual(studio.settings_tabs.tabText(4), 'Settings')
+        self.assertEqual(studio.settings_tabs.tabText(2), 'Settings')
         for key in ('structure_name', 'cell_size', 'solid_fraction'):
             page.add_field(key)
         batch = page.batch
@@ -32,6 +32,7 @@ class SampleSettingsTests(unittest.TestCase):
         self.assertEqual(len(batch._rows), 4)
         self.assertEqual(batch._rows[0].exp_id, 'Gyroid-2-20')
         batch.transfer()
+        self.assertIs(studio.settings_tabs.currentWidget(), studio.planner.learning_page)
         self.assertEqual(len(studio.rows), 4)
         self.assertEqual(studio.rows[0].design_settings.cell_size, 2)
         batch.transfer()
@@ -46,7 +47,7 @@ class SampleSettingsTests(unittest.TestCase):
     def test_invalid_values_limit_and_family_leave_existing_rows_untouched(self):
         _, studio = self.window()
         studio.add_design(Settings())
-        studio.generate_table()
+        studio.generate_ml_table()
         page = studio.sample_settings
         batch = page.batch
         editor = batch.parameter_editor
@@ -67,7 +68,7 @@ class SampleSettingsTests(unittest.TestCase):
     def test_centered_check_column_common_dropdowns_and_busy_guard(self):
         window, studio = self.window()
         page = studio.sample_settings
-        studio.settings_tabs.setCurrentIndex(4)
+        studio.settings_tabs.setCurrentIndex(2)
         self.app.processEvents()
         table = page.available
         self.assertEqual(table.columnWidth(3), table.style().pixelMetric(QStyle.PixelMetric.PM_IndicatorWidth) + 4)
@@ -95,7 +96,7 @@ class SampleSettingsTests(unittest.TestCase):
         page.rename_block('Cell')
         page.labels.setChecked(True)
         page.batch.parameter_editor.add_variable('cell_size', ['2', '3'])
-        studio.settings_tabs.setCurrentIndex(4)
+        studio.settings_tabs.setCurrentIndex(2)
         page.open_batch()
         self.app.processEvents()
         page.batch.splitter.setSizes([300, 180])
@@ -107,7 +108,7 @@ class SampleSettingsTests(unittest.TestCase):
         first.close()
         second, restored = self.window()
         self.assertEqual(restored.sample_settings.rule(), page.rule())
-        restored.settings_tabs.setCurrentIndex(4)
+        restored.settings_tabs.setCurrentIndex(2)
         restored.sample_settings.open_batch()
         self.app.processEvents()
         self.assertEqual(restored.sample_settings.batch.splitter.sizes(), sizes)
@@ -115,13 +116,13 @@ class SampleSettingsTests(unittest.TestCase):
         self.assertEqual(restored.sample_settings.state(), saved)
         self.assertTrue(restored.sample_settings.batch.build_matrix())
         self.assertEqual([r.cell_size for r in restored.sample_settings.batch._rows], [2, 3])
-        self.assertEqual(restored.settings_tabs.currentIndex(), 4)
+        self.assertEqual(restored.settings_tabs.currentIndex(), 2)
 
     def test_regular_doe_generation_uses_naming_rule_and_legacy_plans_open(self):
         _, studio = self.window()
         studio.sample_settings.add_field('cell_size')
         studio.add_design(Settings())
-        studio.generate_table()
+        studio.generate_ml_table()
         self.assertEqual(studio.rows[0].exp_id, '3')
         payload = studio.capture_plan()
         payload.pop('sample_settings')
@@ -177,7 +178,7 @@ class SampleSettingsTests(unittest.TestCase):
         self.assertTrue(editor.fixed.isRowHidden(source_row('cell_size')))
         self.assertEqual(editor.values('cell_size'), (2.0, 3.0))
         editor.fixed_filter.search.clear()
-        studio.settings_tabs.setCurrentIndex(4)
+        studio.settings_tabs.setCurrentIndex(2)
         page.open_batch()
         window.resize(1360, 880)
         self.app.processEvents()

@@ -63,7 +63,7 @@ class DoERunControlTests(unittest.TestCase):
         window.open_workspace()
         self.app.processEvents()
         studio.add_design(Settings())
-        studio.generate_table()
+        studio.generate_ml_table()
         first = studio._rows[0]
         for number in range(2, rows + 1):
             studio._rows.append(dataclasses.replace(first, exp_id=f"EXP-{number:04d}"))

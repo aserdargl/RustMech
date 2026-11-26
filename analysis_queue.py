@@ -11,7 +11,7 @@ from PySide6.QtCore import QLockFile, Qt, Signal
 from PySide6.QtWidgets import QLabel, QPushButton, QTableWidgetItem
 
 from design_exchange import pool_directory
-from doe_studio import (COL_RUN, COL_STRUCTURE, DoEStudioWidget, DoEStudioWindow,
+from doe_studio import (COL_RUN, COL_STRUCTURE, ExperimentTableWidget, ExperimentWindow,
                         ExperimentRow, TABLE_COLUMNS, generate_doe_rows)
 from model import settings_from_dict, validate_settings
 
@@ -77,7 +77,7 @@ class QueueStore:
             temporary.unlink(missing_ok=True)
 
 
-class AnalysisQueueWidget(DoEStudioWidget):
+class AnalysisQueueWidget(ExperimentTableWidget):
     queue_changed = Signal()
 
     def __init__(self, settings_provider, mesh_generator, batch_solver_runner, parent=None, queue_path=None):
@@ -86,17 +86,7 @@ class AnalysisQueueWidget(DoEStudioWidget):
         self.storage_error = ""
         super().__init__(settings_provider, mesh_generator, batch_solver_runner, parent)
         self.setObjectName("analysisQueueWorkspace")
-        # Reuse the proven batch lifecycle without exposing sampling/generation
-        # operations: every job is an independently configured model snapshot.
-        self.settings_tabs.setCurrentIndex(self._matrix_tab)
-        new_doe_index = self.settings_tabs.indexOf(self.new_doe)
-        self.settings_tabs.setTabVisible(new_doe_index, False)
-        self._settings_navigation.button(new_doe_index).hide()
-        self.matrix_tabs.hide()
         self.footer_label.setText("Select rows to move, remove or preview. Each job retains its saved analysis settings.")
-        for button in self.findChildren(QPushButton):
-            if button.text() in ("+ Row", "Table data"):
-                button.hide()
         for delta, label in ((-1, "Move up"), (1, "Move down")):
             button = QPushButton(label)
             button.setAutoDefault(False)
@@ -110,7 +100,6 @@ class AnalysisQueueWidget(DoEStudioWidget):
         except (OSError, ValueError, TypeError, KeyError) as error:
             self.storage_error = f"Queue could not be restored; original file retained: {error}"
             self.notice.setText(self.storage_error)
-        self._matrix_rows[0] = self._rows
         self._storage_ready = not bool(self.storage_error)
         self._refresh_table_view()
         self.run_batch_btn.setText("Run analysis queue")
@@ -148,8 +137,6 @@ class AnalysisQueueWidget(DoEStudioWidget):
             self.storage_error = str(error)
             self.notice.setText("Queue not saved: " + str(error))
 
-    autosave_recovery_plan = False
-
     def _new_dataset_path(self):
         # The queue's results never share a file with a DoE session dataset.
         return self.store.path.parent / "analysis_queue_results.csv"
@@ -163,7 +150,7 @@ class AnalysisQueueWidget(DoEStudioWidget):
         if errors:
             raise ValueError("\n".join(errors))
         snapshot = settings_from_dict(asdict(settings))
-        row = generate_doe_rows([snapshot], {}, "grid", 1, 42)[0]
+        row = generate_doe_rows([snapshot], {}, 1, 42)[0]
         row.exp_id = "JOB-" + uuid4().hex[:10].upper()
         # Save before displaying success. A failed write must not enqueue a job.
         self.store.save([*self._rows, row])
@@ -248,7 +235,7 @@ class AnalysisQueueWidget(DoEStudioWidget):
                 self.table.item(index, col).setSelected(True)
 
 
-class AnalysisQueueWindow(DoEStudioWindow):
+class AnalysisQueueWindow(ExperimentWindow):
     def __init__(self, widget, parent=None):
         super().__init__(widget, parent)
         self.setObjectName("analysisQueueWindow")

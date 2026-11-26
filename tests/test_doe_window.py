@@ -63,7 +63,7 @@ class DoEWindowTests(unittest.TestCase):
         self.assertFalse(window.isFullScreen())
         self.assertFalse(window.isModal())
         studio.add_design(Settings())
-        studio.generate_table()
+        studio.generate_ml_table()
         self.assertEqual(len(studio.rows), 1)
         buttons = studio.findChildren(QPushButton)
         spies = [QSignalSpy(button.clicked) for button in buttons]
@@ -85,26 +85,23 @@ class DoEWindowTests(unittest.TestCase):
         first, studio = self.window(preferences=self.store.settings)
         studio.add_design(replace(Settings(), cell_size=3.5, stl_resolution=0.075))
         studio.settings_tabs.setCurrentIndex(1)
-        studio.sampling_combo.setCurrentIndex(studio.sampling_combo.findData("lhs"))
-        studio.lhs_count_spin.setValue(14)
-        studio.sampling_seed.setValue(23)
-        enabled, low, high, levels = studio.factor_controls["cell_size"]
+        studio.ml_count_spin.setValue(14)
+        studio.ml_seed_spin.setValue(23)
+        enabled, low, high = studio.factor_controls["cell_size"]
         enabled.setChecked(True)
         low.setValue(2.5)
         high.setValue(4.5)
-        levels.setValue(4)
-        studio.generate_table()
+        studio.generate_ml_table()
         self.assertTrue(studio.rows)
         first.close()
 
         _, restored = self.window(preferences=self.store.settings)
         self.assertEqual(restored._designs[0].cell_size, 3.5)
         self.assertEqual(restored._designs[0].stl_resolution, 0.075)
-        self.assertEqual(restored.sampling_combo.currentData(), "lhs")
-        self.assertEqual((restored.lhs_count_spin.value(), restored.sampling_seed.value()), (14, 23))
-        enabled, low, high, levels = restored.factor_controls["cell_size"]
+        self.assertEqual((restored.ml_count_spin.value(), restored.ml_seed_spin.value()), (14, 23))
+        enabled, low, high = restored.factor_controls["cell_size"]
         self.assertTrue(enabled.isChecked())
-        self.assertEqual((low.value(), high.value(), levels.value()), (2.5, 4.5, 4))
+        self.assertEqual((low.value(), high.value()), (2.5, 4.5))
         self.assertFalse(restored.rows)
         self.assertIs(restored.settings_tabs.currentWidget(), restored.new_doe)
 
@@ -153,7 +150,7 @@ class DoEWindowTests(unittest.TestCase):
                             ancestor = ancestor.parentWidget()
                         self.assertEqual(button.visibleRegion().boundingRect(), button.rect())
 
-    def test_geometry_actions_and_matrix_tabs_fit_their_content(self):
+    def test_geometry_actions_and_navigation_fit_their_content(self):
         _, studio = self.window()
         studio.settings_tabs.setCurrentIndex(1)
         self.app.processEvents()
@@ -173,30 +170,17 @@ class DoEWindowTests(unittest.TestCase):
         QTest.keyClick(open_plan, Qt.Key.Key_Tab)
         self.assertTrue(save_plan.hasFocus())
         self.assertEqual(studio.settings_tabs.tabText(0), "DoE")
-        self.assertEqual(studio.settings_tabs.tabText(2), "DoE2")
-        self.assertFalse(studio.table.isVisible())
+        self.assertEqual(studio.settings_tabs.tabText(1), "DeepLearning")
+        self.assertTrue(studio.table.isVisible())
         self.assertEqual(studio.vertical_splitter.handleWidth(), 3)
-        self.assertFalse(studio.matrix_tabs.expanding())
-        buttons[2].click()
-        self.app.processEvents()
-        self.assertEqual(studio.settings_tabs.currentIndex(), 2)
-        self.assertTrue(buttons[2].isChecked())
         footer_corner = save_plan.mapTo(studio, save_plan.rect().bottomRight())
         margins = studio.layout().contentsMargins()
         self.assertEqual(footer_corner.x(), studio.rect().right() - margins.right())
         self.assertEqual(footer_corner.y(), studio.rect().bottom() - margins.bottom())
-        matrix = studio.matrix_navigation.layout()
-        experiments, learning = [matrix.itemAt(index).widget() for index in range(matrix.count())]
-        self.assertLess(experiments.width() + learning.width(), studio.width() // 2)
-        self.assertEqual(experiments.width(), learning.width())
-        learning.click()
-        self.assertEqual(studio.matrix_tabs.currentIndex(), 1)
-        studio.matrix_tabs.setCurrentIndex(0)
-        self.assertTrue(experiments.isChecked())
         studio.table.setFocus()
         QTest.keyClick(studio.table, Qt.Key.Key_Tab, Qt.KeyboardModifier.ControlModifier)
-        self.assertEqual(studio.settings_tabs.currentIndex(), 3)
-        self.assertTrue(buttons[3].isChecked())
+        self.assertEqual(studio.settings_tabs.currentIndex(), 2)
+        self.assertTrue(buttons[2].isChecked())
         for buttons in studio._action_groups:
             self.assertEqual(len({button.size().width() for button in buttons}), 1)
             for button in buttons:
@@ -223,6 +207,10 @@ class DoEWindowTests(unittest.TestCase):
             self.assertEqual(dialog.workspace_tabs.currentIndex(), 0)
             self.assertEqual(len(dialog.doe_studio._designs), 0)
             self.assertIs(dialog.doe_studio.use_model_btn.window(), dialog.doe_window)
+            studio = dialog.doe_studio
+            studio.settings_tabs.setCurrentWidget(studio.planner.learning_page)
+            self.assertTrue(studio.use_model_btn.isVisible())
+            self.assertTrue(studio.table.isVisible())
             with patch.object(dialog, "refresh_validity"):
                 dialog.doe_studio.use_model_btn.setEnabled(True)
                 dialog.doe_studio.use_model_btn.click()
@@ -245,48 +233,42 @@ class DoEWindowTests(unittest.TestCase):
         self.assertEqual([design.size for design in studio._designs], [20, 8, 10])
         studio._designs[1] = replace(studio._designs[1], mesh_resolution=0)
         with patch('doe_studio.QMessageBox.warning') as warning:
-            studio.generate_table()
             studio.generate_ml_table()
             warning.assert_not_called()
-        for rows in studio._matrix_rows.values():
-            self.assertEqual([row.size for row in rows], [20, 8, 10])
-            self.assertEqual(rows[1].cell_size, 2)
-            self.assertEqual(rows[1].solid_fraction, 35)
+        self.assertEqual([row.size for row in studio.rows], [20, 8, 10])
+        self.assertEqual(studio.rows[1].cell_size, 2)
+        self.assertEqual(studio.rows[1].solid_fraction, 35)
 
     def test_each_geometry_keeps_mesh_and_variables_in_generated_rows(self):
         _, studio = self.window()
         studio.add_design(replace(Settings(), mesh_type="TET10", mesh_resolution=.4, local_mesh_size=.08))
-        enabled, low, high, count = studio.factor_controls["solid_fraction"]
+        enabled, low, high = studio.factor_controls["solid_fraction"]
         low.setValue(20)
         high.setValue(40)
-        count.setValue(3)
         enabled.setChecked(True)
         studio.add_design(replace(Settings(), structure_name="Neovius"))
         self.assertFalse(enabled.isChecked())
         self.assertEqual(studio._designs[studio._selected_design].mesh_type, "HEX8")
-        cell_enabled, cell_low, cell_high, cell_count = studio.factor_controls["cell_size"]
+        cell_enabled, cell_low, cell_high = studio.factor_controls["cell_size"]
         cell_low.setValue(2)
         cell_high.setValue(3)
-        cell_count.setValue(2)
         cell_enabled.setChecked(True)
         studio.design_list.setCurrentRow(0)
         self.assertTrue(enabled.isChecked())
         self.assertFalse(cell_enabled.isChecked())
         self.assertEqual(studio._designs[studio._selected_design].mesh_type, "TET10")
-        studio.generate_table()
-        self.assertEqual(len(studio.rows), 5)
-        first = [row.to_settings(Settings()) for row in studio.rows[:3]]
-        self.assertEqual([settings.solid_fraction for settings in first], [20, 30, 40])
+        studio.generate_ml_table()
+        self.assertEqual(len(studio.rows), 2 * studio.ml_count_spin.value())
+        first = [row.to_settings(Settings()) for row in studio.rows[:studio.ml_count_spin.value()]]
+        self.assertTrue(all(20 < settings.solid_fraction < 40 for settings in first))
         self.assertTrue(all(settings.mesh_type == "TET10" and settings.local_mesh_size == .08
                             and settings.mesh_resolution == .4 for settings in first))
-        self.assertEqual([row.cell_size for row in studio.rows[3:]], [2, 3])
+        self.assertTrue(all(2 < row.cell_size < 3 for row in studio.rows[len(first):]))
 
-    def test_ml_matrix_is_separate_repeatable_and_exports_snapshot_and_splits(self):
+    def test_ml_matrix_is_repeatable_and_exports_snapshot_and_splits(self):
         _, studio = self.window()
         studio.add_design(Settings())
         studio.factor_controls["solid_fraction"][0].setChecked(True)
-        studio.generate_table()
-        doe_rows = studio.rows
         studio.ml_count_spin.setValue(12)
         studio.generate_ml_table()
         ml_rows = studio.rows
@@ -299,10 +281,6 @@ class DoEWindowTests(unittest.TestCase):
         with patch("doe_studio.QMessageBox.question", return_value=QMessageBox.StandardButton.Yes):
             studio.generate_ml_table()
         self.assertEqual(values, [row.solid_fraction for row in studio.rows])
-        studio.matrix_tabs.setCurrentIndex(0)
-        self.assertIs(studio.rows, doe_rows)
-        self.assertEqual(studio.table.columnCount(), 22)
-        studio.matrix_tabs.setCurrentIndex(1)
         path = Path(self.temp.name) / "ml.csv"
         studio.export_csv_path(path)
         import csv
@@ -312,22 +290,21 @@ class DoEWindowTests(unittest.TestCase):
         self.assertEqual(len(exported), 13)
         self.assertTrue(all(row.dataset_columns()[1] in ("train", "validation", "test") for row in studio.rows))
         studio._active_mode = "check"
-        studio.matrix_tabs.setCurrentIndex(0)
-        self.assertEqual(studio.matrix_tabs.currentIndex(), 1)
+        studio.generate_ml_table()
         self.assertEqual([row.solid_fraction for row in studio.rows], values)
         studio._active_mode = None
 
     def test_invalid_ranges_do_not_replace_existing_matrix(self):
         _, studio = self.window()
         studio.add_design(Settings())
-        studio.generate_table()
+        studio.generate_ml_table()
         original = studio.rows
-        enabled, low, high, _ = studio.factor_controls["cell_size"]
+        enabled, low, high = studio.factor_controls["cell_size"]
         low.setValue(5)
         high.setValue(8)
         enabled.setChecked(True)
         with patch("doe_studio.QMessageBox.question", return_value=QMessageBox.StandardButton.Yes), patch("doe_studio.QMessageBox.warning") as warning:
-            studio.generate_table()
+            studio.generate_ml_table()
         warning.assert_called_once()
         self.assertIs(studio.rows, original)
 
@@ -335,23 +312,21 @@ class DoEWindowTests(unittest.TestCase):
         _, studio = self.window()
         for name in ("Gyroid", "Neovius"):
             studio.add_design(replace(Settings(), structure_name=name, size=6))
-            enabled, low, high, levels = studio.factor_controls["size"]
+            enabled, low, high = studio.factor_controls["size"]
             self.assertFalse(enabled.isChecked())
             enabled.setChecked(True)
             low.setValue(6)
             high.setValue(7)
-            levels.setValue(2)
-            enabled, low, high, levels = studio.factor_controls["solid_fraction"]
+            enabled, low, high = studio.factor_controls["solid_fraction"]
             low.setValue(30)
             high.setValue(40)
-            levels.setValue(2)
             enabled.setChecked(True)
         self.assertEqual([design.size for design in studio._designs], [6, 6])
-        studio.generate_table()
+        studio.ml_count_spin.setValue(4)
+        studio.generate_ml_table()
         self.assertEqual(len(studio.rows), 8)
-        self.assertEqual({(row.structure_name, row.size, row.solid_fraction) for row in studio.rows},
-                         {(name, size, density) for name in ("Gyroid", "Neovius")
-                          for size in (6, 7) for density in (30, 40)})
+        self.assertEqual({row.structure_name for row in studio.rows}, {"Gyroid", "Neovius"})
+        self.assertTrue(all(6 < row.size < 7 and 30 < row.solid_fraction < 40 for row in studio.rows))
         studio.design_list.setCurrentRow(0)
         size_enabled = studio.factor_controls["size"][0]
         self.assertTrue(size_enabled.isChecked())
@@ -366,10 +341,10 @@ class DoEWindowTests(unittest.TestCase):
         self.assertEqual([s.structure_name for s in studio._designs],
                          ["Gyroid", "S. Diamond"])
         studio.factor_controls["cell_size"][0].setChecked(True)
-        studio.generate_table()
-        self.assertEqual(len(studio.rows), 6)
-        self.assertEqual([r.structure_name for r in studio.rows], ["Gyroid"] + ["S. Diamond"] * 5)
-        self.assertEqual([r.cell_size for r in studio.rows[1:]], [2, 2.5, 3, 3.5, 4])
+        studio.generate_ml_table()
+        self.assertEqual(len(studio.rows), 1 + studio.ml_count_spin.value())
+        self.assertEqual(studio.rows[0].structure_name, "Gyroid")
+        self.assertTrue(all(r.structure_name == "S. Diamond" and 2 < r.cell_size < 4 for r in studio.rows[1:]))
         for index in (0, 1):
             studio.design_list.item(index).setCheckState(Qt.CheckState.Unchecked)
         self.assertFalse(studio.generate_ml_btn.isEnabled())
@@ -382,33 +357,32 @@ class DoEWindowTests(unittest.TestCase):
         studio.design_list.setCurrentRow(0)
         studio.design_value_controls["size"].setValue(9)
         self.assertEqual([s.size for s in studio._designs], [9, 12])
-        studio.generate_table()
+        studio.generate_ml_table()
         self.assertEqual([r.to_settings(Settings()).size for r in studio.rows], [9, 12])
-        self.assertEqual(studio.settings_tabs.currentIndex(), 2)
+        self.assertEqual(studio.settings_tabs.currentIndex(), 0)
 
     def test_group_bounds_two_variables_and_unique_experiments(self):
         _, studio = self.window()
         for cell, density in ((2, 20), (4, 40)):
             studio.add_design(replace(Settings(), cell_size=cell, solid_fraction=density))
         for field, limits in (('cell_size', (2, 4)), ('solid_fraction', (20, 40))):
-            enabled, low, high, levels = studio.factor_controls[field]
+            enabled, low, high = studio.factor_controls[field]
             enabled.setChecked(True)
-            levels.setValue(3)
             low.setValue(limits[0])
             high.setValue(limits[1])
         studio.design_list.setCurrentRow(0)
         self.assertEqual(set(studio._active_factors()), {'cell_size', 'solid_fraction'})
         # Reference dimensions remain editable while the field varies in experiments.
         self.assertTrue(studio.design_value_controls['solid_fraction'].isEnabled())
-        studio.generate_table()
+        studio.ml_count_spin.setValue(9)
+        studio.generate_ml_table()
         self.assertEqual(len(studio.rows), 9)
-        self.assertEqual({(r.cell_size, r.solid_fraction) for r in studio.rows},
-                         {(c, d) for c in (2, 3, 4) for d in (20, 30, 40)})
+        self.assertTrue(all(2 < row.cell_size < 4 and 20 < row.solid_fraction < 40 for row in studio.rows))
 
     def test_saved_designs_keep_factors_separate_between_geometry_groups(self):
         _, studio = self.window()
         studio.add_design(Settings())
-        enabled, low, high, _ = studio.factor_controls['solid_fraction']
+        enabled, low, high = studio.factor_controls['solid_fraction']
         enabled.setChecked(True)
         low.setValue(20)
         high.setValue(50)
@@ -417,17 +391,13 @@ class DoEWindowTests(unittest.TestCase):
         studio.design_list.setCurrentRow(0)
         self.assertEqual((low.value(), high.value()), (20, 50))
 
-    def test_plan_file_roundtrip_restores_designs_variables_both_matrices_and_draft(self):
+    def test_plan_roundtrip_and_legacy_rows(self):
         _, studio = self.window()
         studio.add_design(Settings(hardening_curve=((0., 250.), (.1, 300.))))
-        enabled, low, high, count = studio.factor_controls['solid_fraction']
+        enabled, low, high = studio.factor_controls['solid_fraction']
         enabled.setChecked(True)
         low.setValue(20)
         high.setValue(40)
-        count.setValue(3)
-        studio.sampling_combo.setCurrentIndex(studio.sampling_combo.findData('lhs'))
-        studio.lhs_count_spin.setValue(4)
-        studio.sampling_seed.setValue(123)
         studio.ml_count_spin.setValue(5)
         studio.ml_seed_spin.setValue(321)
         studio.common_strain_check.setChecked(False)
@@ -435,11 +405,10 @@ class DoEWindowTests(unittest.TestCase):
         studio.add_design(replace(Settings(), structure_name='Neovius'))
         studio.design_list.item(1).setCheckState(Qt.CheckState.Unchecked)
         studio.design_list.setCurrentRow(0)
-        studio.generate_table()
+        studio.generate_ml_table()
         studio._rows[0].max_force_n = 123.4
         studio._rows[0].status = 'Completed'
         studio._rows[0].run_folder = 'D:/results/experiment-1'
-        studio.generate_ml_table()
         studio.settings_tabs.setCurrentIndex(0)
         studio.planner.saved_draft = replace(studio.planner.saved_draft, size=9, solid_fraction=42)
         path = Path(self.temp.name) / 'plan.rustmech-doe.json'
@@ -447,41 +416,41 @@ class DoEWindowTests(unittest.TestCase):
         expected = studio.capture_plan()
         self.assertEqual(expected['draft']['solid_fraction'], 42)
         previous_plan = json.loads(path.read_text(encoding='utf-8'))
-        previous_plan['selection']['tab'] = 0
-        for rows in previous_plan['matrices'].values():
-            for row in rows:
-                row['folder_job'] = None
-        path.write_text(json.dumps(previous_plan), encoding='utf-8')
         _, restored = self.window()
         restored.open_plan_path(path)
-        self.app.processEvents()
-        self.assertEqual(restored.settings_tabs.currentIndex(), 2)
+        self.assertEqual(restored.settings_tabs.currentIndex(), 1)
         self.assertEqual(restored.capture_plan(), expected)
         self.assertEqual(restored._plan_path, path.resolve())
         self.assertEqual(restored.plan_file_label.text(), path.name)
-        self.assertEqual(len(restored._matrix_rows[0]), 4)
-        self.assertEqual(len(restored._matrix_rows[1]), 5)
-        self.assertIsNone(restored._active_future)
-        for saved_tab, label, persisted in ((1, "DoE2", 3), (2, "DeepLearning", 2),
-                                             (3, "DoE2", 3), (4, "Settings", 4)):
+
+        previous_plan['version'] = 1
+        rows = previous_plan.pop('rows')
+        previous_plan['matrices'] = {'doe': [dict(rows[0], exp_id='EXP-0001')], 'ml': rows}
+        for entry in previous_plan['designs']:
+            entry['factors'] = {key: [*limits, 3] for key, limits in entry['factors'].items()}
+        for state in previous_plan['variable_editor'].values():
+            state['levels'] = 3
+        for saved_tab, index in ((0, 1), (1, 1), (2, 1), (3, 1), (4, 2)):
             with self.subTest(saved_tab=saved_tab):
                 previous_plan['selection']['tab'] = saved_tab
                 path.write_text(json.dumps(previous_plan), encoding='utf-8')
                 restored.open_plan_path(path)
-                tabs = restored.settings_tabs
-                self.assertEqual(tabs.tabText(tabs.currentIndex()), label)
-                self.assertEqual(restored.capture_plan()['selection']['tab'], persisted)
+                self.assertEqual(restored.settings_tabs.currentIndex(), index)
+                self.assertEqual(len(restored.rows), 6)
+                self.assertEqual(restored.rows[-1].exp_id, 'EXP-0001')
+                self.assertEqual(restored.rows[-1].max_force_n, 123.4)
+                self.assertIsNone(restored._active_future)
 
     def test_invalid_plan_keeps_current_workspace_and_failed_save_keeps_existing_file(self):
         _, studio = self.window()
         studio.add_design(Settings())
-        studio.generate_table()
+        studio.generate_ml_table()
         original = studio.capture_plan()
         corruptions = (
             lambda data: data.update(version=999),
-            lambda data: data['options'].update(lhs_count='bad'),
+            lambda data: data['options'].update(ml_count='bad'),
             lambda data: data['designs'][0].update(factors={'cell_size': [2, 4, 1000]}),
-            lambda data: data['matrices']['doe'][0].update(size='bad'),
+            lambda data: data['rows'][0].update(size='bad'),
             lambda data: data['draft'].update(tpms_morphology='unknown'),
         )
         path = Path(self.temp.name) / 'invalid.json'
@@ -534,14 +503,14 @@ class DoEWindowTests(unittest.TestCase):
     def test_disabled_factors_keep_reference_values(self):
         _, studio = self.window()
         studio.add_design(Settings())
-        enabled, low, high, count = studio.factor_controls["solid_fraction"]
+        enabled, low, high = studio.factor_controls["solid_fraction"]
         enabled.setChecked(True)
         self.assertTrue(low.isEnabled())
         enabled.setChecked(False)
         self.assertFalse(low.isEnabled())
         self.assertEqual(len(studio._designs), 1)
         self.assertEqual(studio.rows, [])
-        studio.generate_table()
+        studio.generate_ml_table()
         self.assertEqual([r.solid_fraction for r in studio.rows], [30])
 
 

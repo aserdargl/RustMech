@@ -6,7 +6,7 @@ from PySide6.QtWidgets import (
     QButtonGroup, QPushButton, QCheckBox, QListWidget, QTabWidget, QSizePolicy,
 )
 
-from studio_style import ActionFlowLayout, CompactComboBox, CONTROL_HEIGHT, NumericLineEdit
+from studio_style import ActionFlowLayout, CONTROL_HEIGHT, NumericLineEdit
 
 
 def geometry_group(settings):
@@ -93,18 +93,10 @@ class SimpleDoEPlanner(QWidget):
         s.factor_controls = {}
         for spec in factor_specs:
             s._add_factor_controls(saved_plan_controls, spec)
-        s.sampling_combo = CompactComboBox(saved_plan_controls)
-        s.sampling_combo.addItem('Full factorial grid', 'full_factorial')
-        s.sampling_combo.addItem('Latin hypercube (LHS)', 'lhs')
-        s.sampling_combo.currentIndexChanged.connect(s._refresh_plan)
-        s.lhs_count_spin = NumericLineEdit(15, 2, 500)
-        s.sampling_seed = NumericLineEdit(42, 1, 999999)
-        for control in (s.lhs_count_spin, s.sampling_seed):
-            control.setParent(saved_plan_controls)
-            control.valueChanged.connect(s._refresh_plan)
-
         self.learning_page = QWidget()
-        ml_layout = QFormLayout(self.learning_page)
+        self.learning_layout = QVBoxLayout(self.learning_page)
+        ml_layout = QFormLayout()
+        self.learning_layout.addLayout(ml_layout)
         ml_layout.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.FieldsStayAtSizeHint)
         s.common_strain_check = QCheckBox('Common final strain (%)')
         s.common_strain_check.setChecked(True)
@@ -121,14 +113,15 @@ class SimpleDoEPlanner(QWidget):
         s.generate_ml_btn = QPushButton('Generate ML matrix')
         s.generate_ml_btn.clicked.connect(s.generate_ml_table)
         s.ml_count_spin.valueChanged.connect(s._refresh_plan)
-        ml_layout.addRow(s.generate_ml_btn)
+        s.use_model_btn = QPushButton('Use current model')
+        s.use_model_btn.setEnabled(False)
+        actions = QHBoxLayout()
+        actions.addWidget(s.use_model_btn)
+        actions.addWidget(s.generate_ml_btn)
+        actions.addStretch()
+        ml_layout.addRow(actions)
         self.tabs.addTab(self.learning_page, 'DeepLearning')
-        s._size_action_group(s.generate_ml_btn)
-
-        # Compatibility with existing model-transfer actions.
-        # The host connects its validated current-model action to this button.
-        s.use_model_btn = QPushButton(self)
-        s.use_model_btn.hide()
+        s._size_action_group(s.use_model_btn, s.generate_ml_btn)
         for button in self.findChildren(QPushButton):
             button.setDefault(False)
             button.setAutoDefault(False)

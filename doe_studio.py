@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import csv
 import hashlib
-import itertools
 import json
 import copy
 import math
@@ -42,7 +41,6 @@ from PySide6.QtWidgets import (
     QPushButton,
     QSizePolicy,
     QSplitter,
-    QTabBar,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -62,16 +60,16 @@ DOE_ACTION_WIDTH = 96
 DOE_RUN_WIDTH = 140
 DOE_STOP_WIDTH = 108
 DOE_TOOLBAR_GAP = 6
-PLAN_MATRIX_TAB = 3
+LEARNING_PLAN_TAB = 2
 MAX_DOE_ROWS = 5000
 SNAPSHOT_HEADER = "Design settings (JSON)"
 
-# Field, label, input bounds, default range and levels.
+# Field, label, input bounds and default range.
 FACTOR_SPECS = (
-    ("cell_size", "2. Cell Size (mm)", 0.1, 100.0, 2.0, 4.0, 5),
-    ("solid_fraction", "3. Density (%)", 1.0, 99.0, 15.0, 45.0, 5),
+    ("cell_size", "2. Cell Size (mm)", 0.1, 100.0, 2.0, 4.0),
+    ("solid_fraction", "3. Density (%)", 1.0, 99.0, 15.0, 45.0),
 )
-SIZE_FACTOR_SPEC = ("size", "Cube size (mm)", 1.0, 100.0, 6.0, 8.0, 3)
+SIZE_FACTOR_SPEC = ("size", "Cube size (mm)", 1.0, 100.0, 6.0, 8.0)
 
 
 @dataclass
@@ -178,15 +176,14 @@ def _lhs_samples(
 
 def generate_doe_rows(
     designs: list[Settings],
-    factors: dict[str, tuple[float, float, int]],
-    sampling_mode: str,
+    factors: dict[str, tuple[float, float]],
     lhs_count: int,
     sampling_seed: int,
     target_strain_pct: float | None = None,
 ) -> list[ExperimentRow]:
     """Expand the selected factors for every saved design."""
     rows = []
-    samples = list(_factor_samples(factors, sampling_mode, lhs_count, sampling_seed))
+    samples = _lhs_samples(lhs_count, list(factors.values()), seed=sampling_seed) if factors else [()]
     for design in designs:
         for sample in samples:
             settings = replace(design, **dict(zip(factors, map(float, sample))))
@@ -209,17 +206,6 @@ def generate_doe_rows(
                 design_settings=design,
             ))
     return rows
-
-
-def _factor_samples(factors, sampling_mode, lhs_count, sampling_seed):
-    if not factors:
-        return [()]
-    if sampling_mode == "lhs":
-        ranges = [(low, high) for low, high, _ in factors.values()]
-        return _lhs_samples(lhs_count, ranges, seed=sampling_seed)
-    return itertools.product(*[
-        np.linspace(low, high, levels) for low, high, levels in factors.values()
-    ])
 
 
 TABLE_COLUMNS: tuple[str, ...] = (
@@ -355,15 +341,13 @@ class _DoEActionBar(QFrame):
             self.setFixedHeight(self.layout().heightForWidth(event.size().width()))
 
 
-class DoEStudioWindow(QMainWindow):
-    """Independent DoE workspace with its geometry editor embedded in the plan."""
+class ExperimentWindow(QMainWindow):
+    """Window for experiment and analysis queue workspaces."""
 
     def __init__(self, studio, parent=None):
         super().__init__(parent, Qt.WindowType.Window)
         from window_state import install_window_state
         install_window_state(QApplication.instance())
-        self.setObjectName("doeStudioWindow")
-        self.setWindowTitle("DoE · RustMech")
         self.setCentralWidget(studio)
         self.resize(1180, 780)
         self.setMinimumSize(680, 480)
@@ -372,17 +356,23 @@ class DoEStudioWindow(QMainWindow):
         from window_state import show_restored_window
         show_restored_window(self)
 
+class DoEStudioWindow(ExperimentWindow):
+    def __init__(self, studio, parent=None):
+        super().__init__(studio, parent)
+        self.setObjectName("doeStudioWindow")
+        self.setWindowTitle("DoE · RustMech")
+
     def closeEvent(self, event):
         self.centralWidget().save_workspace_draft()
         super().closeEvent(event)
 
 
-class DoEStudioWidget(TrubaParallelMixin, QWidget):
-    """Interactive Excel-like Design of Experiments (DoE) table & Batch Solver."""
+class ExperimentTableWidget(TrubaParallelMixin, QWidget):
+    """Shared experiment table and local/TRUBA execution lifecycle."""
 
-    preview_requested = Signal(object)  # Existing table-row preview.
-    model_requested = Signal()
-    autosave_recovery_plan = True
+    preview_requested = Signal(object)
+    editable_experiments = False
+    autosave_recovery_plan = False
 
     def __init__(
         self,
@@ -390,29 +380,18 @@ class DoEStudioWidget(TrubaParallelMixin, QWidget):
         mesh_generator: Callable[[Settings], object],
         batch_solver_runner: Callable[[Settings, object], dict] | None = None,
         parent: QWidget | None = None,
-        *, operation_host=None, preferences=None,
     ) -> None:
         super().__init__(parent)
         self._settings_provider = settings_provider
-        self._operation_host = operation_host
-        self._preferences = preferences
-        self._workspace_draft = None
         self._mesh_generator = mesh_generator
         self._batch_solver_runner = batch_solver_runner
         self._rows: list[ExperimentRow] = []
-        self._designs: list[Settings] = []
-        self._design_factors = []
-        self._selected_design = -1
-        self._loading_design = False
-        self._matrix_rows = {0: self._rows, 1: []}
-        self._matrix_index = 0
         self._updating_table = False
         self._active_future = None
         self._active_mode: str | None = None  # "check" or "solve"
         self._queue: list[int] = []
         self._total_queued = 0
         self._stop_requested = False
-        self._plan_path = None
         self._dataset_path = None
         self._persistence_error = ""
         self._footer_default = None
@@ -434,226 +413,34 @@ class DoEStudioWidget(TrubaParallelMixin, QWidget):
         progress_policy.setRetainSizeWhenHidden(False)
         self.operation_progress.setSizePolicy(progress_policy)
         self.layout().addWidget(self.operation_progress)
-        self.layout().addWidget(self.planner.plan_footer)
         self.progress_bar = self.operation_progress.bar
-        self._refresh_plan()
         self._update_badge()
-        self._saved_plan_state = self.capture_plan()
 
         self._poll_timer = QTimer(self)
         self._poll_timer.setInterval(80)
         self._poll_timer.timeout.connect(self._poll_worker)
         self._poll_timer.start()
 
-    def capture_plan(self, *, commit=False, inputs_only=False):
-        from doe_plan import PLAN_FORMAT, PLAN_VERSION
-        if commit:
-            # Save the text still being edited, even before focus leaves the field.
-            for field in self.findChildren(NumericLineEdit):
-                field.interpretText()
-        matrices = dict(self._matrix_rows)
-        matrices[self._matrix_index] = self._rows
-        return dict(
-            format=PLAN_FORMAT, version=PLAN_VERSION,
-            designs=[dict(settings=asdict(design), factors=factors.copy(),
-                          enabled=self.design_list.item(i).checkState() == Qt.CheckState.Checked)
-                     for i, (design, factors) in enumerate(zip(self._designs, self._design_factors))],
-            draft=asdict(self.planner.saved_draft),
-            variable_editor={name: dict(enabled=enabled.isChecked(), min=low.value(),
-                                        max=high.value(), levels=count.value())
-                             for name, (enabled, low, high, count) in self.factor_controls.items()},
-            options=dict(sampling=self.sampling_combo.currentData(), lhs_count=self.lhs_count_spin.value(),
-                         seed=self.sampling_seed.value(), ml_count=self.ml_count_spin.value(),
-                         ml_seed=self.ml_seed_spin.value(), common_strain_enabled=self.common_strain_check.isChecked(),
-                         common_strain=self.common_strain_spin.value()),
-            matrices={name: [] if inputs_only else [asdict(row) for row in matrices[index]]
-                      for index, name in enumerate(('doe', 'ml'))},
-            sample_settings={} if inputs_only else self.sample_settings.state(),
-            selection=dict(design=self._selected_design, matrix=self._matrix_index,
-                           tab=self._legacy_plan_tab),
-        )
-
-    def restore_workspace_draft(self):
-        from doe_plan import decode_plan
-
-        if self._preferences is None or self._workspace_draft is not None:
-            return
-        raw = self._preferences.value("doe/classicDraft", "", type=str)
-        if raw:
-            try:
-                plan = decode_plan(json.loads(raw))
-            except ValueError:
-                pass
-            else:
-                self._restore_plan(plan, select_tab=False)
-                self._saved_plan_state = self.capture_plan()
-        self._workspace_draft = self.capture_plan(inputs_only=True)
-
-    def save_workspace_draft(self):
-        self.new_doe.save_draft(commit=True)
-        if self._workspace_draft is None:
-            return
-        draft = self.capture_plan(commit=True, inputs_only=True)
-        if draft != self._workspace_draft:
-            self._preferences.setValue("doe/classicDraft", json.dumps(draft, ensure_ascii=False))
-            self._preferences.sync()
-            self._workspace_draft = draft
-
-    def _set_plan_path(self, path):
-        self._plan_path = Path(path).resolve()
-        self.plan_file_label.setText(self._plan_path.name)
-        self.plan_file_label.setToolTip(str(self._plan_path))
-
-    def save_plan_path(self, path):
-        if self._active_mode is not None:
-            raise RuntimeError('Wait for the current batch to finish or stop it before saving the plan.')
-        from doe_plan import write_plan
-        payload = self.capture_plan(commit=True)
-        write_plan(path, payload)
-        self._saved_plan_state = payload
-        self._set_plan_path(path)
-
-    def open_plan_path(self, path):
-        from doe_plan import read_plan
-        if self._active_mode is not None:
-            raise RuntimeError('Wait for the current batch to finish or stop it before opening a plan.')
-        self._restore_plan(read_plan(path))
-        self._set_plan_path(path)
-        self._saved_plan_state = self.capture_plan()
-
-    def _restore_plan(self, plan, *, select_tab=True):
-        from doe_planner import geometry_group
-        self._loading_design = True
-        controls = (self.design_list, self.sampling_combo, self.lhs_count_spin, self.sampling_seed,
-                    self.ml_count_spin, self.ml_seed_spin, self.common_strain_check,
-                    self.common_strain_spin, self.matrix_tabs)
-        blockers = [QSignalBlocker(control) for control in controls]
-        try:
-            self._selected_design = -1
-            self.design_list.clear()
-            self._designs = [entry['settings'] for entry in plan['designs']]
-            self._design_factors = [entry['factors'] for entry in plan['designs']]
-            self.planner._group_factors.clear()
-            for i, entry in enumerate(plan['designs']):
-                item = QListWidgetItem()
-                item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
-                item.setCheckState(Qt.CheckState.Checked if entry['enabled'] else Qt.CheckState.Unchecked)
-                self.design_list.addItem(item)
-                self._update_design_caption(i)
-                self.planner._group_factors[geometry_group(entry['settings'])] = entry['factors'].copy()
-            options = plan['options']
-            self.sampling_combo.setCurrentIndex(self.sampling_combo.findData(options['sampling']))
-            for control, key in ((self.lhs_count_spin, 'lhs_count'), (self.sampling_seed, 'seed'),
-                                 (self.ml_count_spin, 'ml_count'), (self.ml_seed_spin, 'ml_seed'),
-                                 (self.common_strain_spin, 'common_strain')):
-                control.setValue(options[key])
-            self.common_strain_check.setChecked(options['common_strain_enabled'])
-            self.common_strain_spin.setEnabled(options['common_strain_enabled'])
-            self.planner.saved_draft = plan['draft']
-            selection = plan['selection']
-            self.design_list.setCurrentRow(selection['design'])
-            for matrix in plan['matrices'].values():
-                mark_interrupted(matrix)
-            self._matrix_rows = {0: plan['matrices']['doe'], 1: plan['matrices']['ml']}
-            self._matrix_index = selection['matrix']
-            self._rows = self._matrix_rows[self._matrix_index]
-            self.matrix_tabs.setCurrentIndex(self._matrix_index)
-            self._queue.clear()
-            self._stop_requested = False
-        finally:
-            self._loading_design = False
-            del blockers
-        self._select_design(selection['design'])
-        self._loading_design = True
-        try:
-            for name, state in plan['variable_editor'].items():
-                enabled, low, high, count = self.factor_controls[name]
-                enabled.setChecked(state['enabled'])
-                low.setValue(state['min'])
-                high.setValue(state['max'])
-                count.setValue(state['levels'])
-        finally:
-            self._loading_design = False
-        self._refresh_plan()
-        self._refresh_table_view()
-        self.sample_settings.restore_state(plan.get("sample_settings", {}))
-        saved_tab = selection['tab']
-        self._legacy_plan_tab = saved_tab if saved_tab in self._legacy_plan_tabs else PLAN_MATRIX_TAB
-        if select_tab:
-            self.settings_tabs.setCurrentWidget(self._legacy_plan_tabs[self._legacy_plan_tab])
-
-    def save_plan_dialog(self):
-        from doe_plan import PLAN_FILTER
-        if self._active_mode is not None:
-            return
-        path, _ = QFileDialog.getSaveFileName(
-            self, 'Save DoE plan', str(self._plan_path or Path.home() / 'plan.rustmech-doe.json'), PLAN_FILTER)
-        if path:
-            if not path.lower().endswith('.json'):
-                path += '.rustmech-doe.json'
-            try:
-                self.save_plan_path(path)
-            except (OSError, ValueError, RuntimeError) as error:
-                QMessageBox.warning(self, 'Cannot save DoE plan', str(error))
-
-    def open_plan_dialog(self):
-        from doe_plan import PLAN_FILTER, read_plan
-        if self._active_mode is not None:
-            return
-        path, _ = QFileDialog.getOpenFileName(
-            self, 'Open DoE plan', str(self._plan_path.parent if self._plan_path else Path.home()), PLAN_FILTER)
-        if not path:
-            return
-        try:
-            plan = read_plan(path)
-            current = self.capture_plan(commit=True)
-            changed = any(current[key] != self._saved_plan_state[key] for key in current if key != 'selection')
-            if changed and QMessageBox.question(
-                self, 'Unsaved DoE plan', 'Opening this file replaces your unsaved plan. Continue?',
-                QMessageBox.StandardButton.Discard | QMessageBox.StandardButton.Cancel,
-                QMessageBox.StandardButton.Cancel,
-            ) != QMessageBox.StandardButton.Discard:
-                return
-            self._restore_plan(plan)
-            self._set_plan_path(path)
-            self._saved_plan_state = self.capture_plan()
-        except (OSError, ValueError, RuntimeError) as error:
-            QMessageBox.warning(self, 'Cannot open DoE plan', str(error))
-
-    def _build_ui(self) -> None:
+    def _build_ui(self):
         root = QVBoxLayout(self)
-        self.setObjectName("doeWorkspace")
         root.setContentsMargins(6, 6, 6, 4)
         root.setSpacing(4)
+        root.addWidget(self._build_experiment_panel(), 1)
+        root.addWidget(self.footer_label)
 
-        self.vertical_splitter = QSplitter(Qt.Orientation.Vertical)
-        self.vertical_splitter.setObjectName("doePlannerWorkspaceV2")
-        self.vertical_splitter.setChildrenCollapsible(True)
-        self.vertical_splitter.setOpaqueResize(True)
-        self.vertical_splitter.setHandleWidth(3)
+    @property
+    def table_columns(self):
+        if self.editable_experiments:
+            return (*TABLE_COLUMNS, "Dataset split", "Geometry group")
+        return TABLE_COLUMNS
 
-        from doe_planner import DoENavigation, SimpleDoEPlanner
-        self.planner = SimpleDoEPlanner(self, (*FACTOR_SPECS, SIZE_FACTOR_SPEC))
-        self.vertical_splitter.addWidget(self.planner)
-
-        bottom_panel = QWidget()
-        bottom_panel.setMinimumSize(140, 60)
-        bottom_panel.setSizePolicy(
-            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored
-        )
-        bottom_layout = QVBoxLayout(bottom_panel)
-        bottom_layout.setContentsMargins(0, 0, 0, 0)
-        bottom_layout.setSpacing(4)
-        self.matrix_tabs = QTabBar(bottom_panel)
-        self.matrix_tabs.setObjectName("doeMatrixTabs")
-        self.matrix_tabs.setExpanding(False)
-        self.matrix_tabs.addTab("DoE experiment matrix")
-        self.matrix_tabs.addTab("Machine learning matrix")
-        self.matrix_tabs.currentChanged.connect(self._switch_matrix)
-        self.matrix_tabs.hide()
-        self.matrix_navigation = DoENavigation()
-        self.matrix_navigation.add_tabs(self.matrix_tabs)
-        bottom_layout.addWidget(self.matrix_navigation)
+    def _build_experiment_panel(self):
+        panel = QWidget()
+        panel.setMinimumSize(140, 60)
+        panel.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(4)
 
         # 3. Spreadsheet & Batch Execution Toolbar
         bar_frame = _DoEActionBar()
@@ -670,37 +457,42 @@ class DoEStudioWidget(TrubaParallelMixin, QWidget):
         self.row_count_badge.setObjectName("unitBadge")
         bar.addWidget(self.row_count_badge)
 
-        table_actions = []
-        for label, callback in (
-            ("+ Row", self.add_blank_row),
+        actions = []
+        if self.editable_experiments:
+            actions.append(("+ Row", self.add_blank_row))
+        actions.extend((
             ("− Delete", self.delete_selected_rows),
             ("Preview in 3D", self.preview_selected_row),
             ("Check meshes", self.start_mesh_precheck),
-        ):
+        ))
+        table_buttons = []
+        for label, callback in actions:
             btn = QPushButton(label)
-            btn.setObjectName(
-                "secondaryActionBtn"
-                if label in ("Check meshes", "Preview in 3D")
-                else "compactActionBtn"
-            )
+            btn.setObjectName("secondaryActionBtn" if label in ("Check meshes", "Preview in 3D")
+                              else "compactActionBtn")
+            btn.setAutoDefault(False)
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
             btn.clicked.connect(callback)
-            table_actions.append(btn)
+            table_buttons.append(btn)
             bar.addWidget(btn)
 
-        data_button = QPushButton("Table data")
-        data_button.setObjectName("compactActionBtn")
-        data_menu = QMenu(data_button)
-        data_menu.addAction("Copy for Excel", self.copy_table_to_clipboard)
-        data_menu.addAction("Import CSV", self.import_csv_dialog)
-        data_menu.addAction("Export CSV", self.export_csv_dialog)
-        data_button.setMenu(data_menu)
-        self._size_action_group(*table_actions, data_button)
-        bar.addWidget(data_button)
+        if self.editable_experiments:
+            data_button = QPushButton("Table data")
+            data_button.setObjectName("compactActionBtn")
+            data_button.setAutoDefault(False)
+            data_menu = QMenu(data_button)
+            data_menu.addAction("Copy for Excel", self.copy_table_to_clipboard)
+            data_menu.addAction("Import CSV", self.import_csv_dialog)
+            data_menu.addAction("Export CSV", self.export_csv_dialog)
+            data_button.setMenu(data_menu)
+            table_buttons.append(data_button)
+            bar.addWidget(data_button)
+        self._size_action_group(*table_buttons)
 
         self.run_batch_btn = QPushButton("Run batch (ANSYS)")
         self.run_batch_btn.setObjectName("primaryLaunchBtn")
         self._size_action_group(self.run_batch_btn)
+        self.run_batch_btn.setAutoDefault(False)
         self.run_batch_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.run_batch_btn.clicked.connect(self.start_batch_solve)
         bar.addWidget(self.run_batch_btn)
@@ -714,13 +506,13 @@ class DoEStudioWidget(TrubaParallelMixin, QWidget):
         self.stop_batch_btn.clicked.connect(self.stop_active_queue)
         bar.addWidget(self.stop_batch_btn)
 
-        bottom_layout.addWidget(bar_frame)
+        layout.addWidget(bar_frame)
 
         # 4. Excel-like QTableWidget
-        self.table = QTableWidget(0, len(TABLE_COLUMNS))
+        self.table = QTableWidget(0, len(self.table_columns))
         self.table.setObjectName("doeExperimentTable")
         self.table.setShowGrid(False)
-        self.table.setHorizontalHeaderLabels(list(TABLE_COLUMNS))
+        self.table.setHorizontalHeaderLabels(self.table_columns)
         self.table.setAlternatingRowColors(True)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
@@ -728,52 +520,18 @@ class DoEStudioWidget(TrubaParallelMixin, QWidget):
         self.table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         self.table.horizontalHeader().setStretchLastSection(True)
-        for column, title in enumerate(TABLE_COLUMNS):
+        for column, title in enumerate(self.table_columns):
             width = self.table.fontMetrics().horizontalAdvance(title) + 18
             self.table.setColumnWidth(column, max(85, min(240, width)))
             self.table.horizontalHeaderItem(column).setToolTip(title)
         self.table.itemChanged.connect(self._on_table_item_changed)
         self.table.cellDoubleClicked.connect(self._on_row_double_clicked)
-        bottom_layout.addWidget(self.table, 1)
+        layout.addWidget(self.table, 1)
 
-        from new_doe_page import NewDoePage
-        self.new_doe = NewDoePage(self._operation_host, self._preferences)
-        self.planner.tabs.insertTab(0, self.new_doe, "DoE")
-        self.planner.tabs.setCurrentWidget(self.new_doe)
-        self._matrix_tab = self.planner.tabs.addTab(bottom_panel, "DoE2")
-        self._legacy_plan_tab = PLAN_MATRIX_TAB
-        from doe_sample_settings import SampleSettingsPage
-        self.sample_settings = SampleSettingsPage(self)
-        self.planner.tabs.addTab(self.sample_settings, "Settings")
-        # Use version 1 plan tab IDs independent of the current navigation order.
-        self._legacy_plan_tabs = {2: self.planner.learning_page, PLAN_MATRIX_TAB: bottom_panel, 4: self.sample_settings}
-
-        def select_page(index):
-            page = self.planner.tabs.widget(index)
-            legacy = page is not self.new_doe
-            if legacy:
-                self._legacy_plan_tab = next(tab for tab, widget in self._legacy_plan_tabs.items() if widget is page)
-            self.planner.plan_footer.setVisible(legacy)
-            self.new_doe.size_navigation(self.planner.navigation, not legacy)
-
-        self._settings_navigation = self.planner.navigation.add_tabs(self.planner.tabs)
-        self.planner.tabs.currentChanged.connect(select_page)
-        select_page(self.planner.tabs.currentIndex())
-        self.vertical_splitter.setStretchFactor(0, 0)
-        self.vertical_splitter.setSizes([730])
-        root.addWidget(self.vertical_splitter, 1)
-
-        footer = QLabel("Edit values directly in the table · Double-click a row to preview · Table data for CSV and Excel")
-        self.footer_label = footer
-        footer.setObjectName("mutedHintLabel")
-        footer.setWordWrap(True)
-        root.addWidget(footer)
-        footer.hide()
-        self.planner.tabs.currentChanged.connect(lambda index: footer.setVisible(index == self._matrix_tab))
-
-        for button in self.findChildren(QPushButton):
-            button.setAutoDefault(False)
-            button.setDefault(False)
+        self.footer_label = QLabel("Edit values directly in the table · Double-click a row to preview · Table data for CSV and Excel")
+        self.footer_label.setObjectName("mutedHintLabel")
+        self.footer_label.setWordWrap(True)
+        return panel
 
     def _size_action_group(self, *buttons):
         """Keep related actions equal and large enough for their styled labels."""
@@ -791,218 +549,16 @@ class DoEStudioWidget(TrubaParallelMixin, QWidget):
 
     def showEvent(self, event):
         super().showEvent(event)
-        self.restore_workspace_draft()
-        # The parent window's stylesheet may be installed after construction.
-        # Measure after inheritance so every complete label fits at this DPI.
         for buttons in self._action_groups:
             self._size_action_group(*buttons)
-        if self.settings_tabs.currentWidget() is self.new_doe:
-            self.new_doe.size_navigation(self.planner.navigation, True)
 
-    def _add_factor_controls(self, parent, spec) -> None:
-        field, label, lower, upper, minimum, maximum, levels = spec
-        enabled = QCheckBox(label, parent)
-        low = NumericLineEdit(minimum, lower, upper)
-        high = NumericLineEdit(maximum, lower, upper)
-        count = NumericLineEdit(levels, 2, 50)
-        low.setToolTip("Lowest value included in this variable's range.")
-        high.setToolTip("Highest value included in this variable's range.")
-        count.setToolTip("Number of evenly spaced values, including Min and Max. For example: Min 20, Max 40, Levels 3 gives 20, 30, 40. LHS uses Runs per design instead.")
-        self.factor_controls[field] = (enabled, low, high, count)
-        enabled.toggled.connect(self._refresh_plan)
-        for control in (low, high, count):
-            control.setParent(parent)
-            control.valueChanged.connect(self._refresh_plan)
-
-    def _update_design_caption(self, index):
-        settings = self._designs[index]
-        self.design_list.item(index).setText(
-            f"{settings.structure_name} | {settings.size:g} mm · {settings.solid_fraction:g}% · {settings.mesh_type}")
-        self.design_list.item(index).setToolTip(
-            f"{settings.structure_family} · {settings.tpms_morphology}\nCube: {settings.size:g} mm · Cell: {settings.cell_size:g} mm")
-
-    def _included_designs(self):
-        # Designs supplying range endpoints must not multiply identical runs.
-        included, signatures = [], []
-        for index, (design, factors) in enumerate(zip(self._designs, self._design_factors)):
-            if self.design_list.item(index).checkState() != Qt.CheckState.Checked:
-                continue
-            signature = (replace(design, **{name: limits[0] for name, limits in factors.items()}), factors)
-            if signature not in signatures:
-                signatures.append(signature)
-                included.append((design, factors))
-        return included
-
-    def add_design(self, settings: Settings, *, allow_duplicate=False) -> None:
-        """Capture a model snapshot or select the matching existing design."""
-        if not allow_duplicate and settings in self._designs:
-            self.design_list.setCurrentRow(self._designs.index(settings))
-            return
-        self._designs.append(settings)
-        from doe_planner import geometry_group
-        self._design_factors.append(self.planner._group_factors.get(geometry_group(settings), {}).copy())
-        morphology = TPMS_MORPHOLOGIES[settings.tpms_morphology].split(" (")[0]
-        name = settings.structure_name
-        if settings.structure_family == "tpms":
-            name += f" · {morphology}"
-        item = QListWidgetItem(
-            f"{name} | {settings.size:g} mm · {settings.solid_fraction:g}%"
-        )
-        item.setToolTip(
-            f"{name} | Cube {settings.size:g} mm · Period {settings.cell_size:g} mm"
-            f" · Solid {settings.solid_fraction:g}% · {settings.mesh_type} · {settings.material_name}"
-        )
-        item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
-        item.setCheckState(Qt.CheckState.Checked)
-        self.design_list.addItem(item)
-        self.design_list.setCurrentRow(len(self._designs) - 1)
-        self._refresh_plan()
-
-    def _select_design(self, index):
-        self._selected_design = index
-        self._loading_design = True
-        try:
-            has_design = 0 <= index < len(self._designs)
-            if has_design:
-                settings = self._designs[index]
-                for field, control in self.design_value_controls.items():
-                    control.setValue(getattr(settings, field))
-            factors = self._design_factors[index] if has_design else {}
-            for spec in (*FACTOR_SPECS, SIZE_FACTOR_SPEC):
-                field, _, _, _, low, high, count = spec
-                enabled, lo, hi, levels = self.factor_controls[field]
-                enabled.setChecked(field in factors)
-                lower, upper, steps = factors.get(field, (low, high, count))
-                lo.setValue(lower)
-                hi.setValue(upper)
-                levels.setValue(steps)
-        finally:
-            self._loading_design = False
-        self._refresh_plan()
-
-    def _edit_design(self, *_):
-        if (self._loading_design or self._selected_design < 0
-                or self._active_mode is not None):
-            return
-        index = self._selected_design
-        settings = replace(self._designs[index],
-                           **{field: control.value() for field, control in self.design_value_controls.items()})
-        self._designs[index] = settings
-        self._update_design_caption(index)
-        self._refresh_plan()
-
-    def _active_factors(self) -> dict[str, tuple[float, float, int]]:
-        return {
-            name: (low.value(), high.value(), count.value())
-            for name, (enabled, low, high, count) in self.factor_controls.items()
-            if enabled.isChecked()
-        }
-
-    def _refresh_plan(self, *_) -> None:
-        if self._loading_design:
-            return
-        lhs = self.sampling_combo.currentData() == "lhs"
-        factors = self._active_factors()
-        if 0 <= self._selected_design < len(self._design_factors):
-            from doe_planner import geometry_group
-            group = geometry_group(self._designs[self._selected_design])
-            self.planner._group_factors[group] = factors.copy()
-            for index, design in enumerate(self._designs):
-                if geometry_group(design) == group:
-                    self._design_factors[index] = factors.copy()
-        for name, (_, low, high, count) in self.factor_controls.items():
-            varies = name in factors
-            low.setEnabled(varies)
-            high.setEnabled(varies)
-            count.setEnabled(varies and not lhs)
-        idle = self._active_mode is None
-        self.design_list.setEnabled(idle)
-        self.matrix_tabs.setEnabled(idle)
-        self.matrix_navigation.setEnabled(idle)
-        self.sample_settings.setEnabled(idle)
-        self.open_plan_btn.setEnabled(idle)
-        self.save_plan_btn.setEnabled(idle)
-        ml_total, ml_message = self._plan_summary(True, self.ml_count_spin.value())
-        self.ml_plan_label.setText(ml_message + "\nUses each geometry's selected variables. Without variables, only its reference case is generated.")
-        self.generate_ml_btn.setEnabled(0 < ml_total <= MAX_DOE_ROWS and idle)
-
-    def _plan_summary(self, lhs, sample_count=None) -> tuple[int, str]:
-        designs = len(self._included_designs())
-        if not designs:
-            return 0, "Add a geometry and check the saved designs to include in your experiment plan."
-        total = 0
-        for design, design_factors in self._included_designs():
-            errors = validate_geometry(design, include_mesh=False)
-            if errors:
-                return 0, f"{design.structure_name}: {errors[0]}"
-            for name, (low, high, _) in design_factors.items():
-                if low >= high:
-                    return 0, f"{design.structure_name} · {name}: Min must be below Max."
-                if design.imported_geometry_path:
-                    return 0, "Imported geometry has fixed dimensions; disable geometry variables."
-            total += ((sample_count or self.lhs_count_spin.value()) if lhs and design_factors
-                      else math.prod(levels for _, _, levels in design_factors.values()))
-        if total > MAX_DOE_ROWS:
-            return total, f"{total:,} runs exceed the {MAX_DOE_ROWS:,}-run limit."
-        return total, f"{designs} reference configurations · {total:,} experiments"
-
-    def generate_table(self) -> None:
-        total, _ = self._plan_summary(self.sampling_combo.currentData() == "lhs")
-        if 0 < total <= MAX_DOE_ROWS:
-            self._generate_matrix(0)
-
-    def generate_ml_table(self) -> None:
-        if self.generate_ml_btn.isEnabled():
-            self._generate_matrix(1)
-
-    def _generate_matrix(self, target):
-        if self._active_mode is not None:
-            return
-        if self._matrix_index == target:
-            self._matrix_rows[target] = self._rows
-        if self._matrix_rows[target] and QMessageBox.question(
-            self, "Replace experiments?", "Generating a new plan replaces the current table."
-        ) != QMessageBox.StandardButton.Yes:
-            return
-        rows = []
-        for design, factors in self._included_designs():
-            rows.extend(generate_doe_rows(
-                [design], factors, "lhs" if target else self.sampling_combo.currentData(),
-                self.ml_count_spin.value() if target else self.lhs_count_spin.value(),
-                self.ml_seed_spin.value() if target else self.sampling_seed.value(),
-                self.common_strain_spin.value() if self.common_strain_check.isChecked() else None,
-            ))
-        for index, row in enumerate(rows, 1):
-            row.exp_id = f"{'ML' if target else 'EXP'}-{index:04d}"
-            errors = validate_geometry(row.to_settings(self._settings_provider()), include_mesh=False)
-            if errors:
-                QMessageBox.warning(self, "Invalid experiment range", f"{row.exp_id} · {row.structure_name}: {errors[0]}\nAdjust this geometry's fixed values or variable ranges.")
-                return
-        self.sample_settings.apply_names(rows)
-        self._matrix_rows[self._matrix_index] = self._rows
-        self._matrix_rows[target] = rows
-        self.matrix_tabs.setCurrentIndex(target)
-        self._matrix_index = target
-        self._rows = rows
-        self._refresh_table_view()
-        self.planner.tabs.setCurrentIndex(self._matrix_tab)
-
-    def _switch_matrix(self, index):
-        if self._active_mode is not None:
-            self.matrix_tabs.blockSignals(True)
-            self.matrix_tabs.setCurrentIndex(self._matrix_index)
-            self.matrix_tabs.blockSignals(False)
-            return
-        self._matrix_rows[self._matrix_index] = self._rows
-        self._matrix_index = index
-        self._rows = self._matrix_rows[index]
-        self._refresh_table_view()
+    def _refresh_plan(self):
+        pass
 
     def _refresh_table_view(self) -> None:
         self._updating_table = True
-        columns = (*TABLE_COLUMNS, "Dataset split", "Geometry group") if self._matrix_index else TABLE_COLUMNS
-        self.table.setColumnCount(len(columns))
-        self.table.setHorizontalHeaderLabels(columns)
+        self.table.setColumnCount(len(self.table_columns))
+        self.table.setHorizontalHeaderLabels(self.table_columns)
         self.table.setRowCount(len(self._rows))
         for r_idx, row in enumerate(self._rows):
             self._write_row_cells(r_idx, row)
@@ -1044,7 +600,7 @@ class DoEStudioWidget(TrubaParallelMixin, QWidget):
         _set_cell(COL_MESH, f"{row.mesh_resolution:.3f}", editable=True, align_right=True)
         _set_cell(COL_COMP, f"{row.compression:.4f}", editable=True, align_right=True)
         _set_cell(COL_SEED, str(row.random_seed), editable=True, align_right=True)
-        if self._matrix_index:
+        if self.editable_experiments:
             group, split, *_ = row.dataset_columns()
             _set_cell(len(TABLE_COLUMNS), split, editable=False)
             _set_cell(len(TABLE_COLUMNS) + 1, group, editable=False)
@@ -1209,29 +765,6 @@ class DoEStudioWidget(TrubaParallelMixin, QWidget):
             f"{ready_count} ready · {completed_count} solved"
         )
 
-    def add_blank_row(self) -> None:
-        if self._active_mode is not None:
-            return
-        base = self._designs[self._selected_design] if self._selected_design >= 0 else self._settings_provider()
-        idx = len(self._rows) + 1
-        self._rows.append(
-            ExperimentRow(
-                exp_id=f"{'ML' if self._matrix_index else 'EXP'}-{idx:04d}",
-                enabled=True,
-                structure_family=base.structure_family,
-                structure_name=base.structure_name,
-                tpms_morphology=base.tpms_morphology,
-                size=base.size,
-                cell_size=base.cell_size,
-                solid_fraction=base.solid_fraction,
-                mesh_resolution=base.mesh_resolution,
-                compression=base.compression,
-                random_seed=base.random_seed,
-                design_settings=base,
-            )
-        )
-        self._refresh_table_view()
-
     def delete_selected_rows(self) -> None:
         if self._active_future is not None:
             return
@@ -1241,8 +774,6 @@ class DoEStudioWidget(TrubaParallelMixin, QWidget):
         for r in selected_rows:
             if 0 <= r < len(self._rows):
                 self._rows.pop(r)
-        for i, row in enumerate(self._rows, start=1):
-            row.exp_id = f"{'ML' if self._matrix_index else 'EXP'}-{i:04d}"
         self._refresh_table_view()
 
     def _on_row_double_clicked(self, row_index: int, _col_index: int) -> None:
@@ -1552,10 +1083,6 @@ class DoEStudioWidget(TrubaParallelMixin, QWidget):
         done_count = self._total_queued - len(self._queue)
         self.progress_bar.setValue(done_count)
 
-    def _new_dataset_path(self) -> Path:
-        stem = self._plan_path.name.split(".")[0] if self._plan_path else "unsaved-plan"
-        return results_directory() / f"{stem}_{datetime.now():%Y%m%d-%H%M%S}.csv"
-
     def _persist_progress(self) -> None:
         """Save results and a recovery copy of the plan; failures stay visible."""
         problems = []
@@ -1654,7 +1181,7 @@ class DoEStudioWidget(TrubaParallelMixin, QWidget):
         filename, _ = QFileDialog.getSaveFileName(
             self,
             "Export Design of Experiments Table (CSV / Excel)",
-            str(ROOT / ("ml_experiment_matrix.csv" if self._matrix_index else "doe_experiment_table.csv")),
+            str(ROOT / "ml_experiment_matrix.csv"),
             "CSV Spreadsheet (*.csv)",
         )
         if filename:
@@ -1750,9 +1277,437 @@ class DoEStudioWidget(TrubaParallelMixin, QWidget):
         return self._rows
 
     def dispose(self) -> None:
-        self.save_workspace_draft()
-        self.new_doe.cancel()
-        self.sample_settings.save_preferences()
         self._stop_requested = True
         self._poll_timer.stop()
         self.stop_active_queue()
+
+
+class DoEStudioWidget(ExperimentTableWidget):
+    """Operation-specific DoE, dataset generation and sample settings."""
+
+    editable_experiments = True
+    autosave_recovery_plan = True
+
+    def __init__(self, settings_provider, mesh_generator, batch_solver_runner=None, parent=None,
+                 *, operation_host=None, preferences=None):
+        self._operation_host = operation_host
+        self._preferences = preferences
+        self._workspace_draft = None
+        self._plan_path = None
+        self._designs = []
+        self._design_factors = []
+        self._selected_design = -1
+        self._loading_design = False
+        super().__init__(settings_provider, mesh_generator, batch_solver_runner, parent)
+        self.layout().addWidget(self.planner.plan_footer)
+        self._refresh_plan()
+        self._saved_plan_state = self.capture_plan()
+
+    def _build_ui(self):
+        from doe_planner import SimpleDoEPlanner
+        from doe_sample_settings import SampleSettingsPage
+        from new_doe_page import NewDoePage
+
+        root = QVBoxLayout(self)
+        self.setObjectName("doeWorkspace")
+        root.setContentsMargins(6, 6, 6, 4)
+        root.setSpacing(4)
+        self.vertical_splitter = QSplitter(Qt.Orientation.Vertical)
+        self.vertical_splitter.setObjectName("doePlannerWorkspaceV2")
+        self.vertical_splitter.setChildrenCollapsible(True)
+        self.vertical_splitter.setOpaqueResize(True)
+        self.vertical_splitter.setHandleWidth(3)
+
+        self.planner = SimpleDoEPlanner(self, (*FACTOR_SPECS, SIZE_FACTOR_SPEC))
+        self.vertical_splitter.addWidget(self.planner)
+        self.planner.learning_layout.addWidget(self._build_experiment_panel(), 1)
+
+        self.new_doe = NewDoePage(self._operation_host, self._preferences)
+        self.planner.tabs.insertTab(0, self.new_doe, "DoE")
+        self.planner.tabs.setCurrentWidget(self.new_doe)
+        self.sample_settings = SampleSettingsPage(self)
+        self.planner.tabs.addTab(self.sample_settings, "Settings")
+        self._legacy_plan_tab = LEARNING_PLAN_TAB
+        self._legacy_plan_tabs = {LEARNING_PLAN_TAB: self.planner.learning_page, 4: self.sample_settings}
+
+        def select_page(index):
+            page = self.planner.tabs.widget(index)
+            legacy = page is not self.new_doe
+            if legacy:
+                self._legacy_plan_tab = next(tab for tab, widget in self._legacy_plan_tabs.items() if widget is page)
+            self.planner.plan_footer.setVisible(legacy)
+            self.new_doe.size_navigation(self.planner.navigation, not legacy)
+            self.footer_label.setVisible(page is self.planner.learning_page)
+
+        self.planner.navigation.add_tabs(self.planner.tabs)
+        self.planner.tabs.currentChanged.connect(select_page)
+        self.vertical_splitter.setStretchFactor(0, 0)
+        self.vertical_splitter.setSizes([730])
+        root.addWidget(self.vertical_splitter, 1)
+        root.addWidget(self.footer_label)
+        select_page(self.planner.tabs.currentIndex())
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self.restore_workspace_draft()
+        if self.settings_tabs.currentWidget() is self.new_doe:
+            self.new_doe.size_navigation(self.planner.navigation, True)
+
+    def dispose(self):
+        self.save_workspace_draft()
+        self.new_doe.cancel()
+        self.sample_settings.save_preferences()
+        super().dispose()
+
+    def capture_plan(self, *, commit=False, inputs_only=False):
+        from doe_plan import PLAN_FORMAT, PLAN_VERSION
+        if commit:
+            # Save the text still being edited, even before focus leaves the field.
+            for field in self.findChildren(NumericLineEdit):
+                field.interpretText()
+        return dict(
+            format=PLAN_FORMAT, version=PLAN_VERSION,
+            designs=[dict(settings=asdict(design), factors=factors.copy(),
+                          enabled=self.design_list.item(i).checkState() == Qt.CheckState.Checked)
+                     for i, (design, factors) in enumerate(zip(self._designs, self._design_factors))],
+            draft=asdict(self.planner.saved_draft),
+            variable_editor={name: dict(enabled=enabled.isChecked(), min=low.value(),
+                                        max=high.value())
+                             for name, (enabled, low, high) in self.factor_controls.items()},
+            options=dict(ml_count=self.ml_count_spin.value(), ml_seed=self.ml_seed_spin.value(),
+                         common_strain_enabled=self.common_strain_check.isChecked(),
+                         common_strain=self.common_strain_spin.value()),
+            rows=[] if inputs_only else [asdict(row) for row in self._rows],
+            sample_settings={} if inputs_only else self.sample_settings.state(),
+            selection=dict(design=self._selected_design, tab=self._legacy_plan_tab),
+        )
+
+    def restore_workspace_draft(self):
+        from doe_plan import decode_plan
+
+        if self._preferences is None or self._workspace_draft is not None:
+            return
+        raw = self._preferences.value("doe/classicDraft", "", type=str)
+        if raw:
+            try:
+                plan = decode_plan(json.loads(raw))
+            except ValueError:
+                pass
+            else:
+                self._restore_plan(plan, select_tab=False)
+                self._saved_plan_state = self.capture_plan()
+        self._workspace_draft = self.capture_plan(inputs_only=True)
+
+    def save_workspace_draft(self):
+        self.new_doe.save_draft(commit=True)
+        if self._workspace_draft is None:
+            return
+        draft = self.capture_plan(commit=True, inputs_only=True)
+        if draft != self._workspace_draft:
+            self._preferences.setValue("doe/classicDraft", json.dumps(draft, ensure_ascii=False))
+            self._preferences.sync()
+            self._workspace_draft = draft
+
+    def _set_plan_path(self, path):
+        self._plan_path = Path(path).resolve()
+        self.plan_file_label.setText(self._plan_path.name)
+        self.plan_file_label.setToolTip(str(self._plan_path))
+
+    def save_plan_path(self, path):
+        if self._active_mode is not None:
+            raise RuntimeError('Wait for the current batch to finish or stop it before saving the plan.')
+        from doe_plan import write_plan
+        payload = self.capture_plan(commit=True)
+        write_plan(path, payload)
+        self._saved_plan_state = payload
+        self._set_plan_path(path)
+
+    def open_plan_path(self, path):
+        from doe_plan import read_plan
+        if self._active_mode is not None:
+            raise RuntimeError('Wait for the current batch to finish or stop it before opening a plan.')
+        self._restore_plan(read_plan(path))
+        self._set_plan_path(path)
+        self._saved_plan_state = self.capture_plan()
+
+    def _restore_plan(self, plan, *, select_tab=True):
+        from doe_planner import geometry_group
+        self._loading_design = True
+        controls = (self.design_list, self.ml_count_spin, self.ml_seed_spin,
+                    self.common_strain_check, self.common_strain_spin)
+        blockers = [QSignalBlocker(control) for control in controls]
+        try:
+            self._selected_design = -1
+            self.design_list.clear()
+            self._designs = [entry['settings'] for entry in plan['designs']]
+            self._design_factors = [entry['factors'] for entry in plan['designs']]
+            self.planner._group_factors.clear()
+            for i, entry in enumerate(plan['designs']):
+                item = QListWidgetItem()
+                item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+                item.setCheckState(Qt.CheckState.Checked if entry['enabled'] else Qt.CheckState.Unchecked)
+                self.design_list.addItem(item)
+                self._update_design_caption(i)
+                self.planner._group_factors[geometry_group(entry['settings'])] = entry['factors'].copy()
+            options = plan['options']
+            for control, key in ((self.ml_count_spin, 'ml_count'), (self.ml_seed_spin, 'ml_seed'),
+                                 (self.common_strain_spin, 'common_strain')):
+                control.setValue(options[key])
+            self.common_strain_check.setChecked(options['common_strain_enabled'])
+            self.common_strain_spin.setEnabled(options['common_strain_enabled'])
+            self.planner.saved_draft = plan['draft']
+            selection = plan['selection']
+            self.design_list.setCurrentRow(selection['design'])
+            self._rows = plan['rows']
+            mark_interrupted(self._rows)
+            self._queue.clear()
+            self._stop_requested = False
+        finally:
+            self._loading_design = False
+            del blockers
+        self._select_design(selection['design'])
+        self._loading_design = True
+        try:
+            for name, state in plan['variable_editor'].items():
+                enabled, low, high = self.factor_controls[name]
+                enabled.setChecked(state['enabled'])
+                low.setValue(state['min'])
+                high.setValue(state['max'])
+        finally:
+            self._loading_design = False
+        self._refresh_plan()
+        self._refresh_table_view()
+        self.sample_settings.restore_state(plan.get("sample_settings", {}))
+        saved_tab = selection['tab']
+        self._legacy_plan_tab = saved_tab if saved_tab in self._legacy_plan_tabs else LEARNING_PLAN_TAB
+        if select_tab:
+            self.settings_tabs.setCurrentWidget(self._legacy_plan_tabs[self._legacy_plan_tab])
+
+    def save_plan_dialog(self):
+        from doe_plan import PLAN_FILTER
+        if self._active_mode is not None:
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            self, 'Save DoE plan', str(self._plan_path or Path.home() / 'plan.rustmech-doe.json'), PLAN_FILTER)
+        if path:
+            if not path.lower().endswith('.json'):
+                path += '.rustmech-doe.json'
+            try:
+                self.save_plan_path(path)
+            except (OSError, ValueError, RuntimeError) as error:
+                QMessageBox.warning(self, 'Cannot save DoE plan', str(error))
+
+    def open_plan_dialog(self):
+        from doe_plan import PLAN_FILTER, read_plan
+        if self._active_mode is not None:
+            return
+        path, _ = QFileDialog.getOpenFileName(
+            self, 'Open DoE plan', str(self._plan_path.parent if self._plan_path else Path.home()), PLAN_FILTER)
+        if not path:
+            return
+        try:
+            plan = read_plan(path)
+            current = self.capture_plan(commit=True)
+            changed = any(current[key] != self._saved_plan_state[key] for key in current if key != 'selection')
+            if changed and QMessageBox.question(
+                self, 'Unsaved DoE plan', 'Opening this file replaces your unsaved plan. Continue?',
+                QMessageBox.StandardButton.Discard | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Cancel,
+            ) != QMessageBox.StandardButton.Discard:
+                return
+            self._restore_plan(plan)
+            self._set_plan_path(path)
+            self._saved_plan_state = self.capture_plan()
+        except (OSError, ValueError, RuntimeError) as error:
+            QMessageBox.warning(self, 'Cannot open DoE plan', str(error))
+
+    def _add_factor_controls(self, parent, spec) -> None:
+        field, label, lower, upper, minimum, maximum = spec
+        enabled = QCheckBox(label, parent)
+        low = NumericLineEdit(minimum, lower, upper)
+        high = NumericLineEdit(maximum, lower, upper)
+        low.setToolTip("Lowest value included in this variable's range.")
+        high.setToolTip("Highest value included in this variable's range.")
+        self.factor_controls[field] = (enabled, low, high)
+        enabled.toggled.connect(self._refresh_plan)
+        for control in (low, high):
+            control.setParent(parent)
+            control.valueChanged.connect(self._refresh_plan)
+
+    def _update_design_caption(self, index):
+        settings = self._designs[index]
+        self.design_list.item(index).setText(
+            f"{settings.structure_name} | {settings.size:g} mm · {settings.solid_fraction:g}% · {settings.mesh_type}")
+        self.design_list.item(index).setToolTip(
+            f"{settings.structure_family} · {settings.tpms_morphology}\nCube: {settings.size:g} mm · Cell: {settings.cell_size:g} mm")
+
+    def _included_designs(self):
+        # Designs supplying range endpoints must not multiply identical runs.
+        included, signatures = [], []
+        for index, (design, factors) in enumerate(zip(self._designs, self._design_factors)):
+            if self.design_list.item(index).checkState() != Qt.CheckState.Checked:
+                continue
+            signature = (replace(design, **{name: limits[0] for name, limits in factors.items()}), factors)
+            if signature not in signatures:
+                signatures.append(signature)
+                included.append((design, factors))
+        return included
+
+    def add_design(self, settings: Settings, *, allow_duplicate=False) -> None:
+        """Capture a model snapshot or select the matching existing design."""
+        if not allow_duplicate and settings in self._designs:
+            self.design_list.setCurrentRow(self._designs.index(settings))
+            return
+        self._designs.append(settings)
+        from doe_planner import geometry_group
+        self._design_factors.append(self.planner._group_factors.get(geometry_group(settings), {}).copy())
+        morphology = TPMS_MORPHOLOGIES[settings.tpms_morphology].split(" (")[0]
+        name = settings.structure_name
+        if settings.structure_family == "tpms":
+            name += f" · {morphology}"
+        item = QListWidgetItem(
+            f"{name} | {settings.size:g} mm · {settings.solid_fraction:g}%"
+        )
+        item.setToolTip(
+            f"{name} | Cube {settings.size:g} mm · Period {settings.cell_size:g} mm"
+            f" · Solid {settings.solid_fraction:g}% · {settings.mesh_type} · {settings.material_name}"
+        )
+        item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+        item.setCheckState(Qt.CheckState.Checked)
+        self.design_list.addItem(item)
+        self.design_list.setCurrentRow(len(self._designs) - 1)
+        self._refresh_plan()
+
+    def _select_design(self, index):
+        self._selected_design = index
+        self._loading_design = True
+        try:
+            has_design = 0 <= index < len(self._designs)
+            if has_design:
+                settings = self._designs[index]
+                for field, control in self.design_value_controls.items():
+                    control.setValue(getattr(settings, field))
+            factors = self._design_factors[index] if has_design else {}
+            for spec in (*FACTOR_SPECS, SIZE_FACTOR_SPEC):
+                field, _, _, _, low, high = spec
+                enabled, lo, hi = self.factor_controls[field]
+                enabled.setChecked(field in factors)
+                lower, upper = factors.get(field, (low, high))
+                lo.setValue(lower)
+                hi.setValue(upper)
+        finally:
+            self._loading_design = False
+        self._refresh_plan()
+
+    def _edit_design(self, *_):
+        if (self._loading_design or self._selected_design < 0
+                or self._active_mode is not None):
+            return
+        index = self._selected_design
+        settings = replace(self._designs[index],
+                           **{field: control.value() for field, control in self.design_value_controls.items()})
+        self._designs[index] = settings
+        self._update_design_caption(index)
+        self._refresh_plan()
+
+    def _active_factors(self) -> dict[str, tuple[float, float]]:
+        return {
+            name: (low.value(), high.value())
+            for name, (enabled, low, high) in self.factor_controls.items()
+            if enabled.isChecked()
+        }
+
+    def _refresh_plan(self, *_) -> None:
+        if self._loading_design:
+            return
+        factors = self._active_factors()
+        if 0 <= self._selected_design < len(self._design_factors):
+            from doe_planner import geometry_group
+            group = geometry_group(self._designs[self._selected_design])
+            self.planner._group_factors[group] = factors.copy()
+            for index, design in enumerate(self._designs):
+                if geometry_group(design) == group:
+                    self._design_factors[index] = factors.copy()
+        for name, (_, low, high) in self.factor_controls.items():
+            varies = name in factors
+            low.setEnabled(varies)
+            high.setEnabled(varies)
+        idle = self._active_mode is None
+        self.design_list.setEnabled(idle)
+        self.sample_settings.setEnabled(idle)
+        self.open_plan_btn.setEnabled(idle)
+        self.save_plan_btn.setEnabled(idle)
+        ml_total, ml_message = self._plan_summary()
+        self.ml_plan_label.setText(ml_message + "\nUses each geometry's selected variables. Without variables, only its reference case is generated.")
+        self.generate_ml_btn.setEnabled(0 < ml_total <= MAX_DOE_ROWS and idle)
+
+    def _plan_summary(self):
+        designs = self._included_designs()
+        if not designs:
+            return 0, "Add a geometry and check the saved designs to include in your experiment plan."
+        total = 0
+        for design, factors in designs:
+            errors = validate_geometry(design, include_mesh=False)
+            if errors:
+                return 0, f"{design.structure_name}: {errors[0]}"
+            for name, (low, high) in factors.items():
+                if low >= high:
+                    return 0, f"{design.structure_name} · {name}: Min must be below Max."
+                if design.imported_geometry_path:
+                    return 0, "Imported geometry has fixed dimensions; disable geometry variables."
+            total += self.ml_count_spin.value() if factors else 1
+        if total > MAX_DOE_ROWS:
+            return total, f"{total:,} runs exceed the {MAX_DOE_ROWS:,}-run limit."
+        return total, f"{len(designs)} reference configurations · {total:,} experiments"
+
+    def generate_ml_table(self):
+        if not self.generate_ml_btn.isEnabled() or self._active_mode is not None:
+            return
+        if self._rows and QMessageBox.question(
+            self, "Replace experiments?", "Generating a new plan replaces the current table."
+        ) != QMessageBox.StandardButton.Yes:
+            return
+        rows = []
+        for design, factors in self._included_designs():
+            rows.extend(generate_doe_rows(
+                [design], factors, self.ml_count_spin.value(), self.ml_seed_spin.value(),
+                self.common_strain_spin.value() if self.common_strain_check.isChecked() else None,
+            ))
+        for index, row in enumerate(rows, 1):
+            row.exp_id = f"ML-{index:04d}"
+            errors = validate_geometry(row.to_settings(self._settings_provider()), include_mesh=False)
+            if errors:
+                QMessageBox.warning(self, "Invalid experiment range", f"{row.exp_id} · {row.structure_name}: {errors[0]}\nAdjust this geometry's fixed values or variable ranges.")
+                return
+        self.sample_settings.apply_names(rows)
+        self._rows = rows
+        self._refresh_table_view()
+
+    def add_blank_row(self) -> None:
+        if self._active_mode is not None:
+            return
+        base = self._designs[self._selected_design] if self._selected_design >= 0 else self._settings_provider()
+        from doe_sample_rules import unique_name
+
+        exp_id = unique_name(f"ML-{len(self._rows) + 1:04d}", (row.exp_id for row in self._rows))
+        self._rows.append(
+            ExperimentRow(
+                exp_id=exp_id,
+                enabled=True,
+                structure_family=base.structure_family,
+                structure_name=base.structure_name,
+                tpms_morphology=base.tpms_morphology,
+                size=base.size,
+                cell_size=base.cell_size,
+                solid_fraction=base.solid_fraction,
+                mesh_resolution=base.mesh_resolution,
+                compression=base.compression,
+                random_seed=base.random_seed,
+                design_settings=base,
+            )
+        )
+        self._refresh_table_view()
+
+    def _new_dataset_path(self) -> Path:
+        stem = self._plan_path.name.split(".")[0] if self._plan_path else "unsaved-plan"
+        return results_directory() / f"{stem}_{datetime.now():%Y%m%d-%H%M%S}.csv"

@@ -41,7 +41,7 @@ class DoEResultsPersistenceTests(unittest.TestCase):
             window.open_workspace()
             self.app.processEvents()
         studio.add_design(Settings())
-        studio.generate_table()
+        studio.generate_ml_table()
         self.assertEqual(len(studio.rows), 1)
         return studio
 
@@ -135,8 +135,8 @@ class DoEResultsPersistenceTests(unittest.TestCase):
         studio._persist_progress()
         self.assertIn("Completed", studio._dataset_path.read_text(encoding="utf-8-sig"))
         recovery = read_plan(studio._dataset_path.with_suffix(".rustmech-doe.json"))
-        self.assertEqual(recovery["matrices"]["doe"][0].status, "Completed")
-        self.assertEqual(recovery["matrices"]["doe"][0].run_folder, "X:/run1")
+        self.assertEqual(recovery["rows"][0].status, "Completed")
+        self.assertEqual(recovery["rows"][0].run_folder, "X:/run1")
         self.assertEqual(studio.footer_label.text(), default)
         with patch.object(studio, "export_csv_path", side_effect=OSError("disk full")):
             studio._persist_progress()
@@ -164,7 +164,7 @@ class DoEResultsPersistenceTests(unittest.TestCase):
         self.assertIn("321.0000", text)
         self.assertIn("X:/run-live", text)
         recovery = read_plan(dataset.with_suffix(".rustmech-doe.json"))
-        self.assertEqual(recovery["matrices"]["doe"][0].max_force_n, 321.0)
+        self.assertEqual(recovery["rows"][0].max_force_n, 321.0)
         self.assertFalse((Path(self.temp.name) / "doe_master_dataset.csv").exists())
 
 
