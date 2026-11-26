@@ -1,5 +1,5 @@
 """Persistent analysis snapshots using the established batch worker and table."""
-from contextlib import ExitStack, contextmanager
+from contextlib import contextmanager
 from dataclasses import asdict
 from hashlib import sha256
 import json
@@ -8,15 +8,12 @@ from pathlib import Path
 from uuid import uuid4
 
 from PySide6.QtCore import QLockFile, Qt, Signal
-from PySide6.QtWidgets import QLabel, QMessageBox, QPushButton, QTableWidgetItem
+from PySide6.QtWidgets import QLabel, QPushButton, QTableWidgetItem
 
 from design_exchange import pool_directory
 from doe_studio import (COL_RUN, COL_STRUCTURE, DoEStudioWidget, DoEStudioWindow,
                         ExperimentRow, TABLE_COLUMNS, generate_doe_rows)
-from folder_batch_results import (FolderResultMixin, LEGACY_BATCH_DIRECTORY, batch_directory,
-                                  folder_job_row, move_batch_workspace,
-                                  relocate_batch_report, relocate_queue_row, validate_folder_snapshot)
-from model import ROOT, settings_from_dict, validate_settings
+from model import settings_from_dict, validate_settings
 
 
 class QueueStore:
@@ -35,6 +32,9 @@ class QueueStore:
         rows = []
         for raw in data["jobs"]:
             raw = dict(raw)
+            # Version 1 files can contain entries from the retired folder workflow.
+            if raw.pop("folder_job", None) is not None:
+                continue
             raw["design_settings"] = settings_from_dict(raw["design_settings"])
             row = ExperimentRow(**raw)
             if row.status.startswith(("Checking", "Solving", "TRUBA")):
@@ -76,36 +76,8 @@ class QueueStore:
         finally:
             temporary.unlink(missing_ok=True)
 
-    def migrate_batch_workspaces(self, rows, roots=None):
-        if roots is None:
-            roots = {row.folder_job['root'] for row in rows if row.folder_job}
-        candidates = []
-        for root in sorted({Path(root).resolve() for root in roots}):
-            old, new = root / LEGACY_BATCH_DIRECTORY, batch_directory(root)
-            # A prior rename may have completed before the queue file was saved.
-            if old.exists() or old.is_symlink() or old.is_junction() or (new.is_dir() and any(
-                relocate_queue_row(row, [(old, new)]) != row for row in rows
-            )):
-                candidates.append(root)
-        if not candidates:
-            return False
 
-        with self._write_lock(), ExitStack() as moves, ExitStack() as undo:
-            aliases = []
-            for root in candidates:
-                alias = moves.enter_context(move_batch_workspace(root))
-                if alias is not None:
-                    aliases.append(alias)
-            updated = [relocate_queue_row(row, aliases) for row in rows]
-            relocate_batch_report(self.path.with_name('analysis_queue_results.csv'), aliases, undo)
-            if updated != rows:
-                self._write_rows(updated)
-            undo.pop_all()
-        rows[:] = updated
-        return bool(aliases)
-
-
-class AnalysisQueueWidget(FolderResultMixin, DoEStudioWidget):
+class AnalysisQueueWidget(DoEStudioWidget):
     queue_changed = Signal()
 
     def __init__(self, settings_provider, mesh_generator, batch_solver_runner, parent=None, queue_path=None):
@@ -138,46 +110,28 @@ class AnalysisQueueWidget(FolderResultMixin, DoEStudioWidget):
         except (OSError, ValueError, TypeError, KeyError) as error:
             self.storage_error = f"Queue could not be restored; original file retained: {error}"
             self.notice.setText(self.storage_error)
-        else:
-            try:
-                self.store.migrate_batch_workspaces(self._rows)
-            except (OSError, ValueError) as error:
-                self.notice.setText(f"Batch workspace migration could not finish: {error}")
         self._matrix_rows[0] = self._rows
         self._storage_ready = not bool(self.storage_error)
         self._refresh_table_view()
         self.run_batch_btn.setText("Run analysis queue")
-
-    def migrate_batch_workspace(self, root):
-        legacy = root / LEGACY_BATCH_DIRECTORY
-        if not (legacy.exists() or legacy.is_symlink() or legacy.is_junction()):
-            return
-        if self._active_mode is not None or self._active_future is not None:
-            raise ValueError("Stop the analysis queue before moving the batch workspace.")
-        if not self._storage_ready or self.storage_error:
-            raise ValueError(self.storage_error or "Analysis queue is not writable.")
-        if self.store.migrate_batch_workspaces(self._rows, [root]):
-            self._refresh_table_view()
 
     def _refresh_table_view(self):
         super()._refresh_table_view()
         self._updating_table = True
         try:
             count = len(TABLE_COLUMNS)
-            self.table.setColumnCount(count + 4)
-            for offset, title in enumerate(("Material", "Solver", "Elements", "Execution target")):
+            self.table.setColumnCount(count + 3)
+            for offset, title in enumerate(("Material", "Solver", "Elements")):
                 self.table.setHorizontalHeaderItem(count + offset, QTableWidgetItem(title))
             for index, row in enumerate(self._rows):
                 settings = row.design_settings
-                target = (row.folder_job or {}).get('execution_target')
-                target_label = {'truba': 'TRUBA', 'local': 'Local mesh'}.get(target, 'Current workspace')
                 for offset, value in enumerate((settings.material_name, settings.solver_backend,
-                                                settings.mesh_type, target_label)):
+                                                settings.mesh_type)):
                     item = QTableWidgetItem(str(value))
                     item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
                     self.table.setItem(index, count + offset, item)
             header = self.table.horizontalHeader()
-            for offset in range(4):
+            for offset in range(3):
                 header.moveSection(header.visualIndex(count + offset), 2 + offset)
             self.table.resizeColumnsToContents()
         finally:
@@ -200,21 +154,6 @@ class AnalysisQueueWidget(FolderResultMixin, DoEStudioWidget):
         # The queue's results never share a file with a DoE session dataset.
         return self.store.path.parent / "analysis_queue_results.csv"
 
-    def start_batch_solve(self):
-        if self._active_mode is not None or self._active_future is not None:
-            return
-        if any((self._rows[index].folder_job or {}).get('execution_target') == 'truba'
-               for index in self.rows_to_run()):
-            controller = getattr(self, 'remote_controller', None)
-            try:
-                if controller is None or not controller.requested:
-                    raise RuntimeError("Enable TRUBA mode and connect before running these jobs.")
-                controller.require_analysis('kratos')
-            except (RuntimeError, ValueError) as error:
-                QMessageBox.warning(self, "TRUBA batch analysis", str(error))
-                return
-        super().start_batch_solve()
-
     def add_snapshot(self, settings):
         if self._active_mode is not None:
             raise ValueError("Stop the analysis queue before adding jobs.")
@@ -232,33 +171,6 @@ class AnalysisQueueWidget(FolderResultMixin, DoEStudioWidget):
         self._refresh_table_view()
         self.table.selectRow(len(self._rows) - 1)
         return row
-
-    def require_writable_folder_queue(self):
-        if self._active_mode is not None or self._active_future is not None:
-            raise ValueError("Stop the analysis queue before adding jobs.")
-        if not self._storage_ready or self.storage_error:
-            raise ValueError(self.storage_error or "Analysis queue is not writable.")
-
-    def add_folder_snapshots(self, snapshots):
-        """Publish the whole prepared batch atomically; never start a solver here."""
-        self.require_writable_folder_queue()
-        known = {row.folder_job['key'] for row in self._rows if row.folder_job}
-        added = []
-        for settings, metadata in snapshots:
-            if metadata['key'] in known:
-                continue
-            validate_folder_snapshot(settings)
-            added.append(folder_job_row(settings, metadata))
-            known.add(metadata['key'])
-        self.store.save([*self._rows, *added])
-        self._rows.extend(added)
-        self._refresh_table_view()
-        self._write_folder_reports()
-        return added
-
-    def _persist_progress(self):
-        super()._persist_progress()
-        self._write_folder_reports()
 
     def _write_row_cells(self, index, row):
         super()._write_row_cells(index, row)
@@ -286,7 +198,6 @@ class AnalysisQueueWidget(FolderResultMixin, DoEStudioWidget):
             self._queue.clear()
         super()._launch_next_in_queue()
         self.save_queue()
-        self._write_folder_reports()
 
     def _on_table_item_changed(self, item):
         if self._updating_table:

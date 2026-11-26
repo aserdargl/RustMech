@@ -125,15 +125,6 @@ Model prepared. Waiting for ESEN to finish its current transfer…|Model hazır.
 TRUBA connection changed. Press Prepare and run on TRUBA to submit the prepared model.|TRUBA bağlantısı değişti. Hazır modeli göndermek için Hazırla ve TRUBA’da çalıştır düğmesine basın.
 ESEN is busy. Press Prepare and run on TRUBA again when it is ready.|ESEN meşgul. Hazır olduğunda Hazırla ve TRUBA’da çalıştır düğmesine tekrar basın.
 Follow submission, progress and results in ESEN job history.|Gönderimi, ilerlemeyi ve sonuçları ESEN iş geçmişinden izleyin.
-Choose TRUBA folder|TRUBA klasörü seç
-Select an upload folder on TRUBA|TRUBA’da yükleme klasörünü seçin
-TRUBA folders|TRUBA klasörleri
-Use this folder|Bu klasörü kullan
-Loading TRUBA folders…|TRUBA klasörleri yükleniyor…
-Could not load TRUBA folders.|TRUBA klasörleri yüklenemedi.
-Choose a TRUBA folder for the connected account.|Bağlı hesap için bir TRUBA klasörü seçin.
-TRUBA upload folder selected. Send the prepared specimens to this folder.|Yükleme klasörü seçildi. Hazırlanan numuneleri bu klasöre gönderin.
-TRUBA results folder: {path}|TRUBA sonuç klasörü: {path}
 Open the LAMMPS workspace|LAMMPS çalışma alanını aç
 Job settings|İş ayarları
 Date modified|Değiştirilme tarihi
@@ -192,7 +183,6 @@ Collecting results|Sonuçlar alınıyor
 Uploaded to TRUBA: {path}|TRUBA’ya aktarıldı: {path}
 File upload failed: {error}|Dosyalar aktarılamadı: {error}
 Files|Dosyalar
-Script|Betik
 Root|Kök Klasör
 Remove|Çıkar
 Reuse|Girdiyi Al
@@ -681,8 +671,6 @@ Thermal CHT|Isıl CHT
 Thermal (CHT)|Isıl (CHT)
 Transient Heat Transfer|Geçici ısı transferi
 Designs|Tasarımlar
-Batch Analysis|Toplu Analiz
-Batch analysis from folder...|Klasörden toplu analiz...
 Design|Tasarım
 Design Pool|Tasarım havuzu
 Design Pool (Gitterburg)...|Tasarım havuzu (Gitterburg)...
@@ -692,31 +680,6 @@ Analysis queue|Analiz kuyruğu
 Analysis queue...|Analiz kuyruğu...
 Analysis Queue|Analiz Kuyruğu
 Add to Queue|Kuyruğa Ekle
-Send to TRUBA|TRUBA'ya Gönder
-Selection or settings changed. Send the batch to TRUBA again.|Seçim veya ayarlar değişti. Toplu analizi TRUBA'ya yeniden gönderin.
-ready. Review the faces and select the specimens to analyze.|hazır. Yüzleri kontrol edin ve analiz edilecek numuneleri seçin.
-Uploading geometry and analysis settings to TRUBA…|Geometri ve analiz ayarları TRUBA'ya yükleniyor…
-Checking specimen files and analysis settings…|Numune dosyaları ve analiz ayarları kontrol ediliyor…
-Geometry and analysis settings uploaded to TRUBA. Select Run to start.|Geometri ve analiz ayarları TRUBA'ya yüklendi. Başlatmak için Çalıştır'a tıklayın.
-Batch analysis running…|Toplu analiz çalışıyor…
-Completed {completed}/{total} analyses.|{completed}/{total} analiz tamamlandı.
-Use the TRUBA account that received the prepared specimens.|Hazırlanan numunelerin gönderildiği TRUBA hesabını kullanın.
-Select all ready specimens|Hazır numunelerin tümünü seç
-Upload prepared specimens, then add the jobs to the analysis queue.|Hazırlanan numuneleri yükle ve işleri analiz kuyruğuna ekle.
-Prepared geometry uploaded to BatchInputs on TRUBA.|Hazırlanan geometri TRUBA'daki BatchInputs klasörüne yüklendi.
-Previously queued job. Geometry uploads when the queue runs.|Önceden kuyruğa eklenen iş. Geometri kuyruk çalıştırıldığında yüklenir.
-TRUBA is disconnected. Connect using the TRUBA button, then send the prepared specimens.|TRUBA bağlantısı yok. TRUBA düğmesinden bağlanın, ardından hazırlanan numuneleri gönderin.
-Checking and uploading prepared specimens to TRUBA…|Hazırlanan numuneler kontrol edilip TRUBA'ya yükleniyor…
-Wait for the TRUBA upload to finish.|TRUBA yüklemesinin bitmesini bekleyin.
-ready. Edit the faces on the left, then select the specimens to send or queue.|hazır. Solda yüzeyleri düzenleyin, ardından gönderilecek veya kuyruğa eklenecek numuneleri seçin.
-Mesh and analysis run on TRUBA with Kratos. Self-contact is disabled. TET10 uses displacement control and penalty mortar. Material and loading come from the Mechanic workspace.|Ağ üretimi ve analiz TRUBA'da Kratos ile çalışır. Öz temas devre dışıdır. TET10 yer değiştirme kontrolü ve ceza tabanlı mortar kullanır. Malzeme ve yükleme Mekanik çalışma alanından alınır.
-Check at least one ready specimen.|Hazır numunelerden en az birini işaretleyin.
-Checking source files before saving jobs to Analysis Queue…|İşler Analiz Kuyruğuna kaydedilmeden önce kaynak dosyalar kontrol ediliyor…
-The selected jobs are already in Analysis Queue.|Seçili işler zaten Analiz Kuyruğunda.
-Source changed after preparation. Check the folder again.|Kaynak dosya hazırlıktan sonra değişti. Klasörü yeniden kontrol edin.
-Execution|Yürütme
-Direction|Yön
-Choose the TRUBA queue for the generated Slurm script.|Oluşturulacak Slurm betiği için TRUBA kuyruğunu seçin.
 Execution target|Yürütme hedefi
 Install local Kratos from the Kratos settings before running this analysis.|Bu analizi çalıştırmadan önce Kratos ayarlarından yerel Kratos'u kurun.
 Install local Kratos|Yerel Kratos'u Kur
@@ -725,17 +688,7 @@ Local Kratos installation is available on Windows.|Yerel Kratos Windows'ta kurul
 Local Kratos requires 64-bit Python 3.14 and an internet connection for setup.|Yerel Kratos kurulumu için 64 bit Python 3.14 ve internet bağlantısı gerekir.
 Ready to submit analysis to TRUBA.|Analiz TRUBA'ya gönderilmeye hazır.
 Local|Yerel
-Local mesh|Yerel ağ üretimi
-TRUBA batch analysis|TRUBA toplu analizi
-Enable TRUBA mode and allocate or refresh a resource session before running these jobs.|Bu işleri çalıştırmadan önce TRUBA modunu açın ve bir kaynak oturumu ayırın veya mevcut oturumu yenileyin.
-Mesh and solution run locally. Analysis settings come from the Mechanic workspace.|Ağ ve çözüm yerelde çalışır. Analiz ayarları Mekanik çalışma alanından alınır.
-Material, loading, contact and solver parameters are captured from the main Mechanic workspace when checking.|Malzeme, yükleme, temas ve çözücü ayarları ön kontrol sırasında ana Mekanik çalışma alanından alınır.
-Remove from Queue|Kuyruktan Çıkar
-Selected job removed from the queue.|Seçili iş kuyruktan çıkarıldı.
 Stop the analysis queue before removing jobs.|İşleri çıkarmadan önce analiz kuyruğunu durdurun.
-Specimens|Numuneler
-Specimen|Numune
-Preflight|Ön Kontrol
 Analysis queue - RustMech|Analiz kuyruğu - RustMech
 Add current model to analysis queue|Mevcut modeli analiz kuyruğuna ekle
 Configure selected...|Seçileni yapılandır...
@@ -810,22 +763,6 @@ External compression work (J)|Dış basma işi (J)
 Load|Yükle
 Open|Aç
 Save|Kaydet
-Save and close|Kaydet ve kapat
-Specimen faces|Numune yüzeyleri
-Edit specimen geometry and faces|Numune geometrisini ve yüzeylerini düzenle
-Face preview unavailable|Yüzey önizlemesi kullanılamıyor
-Support face|Mesnet yüzeyi
-Compression face|Basma yüzeyi
-Connected components|Bağlantılı bileşenler
-Choose one solid to keep. Blue remains, red is excluded.|Kalacak katıyı seçin. Mavi bileşen kalır, kırmızı bileşenler ayıklanır.
-Choose which connected component to keep.|Kalacak bağlantılı bileşeni seçin.
-Multiple substantial components. Choose which solid to keep in Edit.|Birden fazla büyük bileşen var. Düzenle penceresinde kalacak katıyı seçin.
-No planar end face at the specimen boundary; select faces manually or repair the end geometry.|Numune sınırında düz bir uç yüzey bulunamadı. Yüzeyleri elle seçin veya uç geometrisini onarın.
-Component {index}|Bileşen {index}
-Inspect / select faces|Yüzeyleri incele / seç
-Specimen faces saved.|Numune yüzeyleri kaydedildi.
-Could not save the specimen faces.|Numune yüzeyleri kaydedilemedi.
-Support: green. Compression: orange. Faces validated.|Mesnet: yeşil. Yükleme: turuncu. Yüzeyler doğrulandı.
 Apply|Uygula
 Add|Ekle
 Edit|Düzenle
@@ -855,7 +792,6 @@ Selecting support face|Mesnet yüzeyi seçiliyor
 Selecting support face (right-click)|Mesnet yüzeyi seçiliyor (sağ tıklayın)
 Selecting compression face (right-click)|Basma yüzeyi seçiliyor (sağ tıklayın)
 Show platens|Plakaları göster
-Fixed platen: green. Moving platen: orange.|Sabit tabla: yeşil. Hareketli tabla: turuncu.
 Orthographic|Ortografik
 Perspective|Perspektif
 Smooth geometry|Pürüzsüz geometri
@@ -1695,13 +1631,6 @@ TEMPLATES = {
     'Unsupported EnSight Gold cell types: {types}': 'Desteklenmeyen EnSight Gold eleman tipleri: {types}',
     'Preview error: {error}': 'Önizleme hatası: {error}',
     'Local Kratos {version} is ready.': 'Yerel Kratos {version} hazır.',
-    'Saved to Analysis Queue ({count}). Open Analysis Queue and select Run analysis queue to start.':
-        'Analiz Kuyruğuna {count} iş kaydedildi. Başlatmak için Analiz Kuyruğunu açıp Analiz kuyruğunu çalıştır düğmesine basın.',
-    'Results folder is {path}': 'Sonuç klasörü {path}',
-    'Ready | height {height} mm | Excluded components: {count} | End faces flattened': 'Hazır | yükseklik {height} mm | Ayıklanan bileşen: {count} | Uç yüzeyler düzleştirildi',
-    'Ready | height {height} mm | End faces flattened': 'Hazır | yükseklik {height} mm | Uç yüzeyler düzleştirildi',
-    'Ready | height {height} mm': 'Hazır | yükseklik {height} mm',
-    'Ready | height {height} mm | Excluded components: {count}': 'Hazır | yükseklik {height} mm | Ayıklanan bileşen: {count}',
     'Could not build the DAMASK voxel preview: {detail}': 'DAMASK voksel önizlemesi oluşturulamadı: {detail}',
     '{grid} · Voxel spacing: {spacing} mm\nSolid voxels: {count} ({fraction}) · Void voxels: {void}\nVoid stiffness: {ratio} of solid · Void E: {modulus} MPa':
         '{grid} · Voksel aralığı: {spacing} mm\nKatı vokseller: {count} ({fraction}) · Boşluk vokselleri: {void}\nBoşluk rijitliği: katının {ratio} kadarı · Boşluk E: {modulus} MPa',

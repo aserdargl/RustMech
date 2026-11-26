@@ -4,18 +4,6 @@ Geometry work is independent of the selected mechanical solver. Only mechanics
 requires the qualified Kratos adapter; MAPDL is deliberately excluded.
 """
 
-import re
-
-
-BATCH_INPUT_DIRECTORY = 'BatchInputs'
-BATCH_RESULTS_DIRECTORY = 'results'
-
-
-def batch_geometry_name(digest):
-    if not isinstance(digest, str) or not re.fullmatch(r'[a-f0-9]{64}', digest):
-        raise ValueError('Invalid prepared geometry checksum.')
-    return digest + '.vtp'
-
 OPERATIONS = {
     "probe": "mesh", "prepare": "mesh",
     "preview": "mesh", "surface": "mesh", "doe_mesh": "mesh",

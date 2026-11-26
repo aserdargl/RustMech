@@ -1069,9 +1069,6 @@ class RustMechDialog(QDialog):
         designs_menu.addAction("Add current model to analysis queue", self._enqueue_current_model)
         designs_menu.addAction("Analysis queue...", self._show_analysis_queue)
         self.designs_button.setMenu(designs_menu)
-        self.folder_batch_button = _WorkspaceCommandButton("Batch Analysis")
-        self.folder_batch_button.setToolTip("Batch analysis from folder...")
-        self.folder_batch_button.clicked.connect(self._show_folder_batch)
         self.esen_workspace = None
         self.esen_button = _WorkspaceCommandButton("ESEN")
         self.esen_button.setToolTip("Open the LAMMPS workspace")
@@ -1082,7 +1079,7 @@ class RustMechDialog(QDialog):
         self._workspace_commands = (
             (self.project_button, self.designs_button),
             (self.sidebar_toggle, self.workspace_button),
-            (self.doe_button, self.folder_batch_button, self.esen_button, self.result_history_button),
+            (self.doe_button, self.esen_button, self.result_history_button),
         )
         for index, group in enumerate(self._workspace_commands):
             if index:
@@ -1856,35 +1853,20 @@ class RustMechDialog(QDialog):
         show_restored_window(self.sync_window)
 
     def show_result_history(self):
-        from analysis_queue import QueueStore
         from doe_studio import results_directory
         from esen_jobs import jobs_directory
-        from folder_batch_results import LEGACY_BATCH_DIRECTORY, batch_directory
         from result_history import ResultHistoryDialog, discover_results
         from truba_job_list import unfinished_records
 
         if self.result_history is None:
             preferences = QApplication.instance()._rustmech_window_state.settings
-            source = preferences.value("folderBatch/folder", "", type=str)
-            batch_roots = set()
-            if source:
-                root = Path(source).expanduser().absolute()
-                batch_roots.update((batch_directory(root) / "Results", root / LEGACY_BATCH_DIRECTORY / "Results"))
-            try:
-                queue_rows = QueueStore().load()
-            except (OSError, ValueError, TypeError, KeyError, AttributeError):
-                queue_rows = ()
-            for row in queue_rows:
-                path = row.folder_job.get("results_root") if isinstance(row.folder_job, dict) else None
-                if isinstance(path, str) and path:
-                    batch_roots.add(Path(path))
             esen_root = self.esen_workspace.history_root if self.esen_workspace else jobs_directory()
             records = unfinished_records(self.truba_session.state_dir, include_analysis_history=True)
             remote_folders = {Path(record["local_directory"]) for _, record in records
                               if record.get("state") == "downloaded" and isinstance(record.get("local_directory"), str)
                               and record["local_directory"]}
             analysis_folders = [Path(folder) for folder in preferences.value(ANALYSIS_RESULTS_FOLDERS, [], type=list)]
-            results = discover_results(ROOT, results_directory().resolve(), batch_roots=batch_roots,
+            results = discover_results(ROOT, results_directory().resolve(),
                                        esen_root=esen_root, remote_folders=remote_folders,
                                        analysis_folders=analysis_folders)
             dialog = ResultHistoryDialog(results, self._open_saved_result, self)
@@ -3774,19 +3756,6 @@ class RustMechDialog(QDialog):
         self._ensure_analysis_queue()
         self.analysis_queue_window.open_workspace()
 
-    def _migrate_folder_batch_workspace(self, root):
-        self._ensure_analysis_queue()
-        self.analysis_queue_widget.migrate_batch_workspace(root)
-
-    def _show_folder_batch(self):
-        from folder_batch import FolderBatchDialog
-        if not hasattr(self, "folder_batch_dialog"):
-            self.folder_batch_dialog = FolderBatchDialog(
-                self.applied_structure_settings, generate_volume_mesh, run_batch_experiment, self.remote_controller,
-                self._migrate_folder_batch_workspace, self)
-        from window_state import show_restored_window
-        show_restored_window(self.folder_batch_dialog)
-
     def _enqueue_current_model(self):
         if self.workspace_tabs.currentIndex() != 0:
             QMessageBox.information(self, "Analysis queue", "Select the Mechanic workspace and configure the model first.")
@@ -4358,8 +4327,6 @@ class RustMechDialog(QDialog):
         new_doe_job = self.doe_studio.new_doe.detach_remote()
         if new_doe_job is not None:
             jobs.append(new_doe_job)
-        if hasattr(self, "folder_batch_dialog"):
-            jobs.extend(self.folder_batch_dialog.detach_remote_jobs())
         if self._mesh_convergence_dialog is not None:
             jobs.extend(self._mesh_convergence_dialog.study.detach_remote_jobs())
         pending = [job.detach_remote() for job in jobs]
@@ -4446,9 +4413,6 @@ class RustMechDialog(QDialog):
         if self.analysis_queue_widget is not None:
             self.analysis_queue_widget.dispose()
             self.analysis_queue_window.close()
-        if hasattr(self, "folder_batch_dialog"):
-            self.folder_batch_dialog.dispose()
-            self.folder_batch_dialog.close()
         if self.design_pool is not None:
             self.design_pool.close()
             self.design_pool.dispose()

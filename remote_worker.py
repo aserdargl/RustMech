@@ -214,7 +214,7 @@ def run_operation(request,output):
 
 def _run_operation(request,output):
     operation = request["operation"]
-    from remote_operations import BATCH_INPUT_DIRECTORY, batch_geometry_name, required_capability
+    from remote_operations import required_capability
     needed = required_capability(request)
     if operation in ("probe","prepare"): return dict(capabilities=probe(request))
     _stage('Checking runtime for ' + operation)
@@ -227,19 +227,7 @@ def _run_operation(request,output):
     if settings_data.get('imported_geometry_path'):
         import base64
         geometry = output / 'imported_geometry.vtp'
-        staged = request.get('staged_geometry')
-        if staged is None:
-            geometry.write_bytes(base64.b64decode(request['imported_geometry_vtp'], validate=True))
-        else:
-            inputs = (Path(os.environ['RUSTMECH_BATCH_INPUTS']) if 'directory' in staged
-                      else output.resolve().parent.parent / BATCH_INPUT_DIRECTORY)
-            source = inputs / batch_geometry_name(staged['sha256'])
-            if not source.is_file():
-                raise FileNotFoundError('Prepared geometry is missing on TRUBA. Remove the job from the queue and send the specimen again.')
-            shutil.copyfile(source, geometry)
-            with geometry.open('rb') as stream:
-                if hashlib.file_digest(stream, 'sha256').hexdigest() != staged['sha256']:
-                    raise ValueError('Prepared geometry checksum does not match on TRUBA.')
+        geometry.write_bytes(base64.b64decode(request['imported_geometry_vtp'], validate=True))
         settings_data['imported_geometry_path'] = str(geometry.resolve())
     settings = settings_from_dict(settings_data)
     if request.get("remote_context"):
@@ -470,8 +458,6 @@ def main():
     request = json.loads(Path(sys.argv[1]).read_text())
     if len(sys.argv) == 4 and sys.argv[2] == "--row-output":
         output = Path(sys.argv[3])
-    elif 'directory' in request.get('staged_geometry', {}):
-        output = Path(os.environ['RUSTMECH_BATCH_OUTPUT'])
     else:
         output = Path.cwd()/"output"
     output.mkdir(exist_ok=True)

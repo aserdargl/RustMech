@@ -110,7 +110,7 @@ def _doe_results(folder):
             yield _analysis_result(target, name=name) or _result(target, marker, "DoE", name=name)
 
 
-def discover_results(root, doe_root, *, batch_roots=(), esen_root=None, remote_folders=(), analysis_folders=()):
+def discover_results(root, doe_root, *, esen_root=None, remote_folders=(), analysis_folders=()):
     """Read existing on-disk formats without requiring an index or a connection."""
     candidates = []
     human_results = root / "HumanResults"
@@ -139,13 +139,6 @@ def discover_results(root, doe_root, *, batch_roots=(), esen_root=None, remote_f
             candidates.append(_result(path, path, "DoE"))
         elif (path / "matrix.csv").is_file():
             candidates.extend(_doe_results(path))
-    for batch_root in batch_roots:
-        for path in _entries(batch_root, "toplu_ozet*.csv"):
-            candidates.append(_result(path, path, "Batch Analysis"))
-        for marker in _entries(batch_root, "*/Mechanical/*/*/summary.json"):
-            folder = marker.parent
-            name = f"{folder.relative_to(batch_root).parts[0]} / {folder.name}"
-            candidates.append(_analysis_result(folder, name=name))
     if esen_root is not None:
         from esen_jobs import result_directory
 

@@ -6,10 +6,9 @@ from model import Settings, validate_geometry
 class ExperimentWorker:
     """Picklable job context; no UI objects cross the process boundary."""
 
-    def __init__(self, mesh_generator, batch_solver_runner, output_directory=None):
+    def __init__(self, mesh_generator, batch_solver_runner):
         self._mesh_generator = mesh_generator
         self._batch_solver_runner = batch_solver_runner
-        self._output_directory = output_directory
 
     def _evaluate_row_mesh(
         self, r_idx: int, settings: Settings
@@ -60,10 +59,7 @@ class ExperimentWorker:
                     "hex8_elements": int(mesh.grid.n_cells),
                     "status": "Mesh Disconnected",
                 }
-            if self._output_directory:
-                summary = self._batch_solver_runner(settings, mesh, output_directory=self._output_directory)
-            else:
-                summary = self._batch_solver_runner(settings, mesh)
+            summary = self._batch_solver_runner(settings, mesh)
             graphs = summary.get("graphs", {})
             fields = summary.get("fields", {})
             return {

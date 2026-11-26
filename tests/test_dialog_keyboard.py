@@ -204,9 +204,6 @@ class DialogKeyboardTests(unittest.TestCase):
                         dialog.setup_tabs.setCurrentIndex(dialog._fft_method_index)
                         dialog._show_geometry_workspace()
                         self.assertEqual(dialog.sidebar_toggle.text(), "Finite Element")
-                    self.assertFalse(hasattr(dialog, "folder_batch_dialog"))
-                    QTest.mouseClick(dialog.folder_batch_button, Qt.MouseButton.LeftButton)
-                    self.assertTrue(dialog.folder_batch_dialog.isVisible())
             finally:
                 if dialog is not None:
                     dialog.close()

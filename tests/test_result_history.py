@@ -22,15 +22,13 @@ def test_discovery_reads_saved_formats_and_sorts_by_modified_date(tmp_path):
     write("DoEResults/DoE_group/matrix.csv", [], 999)
     doe = write("DoEResults/DoE_group/truba/output/row_00001/experiment.json", {"state": "Completed"}, 200)
     write("DoEResults/DoE_group/truba/output/row_00002/experiment.json", {"state": "Failed"}, 999)
-    batch = write("batch/specimen/Mechanical/solver/Run_2/summary.json", {"status": "partial_solution"}, 50)
 
-    results = discover_results(tmp_path, tmp_path / "DoEResults", batch_roots=(tmp_path / "batch",))
+    results = discover_results(tmp_path, tmp_path / "DoEResults")
 
     assert [(item.path, item.kind) for item in results] == [
         (fft.parent, "DAMASK FFT"),
         (doe.parent, "DoE"),
         (local.parent, "Mechanic"),
-        (batch.parent, "Mechanic"),
     ]
     assert results[2].solver == "kratos"
 

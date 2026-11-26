@@ -160,7 +160,7 @@ class LanguageTests(unittest.TestCase):
             self.assertEqual(self.preferences.value('ui/meshDisplayDecimals', type=int), 4)
             normal_bounds = window.geometry()
             commands = (window.project_button, window.designs_button, window.workspace_button,
-                        window.sidebar_toggle, window.doe_button, window.folder_batch_button,
+                        window.sidebar_toggle, window.doe_button,
                         window.esen_button, window.result_history_button, window.truba_button,
                         window.truba_connect_button, window.sync_button, window.about_button)
 
@@ -172,16 +172,10 @@ class LanguageTests(unittest.TestCase):
                 self.assertLess(window.esen_button.geometry().right(), window.about_button.x())
 
             assert_toolbar_layout()
-            self.assertEqual(window.folder_batch_button.text(), 'Batch Analysis')
             self.manager.set_language('tr')
             self.app.processEvents()
             self.assertEqual(window._mesh_form.labelForField(window.mesh_precision).text(), 'Ağ ondalık hane sayısı')
-            self.assertEqual(window.folder_batch_button.text(), 'Toplu Analiz')
             assert_toolbar_layout()
-            batch_metrics = window.folder_batch_button.fontMetrics()
-            self.assertGreaterEqual(window.folder_batch_button.width(),
-                                    max(batch_metrics.horizontalAdvance(word) for word in ('Toplu', 'Analiz')) + 16)
-            self.assertGreaterEqual(window.folder_batch_button.height(), 2 * batch_metrics.lineSpacing())
             self.assertEqual(window.about_button.text(), 'Hakkında')
             methods = window.sidebar_toggle.menu().actions()
             self.assertEqual(
@@ -245,7 +239,6 @@ class LanguageTests(unittest.TestCase):
             self.assertEqual(window.doe_studio.capture_plan(), plan)
             self.manager.set_language('en')
             self.assertEqual(window.sidebar_toggle.text(), 'FFT')
-            self.assertEqual(window.folder_batch_button.text(), 'Batch Analysis')
             finite_element.trigger()
             self.assertEqual(window.sidebar_toggle.text(), 'Finite Element')
             self.assertEqual(panel.windowTitle(), 'Compute resources')

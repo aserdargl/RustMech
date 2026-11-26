@@ -123,17 +123,6 @@ class ParallelBatchTests(unittest.TestCase):
                          [('Steel', 200000), ('Aluminium', 70000)])
         studio.stop_active_queue()
 
-    def test_folder_jobs_keep_background_output_copy_and_destination(self):
-        from folder_batch_results import run_remote_folder_doe
-        studio = self.remote_studio(rows=2)
-        destination = str(self.temp.name) + '/folder-result'
-        studio.rows[1].folder_job = dict(destination=destination)
-        studio.start_batch_solve()
-        target, args, _ = self.arguments[1]
-        self.assertIs(target, run_remote_folder_doe)
-        self.assertEqual(args[-2:], (destination, None))
-        studio.stop_active_queue()
-
 
 if __name__ == '__main__':
     unittest.main()

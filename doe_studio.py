@@ -104,7 +104,6 @@ class ExperimentRow:
     started_at: str = ""
     duration_s: float | None = None
     attempts: int = 0
-    folder_job: dict | None = None
 
     def dataset_columns(self) -> list:
         """Return stable geometry grouping and analysis metadata for CSV export."""
@@ -1482,7 +1481,7 @@ class DoEStudioWidget(TrubaParallelMixin, QWidget):
         r_idx = self._queue[0]
         row = self._rows[r_idx]
         row.status = "Checking..." if self._active_mode == "check" else "Solving (ANSYS)..."
-        use_truba = self._uses_truba(row)
+        use_truba = self._uses_truba()
         if use_truba:
             row.status = "TRUBA · checking mesh" if self._active_mode=="check" else "TRUBA · solving"
         self._updating_table = True
@@ -1494,22 +1493,15 @@ class DoEStudioWidget(TrubaParallelMixin, QWidget):
         self._row_started = time.monotonic()
 
         s = row.to_settings(self._run_base())
-        worker = ExperimentWorker(self._mesh_generator, self._batch_solver_runner,
-                                  (row.folder_job or {}).get("destination"))
+        worker = ExperimentWorker(self._mesh_generator, self._batch_solver_runner)
         try:
             if use_truba:
                 from truba_remote import run_remote_doe
-                s = self._truba_row_settings(row, s)
+                s = self._truba_row_settings(s)
                 context,auth = self._require_truba_row(
                     "mesh" if self._active_mode=="check" else s.solver_backend, s)
-                if row.folder_job:
-                    from folder_batch_results import run_remote_folder_doe
-                    self._active_future = AnalysisProcess(run_remote_folder_doe, r_idx, s, context,
-                                                          self._active_mode != "check", row.folder_job['destination'],
-                                                          row.folder_job.get('staged_geometry'),
-                                                          remote_auth=auth)
-                else:
-                    self._active_future = AnalysisProcess(run_remote_doe,r_idx,s,context,self._active_mode!="check",remote_auth=auth)
+                self._active_future = AnalysisProcess(run_remote_doe, r_idx, s, context,
+                                                      self._active_mode != "check", remote_auth=auth)
             elif self._active_mode == "check":
                 self._active_future = AnalysisProcess(worker._evaluate_row_mesh, r_idx, s)
             else:

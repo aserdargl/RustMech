@@ -2,22 +2,20 @@
 
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack, contextmanager, suppress
-from hashlib import file_digest, sha256
+from hashlib import file_digest
 from itertools import batched
-import json
 import ntpath
 import os
 from pathlib import Path, PurePosixPath, PureWindowsPath
 import re
 import shlex
 from stat import FILE_ATTRIBUTE_REPARSE_POINT, S_ISDIR, S_ISREG
-from tempfile import NamedTemporaryFile, TemporaryDirectory
+from tempfile import NamedTemporaryFile
 from threading import Event, Lock
 from uuid import uuid4
 
 from paramiko import SSHException
 
-from remote_operations import BATCH_INPUT_DIRECTORY, batch_geometry_name
 from truba_ssh import active_session_client, execute_ssh_command
 
 
@@ -114,89 +112,6 @@ def upload_file(auth, relative, source):
         target = str(directory / source.name)
         _require_missing(sftp, target)
         _publish_file(sftp, source, target)
-
-
-def list_batch_directory(auth, relative):
-    if relative == PurePosixPath():
-        _ensure_project_root(auth)
-    return list_directory(auth, relative)
-
-
-def list_batch_folders(auth, relative):
-    return [item.filename for item in list_batch_directory(auth, relative)
-            if S_ISDIR(item.st_mode or 0)]
-
-
-def stage_batch_geometries(auth, sources, *, settings_by_geometry=None, relative=None):
-    """Publish face-tagged geometry and optional batch settings without submitting jobs."""
-    sources = list(dict.fromkeys(map(Path, sources)))
-    if not sources:
-        return {}
-    selected_directory = relative is not None
-    if not selected_directory:
-        relative = PurePosixPath(BATCH_INPUT_DIRECTORY)
-        _create_batch_input_directory(auth, relative)
-    staged = {}
-    with _project_directory(auth, relative) as (sftp, directory):
-        for source in sources:
-            with source.open('rb') as stream:
-                digest = file_digest(stream, 'sha256').hexdigest()
-            _publish_batch_input(sftp, source, directory / batch_geometry_name(digest), digest)
-            staged[str(source)] = {'username': auth.username, 'sha256': digest}
-            if selected_directory:
-                staged[str(source)]['directory'] = relative.as_posix()
-        if settings_by_geometry is not None:
-            jobs = [dict(geometry=batch_geometry_name(staged[path]['sha256']), settings=settings)
-                    for path, snapshots in settings_by_geometry.items() for settings in snapshots]
-            content = json.dumps(dict(schema_version=1, jobs=jobs), sort_keys=True, allow_nan=False).encode('utf-8')
-            with TemporaryDirectory(prefix='rustmech-batch-') as temporary:
-                manifest = Path(temporary) / 'batch.json'
-                manifest.write_bytes(content)
-                digest = sha256(content).hexdigest()
-                _publish_batch_input(sftp, manifest, directory / f'{digest}.json', digest)
-    return staged
-
-
-def _ensure_project_root(auth):
-    with _sftp_channel(auth) as sftp:
-        root = str(project_root(auth.username))
-        try:
-            sftp.stat(root)
-        except FileNotFoundError:
-            try:
-                sftp.mkdir(root)
-            except OSError:
-                if not S_ISDIR(sftp.stat(root).st_mode or 0):
-                    raise
-
-
-def _create_batch_input_directory(auth, relative):
-    _ensure_project_root(auth)
-    with _project_directory(auth, PurePosixPath()) as (sftp, root):
-        path = str(root / relative)
-        try:
-            sftp.mkdir(path)
-        except OSError:
-            if not S_ISDIR(sftp.lstat(path).st_mode or 0):
-                raise
-
-
-def _publish_batch_input(sftp, source, target, digest):
-    kind = 'geometry' if source.suffix.lower() == '.vtp' else 'settings'
-    target = str(target)
-    try:
-        attrs = sftp.lstat(target)
-    except FileNotFoundError:
-        try:
-            _publish_file(sftp, source, target)
-        except FileExistsError:
-            pass  # Another sender may have published the same input.
-        attrs = sftp.lstat(target)
-    if not S_ISREG(attrs.st_mode or 0):
-        raise OSError(f'TRUBA {kind} verification failed: {source.name}')
-    with sftp.open(target, 'rb') as uploaded:
-        if file_digest(uploaded, 'sha256').hexdigest() != digest:
-            raise OSError(f'TRUBA {kind} verification failed: {source.name}')
 
 
 def _publish_file(sftp, source, target, *, progress=None, sync_source=None, existing=None):

@@ -130,7 +130,17 @@ class DesignPoolTests(unittest.TestCase):
         widget.move_selected(-1)
         self.assertEqual(widget.rows[0].exp_id, second.exp_id)
         original = replace(original, material_name="Changed later", compression=.2)
-        restored = QueueStore(self.root / "queue.json").load()
+        saved = json.loads(widget.store.path.read_text(encoding="utf-8"))
+        queue_path = self.root / "legacy_queue.json"
+        for row in saved["jobs"]:
+            row["folder_job"] = None
+        saved["jobs"].append({**saved["jobs"][0], "exp_id": "retired", "folder_job": {"root": str(self.root)}})
+        queue_path.write_text(json.dumps(saved), encoding="utf-8")
+        store = QueueStore(queue_path)
+        restored = store.load()
+        self.assertEqual([row.exp_id for row in restored], [second.exp_id, first.exp_id])
+        store.save(restored)
+        self.assertNotIn("folder_job", queue_path.read_text(encoding="utf-8"))
         self.assertEqual(restored[0].design_settings.material_name, "Second material")
         self.assertEqual(restored[1].compression, .6)
         self.assertEqual(restored[1].design_settings.imported_geometry_path, first.design_settings.imported_geometry_path)

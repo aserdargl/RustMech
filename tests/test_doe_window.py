@@ -217,7 +217,7 @@ class DoEWindowTests(unittest.TestCase):
             self.app.processEvents()
             self.assertEqual(dialog.doe_button.text(), "DoE")
             navigation = dialog.doe_button.parentWidget().layout()
-            self.assertEqual(navigation.indexOf(dialog.folder_batch_button),
+            self.assertEqual(navigation.indexOf(dialog.esen_button),
                              navigation.indexOf(dialog.doe_button) + 1)
             self.assertFalse(dialog.doe_button.autoDefault())
             dialog.doe_button.click()
@@ -454,6 +454,9 @@ class DoEWindowTests(unittest.TestCase):
         self.assertEqual(expected['draft']['solid_fraction'], 42)
         previous_plan = json.loads(path.read_text(encoding='utf-8'))
         previous_plan['selection']['tab'] = 0
+        for rows in previous_plan['matrices'].values():
+            for row in rows:
+                row['folder_job'] = None
         path.write_text(json.dumps(previous_plan), encoding='utf-8')
         _, restored = self.window()
         restored.open_plan_path(path)

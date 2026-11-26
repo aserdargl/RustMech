@@ -833,10 +833,7 @@ class RemoteController(QObject):
         study_name = self.study_name.text().strip()
         return replace(context, study_name=study_name)
 
-    def require_batch_queue(self, partition, settings):
-        return self._require(settings.solver_backend, settings, partition=partition)
-
-    def _require(self, capability, settings, *, allow_handover=False, partition=None, explicit_target=False):
+    def _require(self, capability, settings, *, allow_handover=False, explicit_target=False):
         if self.closing: raise RuntimeError('RustMech is closing.')
         can_renew = (allow_handover and self.session and self.session.get('state') == 'ended'
                      and self.session.get('context', {}).get('auto_renew', True)
@@ -854,14 +851,6 @@ class RemoteController(QObject):
         if settings is not None and capability in ("mesh","kratos") and settings.mesh_type not in self.capabilities.get("mesh_types",[]):
             raise RuntimeError(f"The remote runtime does not support {settings.mesh_type} meshing.")
         context = self.context()
-        if partition is not None:
-            from truba_remote import request_resources
-
-            _, memory = request_resources(context, 'doe_solve')
-            context = analysis_submission_context(
-                replace(context, partition=partition, cores=settings.cores, memory_mb=memory, gpus=0,
-                        parallel_jobs=1),
-                self.queue_catalog)
         if settings is not None and capability=="kratos":
             if settings.cores > context.cores:
                 raise RuntimeError("Solver CPU count exceeds the TRUBA allocation. Increase remote CPU cores or reduce solver cores.")

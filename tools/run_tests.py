@@ -23,8 +23,6 @@ GUI = {
     "test_thermal_workspace", "test_viewport_orientation", "test_remote_mode_ui",
     "test_doe_window", "test_doe_sample_settings", "test_design_pool",
     "test_viewport_lifecycle",
-    # Yuz secici gercek QtInteractor acar; offscreen'de VTK aralikli coker.
-    "test_folder_batch",
     # Konsola gercek Ctrl+C gonderir; konsolu olmayan surecte takilir.
     "test_desktop_interrupt",
 }

@@ -190,40 +190,6 @@ def _shell_path(path):
     return '"$HOME"/'+shlex.quote(path[2:]) if path.startswith("~/") else shlex.quote(path)
 
 
-def _batch_results_setup(staged):
-    from remote_operations import BATCH_RESULTS_DIRECTORY
-
-    if staged is None or 'directory' not in staged:
-        return ''
-    relative = staged['directory']
-    path = PurePosixPath(relative)
-    if (path.is_absolute() or '..' in path.parts or '\\' in relative
-            or any(ord(char) < 32 for char in relative)):
-        raise ValueError('This folder is outside the RustMech project.')
-    return f"""project=$(realpath -e -- ..)
-batch=$(realpath -e -- "$project"/{shlex.quote(path.as_posix())})
-case "$batch" in
-    "$project"|"$project"/*) ;;
-    *) printf '%s\\n' 'Batch folder is outside the RustMech project.' >&2; exit 1 ;;
-esac
-export RUSTMECH_BATCH_INPUTS="$batch"
-results="$batch/{BATCH_RESULTS_DIRECTORY}"
-test ! -L "$results"
-mkdir -p -- "$results"
-"""
-
-
-def _batch_output_setup(staged):
-    setup = _batch_results_setup(staged)
-    if not setup:
-        return """mkdir -p output
-trap 'tar -czf result.tar.gz output' EXIT"""
-    return f"""{setup}
-export RUSTMECH_BATCH_OUTPUT="$results/${{PWD##*/}}"
-mkdir -- "$RUSTMECH_BATCH_OUTPUT"
-trap 'tar -czf result.tar.gz --transform="s|^\\.$|output|;s|^\\./|output/|" -C "$RUSTMECH_BATCH_OUTPUT" .' EXIT"""
-
-
 def slurm_script(context,username,request):
     context.validate()
     if context.gpus or context.partition.endswith('-cuda'):
@@ -269,7 +235,8 @@ rustmech_stage 'Preparing request sources'
 export TERM=dumb
 export QT_API=pyside6 QT_QPA_PLATFORM=offscreen MPLBACKEND=Agg
 export OMP_NUM_THREADS={step_cores} RUSTMECH_THREADS={step_cores} OPENBLAS_NUM_THREADS=1
-{_batch_output_setup(request.get('staged_geometry'))}
+mkdir -p output
+trap 'tar -czf result.tar.gz output' EXIT
 mkdir -p engine
 echo "{request['source_sha256']}  engine.tar.gz" | sha256sum -c -
 tar -xzf engine.tar.gz -C engine
@@ -434,7 +401,7 @@ def _save_doe_workbook(record, directory, stage):
 
 def run_remote_job(request,context,auth=None,marker=None,*,directory=None,resume_record=None,on_progress=None,cancelled=None,
                    submit_only=False, poll_once=False, detach_requested=None):
-    from remote_operations import batch_geometry_name, required_capability
+    from remote_operations import required_capability
     study_name = context.study_name
     context.validate()
     submission = resume_record if resume_record is not None else request
@@ -470,12 +437,7 @@ def run_remote_job(request,context,auth=None,marker=None,*,directory=None,resume
     else:
         from model import ROOT
         geometry_path = request.get('settings', {}).get('imported_geometry_path')
-        staged_geometry = request.get('staged_geometry')
-        if staged_geometry is not None:
-            if staged_geometry['username'] != transport.username:
-                raise ValueError('Use the TRUBA account that received the prepared specimens.')
-            batch_geometry_name(staged_geometry['sha256'])
-        elif 'experiment_rows' in request:
+        if 'experiment_rows' in request:
             paths = {row['settings'].get('imported_geometry_path') for row in request['experiment_rows']}
             request = {**request, 'matrix_geometries': {
                 path: base64.b64encode(Path(path).read_bytes()).decode('ascii') for path in paths if path
@@ -581,12 +543,8 @@ def run_remote_job(request,context,auth=None,marker=None,*,directory=None,resume
                         for step in request['convergence_steps']]
                 _write_paths(paths, record)
             remote_path = shlex.quote(remote)
-            setup = _batch_results_setup(request.get('staged_geometry'))
-            command = "mkdir -p -- " + remote_path
-            if setup:
-                command = f"set -e\n{command}\ncd {remote_path}\n{setup}"
             staging_phase = "Creating the TRUBA work directory"
-            transport.command(command)
+            transport.command("mkdir -p -- " + remote_path)
             for name in ("engine.tar.gz","request.json",script_name):
                 staging_phase = f"Uploading {name} to TRUBA"
                 transport.put(directory/name,remote+"/"+name)
@@ -976,12 +934,10 @@ def resume_convergence_levels(record_path, remote_auth=None, job_marker=None):
 resume_convergence_levels.remote_job_target = True
 
 
-def run_remote_doe(index,settings,context,solve,remote_auth=None,job_marker=None,*,staged_geometry=None):
+def run_remote_doe(index,settings,context,solve,remote_auth=None,job_marker=None):
     cores, _ = request_resources(context, 'doe_solve' if solve else 'doe_mesh')
     settings = replace(settings, cores=min(settings.cores, cores), automatic_cores=False)
     request = dict(operation='doe_solve' if solve else 'doe_mesh', settings=asdict(settings), row=index)
-    if staged_geometry is not None:
-        request['staged_geometry'] = staged_geometry
     result, _ = run_remote_job(request, context, remote_auth, job_marker)
     return result["row"] if result is not None else None
 run_remote_doe.remote_job_target = True

@@ -2,7 +2,6 @@
 
 from contextlib import contextmanager
 import errno
-import json
 from hashlib import sha256
 from io import BytesIO
 import os
@@ -20,7 +19,7 @@ import pytest
 from paramiko import SSHException
 
 from esen_workspace import EsenWorkspace
-from truba_files import (create_directory, delete_files, download_file, list_directory, project_root, stage_batch_geometries,
+from truba_files import (create_directory, delete_files, download_file, list_directory, project_root,
                          sync_tree, upload_file, upload_tree)
 from truba_ssh import RemoteAuth, active_session_client, register_session, unregister_session
 from window_state import WindowStateStore
@@ -170,66 +169,6 @@ def test_job_inputs_go_directly_into_open_folder_and_retry_safely(remote, tmp_pa
         upload_tree(auth, folder, tmp_path)
     assert str(target / "extra.txt") not in known
     assert known[str(target / "job.slurm")] == b"script"
-
-
-def test_batch_geometry_upload_is_verified_and_reused(remote, tmp_path):
-    auth, sftp = remote
-    source = tmp_path / 'prepared.vtp'
-    content = b'prepared geometry with face assignments'
-    source.write_bytes(content)
-    digest = sha256(content).hexdigest()
-    directory = project_root(auth.username) / 'BatchInputs'
-    target = str(directory / f'{digest}.vtp')
-    sftp.stat.return_value.st_size = len(content)
-    sftp.lstat.side_effect = [FileNotFoundError, SimpleNamespace(st_mode=S_IFREG)]
-    sftp.open.side_effect = [MagicMock(), BytesIO(content)]
-
-    expected = {str(source): dict(username=auth.username, sha256=digest)}
-    assert stage_batch_geometries(auth, [source, source]) == expected
-    sftp.mkdir.assert_called_once_with(str(directory))
-    assert sftp.rename.call_args.args[1] == target
-    sftp.rename.reset_mock()
-    sftp.lstat.side_effect = None
-    sftp.lstat.return_value.st_mode = S_IFREG
-    sftp.open.side_effect = [BytesIO(content), BytesIO(b'damaged')]
-    assert stage_batch_geometries(auth, [source]) == expected
-    with pytest.raises(OSError, match='geometry verification failed'):
-        stage_batch_geometries(auth, [source])
-    sftp.rename.assert_not_called()
-
-
-@pytest.mark.parametrize('relative', [None, PurePosixPath('Projects/Compression 1')])
-def test_batch_settings_upload_references_verified_geometry(remote, tmp_path, monkeypatch, relative):
-    auth, sftp = remote
-    source = tmp_path / 'prepared.vtp'
-    source.write_bytes(b'prepared geometry')
-    settings = dict(mesh_resolution=0.9, local_mesh_size=0.8, mesh_type='TET10')
-    remote_inputs = {}
-
-    def stat(path):
-        if path not in remote_inputs:
-            raise FileNotFoundError(path)
-        return SimpleNamespace(st_mode=S_IFREG)
-
-    def publish(_, local, target):
-        remote_inputs[target] = local.read_bytes()
-
-    sftp.lstat.side_effect = stat
-    sftp.open.side_effect = lambda path, _: BytesIO(remote_inputs[path])
-    monkeypatch.setattr('truba_files._publish_file', publish)
-    staged = stage_batch_geometries(auth, [source], settings_by_geometry={str(source): [settings]},
-                                   relative=relative)
-
-    manifest_path, = (path for path in remote_inputs if path.endswith('.json'))
-    contents = remote_inputs[manifest_path]
-    assert PurePosixPath(manifest_path).stem == sha256(contents).hexdigest()
-    geometry = sha256(source.read_bytes()).hexdigest() + '.vtp'
-    destination = project_root(auth.username) / (relative or PurePosixPath('BatchInputs'))
-    assert PurePosixPath(manifest_path).parent == destination
-    assert str(destination / geometry) in remote_inputs
-    if relative is not None:
-        assert staged[str(source)]['directory'] == relative.as_posix()
-    assert json.loads(contents) == dict(schema_version=1, jobs=[dict(geometry=geometry, settings=settings)])
 
 
 @pytest.mark.parametrize("available_channels", [1, 3])

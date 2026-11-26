@@ -119,6 +119,9 @@ def decode_plan(payload):
             matrices[key] = []
             for raw in rows:
                 values = dict(raw)
+                # Older plans serialized this unused field on every experiment.
+                if values.get('folder_job') is None:
+                    values.pop('folder_job', None)
                 snapshot = values.get('design_settings')
                 values['design_settings'] = _settings(snapshot) if snapshot is not None else None
                 row = ExperimentRow(**values)

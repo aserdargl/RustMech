@@ -25,7 +25,7 @@
 
 ### 1. Mekanik analiz ve raporlamayı Qt’den ayır
 
-- İlk değişiklikte `extract_curve`, `export_graphs`, `export_field_results` ve doğrudan yardımcılarını Qt bağımlılığı bulunmayan bir sonuç modülüne çıkar. Sonraki değişiklikte `RunPaths`, tekil çalışma, toplu analiz ve Kratos sonuç kurtarma iş akışını arayüzden bağımsız bir modüle al. Yerel süreç, TRUBA işçisi ve standart profil çalışma yolunu yeni girişlere bağla. Eski içe aktarma yollarını kullanan araçlar için geçici yeniden dışa aktarma kullan.
+- İlk değişiklikte `extract_curve`, `export_graphs`, `export_field_results` ve doğrudan yardımcılarını Qt bağımlılığı bulunmayan bir sonuç modülüne çıkar. Sonraki değişiklikte `RunPaths`, tekil çalışma ve Kratos sonuç kurtarma iş akışını arayüzden bağımsız bir modüle al. Yerel süreç, TRUBA işçisi ve standart profil çalışma yolunu yeni girişlere bağla. Eski içe aktarma yollarını kullanan araçlar için geçici yeniden dışa aktarma kullan.
 - **Kabul ölçütü.** Yerel çocuk süreç ve mekanik TRUBA işi, `nonlinear_compression` veya `PySide6` yüklemeden çalışabilsin. Aynı girdide ağ yeniden kullanımı, JSON/dosya sözleşmesi ve kısmi sonuç davranışı korunsun. PyInstaller paketi ile TRUBA kaynak paketinde taşınan Python modülleri doğrulansın. [Masaüstü paketi](Build-Exe.ps1) · [TRUBA kaynak paketi](truba_remote.py)
 
 ### 2. Çözücü kayıt ve sonuç sözleşmesini netleştir
@@ -37,7 +37,7 @@
 ### 3. DoE ve analiz kuyruğunun çalışma döngüsünü ortaklaştır
 
 - Ortak yürütme kodunu önce durum geçişleri, satır seçimi ve sonuç uygulamadan başlayarak arayüzden çıkar. İki ekran aynı yürütme bileşenini kullansın. Kuyruk JSON’u ve klasör sonuçlarının yazımını mevcut saklama sınırlarında tut. Dışa aktarma hatası, sonraki satıra geçiş ve kullanıcı iptali için mevcut davranışı örneklerle doğrula.
-- **Kabul ölçütü.** Çalıştır, durdur, zaman aşımı ve ilerleme geçişleri Qt penceresi oluşturmadan sınanabilir. Kuyruk şeması, atomik yazım, eşzamanlı düzenleme koruması, yarıda kalan işin yeniden açılması ve numuneyi klasör ekranına geri alma akışı korunur. Masaüstü değişikliği sırasında kompakt kontroller, Enter davranışı ve pencere/bölücü kalıcılığı doğrulanır. [DoE](tests/test_doe_run_control.py) · [Sonuç kalıcılığı](tests/test_doe_results_persistence.py) · [Klasör işleri](tests/test_folder_batch.py) · [Klavye](tests/test_dialog_keyboard.py) · [Pencere](tests/test_window_state.py)
+- **Kabul ölçütü.** Çalıştır, durdur, zaman aşımı ve ilerleme geçişleri Qt penceresi oluşturmadan sınanabilir. Kuyruk şeması, atomik yazım, eşzamanlı düzenleme koruması ve yarıda kalan işin yeniden açılması korunur. Masaüstü değişikliği sırasında kompakt kontroller, Enter davranışı ve pencere/bölücü kalıcılığı doğrulanır. [DoE](tests/test_doe_run_control.py) · [Sonuç kalıcılığı](tests/test_doe_results_persistence.py) · [Klavye](tests/test_dialog_keyboard.py) · [Pencere](tests/test_window_state.py)
 
 ### 4. TRUBA işlem eşlemesini ve pencere bağımlılıklarını sadeleştir
 
