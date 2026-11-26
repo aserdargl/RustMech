@@ -245,7 +245,7 @@ class DoEWindowTests(unittest.TestCase):
             self.assertEqual(len(dialog.doe_studio._designs), 0)
             self.assertIs(dialog.doe_studio.use_model_btn.window(), dialog.doe_window)
             studio = dialog.doe_studio
-            studio.settings_tabs.setCurrentWidget(studio.planner.learning_page)
+            studio.planner.show_legacy_learning()
             self.assertTrue(studio.use_model_btn.isVisible())
             self.assertTrue(studio.table.isVisible())
             with patch.object(dialog, "refresh_validity"):

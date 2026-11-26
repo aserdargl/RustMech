@@ -1,7 +1,7 @@
 """Operation inputs and solver dispatch for independent factorial experiments."""
 from dataclasses import asdict
 from itertools import product
-from math import prod
+from math import floor, prod
 from pathlib import Path
 
 from model import GEOMETRY_FIELDS, settings_from_dict
@@ -116,6 +116,22 @@ def matrix(base, dimensions):
                 settings["structure_family"] = family
                 break
         yield request
+
+
+def lhs_matrix(base, dimensions, count, seed):
+    """Sample numeric ranges together and copy fixed settings into every row."""
+    from doe_studio import _lhs_samples
+
+    varying = {path: values for path, values in dimensions.items() if len(values) == 2}
+    if not varying:
+        yield from matrix(base, dimensions)
+        return
+    limits = [(low, high + 1 if type(low) is int else high) for low, high in varying.values()]
+    for sample in _lhs_samples(count, limits, seed):
+        levels = dimensions.copy()
+        for (path, (low, high)), value in zip(varying.items(), sample):
+            levels[path] = [min(high, floor(value)) if type(low) is int else float(value)]
+        yield next(matrix(base, levels))
 
 
 def validate(request):

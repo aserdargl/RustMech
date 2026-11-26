@@ -81,13 +81,19 @@ class SimpleDoEPlanner(QWidget):
                                           imported_geometry_name='', test_profile='custom',
                                           specimen_architecture='porous_all')
         self._build_learning_page(s, factor_specs)
+        self.learning_page = self.legacy_learning_page
+        if s.learning_doe is not None:
+            self.learning_page = QTabWidget()
+            self.learning_page.addTab(s.learning_doe, 'LHS sampling')
+            self.learning_page.addTab(self.legacy_learning_page, 'Mechanical dataset plan')
+        self.tabs.addTab(self.learning_page, 'DeepLearning')
         for button in self.findChildren(QPushButton):
             button.setDefault(False)
             button.setAutoDefault(False)
 
     def _build_learning_page(self, s, factor_specs):
-        self.learning_page = QWidget()
-        layout = QVBoxLayout(self.learning_page)
+        self.legacy_learning_page = QWidget()
+        layout = QVBoxLayout(self.legacy_learning_page)
         layout.setContentsMargins(2, 1, 2, 1)
         self.learning_splitter = QSplitter(Qt.Orientation.Horizontal)
         self.learning_splitter.setObjectName('deepLearningSettingsAndMatrix')
@@ -208,5 +214,9 @@ class SimpleDoEPlanner(QWidget):
         self.learning_splitter.addWidget(matrix_panel)
         self.learning_splitter.setStretchFactor(1, 1)
         self.learning_splitter.setSizes([350, 600])
-        self.tabs.addTab(self.learning_page, 'DeepLearning')
         s._size_action_group(s.use_model_btn, s.generate_ml_btn)
+
+    def show_legacy_learning(self):
+        if self.learning_page is not self.legacy_learning_page:
+            self.learning_page.setCurrentWidget(self.legacy_learning_page)
+        self.tabs.setCurrentWidget(self.learning_page)

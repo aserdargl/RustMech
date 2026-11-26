@@ -176,7 +176,7 @@ class SampleCombinationPage(QWidget):
             return
         studio._rows.extend(self._rows)
         studio._refresh_table_view()
-        studio.settings_tabs.setCurrentWidget(studio.planner.learning_page)
+        studio.planner.show_legacy_learning()
         self.save_preferences()
 
     def restore_state(self, state):

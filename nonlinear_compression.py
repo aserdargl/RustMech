@@ -4297,9 +4297,11 @@ class RustMechDialog(QDialog):
         for queue in (self.doe_studio, self.analysis_queue_widget):
             if queue is not None:
                 jobs.extend(queue.detach_remote_queue())
-        new_doe_job = self.doe_studio.new_doe.detach_remote()
-        if new_doe_job is not None:
-            jobs.append(new_doe_job)
+        for planner in (self.doe_studio.new_doe, self.doe_studio.learning_doe):
+            if planner is not None:
+                job = planner.detach_remote()
+                if job is not None:
+                    jobs.append(job)
         if self._mesh_convergence_dialog is not None:
             jobs.extend(self._mesh_convergence_dialog.study.detach_remote_jobs())
         return [job.detach_remote() for job in jobs]

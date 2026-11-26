@@ -716,6 +716,9 @@ Max|Maks
 Levels|Seviye
 Sampling|Örnekleme
 Deep Learning parameters|Derin öğrenme parametreleri
+LHS sampling|LHS örnekleme
+LHS sample count|LHS örnek sayısı
+Mechanical dataset plan|Mekanik veri planı
 LHS samples per geometry|Geometri başına LHS örneği
 Copy from design|Tasarımdan al
 Min from…|Min tasarımı…

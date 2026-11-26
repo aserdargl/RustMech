@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDialog,
 
 from material_catalog import builtin_materials
 from material_library import MaterialCard
-from new_doe_operations import (MAX_ROWS, OPERATIONS, explicit_numbers, launch, matrix, matrix_request,
+from new_doe_operations import (MAX_ROWS, OPERATIONS, explicit_numbers, launch, lhs_matrix, matrix, matrix_request,
                                 parameters, snapshot, structure_choices, validate)
 from new_doe_report import write_doe_report
 from structure_library import ALL_STRUCTURES_BY_FAMILY, STRUCTURE_FAMILIES
@@ -152,7 +152,7 @@ def text_field(value=""):
 
 
 class Factor:
-    def __init__(self, table, row, variations, variation_row, path, value, source, op, changed):
+    def __init__(self, table, row, variations, variation_row, path, value, source, op, changed, *, sampling=False):
         self.value = value
         self.path = path
         key = path[-1]
@@ -171,7 +171,6 @@ class Factor:
         self.variable = QCheckBox()
         self.variable.setAccessibleName(f"{translate('Variable')} · {translate(self.label)}")
         self.variable.setToolTip(translate("Variable"))
-        table.setCellWidget(row, 0, self.variable)
         self.variations = variations
         self.variation_row = variation_row
         self.choices = []
@@ -192,6 +191,14 @@ class Factor:
             self.choices = [("True", True), ("False", False)]
         self.numeric = not self.choices and type(value) in (int, float)
         self.optional_number = value is None and key in ("minimum_substeps", "maximum_substeps", "stl_resolution")
+        self.sampling = sampling
+        self.can_vary = not sampling or self.numeric or self.optional_number
+        if self.can_vary:
+            table.setCellWidget(row, 0, self.variable)
+        else:
+            self.variable.setParent(table)
+            self.variable.setEnabled(False)
+            self.variable.hide()
         self.levels_seeded = False
         if self.choices:
             self.fixed = CompactComboBox()
@@ -266,10 +273,14 @@ class Factor:
             controls = QVBoxLayout(levels)
             controls.setContentsMargins(0, 0, 0, 0)
             controls.setSpacing(1)
-            controls.addWidget(self.mode)
+            if sampling:
+                self.mode.setParent(levels)
+                self.mode.hide()
+            else:
+                controls.addWidget(self.mode)
             controls.addWidget(self.level_entry)
             variations.setCellWidget(variation_row, 1, levels)
-            variations.setRowHeight(variation_row, 2 * CONTROL_HEIGHT + 2)
+            variations.setRowHeight(variation_row, CONTROL_HEIGHT + 2 if sampling else 2 * CONTROL_HEIGHT + 2)
         else:
             variations.setCellWidget(variation_row, 1, self.selection)
         self.fixed_panel = self.fixed
@@ -389,10 +400,10 @@ class Factor:
                 self.restore_number(self.first, state.get("lower"))
                 self.restore_number(self.last, state.get("upper"))
                 index = self.mode.findData(state.get("mode"))
-                if index >= 0:
+                if not self.sampling and index >= 0:
                     self.mode.setCurrentIndex(index)
         self.levels_seeded = state.get("seeded") is True or state.get("variable") is True
-        self.variable.setChecked(state.get("variable") is True)
+        self.variable.setChecked(self.can_vary and state.get("variable") is True)
 
     def select_material(self, data):
         self.selected_material = data
@@ -414,7 +425,7 @@ class Factor:
             values = ([a.data() for a in self.menu.actions() if a.isChecked()]
                       if varying else [self.fixed.currentData()])
         elif (self.numeric or self.optional_number) and varying:
-            if self.mode.currentData() == "list":
+            if not self.sampling and self.mode.currentData() == "list":
                 values = explicit_numbers(self.selection.text(), type(self.first.value()),
                                           self.first.minimum(), self.first.maximum())
             else:
@@ -649,10 +660,12 @@ class DoeRunDialog(QDialog):
 
 
 class NewDoePage(QWidget):
-    def __init__(self, host, preferences=None):
+    def __init__(self, host, preferences=None, *, sampling=False):
         super().__init__()
         self.host = host
         self.preferences = preferences
+        self.sampling = sampling
+        self.preference_prefix = "deepLearning" if sampling else "doe"
         self._loaded_operation = None
         self._drafts = {}
         self._run_options = {}
@@ -697,7 +710,7 @@ class NewDoePage(QWidget):
         self.input_tabs = QTabWidget()
         self.input_tabs.setMinimumWidth(320)
         self.input_tabs.addTab(self.analysis_settings, "Analysis settings")
-        self.variations = self.table(["Parameter", "Values"])
+        self.variations = self.table(["Parameter", "Min / max" if sampling else "Values"])
         self.variations.setAccessibleName("Variable settings")
         self.variations.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         self.input_tabs.addTab(self.variations, "Variable settings")
@@ -729,7 +742,21 @@ class NewDoePage(QWidget):
         settings_layout.setContentsMargins(0, 0, 0, 0)
         settings_layout.setSpacing(2)
         settings_layout.addWidget(self.input_tabs, 1)
-        self.apply_button = QPushButton("Apply")
+        if sampling:
+            self.lhs_count = NumericLineEdit(100, 2, 5000)
+            self.lhs_seed = NumericLineEdit(42, 1, 999999)
+            sampling_group = SidebarGroupBox("Deep Learning parameters")
+            form = QFormLayout(sampling_group.content)
+            form.setContentsMargins(4, 2, 4, 4)
+            form.setSpacing(CONTROL_GAP)
+            form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.FieldsStayAtSizeHint)
+            form.addRow("LHS sample count", self.lhs_count)
+            form.addRow("Seed", self.lhs_seed)
+            settings_layout.addWidget(sampling_group)
+            for control in (self.lhs_count, self.lhs_seed):
+                control.valueChanged.connect(self.inputs_changed)
+        self.apply_label = "Generate ML matrix" if sampling else "Apply"
+        self.apply_button = QPushButton(self.apply_label)
         self.apply_button.setProperty("primary", True)
         self.apply_button.setFixedHeight(CONTROL_HEIGHT)
         self.apply_button.setAutoDefault(False)
@@ -756,7 +783,7 @@ class NewDoePage(QWidget):
         self.preview.verticalHeader().setDefaultSectionSize(26)
         matrix_layout.addWidget(self.preview, 1)
         self.splitter = QSplitter(Qt.Orientation.Horizontal)
-        self.splitter.setObjectName("newDoeSettingsAndMatrix")
+        self.splitter.setObjectName("learningOperationSettingsAndMatrix" if sampling else "newDoeSettingsAndMatrix")
         self.splitter.setHandleWidth(7)
         self.splitter.setChildrenCollapsible(False)
         self.splitter.addWidget(settings_panel)
@@ -786,7 +813,7 @@ class NewDoePage(QWidget):
             self.operation.setEnabled(False)
             self.run_settings.setEnabled(False)
         if self.preferences is not None:
-            last_operation = self.preferences.value("doe/lastOperation", "", type=str)
+            last_operation = self.preferences.value(f"{self.preference_prefix}/lastOperation", "", type=str)
             index = self.operation.findData(last_operation)
             if index >= 0:
                 self.operation.setCurrentIndex(index)
@@ -796,14 +823,14 @@ class NewDoePage(QWidget):
         target = "truba" if self.host is not None and self.host.remote_controller.requested else "local"
         if self.preferences is None:
             return self._run_options.get(operation, (target, 2))
-        key = f"doe/runOptions/{operation}"
-        paired = self.preferences.value(f"doe/pairTrubaExperiments/{operation}", True, type=bool)
+        key = f"{self.preference_prefix}/runOptions/{operation}"
+        paired = self.preferences.value(f"{self.preference_prefix}/pairTrubaExperiments/{operation}", True, type=bool)
         return (self.preferences.value(f"{key}/target", target, type=str),
                 self.preferences.value(f"{key}/batchSize", 2 if paired else 1, type=int))
 
     def open_run_options(self, *, run=False):
         operation = self.operation.currentData()
-        key = f"doe/runOptions/{operation}"
+        key = f"{self.preference_prefix}/runOptions/{operation}"
         parallel = (self._parallel_experiments.get(operation, 1) if self.preferences is None else
                     self.preferences.value(f"{key}/parallelExperiments", 1, type=int))
         dialog = DoeRunDialog(self, *self.run_options(operation), parallel, run=run)
@@ -871,7 +898,7 @@ class NewDoePage(QWidget):
         for button in self.commands:
             button.setFixedWidth(command_width)
         apply_width = max(self.apply_button.fontMetrics().horizontalAdvance(text)
-                          for text in ("Apply", turkish("Apply"))) + 16
+                          for text in (self.apply_label, turkish(self.apply_label))) + 16
         self.apply_button.setFixedWidth(apply_width)
         if self.host is not None and not self.loaded:
             self.load()
@@ -902,10 +929,12 @@ class NewDoePage(QWidget):
         self._draft_timer.stop()
         op = self._loaded_operation
         draft = {"/".join(factor.path): factor.draft() for factor in self.factors}
+        if self.sampling:
+            draft["sampling"] = {"count": self.lhs_count.value(), "seed": self.lhs_seed.value()}
         if self._drafts.get(op) != draft:
             self._drafts[op] = draft
             if self.preferences is not None:
-                self.preferences.setValue(f"doe/operationDrafts/{op}", json.dumps(draft, ensure_ascii=False))
+                self.preferences.setValue(f"{self.preference_prefix}/operationDrafts/{op}", json.dumps(draft, ensure_ascii=False))
         if self.preferences is not None:
             self.preferences.sync()
 
@@ -934,12 +963,21 @@ class NewDoePage(QWidget):
             draft = self._drafts.get(op)
             if draft is None and self.preferences is not None:
                 try:
-                    draft = json.loads(self.preferences.value(f"doe/operationDrafts/{op}", "{}", type=str))
+                    key = f"{self.preference_prefix}/operationDrafts/{op}"
+                    draft = json.loads(self.preferences.value(key, "{}", type=str))
                 except ValueError:
                     draft = None
             if not isinstance(draft, dict):
                 draft = {}
             self._drafts[op] = draft
+            if self.sampling:
+                options = draft.get("sampling", {})
+                self.lhs_count.setValue(100)
+                self.lhs_seed.setValue(42)
+                if isinstance(options, dict):
+                    for control, name in ((self.lhs_count, "count"), (self.lhs_seed, "seed")):
+                        if type(options.get(name)) is int:
+                            Factor.restore_number(control, options[name])
             self.base = snapshot(self.host, op)
             sources = field_sources(self.host, op)
             groups = {title: [] for title in ("Standard test", "Structure", "Mesh")}
@@ -984,7 +1022,7 @@ class NewDoePage(QWidget):
                 table.setRowCount(len(members))
                 for row, (path, value) in enumerate(members):
                     factor = Factor(table, row, self.variations, variation_rows[path], path, value,
-                                    sources.get(path[-1]), op, self.inputs_changed)
+                                    sources.get(path[-1]), op, self.inputs_changed, sampling=self.sampling)
                     factor.restore_draft(draft.get("/".join(path)))
                     factors[path] = factor
                 table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -1008,7 +1046,7 @@ class NewDoePage(QWidget):
                         lambda _checked=False, mesh=preview_group == "Mesh": self.open_input_preview(mesh))
                     actions.addWidget(preview)
                     body.addLayout(actions)
-                if title == "Structure":
+                if title == "Structure" and not self.sampling:
                     button = QPushButton("Apply")
                     button.setObjectName("structureApplyBtn")
                     button.setAutoDefault(False)
@@ -1036,7 +1074,7 @@ class NewDoePage(QWidget):
             self.loaded = True
             self._loaded_operation = op
             if self.preferences is not None:
-                self.preferences.setValue("doe/lastOperation", op)
+                self.preferences.setValue(f"{self.preference_prefix}/lastOperation", op)
         except Exception as error:
             self.status.setText(str(error))
             self.loaded = False
@@ -1167,6 +1205,9 @@ class NewDoePage(QWidget):
             return
         for field in self.input_tabs.findChildren(NumericLineEdit):
             field.interpretText()
+        if self.sampling:
+            self.lhs_count.interpretText()
+            self.lhs_seed.interpretText()
         self.invalidate()
         dimensions = {}
         try:
@@ -1176,7 +1217,9 @@ class NewDoePage(QWidget):
                 except (ValueError, TypeError) as error:
                     raise ValueError(f"{factor.label}: {error}") from error
             rows = []
-            for row in matrix(self.base, dimensions):
+            requests = (lhs_matrix(self.base, dimensions, self.lhs_count.value(), self.lhs_seed.value())
+                        if self.sampling else matrix(self.base, dimensions))
+            for row in requests:
                 try:
                     validate(row)
                 except (ValueError, TypeError) as error:
@@ -1223,7 +1266,8 @@ class NewDoePage(QWidget):
             except ValueError as error:
                 self.status.setText(translate(str(error)))
                 return
-        directory = results_directory() / ("DoE_" + datetime.now().strftime("%Y%m%d_%H%M%S_") + uuid4().hex[:8])
+        prefix = "DeepLearning_" if self.sampling else "DoE_"
+        directory = results_directory() / (prefix + datetime.now().strftime("%Y%m%d_%H%M%S_") + uuid4().hex[:8])
         try:
             directory.mkdir(parents=True)
             with (directory / "matrix.csv").open("w", newline="", encoding="utf-8-sig") as stream:
@@ -1243,6 +1287,8 @@ class NewDoePage(QWidget):
         if remote:
             if self.truba_jobs_window is None:
                 self.truba_jobs_window = DoeTrubaJobsWindow(self.window())
+                if self.sampling:
+                    self.truba_jobs_window.setObjectName("learningTrubaJobsWindow")
             self.truba_jobs_button.show()
             self.truba_jobs_window.begin()
         if self.grouped_remote:

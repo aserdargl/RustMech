@@ -162,7 +162,7 @@ def _lhs_samples(
     dims = len(ranges)
     result = np.zeros((n_samples, dims), dtype=float)
     for d, (low, high) in enumerate(ranges):
-        if np.isclose(low, high):
+        if low == high:
             result[:, d] = low
             continue
         cut = np.linspace(0.0, 1.0, n_samples + 1)
@@ -1315,6 +1315,8 @@ class DoEStudioWidget(ExperimentTableWidget):
         self.vertical_splitter.setOpaqueResize(True)
         self.vertical_splitter.setHandleWidth(3)
 
+        self.learning_doe = (NewDoePage(self._operation_host, self._preferences, sampling=True)
+                             if self._operation_host is not None else None)
         self.planner = SimpleDoEPlanner(self, (*FACTOR_SPECS, SIZE_FACTOR_SPEC))
         self.vertical_splitter.addWidget(self.planner)
 
@@ -1325,14 +1327,18 @@ class DoEStudioWidget(ExperimentTableWidget):
         self.sample_settings = SampleSettingsPage(self)
         self.sample_settings.hide()
 
-        def select_page(index):
-            learning = self.planner.tabs.widget(index) is self.planner.learning_page
-            self.planner.plan_footer.setVisible(learning)
-            self.new_doe.size_navigation(self.planner.navigation, not learning)
-            self.footer_label.setVisible(learning)
+        def select_page(*_):
+            doe = self.planner.tabs.currentWidget() is self.new_doe
+            legacy = not doe and (self.learning_doe is None or
+                                  self.planner.learning_page.currentWidget() is self.planner.legacy_learning_page)
+            self.planner.plan_footer.setVisible(legacy)
+            self.new_doe.size_navigation(self.planner.navigation, doe)
+            self.footer_label.setVisible(legacy)
 
         self.planner.navigation.add_tabs(self.planner.tabs)
         self.planner.tabs.currentChanged.connect(select_page)
+        if self.learning_doe is not None:
+            self.planner.learning_page.currentChanged.connect(select_page)
         self.vertical_splitter.setStretchFactor(0, 0)
         self.vertical_splitter.setSizes([730])
         root.addWidget(self.vertical_splitter, 1)
@@ -1348,6 +1354,8 @@ class DoEStudioWidget(ExperimentTableWidget):
     def dispose(self):
         self.save_workspace_draft()
         self.new_doe.cancel()
+        if self.learning_doe is not None:
+            self.learning_doe.cancel()
         self.sample_settings.save_preferences()
         super().dispose()
 
@@ -1392,6 +1400,8 @@ class DoEStudioWidget(ExperimentTableWidget):
 
     def save_workspace_draft(self):
         self.new_doe.save_draft(commit=True)
+        if self.learning_doe is not None:
+            self.learning_doe.save_draft(commit=True)
         if self._workspace_draft is None:
             return
         draft = self.capture_plan(commit=True, inputs_only=True)
@@ -1471,7 +1481,7 @@ class DoEStudioWidget(ExperimentTableWidget):
         self._refresh_table_view()
         self.sample_settings.restore_state(plan.get("sample_settings", {}))
         if select_tab:
-            self.settings_tabs.setCurrentWidget(self.planner.learning_page)
+            self.planner.show_legacy_learning()
 
     def save_plan_dialog(self):
         from doe_plan import PLAN_FILTER

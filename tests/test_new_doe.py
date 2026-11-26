@@ -59,9 +59,80 @@ class NewDoeTests(unittest.TestCase):
             button = buttons.itemAt(index).widget()
             self.assertGreaterEqual(button.width(), button.fontMetrics().horizontalAdvance(button.text()) + 22)
         tabs.setCurrentWidget(studio.planner.learning_page)
+        self.assertTrue(studio.learning_doe.isVisible())
+        self.assertFalse(studio.open_plan_btn.isVisible())
+        studio.planner.show_legacy_learning()
         self.assertTrue(studio.open_plan_btn.isVisible())
         self.assertEqual(studio.open_plan_btn.width(), 64)
         self.assertEqual(studio.save_plan_btn.width(), 64)
+
+    def test_learning_samples_the_selected_operation_and_restores_its_ranges(self):
+        doe = self.page()
+        studio = self.window.doe_studio
+        studio.settings_tabs.setCurrentWidget(studio.planner.learning_page)
+        page = studio.learning_doe
+        self.assertTrue(page.loaded, page.status.text())
+        self.assertEqual(page.operation.currentData(), "fft_solve")
+        fields = {factor.path: factor for factor in page.factors}
+        grid = fields["grid",]
+        stiffness = fields["void_ratio",]
+        self.assertFalse(fields["settings", "structure_name"].variable.isEnabled())
+        self.assertTrue(page.variations.isRowHidden(grid.variation_row))
+        grid.variable.click()
+        stiffness.variable.click()
+        page.input_tabs.setCurrentWidget(page.variations)
+        self.assertFalse(page.variations.isRowHidden(grid.variation_row))
+        self.assertTrue(page.variations.isRowHidden(fields["distribution",].variation_row))
+        self.assertTrue(grid.first.isVisible())
+        self.assertTrue(grid.last.isVisible())
+        self.assertFalse(grid.mode.isVisible())
+        page.apply_button.click()
+        self.assertFalse(page.matrix_current)
+        self.assertIn("upper bound", page.status.text())
+
+        grid.first.setValue(16)
+        grid.last.setValue(31)
+        stiffness.first.setValue(0.01)
+        stiffness.last.setValue(0.09)
+        page.lhs_count.setValue(8)
+        page.lhs_seed.setValue(37)
+        page.apply_button.click()
+        self.assertTrue(page.matrix_current, page.status.text())
+        self.assertEqual(page.sheet.rowCount(), 8)
+        original = [(row["grid"], row["void_ratio"]) for row in page.rows]
+        self.assertTrue(all(row["operation"] == "fft_solve" for row in page.rows))
+        self.assertTrue(all(type(grid) is int and 16 <= grid <= 31 for grid, _ in original))
+        self.assertEqual(sorted(int((value - 0.01) / 0.01) for _, value in original), list(range(8)))
+        self.assertFalse(doe.rows)
+        self.assertFalse(next(factor for factor in doe.factors if factor.path == ("grid",)).variable.isChecked())
+
+        page.operation.setCurrentIndex(page.operation.findData("mpm_solve"))
+        self.assertTrue(page.loaded, page.status.text())
+        self.assertFalse(page.rows)
+        self.assertFalse(any(factor.path == ("grid",) for factor in page.factors))
+        self.assertEqual(page.lhs_count.value(), 100)
+        spacing = next(factor for factor in page.factors if factor.path == ("mpm", "grid_mm"))
+        spacing.variable.click()
+        spacing.first.setValue(0.4)
+        spacing.last.setValue(0.8)
+        page.lhs_count.setValue(4)
+        page.apply_button.click()
+        self.assertTrue(page.matrix_current, page.status.text())
+        self.assertEqual(len(page.rows), 4)
+        self.assertTrue(all(row["operation"] == "mpm_solve" and 0.4 <= row["mpm"]["grid_mm"] <= 0.8
+                            for row in page.rows))
+
+        page.operation.setCurrentIndex(page.operation.findData("fft_solve"))
+        self.assertEqual((page.lhs_count.value(), page.lhs_seed.value()), (8, 37))
+        page.apply_button.click()
+        self.assertEqual([(row["grid"], row["void_ratio"]) for row in page.rows], original)
+
+        from new_doe_page import NewDoePage
+        restored = NewDoePage(self.window, page.preferences, sampling=True)
+        restored.load()
+        restored.create()
+        self.assertTrue(restored.matrix_current, restored.status.text())
+        self.assertEqual([(row["grid"], row["void_ratio"]) for row in restored.rows], original)
 
     def test_input_preview_order_current_values_and_window_geometry(self):
         from concurrent.futures import Future
