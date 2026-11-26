@@ -7,7 +7,6 @@ import sys
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 from model import Settings, settings_from_dict
 from kratos_backend import KratosBackend
-from kratos_export import export_kratos
 from solver_api import AnalysisRequest
 from tools.verify_kratos_pipeline import cube_mesh
 

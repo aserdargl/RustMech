@@ -7,7 +7,7 @@ import unittest
 import numpy as np
 from model import Settings, validate_settings, save_settings, load_settings
 from mesh_engine import make_surface, generate_volume_mesh, preview_key, build_preview
-from standard_tests import apply_profile, sample_shape, profile_report, fixture_surfaces
+from standard_tests import apply_profile, sample_shape, profile_report
 
 
 class StandardGeometryTests(unittest.TestCase):

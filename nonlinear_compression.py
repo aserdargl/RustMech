@@ -101,18 +101,16 @@ from model import (
     settings_from_dict,
     validate_geometry,
     validate_settings,
-    write_json,
 )
 from solver_api import (
     KRATOS_QUADRATIC_MESH_TYPES,
     MAPDL_CAPABILITIES,
     SOLVER_REGISTRY,
     SolverCapabilities,
-    create_solver_backend,
     get_solver_capabilities,
 )
 from rust_mesh import build_hex_grid as build_hex_grid
-from mesh_engine import Preview as Preview, build_preview, generate_volume_mesh, gyroid_field as gyroid_field, make_surface, preview_key
+from mesh_engine import Preview as Preview, build_preview, generate_volume_mesh, gyroid_field as gyroid_field, make_surface as make_surface, preview_key
 from material_editor import MaterialEditor
 from mechanical_analysis import (
     RunPaths as RunPaths,
@@ -297,7 +295,6 @@ class RustMechDialog(QDialog):
         self.analysis_poll = QTimer(self)
         self.analysis_poll.setInterval(100)
         self.analysis_poll.timeout.connect(self._poll_analysis)
-        self.accepted_settings = None
         self.preview = None
         self._result_preview_folder = None
         self._result_preview_is_historical = False
@@ -662,7 +659,6 @@ class RustMechDialog(QDialog):
         self.mesh_type_combo.currentIndexChanged.connect(self._sync_mesh_type)
         self._sync_mesh_type()
         self._geometry_form = geometry_form
-        self._morph_label_widget = morph_lbl
 
         self.family_combo.currentIndexChanged.connect(self._on_family_changed)
         self.family_combo.activated.connect(
@@ -2710,7 +2706,6 @@ class RustMechDialog(QDialog):
             if force else "Top platen displacement in −Z; reaction force is calculated (N).")
         active=hasattr(self,'test_profile_combo') and self.test_profile_combo.currentData() != 'custom'
         if active:
-            from standard_tests import kind
             from standard_tests import PROFILES
             experiment=PROFILES[self.test_profile_combo.currentData()].kind
             direction='+Z' if experiment=='tension' else '−Z'
@@ -3893,7 +3888,6 @@ class RustMechDialog(QDialog):
         except Exception as exc:
             QMessageBox.critical(self, "Cannot start analysis", str(exc))
             return
-        self.accepted_settings = settings
         self._set_analysis_blocker("Analysis running...")
         self.force_stop_button.setEnabled(True)
         self._show_analysis_progress(self.analysis_job)

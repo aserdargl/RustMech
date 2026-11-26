@@ -830,7 +830,6 @@ Enter your TRUBA username and password.|TRUBA kullanıcı adınızı ve parolan�
 Connected to TRUBA. Password could not be saved for this Windows user.|TRUBA bağlantısı kuruldu. Parola bu Windows kullanıcısı için kaydedilemedi.
 Saved credentials could not be removed.|Kayıtlı kimlik bilgileri silinemedi.
 Saved credentials cannot be read by this Windows user. Enter your credentials again.|Bu Windows kullanıcısı kayıtlı kimlik bilgilerini okuyamıyor. Bilgilerinizi yeniden girin.
-No saved TRUBA credentials. Open TRUBA to enter and remember your credentials.|Kayıtlı TRUBA kimlik bilgisi yok. Bilgilerinizi girip kaydetmek için TRUBA’yı açın.
 Saved credentials belong to this Windows account. Use separate Windows accounts on shared computers.|Kayıtlı kimlik bilgileri bu Windows hesabına aittir. Ortak bilgisayarlarda ayrı Windows hesapları kullanın.
 Verify TRUBA server identity|TRUBA sunucu kimliğini doğrulayın
 First connection to this server. Verify this fingerprint with TRUBA before accepting:|Bu sunucuya ilk bağlantı. Kabul etmeden önce parmak izini TRUBA ile doğrulayın:

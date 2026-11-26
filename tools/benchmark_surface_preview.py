@@ -3,7 +3,7 @@
 Run from the project root with the application Python. No solver is started.
 """
 import argparse
-from dataclasses import asdict, replace
+from dataclasses import asdict
 import json
 from pathlib import Path
 import platform

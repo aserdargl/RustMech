@@ -6,7 +6,6 @@ import argparse
 import sys
 import json
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
-import numpy as np
 from model import Settings
 from standard_tests import apply_profile, profile_report
 from mesh_engine import generate_volume_mesh

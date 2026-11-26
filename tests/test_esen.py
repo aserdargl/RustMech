@@ -87,7 +87,7 @@ class EsenTests(unittest.TestCase):
             transport.put.assert_not_called()
 
     def test_automatic_timeout_resume_remains_in_background_tracking(self):
-        app = QApplication.instance() or QApplication([])
+        _app = QApplication.instance() or QApplication([])
         directory, record = self.new_job()
         jobs.save_job(directory, record, username=self.auth.username, resume_input="restart.in",
                       job_id="123", state="Running", elapsed_seconds=259200, slurm={"remaining": "0:00"})
@@ -1243,7 +1243,7 @@ class EsenTests(unittest.TestCase):
         self.assertEqual((record["state"], record["job_id"]), ("Submitted", "123"))
 
     def test_run_submits_an_uploaded_run_list_without_local_inputs(self):
-        app = QApplication.instance() or QApplication([])
+        _app = QApplication.instance() or QApplication([])
         preferences = QSettings(str(self.root / "settings.ini"), QSettings.Format.IniFormat)
         truba = FakeTruba()
         truba.auth = self.auth
@@ -1458,7 +1458,7 @@ class EsenTests(unittest.TestCase):
             self.assertTrue(all(call.args[1]["state"] == "Submitted" for call in launch.call_args_list))
 
     def test_reuse_recovers_unsent_slurm_batch_without_resubmitting_accepted_job(self):
-        app = QApplication.instance() or QApplication([])
+        _app = QApplication.instance() or QApplication([])
         preferences = QSettings(str(self.root / "settings.ini"), QSettings.Format.IniFormat)
         truba = FakeTruba()
         truba.auth = self.auth
@@ -1576,7 +1576,7 @@ class EsenTests(unittest.TestCase):
         self.assertFalse(workspace.delete_job.isEnabled())
 
     def test_reuse_multiple_snapshots_creates_jobs_only_when_run(self):
-        app = QApplication.instance() or QApplication([])
+        _app = QApplication.instance() or QApplication([])
         preferences = QSettings(str(self.root / "settings.ini"), QSettings.Format.IniFormat)
         originals = {}
         for target in ("local", "remote"):
@@ -1603,7 +1603,7 @@ class EsenTests(unittest.TestCase):
         self.assertFalse(workspace.reuse_batch)
 
     def test_refresh_processes_selected_truba_jobs_in_sequence(self):
-        app = QApplication.instance() or QApplication([])
+        _app = QApplication.instance() or QApplication([])
         preferences = QSettings(str(self.root / "settings.ini"), QSettings.Format.IniFormat)
         expected = set()
         for number in range(3):

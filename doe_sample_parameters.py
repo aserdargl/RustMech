@@ -2,7 +2,7 @@
 
 from PySide6.QtCore import QByteArray, QSignalBlocker, Qt, Signal
 from PySide6.QtWidgets import (
-    QAbstractItemView, QComboBox, QHBoxLayout, QHeaderView, QLabel, QPushButton, QStyledItemDelegate,
+    QAbstractItemView, QComboBox, QHBoxLayout, QHeaderView, QPushButton, QStyledItemDelegate,
     QSplitter, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
@@ -361,24 +361,6 @@ class SampleBatchParameters(QWidget):
         if not result:
             raise ValueError(self.t("En az bir deger hucresi doldurun.", "Fill at least one value cell."))
         return tuple(result)
-
-    def set_labels(self, labels):
-        self.fixed.blockSignals(True)
-        self.variables.blockSignals(True)
-        try:
-            self.fields = [(key, labels.get(key, label), value, widget) for key, label, value, widget in self.fields]
-            for row, field in enumerate(self.fields):
-                key, label, _, _ = field
-                self._by_key[key] = field
-                self.fixed.item(row, 0).setText(label)
-                self.available.item(row, 0).setText(label)
-                variable_row = self.variable_row(key)
-                if variable_row >= 0:
-                    self.variables.item(variable_row, 0).setText(label)
-        finally:
-            self.fixed.blockSignals(False)
-            self.variables.blockSignals(False)
-        self.filter_rows()
 
     def filter_rows(self, text=None):
         if text is not None:

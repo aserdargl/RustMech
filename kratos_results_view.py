@@ -7,7 +7,7 @@ import pyvista as pv
 from studio_style import CompactComboBox
 from PySide6.QtCore import Qt, QUrl
 from PySide6.QtGui import QDesktopServices
-from PySide6.QtWidgets import QDialog,QVBoxLayout,QHBoxLayout,QComboBox,QLabel,QPushButton
+from PySide6.QtWidgets import QDialog,QVBoxLayout,QHBoxLayout,QLabel,QPushButton
 from studio_style import STUDIO_STYLESHEET,CompactDoubleSpinBox,CONTROL_HEIGHT
 from preview_viewport import create_preview_viewport
 from kratos_backend import KratosResults

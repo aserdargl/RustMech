@@ -234,7 +234,6 @@ class ThermalWorkspace(FlowWorkspace):
             else:
                 directory = ROOT/"results"/("Thermal_"+datetime.now().strftime("%Y%m%d_%H%M%S_")+uuid.uuid4().hex[:8])
             self.case_directory,self.submitted_flow = directory,flow
-            self.solving = solve
             self._remote_job = remote
             if self._remote_job:
                 from truba_remote import run_remote_operation

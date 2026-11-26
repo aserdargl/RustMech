@@ -2,7 +2,7 @@
 import json
 import paramiko
 
-from PySide6.QtCore import QThread, QTimer, Qt, Signal
+from PySide6.QtCore import QThread, QTimer, Signal
 from PySide6.QtWidgets import (QGroupBox, QHeaderView, QLabel, QPushButton,
                                QTableWidget, QTableWidgetItem, QVBoxLayout)
 
@@ -157,7 +157,6 @@ class TrubaJobList(QGroupBox):
         self.dialog = dialog
         self.workers = {}
         self._snapshot = None
-        self._session_releasing = False
         self.submitting = False
         self.analysis_records = ()
         self.sync_worker = None
@@ -195,7 +194,7 @@ class TrubaJobList(QGroupBox):
         records = unfinished_records(self.dialog.state_dir, include_background_history=True,
                                      include_analysis_history=True)
         auth = self.cancellation_auth()
-        snapshot = (records, auth.username if auth else None, tuple(self.workers), self._session_releasing)
+        snapshot = (records, auth.username if auth else None, tuple(self.workers))
         if snapshot == self._snapshot:
             return
         self._snapshot = snapshot
@@ -225,7 +224,7 @@ class TrubaJobList(QGroupBox):
                 self.table.removeCellWidget(row, 2)
                 self.table.setRowHeight(row, CONTROL_HEIGHT + 6)
                 continue
-            cancelling = path in self.workers or (record.get('kind') == 'rustmech_session' and self._session_releasing)
+            cancelling = path in self.workers
             button = QPushButton('Cancelling…' if cancelling else 'Cancel')
             button.setObjectName('cancelBtn')
             button.setAutoDefault(False)
@@ -239,7 +238,7 @@ class TrubaJobList(QGroupBox):
             self.table.setRowHeight(row, CONTROL_HEIGHT + 6)
         if not records:
             self.hint.setText('No saved TRUBA jobs.')
-        elif not self.workers and not self._session_releasing:
+        elif not self.workers:
             self.hint.setText('Background analyses update and download automatically when connected.')
 
     @staticmethod
@@ -287,11 +286,6 @@ class TrubaJobList(QGroupBox):
             from truba_jobs import RemoteAuth
             return RemoteAuth(*saved)
         return None
-
-    def set_session_release_state(self, active, message):
-        self._session_releasing = active
-        self.refresh()
-        self.hint.setText(message)
 
     def cancel(self, path, record):
         auth = self.cancellation_auth()

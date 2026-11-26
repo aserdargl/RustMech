@@ -199,9 +199,6 @@ class TrubaFileBrowser(QWidget):
         if auth is not None and self.isVisible():
             self._refresh()
 
-    def sync_connection(self):
-        self._sync_connection()
-
     def _update_address(self):
         path = str(truba_files.project_root(self.auth.username) / self.directory) if self.auth else ""
         self.address.setText(path)
@@ -216,10 +213,6 @@ class TrubaFileBrowser(QWidget):
     @property
     def restoring_directory(self):
         return not self.loaded and bool(self._initial_directory.parts)
-
-    @property
-    def navigating(self):
-        return self.task is not None and (not self.loaded or self.task[1] != self.directory)
 
     @property
     def deleting(self):

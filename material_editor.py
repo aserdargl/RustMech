@@ -11,7 +11,6 @@ from studio_style import CompactComboBox
 from PySide6.QtCore import QSettings, QSignalBlocker, Qt, Signal
 from PySide6.QtWidgets import (
     QAbstractItemView,
-    QComboBox,
     QDoubleSpinBox,
     QFormLayout,
     QHeaderView,

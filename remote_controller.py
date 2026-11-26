@@ -10,8 +10,8 @@ from PySide6.QtWidgets import (QCheckBox,QDialog,QFormLayout,QGridLayout,QGroupB
 
 from truba_remote import RemoteContext,run_remote_job
 from studio_style import CompactSpinBox, configure_form, CompactComboBox, CompactDoubleSpinBox, CONTROL_HEIGHT, STUDIO_STYLESHEET
-from truba_session import saved_session, create_session, refresh_session, release_session
-from truba_resources import (BASELINES, AUTO_QUEUES, candidates, fetch_catalog,
+from truba_session import saved_session, refresh_session, release_session
+from truba_resources import (BASELINES, candidates, fetch_catalog,
                              allocate_with_limits, analysis_submission_context, automatic_context,
                              convergence_context)
 
@@ -94,7 +94,6 @@ class RemoteController(QObject):
         self.resource_max = {}
         self.queue_supported = True
         self._last_partition = None
-        self.auto_preview = None
         self.queue_catalog = dict(BASELINES)
         self.limits_future = None
         try: self.session = saved_session()
@@ -338,12 +337,10 @@ class RemoteController(QObject):
             context = self.session.get('context', {})
             name = context.get('partition', name).split(',')[0]
         self.queue_supported = True
-        self.auto_preview = None
         if name == 'auto':
             try:
                 required = self.window.controls['cores'].value() if 'cores' in self.window.controls else 1
                 proposal = automatic_context(RemoteContext(walltime=self.controls['walltime'].text().strip()), self.queue_catalog, min_cpus=required)
-                self.auto_preview = proposal
                 limit = self.queue_catalog[proposal.partition]
             except (ValueError, KeyError) as error:
                 self.queue_supported = False

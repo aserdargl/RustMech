@@ -321,7 +321,7 @@ def export_field_results(
     nu_xz_el, nu_yz_el, nu_eff_el = _lateral_poisson_at_step(
         u_elastic, pts, result.top_platen_displacement(0)
     )
-    nu_xz_fin, nu_yz_fin, nu_eff_fin = _lateral_poisson_at_step(u, pts, top_uz)
+    _, _, nu_eff_fin = _lateral_poisson_at_step(u, pts, top_uz)
 
     grid = mesh.grid.copy(deep=True)
     grid.point_data["Displacement_mm"] = u

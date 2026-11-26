@@ -9,8 +9,6 @@ from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 import re
 
-MIN_CPUS = 1
-MIN_MEMORY_MB = 1  # Smallest positive Slurm MiB request; not a site policy.
 MIN_ANALYSIS_MEMORY_MB = 128 * 1024
 
 
@@ -225,7 +223,7 @@ def automatic_options(context, catalog, *, min_cpus=1):
         options.append(((not idle_fit, cpus, order), replace(context, partition=name, cores=cpus, memory_mb=ram, gpus=0)))
     if not options:
         raise ValueError('No supported CPU queue can satisfy this analysis and wall time. Refresh limits or select a queue manually.')
-    return [value for score, value in sorted(options, key=lambda item: item[0])]
+    return [value for _, value in sorted(options, key=lambda item: item[0])]
 
 
 def automatic_context(context, catalog, *, min_cpus=1):

@@ -2,7 +2,7 @@
 from pathlib import Path
 import tempfile
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 from PySide6.QtCore import QSettings, Qt
 from PySide6.QtTest import QSignalSpy, QTest

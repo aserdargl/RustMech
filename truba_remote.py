@@ -252,7 +252,7 @@ test ! -e cancel.request
 if ! bash engine/tools/truba/prepare-damask.sh "$runtime_python"; then
     printf '%s\\n' 'DAMASK setup did not complete. See the runtime capability report and Slurm logs.' >&2
 fi
-''' if prepare_damask else '')+f'''
+''' if prepare_damask else '')+'''
 if [ ! -x "$runtime_python" ]; then
     python3 engine/remote_worker.py request.json --missing-runtime
 else

@@ -11,7 +11,6 @@ from PySide6.QtGui import QColor, QIcon, QPalette, QValidator, QWheelEvent
 from PySide6.QtWidgets import QAbstractSpinBox, QComboBox, QHBoxLayout, QLabel, QLineEdit, QStyledItemDelegate, QVBoxLayout, QWidget
 from shiboken6 import isValid
 
-SKIP_CUSTOM_BUTTON_STYLE_PROPERTY = "skipCustomButtonStyle"
 _ASSETS = Path(__file__).resolve().parent / "assets" / "ui"
 def qss_asset_url(name):
     return (_ASSETS / name.replace("spin-", "stepper-")).as_posix()
@@ -57,11 +56,7 @@ POPUP_TEXT = "#111827"
 
 POPUP_SELECTION = "#E2E8F0"
 
-POPUP_SELECTION_BORDER = "#CBD5E1"
-
 POPUP_SELECTION_TEXT = "#0F172A"
-
-POPUP_DISABLED_TEXT = "#94A3B8"
 
 COMBO_ITEM_PADDING = "2px"
 

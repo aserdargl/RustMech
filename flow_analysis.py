@@ -509,9 +509,9 @@ def summarize_flow_case(directory):
     grid.cell_data["Speed_m_s"] = np.linalg.norm(velocity,axis=1)
     grid.cell_data["Pressure_Pa"] = pressure
     grid.save(directory/"flow_result.vtu")
-    ti,pi = _last_monitor(directory,"inlet_p")
-    to,po = _last_monitor(directory,"outlet_p")
-    tq,qi = _last_monitor(directory,"inlet_phi")
+    _,pi = _last_monitor(directory,"inlet_p")
+    _,po = _last_monitor(directory,"outlet_p")
+    _,qi = _last_monitor(directory,"inlet_phi")
     _,qo = _last_monitor(directory,"outlet_phi")
     imbalance = abs(qi+qo)/max(abs(qi),abs(qo),1e-30)
     log = (directory/"log.simpleFoam").read_text(errors="replace")

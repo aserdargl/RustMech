@@ -56,8 +56,6 @@ from structure_library import (
 )
 
 
-DOE_ACTION_WIDTH = 96
-DOE_RUN_WIDTH = 140
 DOE_STOP_WIDTH = 108
 DOE_TOOLBAR_GAP = 6
 LEARNING_PLAN_TAB = 2
@@ -298,7 +296,6 @@ STATE_DISCONNECTED = "disconnected"
 STATE_CANCELLED = "cancelled"
 STATE_INTERRUPTED = "interrupted"
 FAILURE_STATES = frozenset({STATE_FAILED, STATE_INVALID, STATE_DISCONNECTED})
-RETRYABLE_STATES = FAILURE_STATES | {STATE_PARTIAL}
 TIMEOUT_STATUS = "Failed (timeout)"
 
 RUN_SCOPE_UNFINISHED = "unfinished"  # everything not Completed

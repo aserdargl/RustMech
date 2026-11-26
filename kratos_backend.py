@@ -242,7 +242,3 @@ class KratosBackend:
 
 
 def create_kratos_backend(auth=None,marker=None):return KratosBackend(auth,marker)
-
-
-def write_kratos_mdpa_skeleton(mesh,settings,run_directory):
-    return export_kratos(mesh,settings,run_directory)

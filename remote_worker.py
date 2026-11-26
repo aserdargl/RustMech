@@ -223,7 +223,7 @@ def _run_operation(request,output):
     if not capabilities.get(needed):
         raise RuntimeError(capabilities["reasons"].get(needed,capabilities["reasons"].get("mesh",f"{needed} is unavailable")))
     from model import settings_from_dict
-    from mesh_engine import build_preview,generate_volume_mesh,make_surface,preview_key
+    from mesh_engine import build_preview,generate_volume_mesh,make_surface
     settings_data = dict(request['settings'])
     if settings_data.get('imported_geometry_path'):
         import base64

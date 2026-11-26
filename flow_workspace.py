@@ -10,7 +10,7 @@ import pyvista as pv
 from studio_style import CompactSpinBox, CompactComboBox
 from PySide6.QtCore import QSettings, Qt, QTimer, QUrl
 from PySide6.QtGui import QDesktopServices
-from PySide6.QtWidgets import (QCheckBox, QComboBox, QFormLayout, QHBoxLayout,
+from PySide6.QtWidgets import (QCheckBox, QFormLayout, QHBoxLayout,
                               QLabel, QLineEdit, QPushButton, QScrollArea,
                               QSplitter, QVBoxLayout, QWidget, QSizePolicy)
 
@@ -330,7 +330,6 @@ class FlowWorkspace(QWidget):
                 directory = ROOT/"results"/("Flow_"+datetime.now().strftime("%Y%m%d_%H%M%S_")+uuid.uuid4().hex[:8])
             self.case_directory = directory
             self.submitted_flow = flow
-            self.solving = solve
             self._remote_job = remote
             if self._remote_job:
                 from truba_remote import run_remote_operation

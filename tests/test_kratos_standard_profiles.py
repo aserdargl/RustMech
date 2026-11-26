@@ -80,7 +80,7 @@ class KratosStandardProfilesTests(unittest.TestCase):
         from PySide6.QtWidgets import QApplication,QWidget
         from unittest.mock import MagicMock
         from nonlinear_compression import RustMechDialog
-        app=QApplication.instance() or QApplication([])
+        _app=QApplication.instance() or QApplication([])
         with patch('window_state.install_window_state'),patch('nonlinear_compression.create_preview_viewport',return_value=MagicMock(interactor=QWidget())),patch.object(RustMechDialog,'start_preview',lambda self:None):
             dialog=RustMechDialog(apply_profile(Settings(),'astm_e8_subsize'))
             try:

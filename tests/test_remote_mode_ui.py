@@ -9,7 +9,7 @@ from unittest.mock import MagicMock,patch
 from PySide6.QtCore import QCoreApplication,QEvent,QSettings,Qt
 from PySide6.QtGui import QPalette,QTextCursor
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication,QWidget,QMessageBox,QScrollArea,QSplitter
+from PySide6.QtWidgets import QApplication,QWidget,QScrollArea,QSplitter
 
 from model import Settings
 from nonlinear_compression import RustMechDialog
@@ -1071,7 +1071,7 @@ class RemoteModeUiTests(unittest.TestCase):
                                           "script_name": "RM-pair.slurm", "remote_directory": "/scratch/pair",
                                           "level_resources": [{"cores": 20, "memory_mb": 1024}] * 2}
         with patch("mesh_convergence.AnalysisProcess", return_value=job) as submit, \
-                patch("remote_controller.create_session") as allocate:
+                patch("remote_controller.allocate_with_limits") as allocate:
             study.run_button.click()
             allocate.assert_not_called()
         submit.assert_called_once()

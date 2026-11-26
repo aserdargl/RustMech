@@ -12,7 +12,6 @@ import time
 from urllib.parse import unquote
 import uuid
 
-import paramiko
 from truba_credentials import CredentialStore, state_directory
 from truba_ssh import HOST, RemoteAuth, execute_ssh_command, ssh_connection
 from truba_shared_session import DISCONNECTED_MESSAGE, DesktopSession
@@ -165,7 +164,7 @@ class WinSCPJobs:
         self.site,self.username = selected[0]
         self.executable = executable
 
-    def execute(self, lines, on_line=None, cancel_path=None):
+    def execute(self, lines, on_line=None):
         def quoted(value):
             if any(c in str(value) for c in ('\r','\n')):
                 raise ValueError("Invalid newline in WinSCP argument")

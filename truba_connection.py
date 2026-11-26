@@ -227,7 +227,6 @@ class TrubaConnectionDialog(QDialog):
         # Keep the entire form anchored and unchanged on resize. Smaller
         # viewports scroll instead of squeezing, wrapping or relocating fields.
         self.settings_scroll.setWidget(self.settings_content)
-        self._remote_sections = []
         self.resize(940, 590)
         if use_desktop_session:
             for index in range(fields.rowCount()):
@@ -323,18 +322,6 @@ class TrubaConnectionDialog(QDialog):
             return True, self.job_list.hint.text()
         return self.worker is not None and (not self.connected or self.stopping), self.status.text()
 
-    def install_remote_sections(self, resources, advanced):
-        # The runtime controller owns the controls; this dialog owns presentation.
-        for previous in self._remote_sections:
-            self.settings_columns.removeWidget(previous)
-            previous.hide()
-            previous.setParent(self)
-        self._remote_sections = [resources, advanced]
-        for section in self._remote_sections:
-            self.settings_columns.addWidget(section, alignment=Qt.AlignmentFlag.AlignTop)
-            section.show()
-        self.fit_settings_content()
-
     def _language_changed(self, *_):
         self.language_manager.localize_tree(self)
         if self.desktop_monitor is not None:
@@ -342,7 +329,7 @@ class TrubaConnectionDialog(QDialog):
         self.fit_settings_content()
 
     def fit_settings_content(self):
-        """Size the shared, non-reflowing canvas when sections are installed."""
+        """Fit the scrollable canvas to the credential form."""
         self.settings_content.ensurePolished()
         # Resolve compact action sizes before calculating the form minimum.
         buttons = (self.connect_button,) if self.desktop_monitor is not None else (
@@ -350,20 +337,14 @@ class TrubaConnectionDialog(QDialog):
         button_width = max(132, *(button.fontMetrics().horizontalAdvance(button.text()) + 28 for button in buttons))
         for button in buttons:
             button.setFixedSize(button_width, CONTROL_HEIGHT)
-        sections = (self.credentials_group, *self._remote_sections)
-        for section in sections:
-            section.ensurePolished()
-            for layout in section.findChildren(QLayout):
-                layout.invalidate()
-        width = max(460, *(section.minimumSizeHint().width() for section in sections))
-        heights = []
-        for section in sections:
-            section.setFixedWidth(width)
-            height = section.heightForWidth(width)
-            heights.append(height if height >= 0 else section.sizeHint().height())
-        height = max(heights)
-        for section in sections:
-            section.setFixedHeight(height)
+        section = self.credentials_group
+        section.ensurePolished()
+        for layout in section.findChildren(QLayout):
+            layout.invalidate()
+        width = max(460, section.minimumSizeHint().width())
+        section.setFixedWidth(width)
+        height = section.heightForWidth(width)
+        section.setFixedHeight(height if height >= 0 else section.sizeHint().height())
         self.settings_columns.invalidate()
         self.settings_layout.invalidate()
         self.settings_content.setFixedSize(self.settings_layout.sizeHint())
@@ -388,30 +369,17 @@ class TrubaConnectionDialog(QDialog):
         self.show_password.setChecked(False)
         super().hideEvent(event)
 
-    def _restore_saved_credentials(self, *, required=False):
+    def _restore_saved_credentials(self):
         try:
             saved = self.credentials.load()
         except (OSError, ValueError):
             self.status.setText("Saved credentials cannot be read by this Windows user. Enter your credentials again.")
             return False
         if not saved or not saved[0].strip() or not saved[1]:
-            if required:
-                self.status.setText("No saved TRUBA credentials. Open TRUBA to enter and remember your credentials.")
             return False
         self.username.setText(saved[0])
         self.password.setText(saved[1])
         self.remember.setChecked(True)
-        return True
-
-    def start_saved_connection(self):
-        if self.desktop_monitor is not None:
-            return False
-        if self.worker is not None or self.connected:
-            return False
-        if not self._restore_saved_credentials(required=True):
-            self.connection_ui_changed.emit()
-            return False
-        self.start_connection()
         return True
 
     def start_connection(self):

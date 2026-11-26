@@ -21,7 +21,7 @@ from PySide6.QtWidgets import (
 
 from analysis_process import AnalysisProcess
 from convergence_execution import (
-    Level, METRICS, _solve_level_process, read_curve, response_metrics,
+    Level, METRICS, _solve_level_process, response_metrics,
     solve_level as solve_level, valid_metrics,
 )
 from file_dialog import QFileDialog

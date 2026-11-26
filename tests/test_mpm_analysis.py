@@ -128,7 +128,7 @@ def test_mpm_workspace_submits_via_truba_adapter(tmp_path):
     from mpm_workspace import MPMWorkspace
     from truba_remote import run_remote_operation
 
-    app = QApplication.instance() or QApplication([])
+    _app = QApplication.instance() or QApplication([])
     preferences = QSettings(str(tmp_path / 'workspace.ini'), QSettings.Format.IniFormat)
     parent = QWidget()
     workspace = MPMWorkspace(lambda: GEOMETRY, parent, preferences)
