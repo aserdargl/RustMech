@@ -45,6 +45,8 @@ class NewDoeTests(unittest.TestCase):
         self.assertFalse(studio.plan_file_label.isVisible())
         self.assertFalse(studio.findChildren(QAbstractSpinBox))
         analysis = studio.new_doe.operation
+        self.assertEqual([analysis.itemText(index) for index in range(analysis.count())],
+                         ["FEM", "FFT", "MPM", "Peridynamics", "Flow (CFD)", "Thermal (CHT)"])
         nav = studio.planner.navigation
         nav_bottom = nav.mapToGlobal(QPoint(0, nav.height())).y()
         self.assertLessEqual(analysis.mapToGlobal(QPoint()).y() - nav_bottom, 8)
@@ -198,7 +200,7 @@ class NewDoeTests(unittest.TestCase):
                 self.assertEqual(page.base, snapshot(self.window, page.operation.currentData()))
                 page.create()
                 self.assertEqual(len(page.rows), 1, page.status.text())
-        page.operation.setCurrentIndex(0)
+        page.operation.setCurrentIndex(page.operation.findData("fft_solve"))
         factors = {f.path[-1]: f for f in page.factors}
         grid = factors["grid"]
         grid.variable.setChecked(True)

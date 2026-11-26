@@ -8,8 +8,13 @@ from model import GEOMETRY_FIELDS, settings_from_dict
 from structure_library import ALL_STRUCTURES_BY_FAMILY
 
 OPERATIONS = {
-    "FFT": "fft_solve", "FEM": "mechanical", "Flow (CFD)": "flow_solve",
-    "Thermal (CHT)": "thermal_solve", "Peridynamics": "peridynamic_solve", "MPM": "mpm_solve",
+    # Match the main workspace's method menu, then list the flow workspaces.
+    "FEM": "mechanical",
+    "FFT": "fft_solve",
+    "MPM": "mpm_solve",
+    "Peridynamics": "peridynamic_solve",
+    "Flow (CFD)": "flow_solve",
+    "Thermal (CHT)": "thermal_solve",
 }
 MAX_ROWS = 10000
 
