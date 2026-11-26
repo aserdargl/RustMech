@@ -34,6 +34,9 @@ QLabel:disabled { color: #808080; }
 #trubaConnectionBadge { color: #475569; background: #EEF2F6; border-radius: 4px; margin: 5px 0; padding: 2px 9px; }
 #trubaConnectionBadge[state="connected"] { color: #FFFFFF; background: #166534; }
 #trubaConnectionBadge[state="disconnected"] { color: #FFFFFF; background: #B91C1C; }
+#trubaConnectionBadge[state="pending"], #trubaConnectionBadge[state="warning"] {
+    color: #92400E; background: #FDE68A;
+}
 #sidebarPanel { background: #F5F5F3; border: 1px solid #CBD5E1; border-radius: 2px; }
 #scrollFields, #doeWorkspace { background: #F5F5F3; }
 QMainWindow#doeStudioWindow, QMainWindow#doeTrubaJobsWindow { background: #F5F5F3; }
@@ -115,6 +118,11 @@ QToolButton::menu-indicator, QPushButton::menu-indicator {
 }
 #primaryLaunchBtn[trubaConnected="true"]:hover { color: #FFFFFF; background: #19733B; }
 #primaryLaunchBtn[trubaConnected="true"]:pressed { color: #FFFFFF; background: #14532D; }
+#trubaConnectButton[state="connected"], #trubaConnectButton[state="connected"]:disabled { color: #166534; }
+#trubaConnectButton[state="warning"] { color: #92400E; background: #FDE68A; }
+#trubaConnectButton[state="warning"]:hover { background: #FCD257; }
+#trubaConnectButton[state="warning"]:pressed { background: #FBBF24; }
+#trubaConnectButton[state="disconnected"] { color: #B91C1C; }
 QToolButton#headerMenu, QToolButton#cameraMenu { padding-right: 13px; }
 #workspaceCommandBar QToolButton#headerMenu { padding: 0 14px 0 5px; }
 #workspaceCommandBar QToolButton#headerMenu::menu-indicator { subcontrol-position: center right; }

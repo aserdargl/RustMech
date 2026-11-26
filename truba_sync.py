@@ -24,6 +24,7 @@ from ui_language import translate
 
 class TrubaSession(QObject):
     connection_changed = Signal(bool)
+    status_changed = Signal(object)
     background_updated = Signal(dict, object)
 
     def __init__(self, parent):
@@ -49,9 +50,12 @@ class TrubaSession(QObject):
         self.timer.start()
 
     def _status_changed(self, status):
+        previous = self.status
         self.status = status
-        self.connection_changed.emit(self.connected)
-        self.sync_background()
+        self.status_changed.emit(status)
+        if (status.session, status.other_cluster) != (previous.session, previous.other_cluster):
+            self.connection_changed.emit(self.connected)
+            self.sync_background()
 
     def sync_background(self):
         auth = self.analysis_auth()

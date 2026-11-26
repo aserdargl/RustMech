@@ -120,14 +120,23 @@ def _desktop_launch_command(command):
 class DesktopStatus:
     session: DesktopSession | None = None
     other_cluster: bool = False
+    status_unavailable: bool = False
+
+    @property
+    def connection_state(self):
+        if self.other_cluster or self.status_unavailable:
+            return "warning"
+        return "connected" if self.session is not None else "disconnected"
 
 
 def _parse_status(data):
     try:
         status = json.loads(data)
     except ValueError:
-        return DesktopStatus()
-    if not isinstance(status, dict) or status.get("connected") is not True:
+        return DesktopStatus(status_unavailable=True)
+    if not isinstance(status, dict) or type(status.get("connected")) is not bool:
+        return DesktopStatus(status_unavailable=True)
+    if not status["connected"]:
         return DesktopStatus()
     if status.get("cluster") != "truba":
         return DesktopStatus(other_cluster=True)
@@ -135,7 +144,7 @@ def _parse_status(data):
     if (not isinstance(username, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}", username)
             or type(port) is not int or not 1 <= port <= 65535
             or not isinstance(key, str) or not re.fullmatch(r"[0-9a-f]{64}", key)):
-        return DesktopStatus()
+        return DesktopStatus(status_unavailable=True)
     return DesktopStatus(DesktopSession(username, port, key))
 
 
@@ -185,8 +194,10 @@ class DesktopSessionMonitor(QObject):
         if peer is self.peer and self.greeted and peer.canReadLine():
             self._finish(_parse_status(bytes(peer.readLine())))
 
-    def _unavailable(self, *_):
-        self._finish(DesktopStatus(), missed=True)
+    def _unavailable(self, error=None):
+        desktop_absent = error in (QLocalSocket.LocalSocketError.ServerNotFoundError,
+                                   QLocalSocket.LocalSocketError.ConnectionRefusedError)
+        self._finish(DesktopStatus(status_unavailable=not desktop_absent), missed=True)
 
     def _finish(self, status, *, missed=False):
         self._close_peer()

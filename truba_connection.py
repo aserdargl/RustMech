@@ -296,10 +296,14 @@ class TrubaConnectionDialog(QDialog):
                 username=status.session.username))
             self._set_connection_badge(translate("Connected"), "connected")
         else:
-            message = ("RustMech analyses use the TRUBA ARF cluster." if status.other_cluster else
-                       "Connect to TRUBA ARF in the TRUBA application first.")
+            if status.other_cluster:
+                message = "RustMech analyses use the TRUBA ARF cluster."
+            elif status.status_unavailable:
+                message = "The running TRUBA application did not respond."
+            else:
+                message = "Connect to TRUBA ARF in the TRUBA application first."
             self.status.setText(translate(message))
-            self._set_connection_badge(translate("Disconnected"), "disconnected")
+            self._set_connection_badge(translate("Disconnected"), status.connection_state)
 
     def _update_queue_status_visibility(self, _index):
         self.queue_status_group.setVisible(self.tabs.currentWidget() is self.settings_scroll)
@@ -461,10 +465,12 @@ class TrubaConnectionDialog(QDialog):
         self.status.setText(messages.get(state, "Disconnected"))
         if self.connected:
             self._set_connection_badge("Connected", "connected")
-        elif state in ("connecting", "authenticating", "reconnecting"):
+        elif state in ("connecting", "authenticating", "host_key_confirmation"):
             self._set_connection_badge("Connecting...", "pending")
+        elif state in ("reconnecting", "waiting_for_network"):
+            self._set_connection_badge("Connecting...", "warning")
         else:
-            self._set_connection_badge("Disconnected", "disconnected")
+            self._set_connection_badge("Disconnected", "warning" if state in messages else "disconnected")
         if self.connected and self.remember.isChecked():
             try:
                 self.credentials.save(self.username.text().strip(), self.password.text())
@@ -510,7 +516,8 @@ class TrubaConnectionDialog(QDialog):
         worker = self.worker
         self.worker = None
         self.connected = False
-        self._set_connection_badge("Disconnected", "disconnected")
+        if self.stopping or self.connection_badge.property("state") != "warning":
+            self._set_connection_badge("Disconnected", "disconnected")
         self.connection_changed.emit(False)
         if self.stopping:
             self.status.setText("Disconnected")

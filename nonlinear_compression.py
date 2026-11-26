@@ -424,13 +424,15 @@ class RustMechDialog(QDialog):
         brand_layout.addWidget(self.brand_subtitle_lbl)
         self.truba_session = TrubaSession(self)
         self.truba_session.background_updated.connect(self._background_analysis_updated)
-        self.truba_session.connection_changed.connect(self._update_hpc_button)
+        self.truba_session.status_changed.connect(self._update_hpc_button)
         self.truba_button = _WorkspaceCommandButton("HPC")
         self.truba_button.setObjectName("primaryLaunchBtn")
         self.truba_button.setAutoDefault(False)
         self.truba_button.setToolTip("Open the Connection tab in the TRUBA application")
         self.truba_button.clicked.connect(self._open_truba_desktop)
         self.truba_connect_button = _WorkspaceCommandButton("Connect")
+        self.truba_connect_button.setObjectName("trubaConnectButton")
+        self.truba_connect_button.setProperty("state", "disconnected")
         self.truba_connect_button.setAutoDefault(False)
         self.truba_connect_button.setToolTip("Connect to TRUBA using the saved VPN profile and SSH account")
         self.truba_connect_button.clicked.connect(self._connect_truba_desktop)
@@ -1910,13 +1912,24 @@ class RustMechDialog(QDialog):
         except OSError as error:
             QMessageBox.warning(self, "HPC", translate(str(error)))
 
-    def _update_hpc_button(self, connected: bool) -> None:
+    def _update_hpc_button(self, status) -> None:
+        from ui_language import translate
+
+        connected = status.session is not None
         self.truba_button.setProperty("trubaConnected", connected)
         self.truba_button.style().unpolish(self.truba_button)
         self.truba_button.style().polish(self.truba_button)
-        self.truba_connect_button.setText("Connected" if connected else "Connect")
+        self.truba_connect_button.setText(translate("Connected" if connected else "Connect"))
         self.truba_connect_button.setEnabled(not connected)
+        self._update_truba_connect_color(status.connection_state)
         self._update_remote_banner()
+
+    def _update_truba_connect_color(self, state):
+        button = self.truba_connect_button
+        button.setProperty("state", state)
+        button.style().unpolish(button)
+        button.style().polish(button)
+        button.update()
 
     def _connect_truba_desktop(self):
         from ui_language import translate
@@ -1924,7 +1937,10 @@ class RustMechDialog(QDialog):
         try:
             connect_truba_desktop()
         except OSError as error:
+            self._update_truba_connect_color("warning")
             QMessageBox.warning(self, "HPC", translate(str(error)))
+        else:
+            self._update_truba_connect_color(self.truba_session.status.connection_state)
 
     def _add_setup_page(self, title: str) -> QVBoxLayout:
         scroll = QScrollArea()

@@ -7,7 +7,7 @@ import unittest
 from unittest.mock import MagicMock,patch
 
 from PySide6.QtCore import QCoreApplication,QEvent,QSettings,Qt
-from PySide6.QtGui import QTextCursor
+from PySide6.QtGui import QPalette,QTextCursor
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication,QWidget,QMessageBox,QScrollArea,QSplitter
 
@@ -940,13 +940,20 @@ class RemoteModeUiTests(unittest.TestCase):
         from truba_shared_session import DesktopSession
 
         session = DesktopSession("tester", 10000, "a" * 64)
+        button = self.window.truba_connect_button
+        self.assertEqual(button.palette().color(QPalette.ColorRole.ButtonText).name(), "#b91c1c")
         self.enable()
         self.window.truba_session._status_changed(DesktopStatus(session))
         self.assertTrue(self.window.truba_button.property("trubaConnected"))
-        self.assertFalse(self.window.truba_connect_button.isEnabled())
+        self.assertFalse(button.isEnabled())
+        self.assertEqual(button.palette().color(QPalette.ColorRole.ButtonText).name(), "#166534")
+        self.window.truba_session._status_changed(DesktopStatus(status_unavailable=True))
+        self.assertEqual(button.palette().color(QPalette.ColorRole.Button).name(), "#fde68a")
+        self.assertTrue(button.isEnabled())
         self.window.truba_session._status_changed(DesktopStatus())
         self.assertFalse(self.window.truba_button.property("trubaConnected"))
-        self.assertTrue(self.window.truba_connect_button.isEnabled())
+        self.assertTrue(button.isEnabled())
+        self.assertEqual(button.palette().color(QPalette.ColorRole.ButtonText).name(), "#b91c1c")
         self.assertTrue(self.controller.requested)
         self.assertFalse(self.controller.session_watch)
         self.assertIsNone(self.controller.capabilities)
