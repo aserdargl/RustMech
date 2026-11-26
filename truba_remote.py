@@ -413,6 +413,11 @@ def run_remote_job(request,context,auth=None,marker=None,*,directory=None,resume
         dependency = f" --dependency=afterany:{predecessor}"
     if not resume_record:
         required_capability(request)
+        if "parallel_experiments" in request:
+            parallel = request["parallel_experiments"]
+            if (submit_only or type(parallel) is not int
+                    or not 1 <= parallel <= min(224, len(request.get("experiment_rows", ())))):
+                raise ValueError("Invalid concurrent experiment count for one Slurm job.")
         if request['operation'] in ANALYSIS_OPERATIONS:
             context = _standalone_analysis_context(context, request['operation'])
         if request.get("paired_experiments") or ("experiment_rows" in request and "experiment_index" in request):
@@ -668,9 +673,12 @@ if [ -s job.id ]; then printf 'RUSTMECH_JOB_ID=%s\n' "$(cat job.id)"; fi
                 if progress and progress[1].strip():
                     value = f"{value} · {progress[1].strip()}"
             if record.get('experiment_count') and not record.get('background') and queue_state == 'RUNNING':
-                current = re.search(r'^RUSTMECH_PROGRESS=Running experiment (\d+) / (\d+)$', reply, re.MULTILINE)
-                if current and int(current[2]) == record['experiment_count'] and 1 <= int(current[1]) <= int(current[2]):
-                    record['experiment_index'] = int(current[1])
+                current = re.search(r'^RUSTMECH_PROGRESS=Running experiments? (\d+)(?:-(\d+))? / (\d+)$',
+                                    reply, re.MULTILINE)
+                if current:
+                    first, last, total = int(current[1]), int(current[2] or current[1]), int(current[3])
+                    if total == record['experiment_count'] and 1 <= first <= last <= total:
+                        record.update(experiment_index=first, experiment_end=last)
             previous_progress = record.get('level_progress')
             if record.get('level_resources') and queue_state == 'RUNNING':
                 level_stage = dict(re.findall(r'^RUSTMECH_LEVEL_(\d+)=(.*)$', reply, re.MULTILINE))

@@ -62,6 +62,8 @@ def job_description(record):
         number = record.get('experiment_index')
         if number and record.get('experiment_batch_size', 1) > 1:
             number = f"{number}–{number + record['experiment_batch_size'] - 1}"
+        elif number and record.get('experiment_end', number) > number:
+            number = f"{number}–{record['experiment_end']}"
         label = f"DoE {number}/{record['experiment_count']} · {label}" if number else f"DoE · {label}"
     if 'geometry_name' in record:
         geometry = record['geometry_name']

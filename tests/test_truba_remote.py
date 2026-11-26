@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+from threading import Barrier
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -249,7 +250,7 @@ class RemoteProtocolTests(unittest.TestCase):
         from new_doe_operations import matrix_request
         rows = [dict(operation="fft_solve", settings=asdict(Settings()), grid=n) for n in (16, 24, 32)]
         command = FakeTransport.command
-        progress = ["RUSTMECH_QUEUE=RUNNING|None\nRUSTMECH_PROGRESS=Running experiment 2 / 3\n"]
+        progress = ["RUSTMECH_QUEUE=RUNNING|None\nRUSTMECH_PROGRESS=Running experiments 1-2 / 3\n"]
 
         def poll(transport, script):
             if "RUSTMECH_QUEUE" in script and progress:
@@ -258,11 +259,13 @@ class RemoteProtocolTests(unittest.TestCase):
 
         context = RemoteContext(partition="hamsi", cores=40, memory_mb=64000)
         with patch.object(FakeTransport, "command", poll), patch("truba_remote.time.sleep"):
-            _, folder = run_remote_job(matrix_request(rows), context, directory=self.root / "matrix")
+            _, folder = run_remote_job(dict(matrix_request(rows), parallel_experiments=2), context,
+                                       directory=self.root / "matrix")
         transport, = FakeTransport.instances
         self.assertEqual(transport.submissions, 1)
         self.assertEqual(transport.put_names.count("request.json"), 1)
         self.assertEqual(transport.request["experiment_rows"], json.loads(json.dumps(rows)))
+        self.assertEqual(transport.request["parallel_experiments"], 2)
         from truba_job_list import job_description
         record = json.loads((folder / "remote_job.json").read_text())
         script = (folder / record["script_name"]).read_text()
@@ -272,8 +275,8 @@ class RemoteProtocolTests(unittest.TestCase):
         self.assertEqual((transport.request["remote_context"]["cores"],
                           transport.request["remote_context"]["memory_mb"]), (56, 131072))
         self.assertEqual(record["experiment_count"], 3)
-        self.assertEqual(record["experiment_index"], 2)
-        self.assertIn("DoE 2/3", job_description(record))
+        self.assertEqual((record["experiment_index"], record["experiment_end"]), (1, 2))
+        self.assertIn("DoE 1–2/3", job_description(record))
 
     def test_separate_doe_job_is_identified_in_slurm_and_the_job_list(self):
         from truba_job_list import job_description
@@ -576,6 +579,47 @@ class RemoteProtocolTests(unittest.TestCase):
 
 
 class ComputeWorkerTests(unittest.TestCase):
+    def test_concurrent_experiments_use_separate_slurm_steps_in_one_allocation(self):
+        from remote_worker import _run_experiment_matrix
+
+        rows = [dict(operation="mechanical", settings={"cores": 56, "solver_backend": "kratos"}) for _ in range(3)]
+        allocation = {"cores": 57, "memory_mb": 131073}
+        request = dict(operation="mechanical", experiment_rows=rows, parallel_experiments=2,
+                       remote_context=allocation, request_id="matrix", source_sha256="a" * 64, native_sha256="b" * 64)
+        first_pair = Barrier(2, timeout=5)
+
+        def execute(command, *, cwd, env, **kwargs):
+            child = json.loads((cwd / "request.json").read_text())
+            self.assertEqual(child["remote_context"], {"cores": 28, "memory_mb": 65536})
+            self.assertEqual(child["settings"]["cores"], 28)
+            self.assertEqual(env["OMP_NUM_THREADS"], "28")
+            self.assertEqual(env["RUSTMECH_THREADS"], "28")
+            self.assertEqual(command[0], "srun")
+            self.assertIn("--exact", command)
+            self.assertIn("--cpus-per-task=28", command)
+            self.assertIn("--mem=65536M", command)
+            row = int(cwd.name[-1])
+            if row <= 2:
+                first_pair.wait()
+            return subprocess.CompletedProcess(command, int(row == 2))
+
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            output = root / "output"
+            with patch.dict(os.environ, SLURM_JOB_ID="99", SLURMD_NODENAME="test-node"), \
+                    patch("remote_worker.Path.cwd", return_value=root), \
+                    patch("remote_worker.shutil.which", return_value=None), \
+                    patch("remote_worker._stage") as stage, \
+                    patch("remote_worker.subprocess.run", side_effect=execute) as run:
+                result = _run_experiment_matrix(request, output)
+            self.assertEqual(result, {"experiments": 3, "failed": 1})
+            self.assertEqual(run.call_count, 3)
+            self.assertEqual([call.args[0] for call in stage.call_args_list],
+                             ["Running experiments 1-2 / 3", "Running experiment 3 / 3"])
+            for index, state in enumerate(("Completed", "Failed", "Completed"), 1):
+                record = json.loads((output / f"row_{index:05d}" / "experiment.json").read_text())
+                self.assertEqual(record["state"], state)
+
     def test_paired_experiment_workers_run_in_order_with_the_full_allocation(self):
         from remote_worker import _run_experiment_matrix
 

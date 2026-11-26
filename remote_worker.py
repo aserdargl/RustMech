@@ -3,6 +3,7 @@
 The module itself uses only the standard library so a missing runtime can be
 reported by the cluster's bootstrap Python without importing the application.
 """
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack
 from dataclasses import asdict,replace
 from functools import partial
@@ -337,7 +338,16 @@ def _run_operation(request,output):
     raise ValueError("Unsupported remote operation.")
 
 
-def _run_experiment_row(request, output, root, index, row):
+def _slurm_step(command, cores, memory, name):
+    env = dict(os.environ, OMP_NUM_THREADS=str(cores), RUSTMECH_THREADS=str(cores))
+    env.pop('SLURM_MEM_PER_CPU', None)
+    env.pop('SLURM_MEM_PER_GPU', None)
+    args = ['srun', '--exact', '--nodes=1', '--ntasks=1', '--cpu-bind=cores',
+            f'--cpus-per-task={cores}', f'--mem={memory}M', f'--job-name={name}']
+    return args + command, env
+
+
+def _run_experiment_row(request, output, root, index, row, step_allocation=None):
     from remote_operations import required_capability
 
     name = f"row_{index:05d}"
@@ -350,20 +360,26 @@ def _run_experiment_row(request, output, root, index, row):
         if row["operation"] != request["operation"]:
             raise ValueError("Inconsistent matrix operation.")
         required_capability(row)
-        allocation = request["remote_context"]
+        allocation = request["remote_context"] if step_allocation is None else step_allocation
         child = dict(row, request_id=request["request_id"], source_sha256=request["source_sha256"],
                      native_sha256=request["native_sha256"], remote_context=allocation)
         command = [sys.executable, str(Path(__file__).resolve()), "request.json", "--row-output", str(case)]
+        options = {}
+        if step_allocation is not None:
+            cores, memory = allocation["cores"], allocation["memory_mb"]
+            child["settings"] = dict(row["settings"], cores=min(row["settings"]["cores"], cores))
+            command, env = _slurm_step(command, cores, memory, name)
+            options["env"] = env
         path = row["settings"].get("imported_geometry_path")
         if path:
             child["imported_geometry_vtp"] = request["matrix_geometries"][path]
         _write(work / "request.json", child)
         with (case / "worker.log").open("w") as log:
-            result = subprocess.run(command, cwd=work, stdout=log, stderr=subprocess.STDOUT)
+            result = subprocess.run(command, cwd=work, stdout=log, stderr=subprocess.STDOUT, **options)
         if result.returncode:
             report = case / "result.json"
             detail = json.loads(report.read_text(encoding="utf-8")).get("error") if report.is_file() else None
-            raise RuntimeError(detail or f"Worker exited with code {result.returncode}.")
+            raise RuntimeError(detail or f"Worker exited with code {result.returncode}. See {name}/worker.log.")
         record.update(state="Completed", results=".")
     except Exception as error:
         record.update(state="Failed", error=str(error))
@@ -379,23 +395,48 @@ def _run_experiment_matrix(request, output):
     first_experiment = request.get("experiment_index", 1)
     experiment_count = request.get("experiment_count", len(rows))
     job_id = os.environ.get("SLURM_JOB_ID", "")
-    scontrol = shutil.which("scontrol") if job_id.isdecimal() and os.environ.get("SLURMD_NODENAME") else None
-    failures = 0
-    for index, row in enumerate(rows, 1):
-        if (root / "cancel.request").exists():
-            raise RuntimeError("Experiment matrix cancelled.")
-        experiment = first_experiment + index - 1
-        _stage(f"Running experiment {experiment} / {experiment_count}")
+    in_slurm = job_id.isdecimal() and bool(os.environ.get("SLURMD_NODENAME"))
+    scontrol = shutil.which("scontrol") if in_slurm else None
+    requested = request.get("parallel_experiments", 1)
+    allocation = request["remote_context"]
+    slots = min(requested, len(rows), allocation["cores"], allocation["memory_mb"])
+
+    def report(start, size):
+        nonlocal scontrol
+        first = first_experiment + start
+        experiments = str(first) if size == 1 else f"{first}-{first + size - 1}"
+        label = "experiment" if size == 1 else "experiments"
+        _stage(f"Running {label} {experiments} / {experiment_count}")
         if scontrol:
             try:
                 update = subprocess.run([scontrol, "update", f"JobId={job_id}",
-                                         f"Comment=DoE {experiment}/{experiment_count}"],
+                                         f"Comment=DoE {experiments}/{experiment_count}"],
                                         capture_output=True, timeout=5)
                 if update.returncode:
                     scontrol = None
             except (OSError, subprocess.TimeoutExpired):
                 scontrol = None
-        failures += _run_experiment_row(request, output, root, index, row)
+
+    failures = 0
+    with ExitStack() as stack:
+        pool = None
+        if slots > 1:
+            if not in_slurm:
+                raise RuntimeError("Concurrent experiments require an active Slurm job.")
+            pool = stack.enter_context(ThreadPoolExecutor(max_workers=slots))
+            step_allocation = dict(allocation, cores=allocation["cores"] // slots,
+                                   memory_mb=allocation["memory_mb"] // slots)
+        for start in range(0, len(rows), slots):
+            if (root / "cancel.request").exists():
+                raise RuntimeError("Experiment matrix cancelled.")
+            end = min(start + slots, len(rows))
+            report(start, end - start)
+            if pool is None:
+                failures += _run_experiment_row(request, output, root, start + 1, rows[start])
+            else:
+                pending = [pool.submit(_run_experiment_row, request, output, root, index + 1, rows[index],
+                                       step_allocation) for index in range(start, end)]
+                failures += sum(future.result() for future in pending)
     return dict(experiments=len(rows), failed=failures)
 
 
@@ -417,12 +458,8 @@ def _run_convergence_group(request, output):
             child = dict(common, settings=step['settings'], convergence_step=True,
                          remote_context=dict(allocation, cores=cores, memory_mb=memory))
             _write(directory / 'request.json', child)
-            env = dict(os.environ, OMP_NUM_THREADS=str(cores), RUSTMECH_THREADS=str(cores))
-            env.pop('SLURM_MEM_PER_CPU', None)
-            env.pop('SLURM_MEM_PER_GPU', None)
-            args = ['srun', '--exact', '--nodes=1', '--ntasks=1', '--cpu-bind=cores',
-                    f'--cpus-per-task={cores}', f'--mem={memory}M', f'--job-name=mesh-{index}',
-                    sys.executable, str(Path(__file__).resolve()), 'request.json']
+            command = [sys.executable, str(Path(__file__).resolve()), 'request.json']
+            args, env = _slurm_step(command, cores, memory, f'mesh-{index}')
             with (directory / 'step.out').open('w') as stdout, (directory / 'step.err').open('w') as stderr:
                 process = stack.enter_context(subprocess.Popen(args, cwd=directory, env=env,
                                                                stdout=stdout, stderr=stderr))

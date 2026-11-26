@@ -593,6 +593,8 @@ class NewDoeTests(unittest.TestCase):
                 patch("new_doe_page.launch") as launch:
             dialog = self.select_run_target(page, "truba_matrix")
             self.assertFalse(dialog.batch_size.isEnabled())
+            self.assertTrue(dialog.parallel_experiments.isEnabled())
+            self.assertEqual(dialog.parallel_experiments.value(), 1)
             launch.assert_not_called()
             dialog.confirm.click()
             self.assertIsNone(page.directory)
@@ -640,10 +642,17 @@ class NewDoeTests(unittest.TestCase):
                 patch("new_doe_page.launch") as launch:
             job = launch.return_value
             job.done.return_value = False
-            page.start(remote=True, separate=False)
+            dialog = self.select_run_target(page, "truba_matrix")
+            dialog.parallel_experiments.setValue(2)
+            dialog.confirm.click()
+            self.assertEqual(launch.call_args.args[0]["parallel_experiments"], 2)
             jobs = page.truba_jobs_window
             self.assertTrue(jobs.isVisible())
             self.assertEqual(jobs.table.rowCount(), 0)
+            job.remote_status.return_value = dict(job_id="71", state="RUNNING · Running experiments 1-2 / 2",
+                                                  experiment_index=1, experiment_end=2, local_directory=str(root))
+            page.advance()
+            self.assertEqual(page.sheet.states, ["Running", "Running"])
             job.remote_status.return_value = dict(job_id="71", state="RUNNING", experiment_index=2,
                                                   local_directory=str(root))
             page.advance()

@@ -1305,6 +1305,8 @@ Run on TRUBA as separate jobs|TRUBA’ya ayrı işler olarak gönder
 Run settings|Çalıştırma ayarları
 Run location|Çalıştırma yeri
 Experiments per script|Betik başına deney
+Concurrent experiments|Eşzamanlı deney sayısı
+Experiments share the CPU cores and RAM of one Slurm job.|Deneyler aynı Slurm işinin CPU çekirdeklerini ve belleğini paylaşır.
 TRUBA (one job)|TRUBA (tek iş)
 A TRUBA batch must fit within the experiment matrix.|TRUBA işindeki deneyler matrisin sınırları içinde olmalıdır.
 Paired TRUBA experiments require two rows, CPUs and MiB of RAM.|İkili TRUBA gönderimi için iki deney, en az iki çekirdek ve 2 MiB RAM gerekir.

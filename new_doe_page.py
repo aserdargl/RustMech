@@ -578,7 +578,7 @@ class DoeTrubaJobsWindow(QMainWindow):
 
 
 class DoeRunDialog(QDialog):
-    def __init__(self, parent, target, batch_size, *, run):
+    def __init__(self, parent, target, batch_size, parallel_experiments, *, run):
         super().__init__(parent)
         self.setObjectName("doeRunSettings")
         self.setWindowTitle("Run settings")
@@ -610,12 +610,25 @@ class DoeRunDialog(QDialog):
         self.batch_size.setAccessibleName(batch_label.text())
         form.addRow(batch_label, self.batch_size)
 
-        def update_batch_size():
-            self.batch_size.setEnabled(self.target.currentData() == "truba")
-            batch_label.setEnabled(self.batch_size.isEnabled())
+        self.parallel_experiments = CompactSpinBox()
+        self.parallel_experiments.setFixedSize(NUMBER_WIDTH, CONTROL_HEIGHT)
+        self.parallel_experiments.setRange(1, 224)
+        self.parallel_experiments.setValue(parallel_experiments)
+        parallel_label = QLabel("Concurrent experiments")
+        parallel_label.setBuddy(self.parallel_experiments)
+        self.parallel_experiments.setAccessibleName(parallel_label.text())
+        self.parallel_experiments.setToolTip(translate("Experiments share the CPU cores and RAM of one Slurm job."))
+        form.addRow(parallel_label, self.parallel_experiments)
 
-        self.target.currentIndexChanged.connect(update_batch_size)
-        update_batch_size()
+        def update_controls():
+            target = self.target.currentData()
+            self.batch_size.setEnabled(target == "truba")
+            batch_label.setEnabled(self.batch_size.isEnabled())
+            self.parallel_experiments.setEnabled(target == "truba_matrix")
+            parallel_label.setEnabled(self.parallel_experiments.isEnabled())
+
+        self.target.currentIndexChanged.connect(update_controls)
+        update_controls()
         layout.addStretch()
         actions = QHBoxLayout()
         actions.addStretch()
@@ -643,6 +656,7 @@ class NewDoePage(QWidget):
         self._loaded_operation = None
         self._drafts = {}
         self._run_options = {}
+        self._parallel_experiments = {}
         self._draft_timer = QTimer(self, interval=300, singleShot=True)
         self._draft_timer.timeout.connect(self.save_draft)
         self.rows = []
@@ -789,18 +803,24 @@ class NewDoePage(QWidget):
 
     def open_run_options(self, *, run=False):
         operation = self.operation.currentData()
-        dialog = DoeRunDialog(self, *self.run_options(operation), run=run)
+        key = f"doe/runOptions/{operation}"
+        parallel = (self._parallel_experiments.get(operation, 1) if self.preferences is None else
+                    self.preferences.value(f"{key}/parallelExperiments", 1, type=int))
+        dialog = DoeRunDialog(self, *self.run_options(operation), parallel, run=run)
 
         def confirm():
             target, size = dialog.target.currentData(), dialog.batch_size.value()
+            parallel = dialog.parallel_experiments.value()
             if self.preferences is None:
                 self._run_options[operation] = (target, size)
+                self._parallel_experiments[operation] = parallel
             else:
-                key = f"doe/runOptions/{operation}"
                 self.preferences.setValue(f"{key}/target", target)
                 self.preferences.setValue(f"{key}/batchSize", size)
+                self.preferences.setValue(f"{key}/parallelExperiments", parallel)
             if run:
-                self.start(remote=target != "local", separate=target != "truba_matrix", batch_size=size)
+                self.start(remote=target != "local", separate=target != "truba_matrix", batch_size=size,
+                           parallel_experiments=parallel)
 
         dialog.accepted.connect(confirm)
         show_restored_window(dialog)
@@ -1175,7 +1195,7 @@ class NewDoePage(QWidget):
         self.status.setText(f"{len(rows)} experiments ready.")
         self.save_draft()
 
-    def start(self, *, remote=None, separate=True, batch_size=None):
+    def start(self, *, remote=None, separate=True, batch_size=None, parallel_experiments=1):
         from doe_studio import results_directory
         if not self.matrix_current or not self.rows or self.timer.isActive():
             return
@@ -1227,6 +1247,8 @@ class NewDoePage(QWidget):
             self.truba_jobs_window.begin()
         if self.grouped_remote:
             try:
+                if parallel_experiments > 1 and len(self.rows) > 1:
+                    request["parallel_experiments"] = min(parallel_experiments, len(self.rows))
                 self.job = launch(request, self.directory, controller)
             except Exception as error:
                 self.finish_remote("Failed", str(error))
@@ -1283,14 +1305,17 @@ class NewDoePage(QWidget):
             return
         number = record.get("experiment_index")
         if type(number) is int and 1 <= number <= len(self.rows):
+            last = record.get("experiment_end", number)
             if self.index <= number - 1:
                 for previous in range(self.index, number - 1):
                     self.sheet.set_state(previous, "Awaiting results")
                 self.index = number - 1
-                if self.sheet.states[self.index] != "Running":
-                    self.sheet.set_state(self.index, "Running")
-            stage = record['state'].partition(' · Running experiment ')[0]
-            self.status.setText(f"TRUBA #{self.remote_id} · DoE {number}/{len(self.rows)} · {stage}")
+                for active in range(self.index, last):
+                    if self.sheet.states[active] != "Running":
+                        self.sheet.set_state(active, "Running")
+            stage = record['state'].partition(' · Running experiment')[0]
+            experiments = self.experiment_range(number - 1, last - number + 1)
+            self.status.setText(f"TRUBA #{self.remote_id} · DoE {experiments}/{len(self.rows)} · {stage}")
         else:
             self.status.setText(f"TRUBA #{self.remote_id} · {record['state']}")
 
