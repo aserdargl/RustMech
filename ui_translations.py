@@ -791,6 +791,11 @@ Dataset split|Veri kümesi bölümü
 Geometry group|Geometri grubu
 Run folder|Çalışma klasörü
 Results|Sonuçlar
+Browse saved analysis results|Kayıtlı analiz sonuçlarını görüntüle
+Run name|Çalışma adı
+No saved analysis results found.|Kayıtlı analiz sonucu bulunamadı.
+Cannot open saved result: {path}|Kayıtlı sonuç açılamadı: {path}
+Saved mechanical result · Final load step|Kayıtlı mekanik sonuç · Son yük adımı
 Result|Sonuç
 Force|Kuvvet
 Force (N)|Kuvvet (N)

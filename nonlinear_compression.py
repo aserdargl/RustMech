@@ -293,6 +293,8 @@ class RustMechDialog(QDialog):
         self.accepted_settings = None
         self.preview = None
         self._result_preview_folder = None
+        self._result_preview_is_historical = False
+        self.result_history = None
         self._result_preview_data = None
         self._showing_result_preview = False
         self._mesh_requested = False
@@ -439,7 +441,7 @@ class RustMechDialog(QDialog):
         self.about_button = _WorkspaceCommandButton("About")
         self.about_button.setObjectName("aboutBtn")
         self.about_button.clicked.connect(self.show_about)
-        self._compute_commands = (self.truba_button, self.truba_connect_button, self.sync_button)
+        self._compute_commands = (self.truba_connect_button, self.truba_button, self.sync_button)
         from ui_language import LanguageSelector
         self.language_selector = LanguageSelector(self.language_manager, self)
 
@@ -1065,10 +1067,13 @@ class RustMechDialog(QDialog):
         self.esen_button = _WorkspaceCommandButton("ESEN")
         self.esen_button.setToolTip("Open the LAMMPS workspace")
         self.esen_button.clicked.connect(self.show_esen_workspace)
+        self.result_history_button = _WorkspaceCommandButton("Results")
+        self.result_history_button.setToolTip("Browse saved analysis results")
+        self.result_history_button.clicked.connect(self.show_result_history)
         self._workspace_commands = (
             (self.project_button, self.designs_button),
             (self.workspace_button, self.sidebar_toggle),
-            (self.doe_button, self.folder_batch_button, self.esen_button),
+            (self.doe_button, self.folder_batch_button, self.esen_button, self.result_history_button),
         )
         for index, group in enumerate(self._workspace_commands):
             if index:
@@ -1819,6 +1824,80 @@ class RustMechDialog(QDialog):
             self.sync_window = TrubaSyncWindow(self.truba_session, self.language_manager, self)
         show_restored_window(self.sync_window)
 
+    def show_result_history(self):
+        from analysis_queue import QueueStore
+        from doe_studio import results_directory
+        from esen_jobs import jobs_directory
+        from folder_batch_results import LEGACY_BATCH_DIRECTORY, batch_directory
+        from result_history import ResultHistoryDialog, discover_results
+        from truba_job_list import unfinished_records
+
+        if self.result_history is None:
+            preferences = QApplication.instance()._rustmech_window_state.settings
+            source = preferences.value("folderBatch/folder", "", type=str)
+            batch_roots = set()
+            if source:
+                root = Path(source).expanduser().absolute()
+                batch_roots.update((batch_directory(root) / "Results", root / LEGACY_BATCH_DIRECTORY / "Results"))
+            try:
+                queue_rows = QueueStore().load()
+            except (OSError, ValueError, TypeError, KeyError, AttributeError):
+                queue_rows = ()
+            for row in queue_rows:
+                path = row.folder_job.get("results_root") if isinstance(row.folder_job, dict) else None
+                if isinstance(path, str) and path:
+                    batch_roots.add(Path(path))
+            esen_root = self.esen_workspace.history_root if self.esen_workspace else jobs_directory()
+            records = unfinished_records(self.truba_session.state_dir, include_analysis_history=True)
+            remote_folders = {Path(record["local_directory"]) for _, record in records
+                              if record.get("state") == "downloaded" and isinstance(record.get("local_directory"), str)
+                              and record["local_directory"]}
+            results = discover_results(ROOT, results_directory().resolve(), batch_roots=batch_roots,
+                                       esen_root=esen_root, remote_folders=remote_folders)
+            dialog = ResultHistoryDialog(results, self._open_saved_result, self)
+            self.language_manager.localize_tree(dialog)
+            dialog.finished.connect(lambda _: setattr(self, "result_history", None))
+            self.result_history = dialog
+        show_restored_window(self.result_history)
+
+    def _open_saved_result(self, result):
+        from ui_language import translate
+
+        path = result.path
+        try:
+            workplace = {"Flow (CFD)": self.flow_workspace, "Thermal (CHT)": self.thermal_workspace,
+                         "MPM": self.mpm_workspace}.get(result.kind)
+            if workplace is not None:
+                workplace.load_directory(path)
+                self.workspace_tabs.setCurrentWidget(workplace)
+                return True
+            if result.kind == "Peridynamics":
+                self.peridynamic_results.load(path)
+                self._select_settings_method(self._peridynamic_method_index)
+                self.render_preview()
+                return True
+            if result.kind == "DAMASK FFT":
+                report = json.loads((path / "status.json").read_text(encoding="utf-8"))
+                self._show_fft_results(report, path, remember=False)
+                self._select_settings_method(self._fft_method_index)
+                return True
+            if result.kind == "Mechanic":
+                if result.solver == "kratos" and self.show_kratos_results(folder=path, warn=False):
+                    return True
+                if (path / "03_Results" / "deformed_shape.vtu").is_file():
+                    self._select_settings_method(0)
+                    self._set_mechanical_result_preview(path, historical=True)
+                    if self._display_mechanical_result():
+                        return True
+        except (OSError, ValueError, KeyError, TypeError, RuntimeError):
+            # A legacy or incomplete viewer payload can still be browsed on disk.
+            pass
+        if path.exists() and QDesktopServices.openUrl(QUrl.fromLocalFile(str(path.absolute()))):
+            return True
+        QMessageBox.warning(self.result_history, translate("Results"),
+                            translate("Cannot open saved result: {path}").format(path=path))
+        return False
+
     def _open_truba_desktop(self):
         from ui_language import translate
 
@@ -2096,7 +2175,7 @@ class RustMechDialog(QDialog):
             random_seed=Settings().random_seed,
         )
 
-    def _show_fft_results(self, result, folder):
+    def _show_fft_results(self, result, folder, *, remember=True):
         labels = "    " + "".join(f"{label:>8}" for label in COMPONENTS)
         rows = [
             f"{label:>4}" + "".join(f" {value:7.3g}" for value in row)
@@ -2114,7 +2193,7 @@ class RustMechDialog(QDialog):
         self.fft_result_summary.show()
         self.fft_matrix.show()
         self.fft_results_button.show()
-        if self._persist_solver_profiles:
+        if remember and self._persist_solver_profiles:
             self.solver_profile_store.settings.setValue("fft/latestResultFolder", str(folder))
 
     def _select_settings_method(self, index: int) -> None:
@@ -3846,7 +3925,7 @@ class RustMechDialog(QDialog):
         self.analysis_poll.start()
 
     def _latest_mechanical_result(self) -> Path | None:
-        if (self._result_preview_folder is not None
+        if (not self._result_preview_is_historical and self._result_preview_folder is not None
                 and (self._result_preview_folder / "deformed_shape.vtu").is_file()):
             return self._result_preview_folder.parent
         candidates = list((ROOT / "HumanResults").glob("Run_*"))
@@ -3890,16 +3969,19 @@ class RustMechDialog(QDialog):
             self._show_completed_analysis(folder, announce=False)
         if self._latest_kratos_results == str(folder) and self.show_kratos_results(warn=False):
             return
+        if not self._display_mechanical_result():
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder)))
+
+    def _display_mechanical_result(self):
         self.workspace_tabs.setCurrentIndex(0)
         field = self.result_preview_field
         with QSignalBlocker(field):
             field.setCurrentIndex(field.findData("Von_Mises_MPa"))
         self.render_preview()
-        if field.currentData() is None:
-            QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder)))
+        return field.currentData() is not None
 
-    def show_kratos_results(self, *, warn=True) -> bool:
-        folder = Path(self._latest_kratos_results)
+    def show_kratos_results(self, *, warn=True, folder=None) -> bool:
+        folder = Path(self._latest_kratos_results) if folder is None else folder
         if self._kratos_result_dialog is not None:
             if self._kratos_result_dialog.folder == folder:
                 show_restored_window(self._kratos_result_dialog)
@@ -4095,16 +4177,9 @@ class RustMechDialog(QDialog):
             self._update_status_visuals("ready", "● COMPLETED", False)
         fields_folder = Path(folder) / "03_Results"
         if (fields_folder / "deformed_shape.vtu").is_file():
-            from ui_language import translate
-
-            self._result_preview_folder = fields_folder
-            self._result_preview_data = None
+            self._set_mechanical_result_preview(folder)
             if self._persist_solver_profiles:
                 self.solver_profile_store.settings.setValue("mechanical/latestResultFolder", str(folder))
-            self.result_preview_field.setToolTip(
-                f"{translate('Latest mechanical result · Final load step')}\n{Path(folder)}"
-            )
-            self._sync_preview_readout()
             if self.result_preview_field.currentData() is not None:
                 self.render_preview()
         try:
@@ -4116,6 +4191,16 @@ class RustMechDialog(QDialog):
                     self.solver_profile_store.settings.setValue("kratos/latestResultFolder",str(folder))
                     self.solver_profile_store.settings.sync()
         except (OSError,ValueError):pass
+
+    def _set_mechanical_result_preview(self, folder, *, historical=False):
+        from ui_language import translate
+
+        self._result_preview_folder = Path(folder) / "03_Results"
+        self._result_preview_is_historical = historical
+        self._result_preview_data = None
+        title = "Saved mechanical result · Final load step" if historical else "Latest mechanical result · Final load step"
+        self.result_preview_field.setToolTip(f"{translate(title)}\n{folder}")
+        self._sync_preview_readout()
 
     def _detach_remote_jobs(self):
         jobs = []

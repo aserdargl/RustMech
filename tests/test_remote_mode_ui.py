@@ -109,7 +109,7 @@ class RemoteModeUiTests(unittest.TestCase):
                                  (COMBO_WIDTH,) * 3)
 
     @patch("truba_sync.TrubaSession.connected", new=False)
-    def test_compute_status_is_centered_between_esen_and_hpc(self):
+    def test_compute_status_is_centered_between_results_and_connect(self):
         window = self.window
         label = window.brand_subtitle_lbl
         window.solver_combo.setCurrentIndex(window.solver_combo.findData("kratos"))
@@ -122,19 +122,68 @@ class RemoteModeUiTests(unittest.TestCase):
                     with self.subTest(status=status, language=language, width=width):
                         window.resize(width, 780)
                         self.app.processEvents()
-                        esen = window.esen_button.geometry()
+                        results = window.result_history_button.geometry()
                         badge = window.brand_header.geometry()
+                        connect = window.truba_connect_button.geometry()
                         hpc = window.truba_button.geometry()
                         self.assertTrue(label.isVisible())
-                        self.assertIs(window.brand_header.parentWidget(), window.esen_button.parentWidget())
-                        self.assertEqual(esen.size().height(), hpc.size().height())
-                        self.assertEqual(esen.center().y(), hpc.center().y())
-                        self.assertLessEqual(abs(esen.center().y() - badge.center().y()), 1)
-                        left_gap = badge.left() - esen.right() - 1
-                        right_gap = hpc.left() - badge.right() - 1
+                        self.assertIs(window.brand_header.parentWidget(), window.result_history_button.parentWidget())
+                        self.assertEqual(results.size().height(), hpc.size().height())
+                        self.assertEqual(results.center().y(), hpc.center().y())
+                        self.assertLessEqual(abs(results.center().y() - badge.center().y()), 1)
+                        self.assertLess(connect.right(), hpc.left())
+                        left_gap = badge.left() - results.right() - 1
+                        right_gap = connect.left() - badge.right() - 1
                         self.assertGreaterEqual(min(left_gap, right_gap), 0)
                         self.assertLessEqual(abs(left_gap - right_gap), 1)
                         self.assertGreaterEqual(label.width(), label.fontMetrics().horizontalAdvance(status))
+
+    def test_results_toolbar_opens_selected_history_run_and_restores_window(self):
+        from result_history import SavedResult
+
+        window = self.window
+        root = Path(self.temp.name)
+        history = [SavedResult(root / "latest", "latest", "Flow (CFD)", 2),
+                   SavedResult(root / "earlier", "earlier", "Flow (CFD)", 1)]
+        with patch("result_history.discover_results", return_value=history), \
+                patch.object(window.flow_workspace, "load_directory") as load:
+            window.result_history_button.click()
+            dialog = window.result_history
+            self.app.processEvents()
+            self.assertFalse(dialog.open_button.isEnabled())
+            self.assertEqual(dialog.table.item(0, 2).text(), "latest")
+            dialog.resize(680, 360)
+            dialog.move(90, 110)
+            self.app.processEvents()
+            bounds = dialog.geometry()
+            dialog.table.selectRow(1)
+            self.assertTrue(dialog.open_button.isEnabled())
+            load.assert_not_called()
+            dialog.open_button.click()
+            load.assert_called_once_with(history[1].path)
+            self.assertIs(window.workspace_tabs.currentWidget(), window.flow_workspace)
+            self.assertIsNone(window.result_history)
+
+            window.result_history_button.click()
+            dialog = window.result_history
+            self.app.processEvents()
+            self.assertEqual(dialog.geometry(), bounds)
+            dialog.showMaximized()
+            self.app.processEvents()
+            dialog.close()
+            window.result_history_button.click()
+            dialog = window.result_history
+            self.app.processEvents()
+            self.assertTrue(dialog.isMaximized())
+            dialog.showNormal()
+            self.app.processEvents()
+            self.assertEqual(dialog.geometry(), bounds)
+            dialog.table.sortItems(2, Qt.SortOrder.AscendingOrder)
+            target = dialog.table.visualItemRect(dialog.table.item(1, 2)).center()
+            QTest.mouseClick(dialog.table.viewport(), Qt.MouseButton.LeftButton, pos=target)
+            QTest.mouseDClick(dialog.table.viewport(), Qt.MouseButton.LeftButton, pos=target)
+            self.assertEqual(load.call_count, 2)
+            load.assert_called_with(history[0].path)
 
     def test_preview_failure_details_are_selectable_even_when_completion_is_immediate(self):
         from mesh_engine import preview_key
