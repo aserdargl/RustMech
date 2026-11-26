@@ -1711,7 +1711,6 @@ class DoEStudioWidget(ExperimentTableWidget):
             if errors:
                 QMessageBox.warning(self, "Invalid experiment range", f"{row.exp_id} · {row.structure_name}: {errors[0]}\nAdjust this geometry's fixed values or variable ranges.")
                 return
-        self.sample_settings.apply_names(rows)
         self._rows = rows
         self._refresh_table_view()
 

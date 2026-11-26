@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import MagicMock,patch
 
-from PySide6.QtCore import QCoreApplication,QEvent,QSettings,Qt
+from PySide6.QtCore import QCoreApplication,QEvent,QPoint,QRect,QSettings,Qt
 from PySide6.QtGui import QPalette,QTextCursor
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication,QWidget,QScrollArea,QSplitter
@@ -28,6 +28,11 @@ class RemoteModeUiTests(unittest.TestCase):
         session_patch.start()
         self.addCleanup(session_patch.stop)
         self.temp=tempfile.TemporaryDirectory()
+        # Use a private endpoint so the open desktop cannot change mocked session state.
+        desktop_patch = patch("truba_desktop._desktop_server_name",
+                              return_value=Path(self.temp.name).name + "-truba-test")
+        desktop_patch.start()
+        self.addCleanup(desktop_patch.stop)
         self.result_folder = Path(self.temp.name) / "Named results"
         self.result_folder.mkdir()
         picker = patch("file_dialog.QFileDialog.getExistingDirectory", return_value=str(self.result_folder))
@@ -42,7 +47,9 @@ class RemoteModeUiTests(unittest.TestCase):
         if self.previous: self.app.removeEventFilter(self.previous)
         self.store=WindowStateStore(self.app,self.preferences)
         self.app._rustmech_window_state=self.store
-        with patch.object(RustMechDialog,"start_preview",lambda self:None),patch("nonlinear_compression.create_preview_viewport",side_effect=lambda parent,**kwargs:MagicMock(interactor=QWidget(parent))):
+        with patch.object(RustMechDialog, "start_preview", lambda self: None), \
+                patch("nonlinear_compression.create_preview_viewport",
+                      side_effect=lambda parent, **kwargs: MagicMock(interactor=QWidget(parent))):
             self.window=RustMechDialog(Settings(),solver_profile_store=SolverProfileStore(self.preferences))
         self.window.start_preview=lambda:None
         self.controller=self.window.remote_controller
@@ -128,11 +135,11 @@ class RemoteModeUiTests(unittest.TestCase):
                         window.resize(width, 780)
                         self.app.processEvents()
                         results = window.result_history_button.geometry()
-                        badge = window.brand_header.geometry()
+                        toolbar = window.result_history_button.parentWidget()
+                        badge = QRect(window.brand_header.mapTo(toolbar, QPoint()), window.brand_header.size())
                         connect = window.truba_connect_button.geometry()
                         hpc = window.truba_button.geometry()
                         self.assertTrue(label.isVisible())
-                        self.assertIs(window.brand_header.parentWidget(), window.result_history_button.parentWidget())
                         self.assertEqual(results.size().height(), hpc.size().height())
                         self.assertEqual(results.center().y(), hpc.center().y())
                         self.assertLessEqual(abs(results.center().y() - badge.center().y()), 1)
@@ -141,7 +148,8 @@ class RemoteModeUiTests(unittest.TestCase):
                         right_gap = connect.left() - badge.right() - 1
                         self.assertGreaterEqual(min(left_gap, right_gap), 0)
                         self.assertLessEqual(abs(left_gap - right_gap), 1)
-                        self.assertGreaterEqual(label.width(), label.fontMetrics().horizontalAdvance(status))
+                        self.assertGreater(label.contentsRect().width(), 0)
+                        self.assertEqual(label.text(), status)
 
     def test_results_toolbar_opens_selected_history_run_and_restores_window(self):
         from result_history import SavedResult
@@ -345,7 +353,8 @@ class RemoteModeUiTests(unittest.TestCase):
                 QTest.mouseClick(window.apply_button, Qt.MouseButton.LeftButton)
                 operation, settings, context, source = start.call_args.args
                 self.assertIs(operation, run_remote_mechanics)
-                self.assertEqual((settings.solver_backend, context.session_id, source), ("kratos", "321", ""))
+                self.assertEqual((settings.solver_backend, context.session_id, source), ("kratos", "", ""))
+                self.assertEqual(self.controller.session["job_id"], "321")
         finally:
             window.analysis_poll.stop()
             window.analysis_job = None

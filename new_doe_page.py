@@ -21,7 +21,7 @@ from material_catalog import builtin_materials
 from material_library import MaterialCard
 from new_doe_operations import (MAX_ROWS, OPERATIONS, explicit_numbers, launch, lhs_matrix, matrix, matrix_request,
                                 parameters, snapshot, structure_choices, validate)
-from new_doe_report import write_doe_report
+from new_doe_report import experiment_name, write_doe_report
 from structure_library import ALL_STRUCTURES_BY_FAMILY, STRUCTURE_FAMILIES
 from studio_style import (COMBO_WIDTH, CONTROL_HEIGHT, CompactComboBox, CompactSpinBox, NumericLineEdit,
                           SidebarGroupBox)
@@ -474,7 +474,7 @@ class ExperimentMatrix(QAbstractTableModel):
     def headerData(self, section, orientation, role):
         if role == Qt.ItemDataRole.DisplayRole:
             if orientation == Qt.Orientation.Vertical:
-                return section + 1
+                return experiment_name(section + 1)
             return translate(self.columns[section - 1].label if section else "Status")
 
     def data(self, index, role):
@@ -1272,9 +1272,9 @@ class NewDoePage(QWidget):
             directory.mkdir(parents=True)
             with (directory / "matrix.csv").open("w", newline="", encoding="utf-8-sig") as stream:
                 writer = csv.writer(stream)
-                writer.writerow(["Experiment", "Operation", *[".".join(f.path) for f in self.factors]])
+                writer.writerow(["Sample", "Operation", *[".".join(f.path) for f in self.factors]])
                 for i, row in enumerate(self.rows, 1):
-                    writer.writerow([i, row["operation"], *(display(v) for _, v in parameters(row))])
+                    writer.writerow([experiment_name(i), row["operation"], *(display(v) for _, v in parameters(row))])
         except OSError as error:
             self.status.setText(str(error))
             return

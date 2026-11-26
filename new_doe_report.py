@@ -29,6 +29,10 @@ TABULAR_FIELDS = {"settings", "options", "stiffness_mpa", "frames"}
 NUMERIC = re.compile(r"[+-]?(?:0|[1-9]\d*)(?:\.\d*)?(?:[eE][+-]?\d+)?")
 
 
+def experiment_name(number):
+    return f"EXP-{number:04d}"
+
+
 def _read_json(path):
     try:
         return json.loads(path.read_text(encoding="utf-8"))
@@ -105,7 +109,7 @@ def _report_rows(columns, experiments, records):
         yield ["Sabit parametrelerle çalışıldı"], None
 
     for (number, operation, *values), (record, folder, state, detail) in zip(experiments, records, strict=True):
-        yield [f"Deney {number}", *(f"{columns[i]} = {values[i]}" for i in variables)], "section"
+        yield [experiment_name(number), *(f"{columns[i]} = {values[i]}" for i in variables)], "section"
         saved_state = record.get("state")
         yield ["Durum", saved_state if saved_state in FINAL_STATES else state or saved_state], None
         if record.get("slurm_job_id"):
@@ -125,12 +129,12 @@ def write_doe_report(directory, *, states=None, details=None, grouped_output=Non
     with (directory / "matrix.csv").open(encoding="utf-8-sig", newline="") as stream:
         reader = csv.reader(stream)
         columns = next(reader, [])[2:]
-        experiments = list(reader)
+        experiments = [(int(name.removeprefix("EXP-")), *values) for name, *values in reader]
     if not experiments:
         return
     records = []
     for index, row in enumerate(experiments):
-        record, folder = _experiment(directory, int(row[0]), grouped_output or default_output)
+        record, folder = _experiment(directory, row[0], grouped_output or default_output)
         if only_finished and record.get("state") not in FINAL_STATES:
             return
         state = states[index] if states is not None else record.get("state", "Sonuç kaydı yok")

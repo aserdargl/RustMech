@@ -530,7 +530,9 @@ class NewDoeTests(unittest.TestCase):
         self.assertEqual(page.open.mapTo(page, page.open.rect().bottomRight()).x(),
                          page.preview.mapTo(page, page.preview.rect().bottomRight()).x())
         self.assertEqual(page.preview.mapTo(page, QPoint(0, page.preview.height())).y(), apply_y)
-        self.assertLess(page.operation.width(), 150)
+        # A fixed pixel limit depends on the font backend and DPI.
+        self.assertLessEqual(page.operation.width(), page.operation.sizeHint().width() + 12)
+        self.assertLess(page.operation.width(), page.input_tabs.width())
         apply_right = page.apply_button.mapTo(page, page.apply_button.rect().bottomRight()).x()
         settings_right = page.input_tabs.mapTo(page, page.input_tabs.rect().bottomRight()).x()
         self.assertEqual(apply_right, settings_right)
@@ -631,6 +633,9 @@ class NewDoeTests(unittest.TestCase):
         grid.mode.setCurrentIndex(grid.mode.findData("list"))
         grid.selection.setText("16, 24, 40")
         page.create()
+        names = [f"EXP-{i:04d}" for i in range(1, 4)]
+        self.assertEqual([page.sheet.headerData(i, Qt.Orientation.Vertical, Qt.ItemDataRole.DisplayRole)
+                          for i in range(3)], names)
         failed, active = Mock(), Mock()
         failed.done.return_value = True
         failed.result.side_effect = RuntimeError("Solver failed")
@@ -642,6 +647,9 @@ class NewDoeTests(unittest.TestCase):
         self.assertEqual(launch.call_count, 2)
         active.force_stop.assert_called_once()
         self.assertEqual(page.sheet.states, ["Failed", "Stopped", "Skipped"])
+        from csv import DictReader
+        with (page.directory / "matrix.csv").open(encoding="utf-8-sig", newline="") as stream:
+            self.assertEqual([row["Sample"] for row in DictReader(stream)], names)
         self.assertIn("Solver failed", (page.directory / "row_00001/experiment.json").read_text())
 
     def select_run_target(self, page, target, batch_size=None):
@@ -888,7 +896,7 @@ class NewDoeTests(unittest.TestCase):
                                for row in sheet.findall(".//{*}row")]
             self.assertEqual(result_rows[0], ["Numune parametreleri"])
             self.assertIn(["grid", "16", "24", "32", "40", "48"], result_rows)
-            starts = [result_rows.index([f"Deney {i}", f"grid = {grid}"])
+            starts = [result_rows.index([f"EXP-{i:04d}", f"grid = {grid}"])
                       for i, grid in enumerate((16, 24, 32, 40, 48), 1)]
             self.assertEqual(starts, sorted(starts))
             self.assertIn(["Durum", "Failed"], result_rows[starts[0]:starts[1]])

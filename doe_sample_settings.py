@@ -393,17 +393,6 @@ class SampleSettingsPage(QWidget):
         self.refresh_available()
         self.remove_button.setEnabled(self.sequence.currentItem() is not None)
 
-    def apply_names(self, rows):
-        if not self.rule()['fields']:
-            return
-        from dataclasses import asdict
-        from doe_sample_rules import unique_name
-        used = set()
-        for row in rows:
-            values = asdict(row.to_settings(self.studio._settings_provider()))
-            row.exp_id = unique_name(sample_name(self.rule(), values) or row.exp_id, used)
-            used.add(row.exp_id)
-
     def state(self):
         return {"rule": self.rule(), "combinations": self.batch.state()}
 

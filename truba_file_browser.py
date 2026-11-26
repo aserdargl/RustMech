@@ -82,12 +82,13 @@ class TrubaFileBrowser(QWidget):
         self.filter.textChanged.connect(self._filter_entries)
         self.group_files = command("Group by type")
         self.group_files.setCheckable(True)
-        self.group_files.toggled.connect(self._render_entries)
 
         self.files = QTreeWidget()
         self.files.setAccessibleName("TRUBA files")
         self.files.setProperty("preserveItemText", True)
         self.files.setRootIsDecorated(False)
+        self.group_files.toggled.connect(self.files.setRootIsDecorated)
+        self.group_files.toggled.connect(self._render_entries)
         self.files.setUniformRowHeights(True)
         self.files.setColumnCount(3)
         self.files.header().setStretchLastSection(False)
@@ -472,19 +473,18 @@ class TrubaFileBrowser(QWidget):
         self._render_entries(preserve_selection=preserve_selection, select_run_list=True)
 
     def _render_entries(self, *_, preserve_selection=True, select_run_list=False):
-        current = self.files.selectedItems() if preserve_selection else []
-        selected_names = {row.text(0) for row in current}
+        selected_names = {row.text(0) for row in self.files.selectedItems()} if preserve_selection else set()
         selected_rows = []
         run_list_row = None
         with QSignalBlocker(self.files):
-            self.files.clear()
+            # Detach the existing items without resetting the Qt model.
+            self.files.invisibleRootItem().takeChildren()
         folder_icon = self.style().standardIcon(QStyle.StandardPixmap.SP_DirIcon)
         file_icon = self.style().standardIcon(QStyle.StandardPixmap.SP_FileIcon)
         link_icon = self.style().standardIcon(QStyle.StandardPixmap.SP_FileLinkIcon)
         locale = QLocale()
         groups = {}
         grouped = self.group_files.isChecked()
-        self.files.setRootIsDecorated(grouped)
         for entry in self.entries:
             mode = entry.st_mode or 0
             folder = S_ISDIR(mode)

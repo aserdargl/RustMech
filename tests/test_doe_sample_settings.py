@@ -127,12 +127,13 @@ class SampleSettingsTests(unittest.TestCase):
         self.assertIs(restored.settings_tabs.currentWidget(), restored.planner.learning_page)
         self.assertTrue(restored.sample_settings.isHidden())
 
-    def test_regular_doe_generation_uses_naming_rule_and_legacy_plans_open(self):
+    def test_generated_sample_names_follow_table_order_with_legacy_rules(self):
         _, studio = self.window()
         studio.sample_settings.add_field('cell_size')
         studio.add_design(Settings())
+        studio.add_design(replace(Settings(), structure_name='Neovius'))
         studio.generate_ml_table()
-        self.assertEqual(studio.rows[0].exp_id, '3')
+        self.assertEqual([row.exp_id for row in studio.rows], ['ML-0001', 'ML-0002'])
         payload = studio.capture_plan()
         payload.pop('sample_settings')
         from doe_plan import decode_plan
