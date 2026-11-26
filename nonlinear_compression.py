@@ -214,7 +214,12 @@ class _WorkspaceCommandMenu(QToolButton):
 
 
 class _ComputeStatusLabel(QLabel):
-    """Keep the toolbar height stable when the compute status gets longer."""
+    """Elide compute status text when the toolbar has limited space."""
+
+    def minimumSizeHint(self):
+        hint = super().minimumSizeHint()
+        hint.setWidth(0)
+        return hint
 
     def paintEvent(self, event):
         painter = QStylePainter(self)
@@ -419,7 +424,6 @@ class RustMechDialog(QDialog):
         self.brand_subtitle_lbl.setObjectName("brandSubtitle")
         self.brand_subtitle_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.brand_subtitle_lbl.setTextFormat(Qt.TextFormat.PlainText)
-        self.brand_subtitle_lbl.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Preferred)
         self.brand_subtitle_lbl.setMaximumWidth(320)
         brand_layout.addWidget(self.brand_subtitle_lbl)
         self.truba_session = TrubaSession(self)
@@ -1001,6 +1005,9 @@ class RustMechDialog(QDialog):
         self.sidebar_toggle = _WorkspaceCommandMenu()
         self.sidebar_toggle.setObjectName("headerMenu")
         self.sidebar_toggle.setProperty("contextSelector", True)
+        method_policy = self.sidebar_toggle.sizePolicy()
+        method_policy.setRetainSizeWhenHidden(True)
+        self.sidebar_toggle.setSizePolicy(method_policy)
         self.sidebar_toggle.setToolTip("Select a method to open its settings")
         self.sidebar_toggle.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         self.methods_menu = QMenu(self.sidebar_toggle)
@@ -1088,9 +1095,15 @@ class RustMechDialog(QDialog):
             for button in group:
                 button.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
                 navigation.addWidget(button)
-        navigation.addStretch(1)
-        navigation.addWidget(brand_card)
-        navigation.addStretch(1)
+        # Center the compute badge in the space between command groups. Its
+        # changing text must not contribute to the toolbar's minimum width.
+        compute_slot = QWidget(command_bar)
+        compute_slot.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        compute_slot.setMinimumWidth(2 * WORKSPACE_COMMAND_WIDTH)
+        compute_layout = QHBoxLayout(compute_slot)
+        compute_layout.setContentsMargins(0, 0, 0, 0)
+        compute_layout.addWidget(brand_card, alignment=Qt.AlignmentFlag.AlignCenter)
+        navigation.addWidget(compute_slot, 1)
         for button in self._compute_commands:
             navigation.addWidget(button)
         navigation.addWidget(self.about_button)
@@ -1587,8 +1600,23 @@ class RustMechDialog(QDialog):
         QTimer.singleShot(0, self.start_preview)
 
     def _refresh_ui_language(self, *_):
+        from standard_tests import PROFILES
         from ui_language import translate
         self.language_manager.localize_tree(self)
+        titles = (
+            "Nonlinear Compression", "FFT Homogenization", "Peridynamic TPMS Compression",
+            "MPM TPMS Compression", "Isothermal Flow", "Transient Heat Transfer",
+            *(f"Standard {profile.kind.title()}" for profile in PROFILES.values()),
+        )
+        title_label = self.brand_title_label
+        title_metrics = title_label.fontMetrics()
+        # Preserve the label's styled padding and border when sizing for other titles.
+        current_text_width = title_metrics.size(Qt.TextFlag.TextSingleLine, title_label.text()).width()
+        title_insets = title_label.sizeHint().width() - current_text_width
+        title_label.setFixedWidth(
+            max(title_metrics.size(Qt.TextFlag.TextSingleLine, translate(title)).width()
+                for title in titles) + title_insets
+        )
         self.preview_error_details.setAccessibleName(translate("Preview error details"))
         if self.setup_tabs.currentIndex() == self._fft_method_index:
             self._update_fft_preview_summary()

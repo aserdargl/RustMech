@@ -161,8 +161,8 @@ class LanguageTests(unittest.TestCase):
             normal_bounds = window.geometry()
             commands = (window.project_button, window.designs_button, window.workspace_button,
                         window.sidebar_toggle, window.doe_button, window.folder_batch_button,
-                        window.esen_button, window.truba_button, window.truba_connect_button,
-                        window.sync_button, window.about_button)
+                        window.esen_button, window.result_history_button, window.truba_button,
+                        window.truba_connect_button, window.sync_button, window.about_button)
 
             def assert_toolbar_layout():
                 self.assertEqual(len({button.size().toTuple() for button in commands}), 1)
@@ -190,6 +190,22 @@ class LanguageTests(unittest.TestCase):
             )
             finite_element, fft, mpm, peridynamics = methods
             self.assertEqual(window.sidebar_toggle.text(), finite_element.text())
+            original_size = window.size()
+            for width in (900, 1440):
+                window.resize(width, original_size.height())
+                self.app.processEvents()
+                toolbar_widgets = (window.brand_title_label, *commands)
+                bounds = [widget.geometry() for widget in toolbar_widgets]
+                for action in (fft, peridynamics, mpm, window.workspace_actions.actions()[2],
+                               window.workspace_actions.actions()[3], finite_element):
+                    with self.subTest(width=width, selection=action.text()):
+                        action.trigger()
+                        self.app.processEvents()
+                        self.assertEqual([widget.geometry() for widget in toolbar_widgets], bounds)
+                        self.assertLessEqual(window.brand_title_label.sizeHint().width(),
+                                             window.brand_title_label.width())
+            window.resize(original_size)
+            self.app.processEvents()
             mpm.trigger()
             self.assertFalse(window.apply_button.isEnabled())
             with patch.object(window, '_start_peridynamic_compression') as start_peridynamics:
