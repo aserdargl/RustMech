@@ -15,7 +15,7 @@ from PySide6.QtWidgets import (QCheckBox, QComboBox, QFormLayout, QHBoxLayout,
                               QSplitter, QVBoxLayout, QWidget, QSizePolicy)
 
 from analysis_process import AnalysisProcess
-from file_dialog import QFileDialog
+from file_dialog import QFileDialog, choose_analysis_results_folder
 from flow_analysis import FlowSettings, export_flow_case, export_geometry_inspection, execute_flow_case, stop_flow_case
 from model import ROOT
 from preview_viewport import create_preview_viewport
@@ -319,19 +319,26 @@ class FlowWorkspace(QWidget):
         try:
             specimen,flow = self.settings_provider(),self.collect()
             (replace(flow,allow_bypass=True) if inspection else flow).validate(specimen)
-            directory = ROOT/"results"/("Flow_"+datetime.now().strftime("%Y%m%d_%H%M%S_")+uuid.uuid4().hex[:8])
+            controller = getattr(self, "remote_controller", None)
+            remote = bool(controller is not None and controller.requested)
+            if solve:
+                directory = choose_analysis_results_folder(self)
+                if directory is None:
+                    return
+            else:
+                directory = ROOT/"results"/("Flow_"+datetime.now().strftime("%Y%m%d_%H%M%S_")+uuid.uuid4().hex[:8])
             self.case_directory = directory
             self.submitted_flow = flow
             self.solving = solve
-            controller = getattr(self,"remote_controller",None)
-            self._remote_job = bool(controller is not None and controller.requested)
+            self._remote_job = remote
             if self._remote_job:
                 from truba_remote import run_remote_operation
                 context,auth = controller.require_analysis("flow") if solve else controller.require("mesh")
                 request = dict(operation="flow_solve" if solve else "flow_export",settings=asdict(specimen),flow=asdict(flow))
                 if inspection:
                     request["inspection"] = True
-                self.job = AnalysisProcess(run_remote_operation,request,context,remote_auth=auth)
+                options = {"directory": directory / "TRUBA"} if solve else None
+                self.job = AnalysisProcess(run_remote_operation, request, context, remote_auth=auth, remote_options=options)
             else:
                 target = export_geometry_inspection if inspection else execute_flow_case if solve else export_flow_case
                 self.job = AnalysisProcess(target,specimen,flow,str(directory))

@@ -306,5 +306,5 @@ def run_compression(settings, options, folder=None, *, on_progress=report_analys
     return str(folder)
 
 
-def run_local_compression(settings, options):
-    return dict(operation="peridynamic_solve", run_folder=run_compression(settings, options))
+def run_local_compression(settings, options, folder=None):
+    return dict(operation="peridynamic_solve", run_folder=run_compression(settings, options, folder))

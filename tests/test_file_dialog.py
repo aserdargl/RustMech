@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (
     QStyle, QStyleOptionButton,
 )
 
-from file_dialog import QFileDialog, install_file_dialogs
+from file_dialog import ANALYSIS_RESULTS_FOLDERS, QFileDialog, choose_analysis_results_folder, install_file_dialogs
 from studio_style import STUDIO_STYLESHEET
 from window_caption import CAPTION_PROPERTY, install_window_captions
 from window_state import WindowStateStore
@@ -45,6 +45,62 @@ def picker_app(tmp_path):
         delattr(app, name)
         service.deleteLater()
     app.setAttribute(attribute, previous)
+
+
+def test_analysis_picker_creates_and_names_a_result_folder(picker_app, tmp_path):
+    owner = QWidget()
+    owner.show()
+    selected = tmp_path / "Named analysis"
+
+    def create_folder():
+        dialog = picker_app.activeModalWidget()
+        try:
+            dialog.setDirectory(str(tmp_path))
+            dialog.setViewMode(QFileDialog.ViewMode.List)
+            QTest.qWait(100)
+            button = dialog.findChild(QWidget, "newFolderButton")
+            QTest.mouseClick(button, Qt.MouseButton.LeftButton)
+            views = dialog.findChild(QStackedWidget, "stackedWidget")
+            for _ in range(20):
+                editor = views.currentWidget().findChild(QLineEdit)
+                if editor is not None:
+                    break
+                QTest.qWait(10)
+            editor.selectAll()
+            QTest.keyClicks(editor, selected.name)
+            QTest.keyClick(editor, Qt.Key.Key_Return)
+            for _ in range(20):
+                if selected.is_dir():
+                    break
+                QTest.qWait(10)
+            dialog.setDirectory(str(selected))
+            dialog.selectFile(str(selected))
+            dialog.accept()
+        finally:
+            if dialog.isVisible():
+                dialog.reject()
+
+    QTimer.singleShot(0, create_folder)
+    assert choose_analysis_results_folder(owner) == selected
+    assert selected.is_dir()
+    settings = QSettings(picker_app._rustmech_window_state.settings.fileName(), QSettings.Format.IniFormat)
+    assert settings.value(ANALYSIS_RESULTS_FOLDERS, [], type=list) == [str(selected)]
+    owner.close()
+
+
+def test_analysis_picker_rejects_a_folder_with_existing_results(monkeypatch, tmp_path):
+    existing = tmp_path / "Previous run"
+    existing.mkdir()
+    previous = existing / "summary.json"
+    previous.write_text("previous results", encoding="utf-8")
+    choices = iter((str(existing), ""))
+    warnings = []
+    monkeypatch.setattr(QFileDialog, "getExistingDirectory", lambda *_: next(choices))
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args: warnings.append(args))
+
+    assert choose_analysis_results_folder(None) is None
+    assert len(warnings) == 1
+    assert previous.read_text(encoding="utf-8") == "previous results"
 
 
 @pytest.mark.parametrize("method", ["getOpenFileName", "getOpenFileNames", "getSaveFileName", "getExistingDirectory"])

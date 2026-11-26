@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (QFormLayout,QHBoxLayout,QLabel,QPushButton,
                               QSlider,QSplitter,QWidget,QSizePolicy)
 
 from analysis_process import AnalysisProcess
-from file_dialog import QFileDialog
+from file_dialog import QFileDialog, choose_analysis_results_folder
 from flow_workspace import FlowWorkspace
 from flow_analysis import FlowSettings
 from model import ROOT
@@ -224,16 +224,23 @@ class ThermalWorkspace(FlowWorkspace):
         try:
             specimen,flow,thermal = self.settings_provider(),self.collect(),self.collect_thermal()
             thermal.validate(specimen,flow)
-            directory = ROOT/"results"/("Thermal_"+datetime.now().strftime("%Y%m%d_%H%M%S_")+uuid.uuid4().hex[:8])
+            controller = getattr(self, "remote_controller", None)
+            remote = bool(controller is not None and controller.requested)
+            if solve:
+                directory = choose_analysis_results_folder(self)
+                if directory is None:
+                    return
+            else:
+                directory = ROOT/"results"/("Thermal_"+datetime.now().strftime("%Y%m%d_%H%M%S_")+uuid.uuid4().hex[:8])
             self.case_directory,self.submitted_flow = directory,flow
             self.solving = solve
-            controller = getattr(self,"remote_controller",None)
-            self._remote_job = bool(controller is not None and controller.requested)
+            self._remote_job = remote
             if self._remote_job:
                 from truba_remote import run_remote_operation
                 context,auth = controller.require_analysis("thermal") if solve else controller.require("mesh")
                 request = dict(operation="thermal_solve" if solve else "thermal_export",settings=asdict(specimen),flow=asdict(flow),thermal=asdict(thermal))
-                self.job = AnalysisProcess(run_remote_operation,request,context,remote_auth=auth)
+                options = {"directory": directory / "TRUBA"} if solve else None
+                self.job = AnalysisProcess(run_remote_operation, request, context, remote_auth=auth, remote_options=options)
             else:
                 self.job = AnalysisProcess(execute_thermal_case if solve else export_thermal_case,specimen,flow,thermal,str(directory))
         except Exception as error:

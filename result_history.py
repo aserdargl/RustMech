@@ -71,13 +71,13 @@ def _analysis_result(folder, *, name=None):
     return None
 
 
-def _remote_result(folder):
+def _remote_result(folder, *, name=None):
     output = folder / "output"
     marker = output / "result.json"
     report = _read_report(marker)
     operation = report.get("operation")
     if operation == "convergence_level" and not report.get("error"):
-        return _result(output, marker, "Mesh convergence", name=folder.name)
+        return _result(output, marker, "Mesh convergence", name=name or folder.name)
     if operation not in (
         "mechanical", "fft_solve", "peridynamic_solve", "mpm_solve", "flow_solve", "thermal_solve", "doe_solve",
     ):
@@ -86,7 +86,7 @@ def _remote_result(folder):
     # Resolve the layout on disk. Older records can still contain a remote path.
     for candidate in (output, *_entries(output), *_entries(output / "HumanResults")):
         if candidate.is_dir():
-            result = _analysis_result(candidate, name=folder.name)
+            result = _analysis_result(candidate, name=name or folder.name)
             if result is not None:
                 return result
     return None
@@ -110,7 +110,7 @@ def _doe_results(folder):
             yield _analysis_result(target, name=name) or _result(target, marker, "DoE", name=name)
 
 
-def discover_results(root, doe_root, *, batch_roots=(), esen_root=None, remote_folders=()):
+def discover_results(root, doe_root, *, batch_roots=(), esen_root=None, remote_folders=(), analysis_folders=()):
     """Read existing on-disk formats without requiring an index or a connection."""
     candidates = []
     human_results = root / "HumanResults"
@@ -132,6 +132,8 @@ def discover_results(root, doe_root, *, batch_roots=(), esen_root=None, remote_f
         candidates.append(result)
     for folder in remote_folders:
         candidates.append(_remote_result(folder))
+    for folder in analysis_folders:
+        candidates.append(_analysis_result(folder) or _remote_result(folder / "TRUBA", name=folder.name))
     for path in _entries(doe_root):
         if path.is_file() and path.suffix.lower() == ".csv":
             candidates.append(_result(path, path, "DoE"))

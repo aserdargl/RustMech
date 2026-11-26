@@ -58,7 +58,10 @@ class FlowWorkspaceTests(unittest.TestCase):
         for button in flow.findChildren(QPushButton):
             self.assertFalse(button.autoDefault())
             self.assertFalse(button.isDefault())
-        with patch("flow_workspace.AnalysisProcess") as constructor:
+        folder = Path(self.temp.name) / "Flow results"
+        with patch("flow_workspace.AnalysisProcess") as constructor, patch(
+            "flow_workspace.choose_analysis_results_folder", return_value=folder
+        ):
             speed = flow.controls["inlet_speed"]
             speed.setFocus()
             speed.lineEdit().selectAll()
@@ -71,6 +74,7 @@ class FlowWorkspaceTests(unittest.TestCase):
             self.assertIsNone(dialog.sync_window)
             flow.buttons[1].click()
             constructor.assert_called_once()
+            self.assertEqual(constructor.call_args.args[-1], str(folder))
             self.assertTrue(flow.stop.isEnabled())
             self.assertFalse(flow.input_panel.isEnabled())
             with patch("flow_workspace.stop_flow_case"):

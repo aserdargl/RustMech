@@ -16,6 +16,7 @@ import sys
 import traceback
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, replace
+from functools import partial
 from pathlib import Path
 from queue import Empty, SimpleQueue
 from threading import Event
@@ -61,6 +62,7 @@ from damask_fft import (
     COMPONENTS, MIN_GRID, DamaskAnalysisProcess, fft_dimensions, sample_periodic_cell,
     validate_periodic_fft,
 )
+from file_dialog import ANALYSIS_RESULTS_FOLDERS, choose_analysis_results_folder
 from studio_style import (ActionFlowLayout, CompactDoubleSpinBox, CONTROL_HEIGHT, STUDIO_STYLESHEET,
                           SidebarGroupBox, configure_form, field_label, mesh_precision_stepper,
                           stepper_with_unit)
@@ -1852,8 +1854,10 @@ class RustMechDialog(QDialog):
             remote_folders = {Path(record["local_directory"]) for _, record in records
                               if record.get("state") == "downloaded" and isinstance(record.get("local_directory"), str)
                               and record["local_directory"]}
+            analysis_folders = [Path(folder) for folder in preferences.value(ANALYSIS_RESULTS_FOLDERS, [], type=list)]
             results = discover_results(ROOT, results_directory().resolve(), batch_roots=batch_roots,
-                                       esen_root=esen_root, remote_folders=remote_folders)
+                                       esen_root=esen_root, remote_folders=remote_folders,
+                                       analysis_folders=analysis_folders)
             dialog = ResultHistoryDialog(results, self._open_saved_result, self)
             self.language_manager.localize_tree(dialog)
             dialog.finished.connect(lambda _: setattr(self, "result_history", None))
@@ -3267,8 +3271,10 @@ class RustMechDialog(QDialog):
                 requested = getattr(self, '_analysis_after_mesh', None)
                 if requested is not None and preview.mesh is not None:
                     self._analysis_after_mesh = None
-                    if self.collect() == requested and not self.has_pending_geometry():
-                        self.apply()
+                    requested_settings, folder = requested
+                    if (self.collect() == requested_settings and not self.has_pending_geometry()
+                            and self.apply_button.isEnabled()):
+                        self._launch_mechanical_analysis(requested_settings, folder)
         except Exception as exc:
             self._analysis_after_mesh = None
             if self.worker_key == key:
@@ -3693,7 +3699,6 @@ class RustMechDialog(QDialog):
         detach_requested = None
         if self.remote_controller.requested:
             try:
-                from functools import partial
                 from truba_remote import run_remote_surface
                 context,auth = self.remote_controller.require("mesh")
                 detach_requested = Event()
@@ -3781,19 +3786,26 @@ class RustMechDialog(QDialog):
         self.refresh_validity()
         if not self.apply_button.isEnabled():
             return
+        remote = self.remote_controller.requested
+        folder = choose_analysis_results_folder(self)
+        if folder is None or remote != self.remote_controller.requested:
+            return
         if self.setup_tabs.currentIndex() == self._fft_method_index:
-            self._start_fft(self._fft_settings(settings))
+            self._start_fft(self._fft_settings(settings), folder)
             return
         if self.setup_tabs.currentIndex() == self._peridynamic_method_index:
-            self._start_peridynamic_compression()
+            self._start_peridynamic_compression(folder)
             return
-        if not self.remote_controller.requested and self.preview.mesh is None:
-            self._analysis_after_mesh = settings
+        if not remote and self.preview.mesh is None:
+            self._analysis_after_mesh = settings, folder
             self._mesh_requested = True
             self.failed_key = None
             self.start_preview()
             self.refresh_validity()
             return
+        self._launch_mechanical_analysis(settings, folder)
+
+    def _launch_mechanical_analysis(self, settings, folder):
         try:
             save_settings(settings)
         except (OSError, ValueError) as exc:
@@ -3807,10 +3819,14 @@ class RustMechDialog(QDialog):
                 source = ""
                 if preview is not None and preview.mesh is not None and preview.key == preview_key(settings):
                     source = getattr(preview, "remote_source", "")
-                self.analysis_job = AnalysisProcess(run_remote_mechanics,settings,context,source,remote_auth=auth)
+                self.analysis_job = AnalysisProcess(
+                    run_remote_mechanics, settings, context, source, remote_auth=auth,
+                    remote_options={"directory": folder / "TRUBA"},
+                )
                 self.truba_session.submitting = True
             else:
-                self.analysis_job = AnalysisProcess(run_single_analysis, settings, self.preview.mesh)
+                target = partial(run_single_analysis, result_folder=folder)
+                self.analysis_job = AnalysisProcess(target, settings, self.preview.mesh)
         except Exception as exc:
             QMessageBox.critical(self, "Cannot start analysis", str(exc))
             return
@@ -3821,7 +3837,7 @@ class RustMechDialog(QDialog):
         self._update_status_visuals("busy", "● ANALYSING", False)
         self.analysis_poll.start()
 
-    def _start_fft(self, settings):
+    def _start_fft(self, settings, folder):
         remote = self.remote_controller.requested
         distribution = self.fft_distribution.text().strip()
         if not remote and os.name == "nt" and not distribution:
@@ -3833,10 +3849,13 @@ class RustMechDialog(QDialog):
                 from truba_remote import submit_remote_analysis
                 context, auth = self.remote_controller.require_analysis("damask")
                 request = dict(operation="fft_solve", settings=asdict(settings), grid=grid, void_ratio=void_ratio)
-                self.analysis_job = AnalysisProcess(submit_remote_analysis, request, context, remote_auth=auth)
+                self.analysis_job = AnalysisProcess(
+                    submit_remote_analysis, request, context, remote_auth=auth,
+                    remote_options={"directory": folder / "TRUBA"},
+                )
                 self.truba_session.submitting = True
             else:
-                self.analysis_job = DamaskAnalysisProcess(settings, grid, void_ratio, distribution)
+                self.analysis_job = DamaskAnalysisProcess(settings, grid, void_ratio, distribution, folder=folder)
         except (OSError, ValueError, RuntimeError) as exc:
             self.status.setText(str(exc))
             self._update_status_visuals("error", "● FAILED", False)
@@ -3860,7 +3879,7 @@ class RustMechDialog(QDialog):
         preferences.setValue("fft/distribution", self.fft_distribution.text())
         preferences.sync()
 
-    def _start_peridynamic_compression(self):
+    def _start_peridynamic_compression(self, folder):
         settings, options = self.peridynamic_settings.inputs()
         try:
             if self.remote_controller.requested:
@@ -3868,10 +3887,13 @@ class RustMechDialog(QDialog):
 
                 context, auth = self.remote_controller.require_analysis("peridynamics")
                 request = dict(operation="peridynamic_solve", settings=asdict(settings), options=asdict(options))
-                self.analysis_job = AnalysisProcess(submit_remote_analysis, request, context, remote_auth=auth)
+                self.analysis_job = AnalysisProcess(
+                    submit_remote_analysis, request, context, remote_auth=auth,
+                    remote_options={"directory": folder / "TRUBA"},
+                )
                 self.truba_session.submitting = True
             else:
-                self.analysis_job = AnalysisProcess(run_local_compression, settings, options)
+                self.analysis_job = AnalysisProcess(run_local_compression, settings, options, folder)
         except (OSError, ValueError, RuntimeError) as error:
             self.status.setText(str(error))
             self._update_status_visuals("error", "● FAILED", False)
@@ -3928,11 +3950,11 @@ class RustMechDialog(QDialog):
         if (not self._result_preview_is_historical and self._result_preview_folder is not None
                 and (self._result_preview_folder / "deformed_shape.vtu").is_file()):
             return self._result_preview_folder.parent
-        candidates = list((ROOT / "HumanResults").glob("Run_*"))
+        candidates = sorted((ROOT / "HumanResults").glob("Run_*"), reverse=True)
         if self._persist_solver_profiles:
             saved = self.solver_profile_store.settings.value("mechanical/latestResultFolder", "", type=str)
-            candidates.extend(Path(path) for path in (saved, self._latest_kratos_results) if path)
-        for folder in sorted(set(candidates), key=lambda path: path.name, reverse=True):
+            candidates = [Path(path) for path in (saved, self._latest_kratos_results) if path] + candidates
+        for folder in dict.fromkeys(candidates):
             if not (folder / "03_Results" / "deformed_shape.vtu").is_file():
                 continue
             try:

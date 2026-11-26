@@ -1,6 +1,7 @@
 """Stop actions cancel live jobs without accepting/closing the workspace."""
 from types import SimpleNamespace
 import unittest
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from PySide6.QtTest import QSignalSpy
@@ -16,6 +17,9 @@ class ForcedStopUiTests(unittest.TestCase):
         cls.app = QApplication.instance() or QApplication([])
 
     def setUp(self):
+        picker = patch("nonlinear_compression.choose_analysis_results_folder", return_value=Path("Selected results"))
+        self.pick_results = picker.start()
+        self.addCleanup(picker.stop)
         with patch.object(RustMechDialog, "start_preview", lambda self: None), patch(
             "nonlinear_compression.create_preview_viewport",
             side_effect=lambda parent, **kwargs: MagicMock(interactor=QWidget(parent)),
@@ -90,6 +94,21 @@ class ForcedStopUiTests(unittest.TestCase):
         dialog.operation_progress.refresh()
         self.assertFalse(dialog.operation_progress.isHidden())
         dialog.analysis_job = None
+        dialog.preview = None
+
+    def test_cancel_folder_picker_does_not_start_meshing_or_analysis(self):
+        dialog = self.dialog
+        dialog.preview = SimpleNamespace(mesh=None)
+        self.pick_results.return_value = None
+        with patch.object(dialog, "refresh_validity"), patch.object(dialog, "start_preview") as mesh, patch(
+            "nonlinear_compression.AnalysisProcess"
+        ) as start:
+            dialog.apply_button.setEnabled(True)
+            dialog.apply()
+        self.pick_results.assert_called_once_with(dialog)
+        mesh.assert_not_called()
+        start.assert_not_called()
+        self.assertIsNone(dialog._analysis_after_mesh)
         dialog.preview = None
 
     def test_local_progress_hides_after_success_or_failure(self):

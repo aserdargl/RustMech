@@ -33,3 +33,21 @@ def test_discovery_reads_saved_formats_and_sorts_by_modified_date(tmp_path):
         (batch.parent, "Mechanic"),
     ]
     assert results[2].solver == "kratos"
+
+
+def test_history_finds_named_local_and_truba_folders(tmp_path):
+    project = tmp_path / "project"
+    local = tmp_path / "Local compression"
+    remote = tmp_path / "TRUBA compression"
+    remote_job = remote / "TRUBA"
+    remote_output = remote_job / "output" / "HumanResults" / "Run_1"
+    local.mkdir()
+    remote_output.mkdir(parents=True)
+    for folder in (local, remote_output):
+        (folder / "summary.json").write_text('{"status": "completed"}', encoding="utf-8")
+    (remote_job / "output" / "result.json").write_text('{"operation": "mechanical"}', encoding="utf-8")
+
+    results = discover_results(project, project / "DoEResults", remote_folders=(remote_job,),
+                               analysis_folders=(local, remote, tmp_path / "Missing"))
+
+    assert {item.path: item.name for item in results} == {local: local.name, remote_output: remote.name}

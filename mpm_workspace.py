@@ -1,10 +1,8 @@
 """MPM analysis setup and force–displacement results in the main workspace."""
 
 from dataclasses import asdict
-from datetime import datetime
 import json
 from pathlib import Path
-from uuid import uuid4
 
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
@@ -14,7 +12,7 @@ from PySide6.QtWidgets import (QFormLayout, QGroupBox, QLabel, QPushButton, QScr
                                QSplitter, QVBoxLayout, QWidget)
 
 from analysis_process import AnalysisProcess
-from file_dialog import QFileDialog
+from file_dialog import QFileDialog, choose_analysis_results_folder
 from local_kratos import MPM_INSTALL_REQUIRED, install_local_kratos, local_mpm_python
 from model import ROOT
 from mpm_analysis import MPMSettings, SUMMARY_NAME, read_mpm_result, run_local_mpm
@@ -225,16 +223,21 @@ class MPMWorkspace(QWidget):
             geometry, settings = self.geometry_provider(), self.collect()
             settings.validate(geometry)
             controller = self.remote_controller
-            if controller is not None and controller.requested:
+            remote = controller is not None and controller.requested
+            if not remote and local_mpm_python() is None:
+                raise RuntimeError(MPM_INSTALL_REQUIRED)
+            directory = choose_analysis_results_folder(self)
+            if directory is None:
+                return
+            if remote:
                 context, auth = controller.require_analysis('mpm')
                 request = dict(operation='mpm_solve', settings=asdict(geometry), mpm=asdict(settings))
-                job = AnalysisProcess(run_remote_operation, request, context, remote_auth=auth)
+                job = AnalysisProcess(
+                    run_remote_operation, request, context, remote_auth=auth,
+                    remote_options={"directory": directory / "TRUBA"},
+                )
                 self._track(job, 'Submitting MPM to TRUBA…')
             else:
-                if local_mpm_python() is None:
-                    raise RuntimeError(MPM_INSTALL_REQUIRED)
-                folder = datetime.now().strftime('MPM_%Y%m%d_%H%M%S_') + uuid4().hex[:8]
-                directory = ROOT / 'results' / folder
                 job = AnalysisProcess(run_local_mpm, geometry, settings, str(directory))
                 self._track(job, 'Preparing MPM compression…')
         except (RuntimeError, OSError, ValueError) as error:

@@ -203,9 +203,12 @@ class LanguageTests(unittest.TestCase):
             self.assertEqual(window.sidebar_toggle.accessibleName(), fft.text())
             assert_toolbar_layout()
             self.assertTrue(window.apply_button.isEnabled())
-            with patch.object(window, '_start_fft') as start_fft:
+            folder = Path("Named FFT results")
+            with patch.object(window, '_start_fft') as start_fft, patch(
+                "nonlinear_compression.choose_analysis_results_folder", return_value=folder
+            ):
                 window.apply_button.click()
-                start_fft.assert_called_once_with(window._fft_settings(before))
+                start_fft.assert_called_once_with(window._fft_settings(before), folder)
             panel.show()
             self.app.processEvents()
             self.assertEqual(window.apply_button.text(), 'Analizi çalıştır')

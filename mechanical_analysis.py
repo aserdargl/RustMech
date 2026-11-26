@@ -23,24 +23,22 @@ class RunPaths:
     raw: Path
 
     @classmethod
-    def create(cls, offline: bool = False, output_directory=None, *, result_root=None) -> RunPaths:
-        stamp = datetime.now().astimezone().strftime("%Y%m%d_%H%M%S_%f")
-        tag = ("OfflineCheck_" if offline else "Run_") + stamp
-        root = ROOT if result_root is None else Path(result_root)
-        paths = (cls(Path(output_directory) / tag, Path(output_directory) / tag / "Raw")
-                 if output_directory else cls(root / "HumanResults" / tag, root / "results" / tag))
-        for path in [
-            paths.raw,
-            *(
-                paths.human / name
-                for name in (
-                    "01_Geometry",
-                    "02_MeshQuality",
-                    "03_Results",
-                    "04_Graphs",
-                )
-            ),
-        ]:
+    def create(cls, offline: bool = False, output_directory=None, *, result_root=None, result_folder=None) -> RunPaths:
+        if result_folder is not None:
+            human = Path(result_folder)
+            paths = cls(human, human / "Raw")
+        else:
+            stamp = datetime.now().astimezone().strftime("%Y%m%d_%H%M%S_%f")
+            tag = ("OfflineCheck_" if offline else "Run_") + stamp
+            root = ROOT if result_root is None else Path(result_root)
+            if output_directory:
+                human = Path(output_directory) / tag
+                paths = cls(human, human / "Raw")
+            else:
+                paths = cls(root / "HumanResults" / tag, root / "results" / tag)
+        for path in (paths.raw, *(paths.human / name for name in (
+            "01_Geometry", "02_MeshQuality", "03_Results", "04_Graphs",
+        ))):
             path.mkdir(parents=True, exist_ok=False)
         return paths
 
@@ -53,6 +51,7 @@ def run_analysis(
     output_directory=None,
     *,
     result_root=None,
+    result_folder=None,
 ) -> Path:
     total_stages = 6
     report_analysis_step("Validating analysis settings and mesh…", 0, total_stages)
@@ -60,7 +59,7 @@ def run_analysis(
     errors = backend.capabilities.validate(settings) + mesh.solve_errors
     if errors:
         raise ValueError("\n".join(errors))
-    paths = RunPaths.create(output_directory=output_directory, result_root=result_root)
+    paths = RunPaths.create(output_directory=output_directory, result_root=result_root, result_folder=result_folder)
     report = {
         "status": "preparing",
         "licensed_solve_executed": False,

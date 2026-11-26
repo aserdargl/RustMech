@@ -865,9 +865,9 @@ submit_remote_analysis.remote_job_target = True
 submit_remote_analysis.remote_submit_target = True
 
 
-def run_remote_mechanics(settings,context,mesh_source="",remote_auth=None,job_marker=None):
+def run_remote_mechanics(settings, context, mesh_source="", remote_auth=None, job_marker=None, *, directory=None):
     request = dict(operation="mechanical", settings=asdict(settings), mesh_source=mesh_source)
-    return submit_remote_analysis(request, context, remote_auth, job_marker)
+    return submit_remote_analysis(request, context, remote_auth, job_marker, directory=directory)
 run_remote_mechanics.remote_job_target = True
 run_remote_mechanics.remote_submit_target = True
 

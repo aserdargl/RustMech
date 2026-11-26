@@ -4,6 +4,7 @@ import os
 import re
 import sys
 from ctypes import wintypes
+from pathlib import Path
 
 from PySide6.QtCore import QDir, QEvent, QFileInfo, QObject, QProcess, QSettings, Qt, QUrl
 from PySide6.QtGui import QDesktopServices
@@ -27,6 +28,12 @@ FAPPCOMMAND_MOUSE = 0x8000
 FAPPCOMMAND_MASK = 0xF000
 # XBUTTON1/2 and APPCOMMAND_BROWSER_BACKWARD/FORWARD use the same IDs.
 WINDOWS_HISTORY_BUTTONS = {1: Qt.MouseButton.BackButton, 2: Qt.MouseButton.ForwardButton}
+ANALYSIS_RESULTS_FOLDERS = "analysisResults/folders"
+
+
+def _dialog_settings():
+    store = getattr(QApplication.instance(), "_rustmech_window_state", None)
+    return store.settings if store is not None else QSettings("RustMech", "RustMech")
 
 
 def _style_dialog_buttons(box):
@@ -246,9 +253,7 @@ class QFileDialog(QtFileDialog):
 
     @classmethod
     def _choose(cls, parent, title, directory, filters, mode, *, save=False, default_suffix=""):
-        app = QApplication.instance()
-        store = getattr(app, "_rustmech_window_state", None)
-        settings = store.settings if store is not None else QSettings("RustMech", "RustMech")
+        settings = _dialog_settings()
         owner = type(parent).__name__ if parent is not None else "default"
         action = "save" if save else "open"
         key = f"fileDialogs/{owner}/{action}/{mode.name}/{title or 'default'}/directory"
@@ -314,6 +319,31 @@ class QFileDialog(QtFileDialog):
     def getExistingDirectory(cls, parent=None, caption="", dir="", *, filter=""):
         folders, _ = cls._choose(parent, caption, dir, filter, cls.FileMode.Directory)
         return folders[0] if folders else ""
+
+
+def choose_analysis_results_folder(parent):
+    from ui_language import translate
+
+    title = "Choose where to save analysis results"
+    directory = ""
+    while selected := QFileDialog.getExistingDirectory(parent, title, directory):
+        folder = Path(selected)
+        try:
+            empty = next(folder.iterdir(), None) is None
+        except OSError as error:
+            message = str(error)
+        else:
+            if empty:
+                settings = _dialog_settings()
+                folders = settings.value(ANALYSIS_RESULTS_FOLDERS, [], type=list)
+                if str(folder) not in folders:
+                    settings.setValue(ANALYSIS_RESULTS_FOLDERS, [*folders, str(folder)])
+                    settings.sync()
+                return folder
+            message = translate("Select an empty folder or create a new folder for this analysis.")
+        QMessageBox.warning(parent, translate(title), message)
+        directory = selected
+    return None
 
 
 def install_file_dialogs(app):

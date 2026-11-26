@@ -66,7 +66,10 @@ class ThermalWorkspaceTests(unittest.TestCase):
         for button in thermal.findChildren(QPushButton):
             self.assertFalse(button.autoDefault())
             self.assertFalse(button.isDefault())
-        with patch("thermal_workspace.AnalysisProcess") as constructor:
+        folder = Path(self.temp.name) / "Thermal results"
+        with patch("thermal_workspace.AnalysisProcess") as constructor, patch(
+            "thermal_workspace.choose_analysis_results_folder", return_value=folder
+        ):
             control = thermal.thermal_controls["inlet_temperature_c"]
             control.setFocus()
             control.lineEdit().selectAll()
@@ -79,6 +82,7 @@ class ThermalWorkspaceTests(unittest.TestCase):
             self.assertIsNone(dialog.sync_window)
             thermal.buttons[1].click()
             constructor.assert_called_once()
+            self.assertEqual(constructor.call_args.args[-1], str(folder))
             self.assertFalse(thermal.thermal_panel.isEnabled())
             with patch("flow_workspace.stop_flow_case"): thermal.stop.click()
             constructor.return_value.force_stop.assert_called_once()

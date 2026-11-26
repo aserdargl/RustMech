@@ -27,10 +27,13 @@ class SurfacePreviewUITests(unittest.TestCase):
         cls.app = QApplication.instance() or QApplication([])
 
     def setUp(self):
+        self.result_folder = Path("Named results")
+        self.pick_results = MagicMock(return_value=self.result_folder)
         self.patches = [
             patch('window_state.install_window_state'),
             patch('nonlinear_compression.create_preview_viewport', side_effect=lambda parent, **kw: MagicMock(interactor=QWidget(parent))),
             patch.object(RustMechDialog, 'start_preview', lambda self: None),
+            patch('nonlinear_compression.choose_analysis_results_folder', self.pick_results),
         ]
         for item in self.patches:
             item.start()
@@ -366,7 +369,7 @@ class SurfacePreviewUITests(unittest.TestCase):
         with patch('nonlinear_compression.AnalysisProcess') as process, patch('nonlinear_compression.save_settings'):
             self.window.apply()
             process.assert_not_called()
-            self.assertEqual(self.window._analysis_after_mesh, self.settings)
+            self.assertEqual(self.window._analysis_after_mesh, (self.settings, self.result_folder))
             full = build_preview(self.settings, self.window.preview, include_mesh=True)
             self.assertFalse(full.mesh.solve_errors)
             future = Future()
@@ -376,6 +379,8 @@ class SurfacePreviewUITests(unittest.TestCase):
             self.window.poll_preview()
             process.assert_called_once()
             self.assertIs(process.call_args.args[2], full.mesh)
+            self.assertEqual(process.call_args.args[0].keywords, {"result_folder": self.result_folder})
+            self.pick_results.assert_called_once_with(self.window)
 
     def test_editing_settings_or_cancelling_during_meshing_cancels_pending_solve(self):
         with patch('nonlinear_compression.AnalysisProcess') as process:

@@ -135,10 +135,13 @@ def test_mpm_workspace_submits_via_truba_adapter(tmp_path):
     remote = Mock(requested=True)
     remote.require_analysis.return_value = 'allocation', 'authentication'
     workspace.remote_controller = remote
-    with patch('mpm_workspace.AnalysisProcess') as start:
+    with patch('mpm_workspace.AnalysisProcess') as start, patch(
+        'mpm_workspace.choose_analysis_results_folder', return_value=tmp_path / 'MPM results'
+    ):
         workspace.run()
         start.assert_called_once_with(run_remote_operation, {
             'operation': 'mpm_solve', 'settings': asdict(GEOMETRY), 'mpm': asdict(MPMSettings()),
-        }, 'allocation', remote_auth='authentication')
+        }, 'allocation', remote_auth='authentication',
+            remote_options={'directory': tmp_path / 'MPM results' / 'TRUBA'})
         remote.require_analysis.assert_called_once_with('mpm')
     workspace.dispose()

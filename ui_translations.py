@@ -837,6 +837,8 @@ View|Görünüm
 Reset view|Görünümü sıfırla
 Update preview|Önizlemeyi güncelle
 Run Analysis|Analizi çalıştır
+Choose where to save analysis results|Analiz sonuçlarının kaydedileceği klasörü seçin
+Select an empty folder or create a new folder for this analysis.|Bu analiz için boş bir klasör seçin veya yeni bir klasör oluşturun.
 Run analysis queue|Analiz kuyruğunu çalıştır
 Forced Stop|Zorla durdur
 Cancel meshing|Ağı iptal et

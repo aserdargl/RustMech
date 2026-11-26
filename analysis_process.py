@@ -171,11 +171,12 @@ class AnalysisProcess:
         self._scratch.cleanup()
 
 
-def run_single_analysis(settings, mesh, remote_auth=None, job_marker=None):
+def run_single_analysis(settings, mesh, remote_auth=None, job_marker=None, *, result_folder=None):
     from mechanical_analysis import run_analysis
     from solver_api import create_solver_backend
 
-    return str(run_analysis(settings, mesh, create_solver_backend(settings.solver_backend,remote_auth,job_marker)))
+    backend = create_solver_backend(settings.solver_backend, remote_auth, job_marker)
+    return str(run_analysis(settings, mesh, backend, result_folder=result_folder))
 
 
 def run_resume_analysis(record_path,remote_auth=None,job_marker=None):

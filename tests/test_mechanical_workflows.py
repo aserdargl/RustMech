@@ -109,7 +109,8 @@ def specimen(solver):
         ("solver interrupted", 0.0, "partial_solution"),
     ],
 )
-def test_local_analysis_reports_supplied_mesh(monkeypatch, tmp_path, error, imbalance, status):
+@pytest.mark.parametrize("custom_folder", [False, True])
+def test_local_analysis_reports_supplied_mesh(monkeypatch, tmp_path, error, imbalance, status, custom_folder):
     settings = specimen("ansys_mapdl")
     mesh = generate_volume_mesh(settings)
     backend = MechanicalBackend(settings, error=error, force_imbalance=imbalance)
@@ -118,15 +119,26 @@ def test_local_analysis_reports_supplied_mesh(monkeypatch, tmp_path, error, imba
     # Keep numerical and PNG graph output real without requiring an OpenGL window.
     monkeypatch.setattr("mechanical_results.save_image", lambda *args, **kwargs: None)
 
+    selected = tmp_path / "User named results" if custom_folder else None
+    if selected is not None:
+        selected.mkdir()
     if error:
         with pytest.raises(RuntimeError, match="partial results are labelled"):
-            run_single_analysis(settings, mesh)
-        folder, = (tmp_path / "HumanResults").iterdir()
+            run_single_analysis(settings, mesh, result_folder=selected)
+        if selected is None:
+            folder, = (tmp_path / "HumanResults").iterdir()
+        else:
+            folder = selected
     else:
-        folder = Path(run_single_analysis(settings, mesh))
+        folder = Path(run_single_analysis(settings, mesh, result_folder=selected))
 
     assert backend.request.mesh is mesh
-    assert backend.request.run_directory == tmp_path / "results" / folder.name
+    if selected is not None:
+        assert folder == selected
+        assert backend.request.run_directory == selected / "Raw"
+        assert not (tmp_path / "HumanResults").exists()
+    else:
+        assert backend.request.run_directory == tmp_path / "results" / folder.name
     summary = assert_report(folder, settings, status, images=True)
     assert summary["reactions"]["force_balance_warning"] is bool(imbalance)
     if error:

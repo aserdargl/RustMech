@@ -28,6 +28,11 @@ class RemoteModeUiTests(unittest.TestCase):
         session_patch.start()
         self.addCleanup(session_patch.stop)
         self.temp=tempfile.TemporaryDirectory()
+        self.result_folder = Path(self.temp.name) / "Named results"
+        self.result_folder.mkdir()
+        picker = patch("file_dialog.QFileDialog.getExistingDirectory", return_value=str(self.result_folder))
+        picker.start()
+        self.addCleanup(picker.stop)
         for module in ('truba_session', 'truba_jobs', 'truba_remote', 'truba_sync'):
             state_patch = patch(module + '.state_directory', return_value=Path(self.temp.name) / 'truba')
             state_patch.start()
@@ -239,6 +244,7 @@ class RemoteModeUiTests(unittest.TestCase):
                 self.assertIs(start.call_args.args[0], run_remote_mechanics)
                 self.assertEqual(start.call_args.args[2].session_id, "")
                 self.assertIs(start.call_args.kwargs["remote_auth"], auth)
+                self.assertEqual(start.call_args.kwargs["remote_options"]["directory"], self.result_folder / "TRUBA")
                 self.assertIsNone(window.sync_window)
                 allocate.assert_not_called()
             finally:
@@ -261,6 +267,7 @@ class RemoteModeUiTests(unittest.TestCase):
                     self.assertIs(start.call_args.args[0], run_remote_operation)
                     self.assertEqual(start.call_args.args[1]["operation"], operation)
                     self.assertEqual(start.call_args.args[2].session_id, "")
+                    self.assertEqual(start.call_args.kwargs["remote_options"]["directory"], self.result_folder / "TRUBA")
                     self.assertIsNone(window.sync_window)
                     workspace.cancel()
 
@@ -365,7 +372,8 @@ class RemoteModeUiTests(unittest.TestCase):
             try:
                 window.apply()
                 args, kwargs = start.call_args
-                self.assertEqual(args[0], run_single_analysis)
+                self.assertIs(args[0].func, run_single_analysis)
+                self.assertEqual(args[0].keywords, {"result_folder": self.result_folder})
                 self.assertEqual(args[1].solver_backend, "kratos")
                 self.assertIs(args[2], window.preview.mesh)
                 self.assertEqual(kwargs, {})
@@ -396,6 +404,7 @@ class RemoteModeUiTests(unittest.TestCase):
                 target, request, _ = process.call_args.args
                 self.assertIs(target, submit_remote_analysis)
                 self.assertEqual((request['operation'], request['grid']), ('fft_solve', 128))
+                self.assertEqual(process.call_args.kwargs["remote_options"]["directory"], self.result_folder / "TRUBA")
                 self.assertEqual(request['settings']['young_modulus'], 125000)
         finally:
             window.analysis_job = None
