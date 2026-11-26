@@ -498,6 +498,7 @@ Geometry|Geometri
 Structure|Yapı
 Structure Family|Yapı ailesi
 Structure family|Yapı ailesi
+Set the LHS sample count to at least the number of selected structure families.|LHS örnek sayısı en az seçilen yapı ailesi sayısı kadar olmalı.
 Structure type|Yapı türü
 Type|Tür
 Structure / Dimensions|Yapı / Ölçüler
@@ -1605,6 +1606,7 @@ TURKISH.update({
 
 TEMPLATES = {
     '{count} experiments ready.': '{count} deney hazır.',
+    'Select a structure type for {family}.': '{family} için bir yapı türü seçin.',
     'Running experiment {index} / {total}': 'Deney çalıştırılıyor {index} / {total}',
     '{count} experiments finished · {failed} failed.': '{count} deney tamamlandı · {failed} hata.',
     'Permanently delete {count} selected files from TRUBA?':

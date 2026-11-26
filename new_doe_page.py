@@ -8,7 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
 
-from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt, QTimer, QUrl
+from PySide6.QtCore import QAbstractTableModel, QModelIndex, QSignalBlocker, Qt, QTimer, QUrl
 from PySide6.QtGui import QDesktopServices, QIcon
 from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDialog, QDoubleSpinBox,
                                QFormLayout, QHeaderView,
@@ -20,8 +20,9 @@ from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDialog,
 from material_catalog import builtin_materials
 from material_library import MaterialCard
 from doe_planner import DoENavigation
-from new_doe_operations import (MAX_ROWS, OPERATIONS, explicit_numbers, launch, lhs_matrix, matrix, matrix_request,
-                                parameters, snapshot, structure_choices, validate)
+from new_doe_operations import (FAMILY_PATH, MAX_ROWS, OPERATIONS, TYPE_PATH, explicit_numbers, launch, lhs_matrix,
+                                matrix, matrix_request, parameters, snapshot, structure_choices, structure_families,
+                                structure_levels, validate)
 from new_doe_report import (LEARNING_CSV_NAME, LEARNING_RUN_PREFIX, experiment_name, write_doe_report,
                             write_learning_csv)
 from structure_library import ALL_STRUCTURES_BY_FAMILY, STRUCTURE_FAMILIES, resolve_family_and_name
@@ -39,7 +40,7 @@ DEFAULT_SETTINGS_WIDTH = 350
 CELL_HORIZONTAL_ALLOWANCE = 7 + 2 * SETTINGS_PADDING
 CELL_VERTICAL_ALLOWANCE = 3 + 2 * SETTINGS_PADDING
 LABELS = {"grid": "Voxels per axis", "void_ratio": "Void / solid stiffness", "distribution": "WSL distribution",
-          "structure_name": "Type", "tpms_morphology": "Morphology",
+          "structure_family": "Structure family", "structure_name": "Type", "tpms_morphology": "Morphology",
           "young_modulus": "Young’s modulus (MPa)", "cell_size": "Cell size (mm)",
           "solid_fraction": "Solid fraction (%)", "size_x": "Outer X (mm)", "size_y": "Outer Y (mm)",
           "size": "Outer Z (mm)", "material_card": "Material card",
@@ -191,7 +192,9 @@ class Factor:
         self.applicable = True
         self.choices = []
         self.material_card = path in MATERIAL_CARD_FIELDS
-        if key == "structure_name":
+        if path == FAMILY_PATH:
+            self.choices = [(STRUCTURE_FAMILIES[family], family) for family in structure_families(op)]
+        elif path == TYPE_PATH:
             self.choices = structure_choices(op)
         elif isinstance(source, QComboBox):
             self.choices = [(source.itemText(i), source.itemData(i)) for i in range(source.count())
@@ -209,6 +212,8 @@ class Factor:
         self.optional_number = value is None and key in ("minimum_substeps", "maximum_substeps", "stl_resolution")
         self.sampling = sampling
         self.can_vary = not sampling or self.numeric or self.optional_number
+        if path == FAMILY_PATH:
+            self.can_vary = len(self.choices) > 1
         if self.can_vary:
             table.setCellWidget(row, 0, self.variable)
         else:
@@ -229,7 +234,8 @@ class Factor:
                 action.setChecked(data == value)
                 action.setData(data)
                 action.toggled.connect(changed)
-            self.fixed.setCurrentIndex(self.fixed.findData(value))
+            index = self.fixed.findData(value)
+            self.fixed.setCurrentIndex(max(0, index) if path == FAMILY_PATH else index)
             self.fixed.currentIndexChanged.connect(changed)
         elif self.numeric or self.optional_number:
             initial = value if self.numeric else (0.1 if key == "stl_resolution" else 1)
@@ -302,10 +308,6 @@ class Factor:
             controls.addWidget(self.selection, alignment=alignment)
         variations.setCellWidget(variation_row, 1, levels)
         variations.setRowHeight(variation_row, height + CELL_VERTICAL_ALLOWANCE)
-        if key == "structure_name":
-            self.add_structure_family(value)
-            table.setItem(row - 1, 1, QTableWidgetItem("Structure Family"))
-            table.setCellWidget(row - 1, 2, self.family)
         table.setCellWidget(row, 2, self.fixed)
         self.toggle(False)
         self.variable.toggled.connect(self.toggle)
@@ -318,8 +320,6 @@ class Factor:
     def toggle(self, enabled):
         self.variations.setRowHidden(self.variation_row, not (enabled and self.applicable))
         self.fixed.setEnabled(not enabled)
-        if self.path == ("settings", "structure_name"):
-            self.family.setEnabled(not enabled)
         if enabled and not self.levels_seeded:
             if self.choices:
                 for action in self.menu.actions():
@@ -337,27 +337,14 @@ class Factor:
     def update_level_entry(self):
         self.level_entry.setCurrentWidget(self.selection if self.mode.currentData() == "list" else self.bounds)
 
-    def add_structure_family(self, value):
-        names = {name for _, name in self.choices}
-        self.family = CompactComboBox()
-        self.family.setAccessibleName("Structure Family")
-        self.fixed.setAccessibleName("Structure type")
-        for family, members in ALL_STRUCTURES_BY_FAMILY.items():
-            if names.intersection(members):
-                self.family.addItem(STRUCTURE_FAMILIES[family], family)
-                if value in members:
-                    self.family.setCurrentIndex(self.family.count() - 1)
-        self.family.currentIndexChanged.connect(self.update_structure_choices)
-        self.update_structure_choices()
-
-    def update_structure_choices(self):
+    def update_structure_choices(self, family):
         previous = self.fixed.currentData()
-        choices = ALL_STRUCTURES_BY_FAMILY[self.family.currentData()]
-        self.fixed.clear()
-        for label, name in self.choices:
-            if name in choices:
-                self.fixed.addItem(label.split(" / ", 1)[-1], name)
-        self.fixed.setCurrentIndex(max(0, self.fixed.findData(previous)))
+        choices = ALL_STRUCTURES_BY_FAMILY[family]
+        with QSignalBlocker(self.fixed):
+            self.fixed.clear()
+            for name in choices:
+                self.fixed.addItem(name, name)
+            self.fixed.setCurrentIndex(max(0, self.fixed.findData(previous)))
 
     def selected_choices(self):
         if self.variable.isChecked():
@@ -392,11 +379,6 @@ class Factor:
                     choices = json.loads(legacy_levels)
                 except ValueError:
                     pass
-            if self.path[-1] == "structure_name":
-                for family, members in ALL_STRUCTURES_BY_FAMILY.items():
-                    if fixed in members and self.family.findData(family) >= 0:
-                        self.family.setCurrentIndex(self.family.findData(family))
-                        break
             index = self.fixed.findData(fixed)
             if index >= 0:
                 self.fixed.setCurrentIndex(index)
@@ -732,7 +714,7 @@ class NewDoePage(QWidget):
         analysis_layout.addWidget(self.inputs, 1)
         self.input_tabs = QTabWidget()
         self.input_tabs.addTab(self.analysis_settings, "Analysis settings")
-        self.variations = self.table(["Parameter", "Min / max" if sampling else "Values"])
+        self.variations = self.table(["Parameter", "Values"])
         self.variations.setAccessibleName("Variable settings")
         self.variations.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         self.input_tabs.addTab(self.variations, "Variable settings")
@@ -1035,27 +1017,44 @@ class NewDoePage(QWidget):
                 table.setColumnWidth(2, COMBO_WIDTH + CELL_HORIZONTAL_ALLOWANCE)
                 body.addWidget(table)
                 if title == "Structure":
-                    members.sort(key=lambda member: member[0] != ("settings", "structure_name"))
-                first_row = int(title == "Structure")
-                table.setRowCount(len(members) + first_row)
-                for row, (path, value) in enumerate(members, first_row):
+                    members.sort(key=lambda member: {FAMILY_PATH: 0, TYPE_PATH: 1}.get(member[0], 2))
+                table.setRowCount(len(members))
+                for row, (path, value) in enumerate(members):
                     factor = Factor(table, row, self.variations, variation_rows[path], path, value,
                                     sources.get(path[-1]), op, self.inputs_changed, sampling=self.sampling)
-                    factor.restore_draft(draft.get("/".join(path)))
+                    state = draft.get("/".join(path))
+                    if path == FAMILY_PATH and state is None:
+                        # Previous drafts stored the family implicitly through the fixed type.
+                        saved = draft.get("/".join(TYPE_PATH), {})
+                        name = saved.get("fixed") if isinstance(saved, dict) else None
+                        if isinstance(name, str):
+                            family, _ = resolve_family_and_name(value, name)
+                            state = {"fixed": family}
+                    if path == TYPE_PATH:
+                        factor.update_structure_choices(factors[FAMILY_PATH].fixed.currentData())
+                    factor.restore_draft(state)
                     factors[path] = factor
                 table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
                 table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
                 self.fit_parameter_table(table)
                 if title == "Structure":
-                    structure = factors["settings", "structure_name"]
+                    family, structure = factors[FAMILY_PATH], factors[TYPE_PATH]
                     geometry = [factors[path] for path in STRUCTURE_FIELD_FAMILIES if path in factors]
-                    structure.fixed.currentIndexChanged.connect(
-                        lambda *_: self.update_structure_fields(structure, geometry))
-                    structure.variable.toggled.connect(
-                        lambda *_: self.update_structure_fields(structure, geometry))
-                    for action in structure.menu.actions():
-                        action.toggled.connect(lambda *_: self.update_structure_fields(structure, geometry))
-                    self.update_structure_fields(structure, geometry)
+
+                    def refresh_structure(*_):
+                        self.update_structure_fields(family, structure, geometry)
+
+                    def change_family(*_):
+                        structure.update_structure_choices(family.fixed.currentData())
+                        refresh_structure()
+
+                    family.fixed.currentIndexChanged.connect(change_family)
+                    structure.fixed.currentIndexChanged.connect(refresh_structure)
+                    for factor in (family, structure):
+                        factor.variable.toggled.connect(refresh_structure)
+                        for action in factor.menu.actions():
+                            action.toggled.connect(refresh_structure)
+                    refresh_structure()
                 preview_group = "Mesh" if title == FFT_GROUP else title
                 if preview_group in PREVIEW_BUTTONS:
                     actions = QHBoxLayout()
@@ -1112,11 +1111,17 @@ class NewDoePage(QWidget):
         height = table.horizontalHeader().sizeHint().height() + table.verticalHeader().length()
         table.setFixedHeight(height + 2 * table.frameWidth())
 
-    def update_structure_fields(self, structure, geometry):
-        names = set(structure.selected_choices())
-        families = {family for family, members in ALL_STRUCTURES_BY_FAMILY.items() if names.intersection(members)}
+    def update_structure_fields(self, family, structure, geometry):
+        vary_family = family.variable.isChecked()
+        vary_type = structure.variable.isChecked()
+        family.fixed.setEnabled(not (vary_family or vary_type))
+        if vary_family:
+            families = set(family.selected_choices())
+        else:
+            names = set(structure.selected_choices())
+            families = {key for key, members in ALL_STRUCTURES_BY_FAMILY.items() if names.intersection(members)}
         if not families:
-            families = {structure.family.currentData()}
+            families = {family.fixed.currentData()}
         for factor in geometry:
             factor.set_applicable(bool(families & STRUCTURE_FIELD_FAMILIES[factor.path]))
         self.fit_parameter_table(structure.table)
@@ -1130,10 +1135,18 @@ class NewDoePage(QWidget):
         dimensions = {}
         varying = False
         try:
-            structure = next(factor for factor in self.factors if factor.path == ("settings", "structure_name"))
-            name = next(iter(structure.selected_choices()), None)
-            family, _ = resolve_family_and_name(structure.family.currentData(), name)
             for factor in self.factors:
+                if factor.path in (FAMILY_PATH, TYPE_PATH):
+                    try:
+                        dimensions[factor.path] = factor.levels_for_matrix()
+                    except ValueError as error:
+                        raise ValueError(f"{factor.label}: {error}") from error
+                    varying |= factor.variable.isChecked()
+            family, name = structure_levels(self.base, dimensions)[0]
+            dimensions[FAMILY_PATH], dimensions[TYPE_PATH] = [family], [name]
+            for factor in self.factors:
+                if factor.path in (FAMILY_PATH, TYPE_PATH):
+                    continue
                 group, key = factor.path[0], factor.path[-1]
                 section = parameter_group(factor.path, op)
                 if group == "settings":
@@ -1157,7 +1170,7 @@ class NewDoePage(QWidget):
                 varying |= factor.variable.isChecked()
             request = next(matrix(self.base, dimensions))
         except (TypeError, ValueError) as error:
-            self.status.setText(str(error))
+            self.status.setText(translate(str(error)))
             return
         for previous in self.findChildren(DoeInputPreview, options=Qt.FindChildOption.FindDirectChildrenOnly):
             if previous.objectName() == ("mesh" if mesh else "structure"):
@@ -1272,7 +1285,7 @@ class NewDoePage(QWidget):
                     raise ValueError(f"Experiment {len(rows) + 1}: {error}") from error
                 rows.append(row)
         except (TypeError, ValueError) as error:
-            self.status.setText(str(error))
+            self.status.setText(translate(str(error)))
             return
         self.rows = rows
         self.sheet.reset(rows, active_factors)

@@ -329,9 +329,13 @@ class NewDoeTests(unittest.TestCase):
         grid.last.setValue(32)
         grid.mode.setCurrentIndex(grid.mode.findData("list"))
         grid.selection.setText("32, 48")
+        family = factor(page, "structure_family")
+        family.fixed.setCurrentIndex(family.fixed.findData("lattice"))
+        family.variable.setChecked(True)
+        for choice in family.menu.actions():
+            choice.setChecked(True)
+        expected_family = family.draft()
         structure = factor(page, "structure_name")
-        structure.family.setCurrentIndex(structure.family.findData("lattice"))
-        self.assertEqual(structure.family.currentData(), "lattice")
         structure.variable.setChecked(True)
         structure.menu.actions()[-1].setChecked(True)
         expected_structure = structure.draft()
@@ -346,6 +350,7 @@ class NewDoeTests(unittest.TestCase):
         self.assertEqual(grid.fixed.value(), 28)
         self.assertEqual((grid.first.value(), grid.last.value()), (20, 32))
         self.assertEqual(grid.levels_for_matrix(), [32, 48])
+        self.assertEqual(factor(page, "structure_family").draft(), expected_family)
         self.assertEqual(factor(page, "structure_name").draft(), expected_structure)
         self.assertEqual(factor(page, "distribution").fixed.text(), "Local Ubuntu")
         page.operation.setCurrentIndex(cfd)
@@ -367,6 +372,7 @@ class NewDoeTests(unittest.TestCase):
             self.assertFalse(page.run.isEnabled())
             page.operation.setCurrentIndex(page.operation.findData("fft_solve"))
             self.assertEqual(factor(page, "grid").levels_for_matrix(), [32, 48])
+            self.assertEqual(factor(page, "structure_family").draft(), expected_family)
         finally:
             reopened.close()
             reopened.dispose()
@@ -387,16 +393,18 @@ class NewDoeTests(unittest.TestCase):
             with self.subTest(sampling=page.sampling):
                 page.operation.setCurrentIndex(page.operation.findData("mechanical"))
                 fields = {factor.path: factor for factor in page.factors}
+                family_picker = fields["settings", "structure_family"]
                 structure = fields["settings", "structure_name"]
                 seed = fields["settings", "random_seed"]
                 morphology = fields["settings", "tpms_morphology"]
                 table = page.sections["Structure"].findChild(QTableWidget)
-                self.assertEqual([table.item(row, 1).text() for row in (0, 1)], ["Structure Family", "Type"])
-                self.assertIs(table.cellWidget(0, 2), structure.family)
+                self.assertEqual([table.item(row, 1).text() for row in (0, 1)], ["Structure family", "Type"])
+                self.assertIs(table.cellWidget(0, 0), family_picker.variable)
+                self.assertIs(table.cellWidget(0, 2), family_picker.fixed)
                 self.assertIs(table.cellWidget(1, 2), structure.fixed)
 
                 def select(family):
-                    structure.family.setCurrentIndex(structure.family.findData(family))
+                    family_picker.fixed.setCurrentIndex(family_picker.fixed.findData(family))
 
                 select("porous")
                 self.assertFalse(table.isRowHidden(seed.row))
@@ -428,7 +436,7 @@ class NewDoeTests(unittest.TestCase):
             page.operation.setCurrentIndex(index)
             self.assertTrue(page.loaded, page.status.text())
             fields = {f.path: f for f in page.factors}
-            structure = fields["settings", "structure_name"]
+            family_picker = fields["settings", "structure_family"].fixed
             axes = [fields["settings", key] for key in ("size_x", "size_y", "size")]
             lengths = (6, 9, 12)
             fields["settings", "cell_size"].fixed.setValue(3)
@@ -436,11 +444,11 @@ class NewDoeTests(unittest.TestCase):
                 fields["options", "resolution"].fixed.setValue(48)
             for axis, length in zip(axes, lengths):
                 axis.fixed.setValue(length)
-            for family in range(structure.family.count()):
-                structure.family.setCurrentIndex(family)
+            for family in range(family_picker.count()):
+                family_picker.setCurrentIndex(family)
                 for direction, axis in enumerate(axes):
                     with self.subTest(operation=page.operation.currentText(),
-                                      family=structure.family.currentText(), axis=axis.label):
+                                      family=family_picker.currentText(), axis=axis.label):
                         axis.variable.setChecked(True)
                         axis.first.setValue(lengths[direction])
                         axis.last.setValue(lengths[direction] + 3)
@@ -450,8 +458,70 @@ class NewDoeTests(unittest.TestCase):
                             expected = list(lengths)
                             expected[direction] += 3 * level
                             self.assertEqual([row["settings"][f.path[-1]] for f in axes], expected)
-                            self.assertEqual(row["settings"]["structure_family"], structure.family.currentData())
+                            self.assertEqual(row["settings"]["structure_family"], family_picker.currentData())
                         axis.variable.setChecked(False)
+
+    def test_doe_combines_only_compatible_structure_families_and_types(self):
+        from structure_library import ALL_STRUCTURES_BY_FAMILY
+
+        page = self.page()
+        fields = {factor.path[-1]: factor for factor in page.factors}
+        family, structure = fields["structure_family"], fields["structure_name"]
+        fixed_type = structure.fixed.currentData()
+        family.variable.setChecked(True)
+        self.assertFalse(page.variations.isRowHidden(family.variation_row))
+        for action in family.menu.actions():
+            action.setChecked(True)
+
+        page.create()
+        self.assertTrue(page.matrix_current, page.status.text())
+        self.assertEqual([(row["settings"]["structure_family"], row["settings"]["structure_name"])
+                          for row in page.rows],
+                         [("tpms", fixed_type), ("lattice", ALL_STRUCTURES_BY_FAMILY["lattice"][0])])
+        self.assertIn(family, page.sheet.columns)
+
+        structure.variable.setChecked(True)
+        names = [*ALL_STRUCTURES_BY_FAMILY["tpms"][:2], ALL_STRUCTURES_BY_FAMILY["lattice"][1]]
+        for action in structure.menu.actions():
+            action.setChecked(action.data() in names)
+        page.create()
+        self.assertTrue(page.matrix_current, page.status.text())
+        self.assertEqual([row["settings"]["structure_name"] for row in page.rows], names)
+        next(action for action in structure.menu.actions() if action.data() == names[-1]).setChecked(False)
+        page.create()
+        self.assertFalse(page.matrix_current)
+        self.assertIn("Truss Lattice", page.status.text())
+
+    def test_learning_balances_structure_families_in_the_lhs_sample_count(self):
+        from collections import Counter
+        from structure_library import ALL_STRUCTURES_BY_FAMILY
+
+        self.window.deep_learning_button.click()
+        page = self.window.doe_studio.learning_doe
+        fields = {factor.path[-1]: factor for factor in page.factors}
+        family = fields["structure_family"]
+        family.variable.setChecked(True)
+        for action in family.menu.actions():
+            action.setChecked(True)
+        page.create()
+        self.assertTrue(page.matrix_current, page.status.text())
+        self.assertEqual(len(page.rows), 2)
+
+        grid = fields["grid"]
+        grid.variable.setChecked(True)
+        grid.first.setValue(16)
+        grid.last.setValue(24)
+        page.lhs_count.setValue(9)
+        page.create()
+        self.assertTrue(page.matrix_current, page.status.text())
+        choices = [(row["settings"]["structure_family"], row["settings"]["structure_name"])
+                   for row in page.rows]
+        self.assertEqual(sorted(Counter(family for family, _ in choices).values()), [4, 5])
+        self.assertTrue(all(name in ALL_STRUCTURES_BY_FAMILY[family] for family, name in choices))
+        self.assertEqual(sorted(row["grid"] for row in page.rows), list(range(16, 25)))
+        rows = page.rows
+        page.create()
+        self.assertEqual(page.rows, rows)
 
     def test_operation_inputs_and_fft_factorial_matrix(self):
         from new_doe_operations import snapshot
@@ -514,12 +584,13 @@ class NewDoeTests(unittest.TestCase):
         self.assertEqual(self.window.property(CAPTION_PROPERTY).height(), 25)
         self.assertEqual(page.window().property(CAPTION_PROPERTY).height(), 25)
         fields = {factor.path[-1]: factor for factor in page.factors}
+        family_picker = fields["structure_family"].fixed
         structure = fields["structure_name"]
         starting_structure = structure.fixed.currentData()
-        structure.family.setCurrentIndex(structure.family.findData("lattice"))
+        family_picker.setCurrentIndex(family_picker.findData("lattice"))
         self.assertNotEqual(structure.fixed.currentData(), starting_structure)
         self.assertEqual(self.window.fft_structure_combo.currentData(), starting_structure)
-        structure.family.setCurrentIndex(structure.family.findData("tpms"))
+        family_picker.setCurrentIndex(family_picker.findData("tpms"))
 
         card = next(entry.card() for entry in builtin_materials() if entry.kind == "solid")
         original = self.window.fft_material_editor.material_settings()

@@ -3,9 +3,10 @@ from dataclasses import asdict
 from itertools import product
 from math import floor, prod
 from pathlib import Path
+from random import Random
 
 from model import GEOMETRY_FIELDS, settings_from_dict
-from structure_library import ALL_STRUCTURES_BY_FAMILY
+from structure_library import ALL_STRUCTURES_BY_FAMILY, STRUCTURE_FAMILIES
 
 OPERATIONS = {
     # Match the main workspace's method menu, then list the flow workspaces.
@@ -17,6 +18,8 @@ OPERATIONS = {
     "Thermal (CHT)": "thermal_solve",
 }
 MAX_ROWS = 10000
+FAMILY_PATH = ("settings", "structure_family")
+TYPE_PATH = ("settings", "structure_name")
 
 
 def snapshot(host, operation):
@@ -50,12 +53,13 @@ def parameters(request):
     if op == "mechanical":
         keys = [key for key in request["settings"] if not key.startswith("truba_")]
     elif op == "fft_solve":
-        keys = ("structure_name", "tpms_morphology", "size", "cell_size", "solid_fraction",
+        keys = ("structure_family", "structure_name", "tpms_morphology", "size", "cell_size", "solid_fraction",
                 "material_name", "material_card", "young_modulus", "poisson_ratio")
     elif op == "peridynamic_solve":
-        keys = ("structure_name", "tpms_morphology", "size", "cell_size", "solid_fraction", "young_modulus")
+        keys = ("structure_family", "structure_name", "tpms_morphology", "size", "cell_size", "solid_fraction",
+                "young_modulus")
     elif op == "mpm_solve":
-        keys = ("structure_name", "tpms_morphology", "size", "cell_size", "solid_fraction")
+        keys = ("structure_family", "structure_name", "tpms_morphology", "size", "cell_size", "solid_fraction")
     for key, value in request.items():
         if key in ("settings", "operation"):
             continue
@@ -74,14 +78,17 @@ def parameters(request):
                     length = geometry.get(axis)
                     yield ("settings", axis), float(geometry["size"] if length is None else length)
                 continue
-        if key != "structure_family":  # The structure selector includes its family.
-            yield ("settings", key), request["settings"][key]
+        yield ("settings", key), request["settings"][key]
+
+
+def structure_families(operation):
+    families = {"fft_solve": ("tpms", "lattice"), "peridynamic_solve": ("tpms",), "mpm_solve": ("tpms",)}
+    return families.get(operation, ALL_STRUCTURES_BY_FAMILY)
 
 
 def structure_choices(operation):
-    families = {"fft_solve": ("tpms", "lattice"), "peridynamic_solve": ("tpms",), "mpm_solve": ("tpms",)}
     return [(f"{family.upper()} / {name}", name)
-            for family in families.get(operation, ALL_STRUCTURES_BY_FAMILY)
+            for family in structure_families(operation)
             for name in ALL_STRUCTURES_BY_FAMILY[family]]
 
 
@@ -99,36 +106,67 @@ def explicit_numbers(text, number_type, minimum, maximum):
     return values
 
 
+def structure_levels(base, dimensions):
+    settings = base["settings"]
+    families = dimensions.get(FAMILY_PATH, [settings["structure_family"]])
+    names = dimensions.get(TYPE_PATH, [settings["structure_name"]])
+    if len(families) == 1:
+        # Existing Type sweeps may span families even without a family sweep.
+        return [(next((family for family, members in ALL_STRUCTURES_BY_FAMILY.items() if name in members),
+                      families[0]), name) for name in names]
+    pairs = []
+    for family in families:
+        members = ALL_STRUCTURES_BY_FAMILY[family]
+        matching = [name for name in names if name in members]
+        if not matching:
+            if len(names) > 1:
+                raise ValueError(f"Select a structure type for {STRUCTURE_FAMILIES[family]}.")
+            matching = [members[0]]
+        pairs.extend((family, name) for name in matching)
+    return pairs
+
+
 def matrix(base, dimensions):
-    if prod(len(values) for values in dimensions.values()) > MAX_ROWS:
+    geometry = structure_levels(base, dimensions)
+    # Keep the structure's position in the existing factorial sample order.
+    paths = [path for path in dimensions if path != FAMILY_PATH]
+    if TYPE_PATH not in paths:
+        paths.append(TYPE_PATH)
+    levels = [geometry if path == TYPE_PATH else dimensions[path] for path in paths]
+    if prod(map(len, levels)) > MAX_ROWS:
         raise ValueError(f"Reduce the number of levels to at most {MAX_ROWS:,} experiments.")
-    for combination in product(*dimensions.values()):
+    for combination in product(*levels):
         # Each row owns its input groups. Material tables inside them are
         # immutable snapshots and can be shared across a large matrix.
         request = {key: value.copy() if isinstance(value, dict) else value
                    for key, value in base.items()}
-        for path, value in zip(dimensions, combination):
-            target = request if len(path) == 1 else request[path[0]]
-            target[path[-1]] = value
-        settings = request["settings"]
-        for family, names in ALL_STRUCTURES_BY_FAMILY.items():
-            if settings["structure_name"] in names:
-                settings["structure_family"] = family
-                break
+        for path, value in zip(paths, combination):
+            if path == TYPE_PATH:
+                request["settings"]["structure_family"], request["settings"]["structure_name"] = value
+            else:
+                target = request if len(path) == 1 else request[path[0]]
+                target[path[-1]] = value
         yield request
 
 
 def lhs_matrix(base, dimensions, count, seed):
-    """Sample numeric ranges together and copy fixed settings into every row."""
+    """Stratify numeric ranges and distribute the selected families across the samples."""
     from doe_studio import _lhs_samples
 
-    varying = {path: values for path, values in dimensions.items() if len(values) == 2}
+    varying = {path: values for path, values in dimensions.items() if len(values) == 2
+               and path not in (FAMILY_PATH, TYPE_PATH)}
     if not varying:
         yield from matrix(base, dimensions)
         return
+    geometry = structure_levels(base, dimensions)
+    if count < len(geometry):
+        raise ValueError("Set the LHS sample count to at least the number of selected structure families.")
+    Random(seed).shuffle(geometry)
     limits = [(low, high + 1 if type(low) is int else high) for low, high in varying.values()]
-    for sample in _lhs_samples(count, limits, seed):
+    for index, sample in enumerate(_lhs_samples(count, limits, seed)):
         levels = dimensions.copy()
+        family, name = geometry[index % len(geometry)]
+        levels[FAMILY_PATH], levels[TYPE_PATH] = [family], [name]
         for (path, (low, high)), value in zip(varying.items(), sample):
             levels[path] = [min(high, floor(value)) if type(low) is int else float(value)]
         yield next(matrix(base, levels))
