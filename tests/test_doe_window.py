@@ -169,8 +169,7 @@ class DoEWindowTests(unittest.TestCase):
         open_plan.setFocus()
         QTest.keyClick(open_plan, Qt.Key.Key_Tab)
         self.assertTrue(save_plan.hasFocus())
-        self.assertEqual(studio.settings_tabs.tabText(0), "DoE")
-        self.assertEqual(studio.settings_tabs.tabText(1), "DeepLearning")
+        self.assertEqual([button.text() for button in buttons], ["DoE", "DeepLearning"])
         self.assertTrue(studio.table.isVisible())
         self.assertEqual(studio.vertical_splitter.handleWidth(), 3)
         footer_corner = save_plan.mapTo(studio, save_plan.rect().bottomRight())
@@ -179,8 +178,8 @@ class DoEWindowTests(unittest.TestCase):
         self.assertEqual(footer_corner.y(), studio.rect().bottom() - margins.bottom())
         studio.table.setFocus()
         QTest.keyClick(studio.table, Qt.Key.Key_Tab, Qt.KeyboardModifier.ControlModifier)
-        self.assertEqual(studio.settings_tabs.currentIndex(), 2)
-        self.assertTrue(buttons[2].isChecked())
+        self.assertIs(studio.settings_tabs.currentWidget(), studio.new_doe)
+        self.assertTrue(buttons[0].isChecked())
         for buttons in studio._action_groups:
             self.assertEqual(len({button.size().width() for button in buttons}), 1)
             for button in buttons:
@@ -430,12 +429,12 @@ class DoEWindowTests(unittest.TestCase):
             entry['factors'] = {key: [*limits, 3] for key, limits in entry['factors'].items()}
         for state in previous_plan['variable_editor'].values():
             state['levels'] = 3
-        for saved_tab, index in ((0, 1), (1, 1), (2, 1), (3, 1), (4, 2)):
+        for saved_tab in range(5):
             with self.subTest(saved_tab=saved_tab):
                 previous_plan['selection']['tab'] = saved_tab
                 path.write_text(json.dumps(previous_plan), encoding='utf-8')
                 restored.open_plan_path(path)
-                self.assertEqual(restored.settings_tabs.currentIndex(), index)
+                self.assertIs(restored.settings_tabs.currentWidget(), restored.planner.learning_page)
                 self.assertEqual(len(restored.rows), 6)
                 self.assertEqual(restored.rows[-1].exp_id, 'EXP-0001')
                 self.assertEqual(restored.rows[-1].max_force_n, 123.4)

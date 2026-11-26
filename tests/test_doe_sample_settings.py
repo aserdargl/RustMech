@@ -18,10 +18,16 @@ class SampleSettingsTests(unittest.TestCase):
     tearDown = helpers.DoEWindowTests.tearDown
     window = helpers.DoEWindowTests.window
 
+    def show_sample_page(self, studio):
+        page = studio.sample_settings
+        page.setGeometry(studio.rect())
+        page.show()
+        self.app.processEvents()
+
     def test_names_combinations_transfer_and_export(self):
         _, studio = self.window()
         page = studio.sample_settings
-        self.assertEqual(studio.settings_tabs.tabText(2), 'Settings')
+        self.assertTrue(page.isHidden())
         for key in ('structure_name', 'cell_size', 'solid_fraction'):
             page.add_field(key)
         batch = page.batch
@@ -68,8 +74,7 @@ class SampleSettingsTests(unittest.TestCase):
     def test_centered_check_column_common_dropdowns_and_busy_guard(self):
         window, studio = self.window()
         page = studio.sample_settings
-        studio.settings_tabs.setCurrentIndex(2)
-        self.app.processEvents()
+        self.show_sample_page(studio)
         table = page.available
         self.assertEqual(table.columnWidth(3), table.style().pixelMetric(QStyle.PixelMetric.PM_IndicatorWidth) + 4)
         row = next(i for i, field in enumerate(page.sources) if field[0] == 'cell_size')
@@ -96,27 +101,31 @@ class SampleSettingsTests(unittest.TestCase):
         page.rename_block('Cell')
         page.labels.setChecked(True)
         page.batch.parameter_editor.add_variable('cell_size', ['2', '3'])
-        studio.settings_tabs.setCurrentIndex(2)
         page.open_batch()
-        self.app.processEvents()
+        self.show_sample_page(studio)
         page.batch.splitter.setSizes([300, 180])
         self.app.processEvents()
         sizes = page.batch.splitter.sizes()
         saved = page.state()
         plan = Path(self.temp.name) / 'samples.rustmech-doe.json'
         studio.save_plan_path(plan)
+        from doe_plan import write_plan
+        payload = studio.capture_plan()
+        payload['selection']['tab'] = 4
+        write_plan(plan, payload)
         first.close()
         second, restored = self.window()
         self.assertEqual(restored.sample_settings.rule(), page.rule())
-        restored.settings_tabs.setCurrentIndex(2)
         restored.sample_settings.open_batch()
-        self.app.processEvents()
+        self.show_sample_page(restored)
         self.assertEqual(restored.sample_settings.batch.splitter.sizes(), sizes)
+        restored.sample_settings.hide()
         restored.open_plan_path(plan)
         self.assertEqual(restored.sample_settings.state(), saved)
         self.assertTrue(restored.sample_settings.batch.build_matrix())
         self.assertEqual([r.cell_size for r in restored.sample_settings.batch._rows], [2, 3])
-        self.assertEqual(restored.settings_tabs.currentIndex(), 2)
+        self.assertIs(restored.settings_tabs.currentWidget(), restored.planner.learning_page)
+        self.assertTrue(restored.sample_settings.isHidden())
 
     def test_regular_doe_generation_uses_naming_rule_and_legacy_plans_open(self):
         _, studio = self.window()
@@ -178,10 +187,9 @@ class SampleSettingsTests(unittest.TestCase):
         self.assertTrue(editor.fixed.isRowHidden(source_row('cell_size')))
         self.assertEqual(editor.values('cell_size'), (2.0, 3.0))
         editor.fixed_filter.search.clear()
-        studio.settings_tabs.setCurrentIndex(2)
         page.open_batch()
         window.resize(1360, 880)
-        self.app.processEvents()
+        self.show_sample_page(studio)
         editor.splitter.setSizes([270, 320, 420])
         self.app.processEvents()
         sizes = editor.splitter.sizes()

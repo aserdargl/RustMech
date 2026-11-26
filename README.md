@@ -414,7 +414,7 @@ DoE ekleme, deney/ML tablosu oluşturma ve yüzey önizlemelerinde yalnız yapı
 sayısı bu adımları engellemez; ayarlar değiştirilmeden saklanır. Mesh
 kontrolü/üretimi veya analiz istendiğinde tam FE doğrulaması uygulanır.
 
-**DeepLearning** ve **Settings** sayfalarındaki **Save** ve **Open**,
+**DeepLearning** sayfasındaki **Save** ve **Open**,
 planı `.rustmech-doe.json` dosyasına kaydeder ve geri açar. Dosya, tasarımları,
 değişken aralıklarını, örnekleme ve adlandırma ayarlarını, deney satırlarını
 ve sonuç değerlerini saklar. Eski planlardan gelen deneyler DeepLearning

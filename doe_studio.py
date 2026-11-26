@@ -1283,7 +1283,7 @@ class ExperimentTableWidget(TrubaParallelMixin, QWidget):
 
 
 class DoEStudioWidget(ExperimentTableWidget):
-    """Operation-specific DoE, dataset generation and sample settings."""
+    """Operation-specific DoE and DeepLearning dataset generation."""
 
     editable_experiments = True
     autosave_recovery_plan = True
@@ -1325,19 +1325,15 @@ class DoEStudioWidget(ExperimentTableWidget):
         self.new_doe = NewDoePage(self._operation_host, self._preferences)
         self.planner.tabs.insertTab(0, self.new_doe, "DoE")
         self.planner.tabs.setCurrentWidget(self.new_doe)
+        # Keep saved sample rules and combinations available to legacy plans.
         self.sample_settings = SampleSettingsPage(self)
-        self.planner.tabs.addTab(self.sample_settings, "Settings")
-        self._legacy_plan_tab = LEARNING_PLAN_TAB
-        self._legacy_plan_tabs = {LEARNING_PLAN_TAB: self.planner.learning_page, 4: self.sample_settings}
+        self.sample_settings.hide()
 
         def select_page(index):
-            page = self.planner.tabs.widget(index)
-            legacy = page is not self.new_doe
-            if legacy:
-                self._legacy_plan_tab = next(tab for tab, widget in self._legacy_plan_tabs.items() if widget is page)
-            self.planner.plan_footer.setVisible(legacy)
-            self.new_doe.size_navigation(self.planner.navigation, not legacy)
-            self.footer_label.setVisible(page is self.planner.learning_page)
+            learning = self.planner.tabs.widget(index) is self.planner.learning_page
+            self.planner.plan_footer.setVisible(learning)
+            self.new_doe.size_navigation(self.planner.navigation, not learning)
+            self.footer_label.setVisible(learning)
 
         self.planner.navigation.add_tabs(self.planner.tabs)
         self.planner.tabs.currentChanged.connect(select_page)
@@ -1379,7 +1375,7 @@ class DoEStudioWidget(ExperimentTableWidget):
                          common_strain=self.common_strain_spin.value()),
             rows=[] if inputs_only else [asdict(row) for row in self._rows],
             sample_settings={} if inputs_only else self.sample_settings.state(),
-            selection=dict(design=self._selected_design, tab=self._legacy_plan_tab),
+            selection=dict(design=self._selected_design, tab=LEARNING_PLAN_TAB),
         )
 
     def restore_workspace_draft(self):
@@ -1478,10 +1474,8 @@ class DoEStudioWidget(ExperimentTableWidget):
         self._refresh_plan()
         self._refresh_table_view()
         self.sample_settings.restore_state(plan.get("sample_settings", {}))
-        saved_tab = selection['tab']
-        self._legacy_plan_tab = saved_tab if saved_tab in self._legacy_plan_tabs else LEARNING_PLAN_TAB
         if select_tab:
-            self.settings_tabs.setCurrentWidget(self._legacy_plan_tabs[self._legacy_plan_tab])
+            self.settings_tabs.setCurrentWidget(self.planner.learning_page)
 
     def save_plan_dialog(self):
         from doe_plan import PLAN_FILTER

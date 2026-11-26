@@ -37,12 +37,11 @@ class NewDoeTests(unittest.TestCase):
         self.window.doe_window.open_workspace()
         self.app.processEvents()
         tabs = studio.settings_tabs
-        self.assertEqual(tabs.count(), 3)
         self.assertIs(tabs.widget(0), studio.new_doe)
         self.assertIs(tabs.currentWidget(), studio.new_doe)
         self.assertTrue(studio.new_doe.loaded)
         self.assertEqual([tabs.tabText(index) for index in range(tabs.count())],
-                         ["DoE", "DeepLearning", "Settings"])
+                         ["DoE", "DeepLearning"])
         self.assertEqual(studio.new_doe.operation.currentText(), "FFT")
         self.assertIsNone(studio.findChild(LanguageSelector))
         self.assertTrue(self.window.language_selector.isVisible())
