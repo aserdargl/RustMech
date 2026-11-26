@@ -713,7 +713,6 @@ class NewDoePage(QWidget):
         analysis_layout.addLayout(operation_row)
         analysis_layout.addWidget(self.inputs, 1)
         self.input_tabs = QTabWidget()
-        self.input_tabs.setMinimumWidth(320)
         self.input_tabs.addTab(self.analysis_settings, "Analysis settings")
         self.variations = self.table(["Parameter", "Min / max" if sampling else "Values"])
         self.variations.setAccessibleName("Variable settings")
@@ -745,7 +744,7 @@ class NewDoePage(QWidget):
 
         settings_panel = QWidget()
         settings_layout = QVBoxLayout(settings_panel)
-        settings_layout.setContentsMargins(0, 0, 0, 0)
+        settings_layout.setContentsMargins(2, 0, 2, 0)
         settings_layout.setSpacing(2)
         settings_layout.addWidget(self.input_navigation)
         settings_layout.addWidget(self.input_tabs, 1)
@@ -1013,7 +1012,8 @@ class NewDoePage(QWidget):
                 header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
                 header.setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
                 table.setColumnWidth(0, 24)
-                table.setColumnWidth(2, COMBO_WIDTH + 6)
+                # Account for the cell's 6 px padding and 1 px grid line, plus 2 px of clearance.
+                table.setColumnWidth(2, COMBO_WIDTH + 9)
                 body.addWidget(table)
                 table.setRowCount(len(members))
                 for row, (path, value) in enumerate(members):
