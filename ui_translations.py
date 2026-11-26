@@ -496,8 +496,10 @@ Settings|Ayarlar
 Setup|Kurulum
 Geometry|Geometri
 Structure|Yapı
+Structure Family|Yapı ailesi
 Structure family|Yapı ailesi
 Structure type|Yapı türü
+Type|Tür
 Structure / Dimensions|Yapı / Ölçüler
 Preview structure|Yapıyı önizle
 Preview mesh|Ağı önizle

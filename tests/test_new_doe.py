@@ -382,6 +382,46 @@ class NewDoeTests(unittest.TestCase):
             self.assertIs(type(value), float)
             self.assertEqual(value, 8.0)
 
+    def test_structure_fields_follow_the_selected_family_and_preserve_hidden_drafts(self):
+        for page in (self.page(), self.window.doe_studio.learning_doe):
+            with self.subTest(sampling=page.sampling):
+                page.operation.setCurrentIndex(page.operation.findData("mechanical"))
+                fields = {factor.path: factor for factor in page.factors}
+                structure = fields["settings", "structure_name"]
+                seed = fields["settings", "random_seed"]
+                morphology = fields["settings", "tpms_morphology"]
+                table = page.sections["Structure"].findChild(QTableWidget)
+                self.assertEqual([table.item(row, 1).text() for row in (0, 1)], ["Structure Family", "Type"])
+                self.assertIs(table.cellWidget(0, 2), structure.family)
+                self.assertIs(table.cellWidget(1, 2), structure.fixed)
+
+                def select(family):
+                    structure.family.setCurrentIndex(structure.family.findData(family))
+
+                select("porous")
+                self.assertFalse(table.isRowHidden(seed.row))
+                self.assertFalse(table.isRowHidden(morphology.row))
+                seed.variable.setChecked(True)
+                seed.first.setValue(123)
+                self.assertFalse(page.variations.isRowHidden(seed.variation_row))
+                porous_height = table.height()
+
+                select("tpms")
+                self.assertTrue(table.isRowHidden(seed.row))
+                self.assertFalse(table.isRowHidden(morphology.row))
+                self.assertTrue(page.variations.isRowHidden(seed.variation_row))
+                self.assertLess(table.height(), porous_height)
+                page.create()
+                self.assertTrue(page.matrix_current, page.status.text())
+                self.assertNotIn(seed, page.sheet.columns)
+                self.assertEqual(len(page.rows), 1)
+
+                select("lattice")
+                self.assertTrue(table.isRowHidden(morphology.row))
+                select("porous")
+                self.assertFalse(page.variations.isRowHidden(seed.variation_row))
+                self.assertEqual(seed.first.value(), 123)
+
     def test_each_structure_family_can_sweep_each_outer_axis(self):
         page = self.page()
         for index in range(page.operation.count()):

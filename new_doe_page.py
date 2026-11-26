@@ -24,7 +24,7 @@ from new_doe_operations import (MAX_ROWS, OPERATIONS, explicit_numbers, launch, 
                                 parameters, snapshot, structure_choices, validate)
 from new_doe_report import (LEARNING_CSV_NAME, LEARNING_RUN_PREFIX, experiment_name, write_doe_report,
                             write_learning_csv)
-from structure_library import ALL_STRUCTURES_BY_FAMILY, STRUCTURE_FAMILIES
+from structure_library import ALL_STRUCTURES_BY_FAMILY, STRUCTURE_FAMILIES, resolve_family_and_name
 from studio_style import (COMBO_WIDTH, CONTROL_HEIGHT, CompactComboBox, CompactSpinBox, NumericLineEdit,
                           SidebarGroupBox)
 from window_state import show_restored_window
@@ -39,7 +39,7 @@ DEFAULT_SETTINGS_WIDTH = 350
 CELL_HORIZONTAL_ALLOWANCE = 7 + 2 * SETTINGS_PADDING
 CELL_VERTICAL_ALLOWANCE = 3 + 2 * SETTINGS_PADDING
 LABELS = {"grid": "Voxels per axis", "void_ratio": "Void / solid stiffness", "distribution": "WSL distribution",
-          "structure_name": "Structure family / type", "tpms_morphology": "Morphology",
+          "structure_name": "Type", "tpms_morphology": "Morphology",
           "young_modulus": "Young’s modulus (MPa)", "cell_size": "Cell size (mm)",
           "solid_fraction": "Solid fraction (%)", "size_x": "Outer X (mm)", "size_y": "Outer Y (mm)",
           "size": "Outer Z (mm)", "material_card": "Material card",
@@ -53,6 +53,8 @@ FLOW_MESH_FIELDS = ("cells_across", "mesh_method", "surface_refinement", "bounda
 FLOW_SOLVER_FIELDS = ("inlet_speed", "iterations", "turbulence", "distribution", "foam_bashrc")
 FFT_GROUP = "FFT Homogenization"
 PREVIEW_BUTTONS = {"Structure": "Preview structure", "Mesh": "Preview mesh"}
+STRUCTURE_FIELD_FAMILIES = {("settings", "tpms_morphology"): {"tpms", "porous"},
+                            ("settings", "random_seed"): {"porous"}}
 THERMAL_FLUID_PROPERTIES = {("thermal", "water_cp"): "heat_capacity",
                             ("thermal", "water_conductivity"): "conductivity"}
 THERMAL_SOLID_PROPERTIES = {("thermal", "solid_density"): "density", ("thermal", "solid_cp"): "heat_capacity",
@@ -184,6 +186,9 @@ class Factor:
         self.variable.setToolTip(translate("Variable"))
         self.variations = variations
         self.variation_row = variation_row
+        self.table = table
+        self.row = row
+        self.applicable = True
         self.choices = []
         self.material_card = path in MATERIAL_CARD_FIELDS
         if key == "structure_name":
@@ -297,11 +302,11 @@ class Factor:
             controls.addWidget(self.selection, alignment=alignment)
         variations.setCellWidget(variation_row, 1, levels)
         variations.setRowHeight(variation_row, height + CELL_VERTICAL_ALLOWANCE)
-        self.fixed_panel = self.fixed
         if key == "structure_name":
             self.add_structure_family(value)
-            table.setRowHeight(row, 2 * CONTROL_HEIGHT + 2)
-        table.setCellWidget(row, 2, self.fixed_panel)
+            table.setItem(row - 1, 1, QTableWidgetItem("Structure Family"))
+            table.setCellWidget(row - 1, 2, self.family)
+        table.setCellWidget(row, 2, self.fixed)
         self.toggle(False)
         self.variable.toggled.connect(self.toggle)
         self.variable.toggled.connect(changed)
@@ -311,8 +316,10 @@ class Factor:
                 editor.setAutoDefault(False)
 
     def toggle(self, enabled):
-        self.variations.setRowHidden(self.variation_row, not enabled)
-        self.fixed_panel.setEnabled(not enabled)
+        self.variations.setRowHidden(self.variation_row, not (enabled and self.applicable))
+        self.fixed.setEnabled(not enabled)
+        if self.path == ("settings", "structure_name"):
+            self.family.setEnabled(not enabled)
         if enabled and not self.levels_seeded:
             if self.choices:
                 for action in self.menu.actions():
@@ -322,25 +329,24 @@ class Factor:
                 self.last.setValue(self.fixed.value())
             self.levels_seeded = True
 
+    def set_applicable(self, applicable):
+        self.applicable = applicable
+        self.table.setRowHidden(self.row, not applicable)
+        self.variations.setRowHidden(self.variation_row, not (applicable and self.variable.isChecked()))
+
     def update_level_entry(self):
         self.level_entry.setCurrentWidget(self.selection if self.mode.currentData() == "list" else self.bounds)
 
     def add_structure_family(self, value):
         names = {name for _, name in self.choices}
         self.family = CompactComboBox()
-        self.family.setAccessibleName("Structure family")
+        self.family.setAccessibleName("Structure Family")
         self.fixed.setAccessibleName("Structure type")
         for family, members in ALL_STRUCTURES_BY_FAMILY.items():
             if names.intersection(members):
                 self.family.addItem(STRUCTURE_FAMILIES[family], family)
                 if value in members:
                     self.family.setCurrentIndex(self.family.count() - 1)
-        self.fixed_panel = QWidget()
-        controls = QVBoxLayout(self.fixed_panel)
-        controls.setContentsMargins(0, 0, 0, 0)
-        controls.setSpacing(1)
-        controls.addWidget(self.family)
-        controls.addWidget(self.fixed)
         self.family.currentIndexChanged.connect(self.update_structure_choices)
         self.update_structure_choices()
 
@@ -352,6 +358,11 @@ class Factor:
             if name in choices:
                 self.fixed.addItem(label.split(" / ", 1)[-1], name)
         self.fixed.setCurrentIndex(max(0, self.fixed.findData(previous)))
+
+    def selected_choices(self):
+        if self.variable.isChecked():
+            return [action.data() for action in self.menu.actions() if action.isChecked()]
+        return [self.fixed.currentData()]
 
     def draft(self):
         state = {"variable": self.variable.isChecked(), "seeded": self.levels_seeded}
@@ -436,8 +447,7 @@ class Factor:
     def levels_for_matrix(self):
         varying = self.variable.isChecked()
         if self.choices:
-            values = ([a.data() for a in self.menu.actions() if a.isChecked()]
-                      if varying else [self.fixed.currentData()])
+            values = self.selected_choices()
         elif (self.numeric or self.optional_number) and varying:
             if not self.sampling and self.mode.currentData() == "list":
                 values = explicit_numbers(self.selection.text(), type(self.first.value()),
@@ -1024,16 +1034,28 @@ class NewDoePage(QWidget):
                 table.setColumnWidth(0, 24)
                 table.setColumnWidth(2, COMBO_WIDTH + CELL_HORIZONTAL_ALLOWANCE)
                 body.addWidget(table)
-                table.setRowCount(len(members))
-                for row, (path, value) in enumerate(members):
+                if title == "Structure":
+                    members.sort(key=lambda member: member[0] != ("settings", "structure_name"))
+                first_row = int(title == "Structure")
+                table.setRowCount(len(members) + first_row)
+                for row, (path, value) in enumerate(members, first_row):
                     factor = Factor(table, row, self.variations, variation_rows[path], path, value,
                                     sources.get(path[-1]), op, self.inputs_changed, sampling=self.sampling)
                     factor.restore_draft(draft.get("/".join(path)))
                     factors[path] = factor
                 table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
                 table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-                frame = 2 * table.frameWidth()
-                table.setFixedHeight(table.horizontalHeader().sizeHint().height() + table.verticalHeader().length() + frame)
+                self.fit_parameter_table(table)
+                if title == "Structure":
+                    structure = factors["settings", "structure_name"]
+                    geometry = [factors[path] for path in STRUCTURE_FIELD_FAMILIES if path in factors]
+                    structure.fixed.currentIndexChanged.connect(
+                        lambda *_: self.update_structure_fields(structure, geometry))
+                    structure.variable.toggled.connect(
+                        lambda *_: self.update_structure_fields(structure, geometry))
+                    for action in structure.menu.actions():
+                        action.toggled.connect(lambda *_: self.update_structure_fields(structure, geometry))
+                    self.update_structure_fields(structure, geometry)
                 preview_group = "Mesh" if title == FFT_GROUP else title
                 if preview_group in PREVIEW_BUTTONS:
                     actions = QHBoxLayout()
@@ -1085,6 +1107,20 @@ class NewDoePage(QWidget):
             self.loaded = False
         self.apply_button.setEnabled(self.loaded)
 
+    @staticmethod
+    def fit_parameter_table(table):
+        height = table.horizontalHeader().sizeHint().height() + table.verticalHeader().length()
+        table.setFixedHeight(height + 2 * table.frameWidth())
+
+    def update_structure_fields(self, structure, geometry):
+        names = set(structure.selected_choices())
+        families = {family for family, members in ALL_STRUCTURES_BY_FAMILY.items() if names.intersection(members)}
+        if not families:
+            families = {structure.family.currentData()}
+        for factor in geometry:
+            factor.set_applicable(bool(families & STRUCTURE_FIELD_FAMILIES[factor.path]))
+        self.fit_parameter_table(structure.table)
+
     def open_input_preview(self, mesh):
         from doe_preview import DoeInputPreview
 
@@ -1094,6 +1130,9 @@ class NewDoePage(QWidget):
         dimensions = {}
         varying = False
         try:
+            structure = next(factor for factor in self.factors if factor.path == ("settings", "structure_name"))
+            name = next(iter(structure.selected_choices()), None)
+            family, _ = resolve_family_and_name(structure.family.currentData(), name)
             for factor in self.factors:
                 group, key = factor.path[0], factor.path[-1]
                 section = parameter_group(factor.path, op)
@@ -1103,7 +1142,8 @@ class NewDoePage(QWidget):
                     relevant = mesh and (section == "Mesh" or (op == "fft_solve" and factor.path == ("grid",)) or
                                          (group == "flow" and section == "Channel · Isothermal CFD"
                                           and key not in FLOW_SOLVER_FIELDS))
-                if not relevant:
+                families = STRUCTURE_FIELD_FAMILIES.get(factor.path)
+                if not relevant or (families is not None and family not in families):
                     continue
                 if isinstance(factor.fixed, NumericLineEdit):
                     factor.fixed.interpretText()
@@ -1215,8 +1255,9 @@ class NewDoePage(QWidget):
             self.lhs_seed.interpretText()
         self.invalidate()
         dimensions = {}
+        active_factors = [factor for factor in self.factors if factor.applicable]
         try:
-            for factor in self.factors:
+            for factor in active_factors:
                 try:
                     dimensions[factor.path] = factor.levels_for_matrix()
                 except (ValueError, TypeError) as error:
@@ -1234,7 +1275,7 @@ class NewDoePage(QWidget):
             self.status.setText(str(error))
             return
         self.rows = rows
-        self.sheet.reset(rows, self.factors)
+        self.sheet.reset(rows, active_factors)
         if self.sampling:
             self.export_csv.setEnabled(False)
         for i, factor in enumerate(self.sheet.columns, 1):
@@ -1279,10 +1320,11 @@ class NewDoePage(QWidget):
             directory.mkdir(parents=True)
             with (directory / "matrix.csv").open("w", newline="", encoding="utf-8-sig") as stream:
                 writer = csv.writer(stream)
-                writer.writerow(["Sample", "Operation", *[".".join(f.path) for f in self.factors]])
+                active_factors = [factor for factor in self.factors if factor.applicable]
+                writer.writerow(["Sample", "Operation", *[".".join(f.path) for f in active_factors]])
                 for i, row in enumerate(self.rows, 1):
                     writer.writerow([experiment_name(i), row["operation"],
-                                     *(display(parameter_value(row, factor.path)) for factor in self.factors)])
+                                     *(display(parameter_value(row, factor.path)) for factor in active_factors)])
         except OSError as error:
             self.status.setText(str(error))
             return
