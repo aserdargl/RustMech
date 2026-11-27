@@ -61,7 +61,7 @@ def _element_family(period, group, symbol):
 class AlloyElements(QWidget):
     changed = Signal()
     selection_changed = Signal()
-    LEFT_COLUMN_ROWS = 5
+    ROWS_PER_COLUMN = 5
     CELL_SIZE = 45
 
     def __init__(self, defaults, parent=None):
@@ -85,9 +85,6 @@ class AlloyElements(QWidget):
                     self._add_cell(grid, period, group, symbol)
         grid.setRowMinimumHeight(7, self.CELL_SIZE + 3)
         layout.addWidget(table, alignment=Qt.AlignmentFlag.AlignLeft)
-        hint = QLabel("Click an element to add it.")
-        hint.setWordWrap(True)
-        layout.addWidget(hint)
         layout.addSpacing(6)
         divider = QFrame()
         divider.setObjectName("mdCompositionDivider")
@@ -172,10 +169,13 @@ class AlloyElements(QWidget):
         self.selection_changed.emit()
 
     def _place_row(self, row, index):
-        if index < self.LEFT_COLUMN_ROWS:
-            self.list_layout.addWidget(row, index, 0)
-        else:
-            self.list_layout.addWidget(row, index - self.LEFT_COLUMN_ROWS, 1)
+        column, line = divmod(index, self.ROWS_PER_COLUMN)
+        if column and line == 0 and self.list_layout.itemAtPosition(0, 2 * column - 1) is None:
+            divider = QFrame()
+            divider.setObjectName("mdCompositionDivider")
+            divider.setFixedWidth(1)
+            self.list_layout.addWidget(divider, 0, 2 * column - 1, self.ROWS_PER_COLUMN, 1)
+        self.list_layout.addWidget(row, line, 2 * column)
 
     def remove_element(self, symbol, *, focus=True):
         row, _ = self.rows.pop(symbol)
@@ -185,6 +185,12 @@ class AlloyElements(QWidget):
         for index, (remaining, _) in enumerate(self.rows.values()):
             self.list_layout.removeWidget(remaining)
             self._place_row(remaining, index)
+        columns, remainder = divmod(len(self.rows), self.ROWS_PER_COLUMN)
+        if columns and remainder == 0:
+            divider = self.list_layout.itemAtPosition(0, 2 * columns - 1).widget()
+            self.list_layout.removeWidget(divider)
+            divider.hide()
+            divider.deleteLater()
         self._mark_added(symbol, False)
         if focus:
             self.cells[symbol][0].setFocus()

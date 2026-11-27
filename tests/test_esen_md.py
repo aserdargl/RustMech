@@ -256,10 +256,11 @@ def test_md_plan_library_reopens_generated_and_added_packages(tmp_path):
         app.removeEventFilter(store)
 
 
-def test_alloy_elements_fill_left_column_then_continue_on_right():
+def test_alloy_elements_fill_columns_of_five_with_dividers():
     app = QApplication.instance() or QApplication([])
     first = ("Hf", "Nb", "Ta", "Ti", "Zr")
-    additional = ("Fe", "Mo", "W", "V", "Cr", "Ni")
+    additional = ("Fe", "Mo", "W", "V", "Cr", "Ni", "Al", "Mg", "Cu", "Co",
+                  "Mn", "Si", "Zn", "Ag", "Au", "Pt")
     elements = AlloyElements((symbol, 20) for symbol in first)
     elements.show()
     try:
@@ -270,12 +271,16 @@ def test_alloy_elements_fill_left_column_then_continue_on_right():
         assert tuple(elements.rows) == first + additional
 
         def row_at(row, column):
-            return elements.list_layout.itemAtPosition(row, column).widget()
+            return elements.list_layout.itemAtPosition(row, 2 * column).widget()
 
-        for index, symbol in enumerate(first):
-            assert row_at(index, 0) is elements.rows[symbol][0]
-        for index, symbol in enumerate(additional):
-            assert row_at(index, 1) is elements.rows[symbol][0]
+        for index, symbol in enumerate(first + additional):
+            column, row = divmod(index, 5)
+            assert row_at(row, column) is elements.rows[symbol][0]
+        for column in (1, 3, 5, 7):
+            divider = elements.list_layout.itemAtPosition(0, column).widget()
+            assert divider.objectName() == "mdCompositionDivider"
+            assert divider.width() == 1
+            assert elements.list_layout.itemAtPosition(4, column).widget() is divider
         assert row_at(0, 0).y() == row_at(0, 1).y()
         assert row_at(0, 0).geometry().right() < row_at(0, 1).x()
 
@@ -283,6 +288,8 @@ def test_alloy_elements_fill_left_column_then_continue_on_right():
         elements.remove_element("Nb")
         assert row_at(4, 0) is elements.rows["Fe"][0]
         assert row_at(0, 1) is elements.rows["Mo"][0]
+        assert row_at(4, 3) is elements.rows["Pt"][0]
+        assert elements.list_layout.itemAtPosition(0, 7) is None
         assert elements.composition().startswith("Hf:20.0000, Ta:20.0000, Ti:20.0000, Zr:20.0000, Fe:20.0000")
         assert elements.total_label.text().endswith("100 %")
     finally:
