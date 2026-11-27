@@ -28,9 +28,11 @@ class NewDoeTests(unittest.TestCase):
         self.assertIs(page.window(), self.window.doe_window)
         return page
 
-    def test_doe_uses_command_buttons_for_the_settings_tabs(self):
+    def test_experimental_design_toolbar_aligns_both_methods_and_the_active_controls(self):
         page = self.page()
         self.assertTrue(page.loaded)
+        self.assertEqual(self.window.doe_button.text(), "Experimental Design")
+        self.assertEqual(page.window().windowTitle(), "Experimental Design · RustMech")
         self.assertEqual(page.operation.currentText(), "FFT")
         self.assertIsNone(page.findChild(LanguageSelector))
         self.assertTrue(self.window.language_selector.isVisible())
@@ -38,33 +40,91 @@ class NewDoeTests(unittest.TestCase):
         analysis = page.operation
         self.assertEqual([analysis.itemText(index) for index in range(analysis.count())],
                          ["FEM", "FFT", "MPM", "Peridynamics", "Flow (CFD)", "Thermal (CHT)"])
-        nav = page.input_navigation
-        tab_bottom = nav.mapToGlobal(QPoint(0, nav.height())).y()
-        self.assertIn(analysis.mapToGlobal(QPoint()).y() - tab_bottom, range(9))
-        analysis_button, variables_button, lhs_button = nav.buttons.buttons()
-        self.assertEqual([analysis_button.text(), variables_button.text(), lhs_button.text()],
-                         ["Analysis settings", "Variable settings", "LHS"])
+        doe_button, lhs_button = page.window().navigation.buttons.buttons()
+        variables_button = page.variables_button
+        self.assertEqual([doe_button.text(), lhs_button.text(), variables_button.text()],
+                         ["DoE", "LHS", "Variable Settings"])
+        for current in (page, self.lhs_page()):
+            label = next(label for label in current.operation.parentWidget().findChildren(QLabel)
+                         if label.buddy() is current.operation)
+            controls = (doe_button, lhs_button, label, current.operation, current.variables_button)
+            centers = [control.mapToGlobal(control.rect().center()) for control in controls]
+            self.assertEqual(len({point.y() for point in centers}), 1)
+            self.assertEqual([point.x() for point in centers], sorted(point.x() for point in centers))
+        doe_button.click()
         self.assertTrue(page.input_tabs.tabBar().isHidden())
-        self.assertEqual(analysis_button.size(), variables_button.size())
-        self.assertTrue(analysis_button.isChecked())
+        self.assertEqual(doe_button.size(), lhs_button.size())
+        self.assertTrue(doe_button.isChecked())
         variables_button.setFocus()
         QTest.keyClick(variables_button, Qt.Key.Key_Space)
         self.assertIs(page.input_tabs.currentWidget(), page.variations)
         self.assertTrue(variables_button.isChecked())
         QTest.keyClick(page.variations, Qt.Key.Key_Tab, Qt.KeyboardModifier.ControlModifier)
         self.assertIs(page.input_tabs.currentWidget(), page.analysis_settings)
-        self.assertTrue(analysis_button.isChecked())
+        self.assertFalse(variables_button.isChecked())
         lhs_button.click()
         self.assertTrue(lhs_button.isChecked())
-        self.assertTrue(self.window.lhs_page.isVisible())
-        self.assertIs(self.window.lhs_page.window(), self.window.doe_window)
+        lhs = self.window.lhs_page
+        self.assertTrue(lhs.isVisible())
+        lhs.variables_button.click()
+        self.assertTrue(lhs.variations.isVisible())
+        lhs_button.click()
+        self.assertTrue(lhs.analysis_settings.isVisible())
+        doe_button.click()
+        self.assertTrue(page.analysis_settings.isVisible())
         variables_button.click()
         self.assertTrue(page.variations.isVisible())
 
     def lhs_page(self):
-        self.page().input_navigation.buttons.button(2).click()
+        self.page().window().navigation.buttons.button(1).click()
         self.app.processEvents()
         return self.window.lhs_page
+
+    def test_method_drafts_and_matrices_are_independent(self):
+        from new_doe_page import NewDoePage
+
+        doe = self.page()
+        lhs = self.lhs_page()
+        for page, bounds in ((doe, (16, 24)), (lhs, (32, 40))):
+            page.window().navigation.buttons.button(int(page.sampling)).click()
+            grid = next(factor for factor in page.factors if factor.path == ("grid",))
+            grid.variable.click()
+            page.variables_button.click()
+            self.assertTrue(grid.first.isVisible())
+            grid.first.setValue(bounds[0])
+            grid.last.setValue(bounds[1])
+            page.apply_button.click()
+            self.assertTrue(page.matrix_current, page.status.text())
+        self.assertEqual([row["grid"] for row in doe.rows], [16, 24])
+        self.assertEqual(len(lhs.rows), 100)
+        self.assertTrue(all(32 <= row["grid"] <= 40 for row in lhs.rows))
+        for page in (doe, lhs):
+            restored = NewDoePage(self.window, page.preferences, sampling=page.sampling)
+            restored.load()
+            restored.create()
+            self.assertTrue(restored.matrix_current, restored.status.text())
+            self.assertEqual(restored.rows, page.rows)
+
+    def test_stl_resolution_shows_automatic_for_legacy_null_and_keeps_manual_values(self):
+        doe = self.page()
+        lhs = self.lhs_page()
+        for page in (doe, lhs):
+            page.preferences.setValue(f"{page.preference_prefix}/operationDrafts/mechanical",
+                                      json.dumps({"settings/stl_resolution": {"fixed": "null"}}))
+            page.operation.setCurrentIndex(page.operation.findData("mechanical"))
+            stl = next(factor for factor in page.factors if factor.path == ("settings", "stl_resolution"))
+            self.assertEqual(stl.label, "STL Resolution")
+            self.assertEqual(stl.fixed.text(), "")
+            self.assertEqual(stl.fixed.placeholderText(), "Automatic")
+            page.create()
+            self.assertTrue(page.matrix_current, page.status.text())
+            self.assertIsNone(page.rows[0]["settings"]["stl_resolution"])
+            index = page.sheet.index(0, page.sheet.columns.index(stl) + 1)
+            self.assertEqual(index.data(), "Automatic")
+            stl.fixed.setText("0.125")
+            page.create()
+            self.assertTrue(page.matrix_current, page.status.text())
+            self.assertEqual(page.rows[0]["settings"]["stl_resolution"], 0.125)
 
     def test_learning_samples_the_selected_operation_and_restores_its_ranges(self):
         doe = self.page()
@@ -725,13 +785,12 @@ class NewDoeTests(unittest.TestCase):
         self.assertLess(page.input_tabs.width(), page.preview.width())
         self.assertEqual(page.inputs.horizontalScrollBar().maximum(), 0)
         self.assertIs(page.input_tabs.currentWidget(), page.analysis_settings)
-        self.assertTrue(page.analysis_settings.isAncestorOf(page.operation))
-        label = next(label for label in page.analysis_settings.findChildren(QLabel)
+        label = next(label for label in page.operation.parentWidget().findChildren(QLabel)
                      if label.buddy() is page.operation)
         self.assertEqual(label.text(), "Analysis Type")
         self.assertLess(label.geometry().right(), page.operation.x())
-        operation_bottom = page.operation.mapTo(page, page.operation.rect().bottomLeft()).y()
-        self.assertLess(operation_bottom, geometry.mapTo(page, QPoint()).y())
+        operation_bottom = page.operation.mapToGlobal(page.operation.rect().bottomLeft()).y()
+        self.assertLess(operation_bottom, geometry.mapToGlobal(QPoint()).y())
         command_row = (page.run_settings, page.run, page.stop, page.open)
         apply_y = page.apply_button.mapTo(page, QPoint()).y()
         self.assertTrue(all(button.mapTo(page, QPoint()).y() == apply_y for button in command_row))
@@ -758,7 +817,7 @@ class NewDoeTests(unittest.TestCase):
         self.assertFalse(cell.fixed.isEnabled())
         self.assertTrue(page.variations.isRowHidden(fields["grid"].variation_row))
         page.input_tabs.setCurrentWidget(page.variations)
-        self.assertFalse(page.operation.isVisible())
+        self.assertTrue(page.operation.isVisible())
         self.assertTrue(cell.first.isVisible())
         self.assertFalse(page.variations.isRowHidden(cell.variation_row))
         page.input_tabs.setCurrentWidget(page.analysis_settings)

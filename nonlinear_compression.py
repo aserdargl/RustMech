@@ -1025,7 +1025,7 @@ class RustMechDialog(QDialog):
         self.workspace_navigation.setObjectName("workspaceNavigation")
         self.workspace_navigation.setExpanding(False)
         self.workspace_navigation.setDrawBase(False)
-        workspace_names = ("Mechanic", "Experiments (DoE)", "Flow CFD", "Thermal CHT", "MPM")
+        workspace_names = ("Mechanic", "Experimental Design", "Flow CFD", "Thermal CHT", "MPM")
         for name in workspace_names:
             self.workspace_navigation.addTab(name)
         self.workspace_navigation.currentChanged.connect(self.workspace_tabs.setCurrentIndex)
@@ -1049,8 +1049,8 @@ class RustMechDialog(QDialog):
             action.setVisible(index != 1)
             action.triggered.connect(lambda checked=False, page=index: self.workspace_tabs.setCurrentIndex(page))
         self.workspace_button.setMenu(self.workspace_menu)
-        self.doe_button = _WorkspaceCommandButton("DoE")
-        self.doe_button.setToolTip("Open Design of Experiments settings.")
+        self.doe_button = _WorkspaceCommandButton("Experimental Design")
+        self.doe_button.setToolTip("Open Experimental Design.")
         self.doe_button.clicked.connect(self._show_doe_workspace)
         self.designs_button = _WorkspaceCommandMenu()
         self.designs_button.setObjectName("headerMenu")
@@ -1439,7 +1439,7 @@ class RustMechDialog(QDialog):
         self.workspace_tabs.addTab(model_workspace, "Mechanic")
         # Keep workspace indices stable for existing integrations. Selecting
         # this entry opens the independent window and returns to the model.
-        self.workspace_tabs.addTab(QWidget(), "&Experiments (DoE)")
+        self.workspace_tabs.addTab(QWidget(), "&Experimental Design")
         from flow_workspace import FlowWorkspace
         self.flow_workspace = FlowWorkspace(self.applied_structure_settings, self, preferences=self.solver_profile_store.settings,viewport_factory=create_preview_viewport)
         self.workspace_tabs.addTab(self.flow_workspace, "&Flow (CFD)")

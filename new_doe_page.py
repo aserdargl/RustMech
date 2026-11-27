@@ -44,9 +44,11 @@ LABELS = {"grid": "Voxels per axis", "void_ratio": "Void / solid stiffness", "di
           "structure_family": "Structure family", "structure_name": "Type", "tpms_morphology": "Morphology",
           "young_modulus": "Young’s modulus (MPa)", "cell_size": "Cell size (mm)",
           "solid_fraction": "Solid fraction (%)", "size_x": "Outer X (mm)", "size_y": "Outer Y (mm)",
+          "stl_resolution": "STL Resolution",
           "size": "Outer Z (mm)", "material_card": "Material card",
           "fluid_material_card": "Material card", "solid_material_card": "Material card"}
 
+AUTOMATIC_NUMBER_FIELDS = {"minimum_substeps", "maximum_substeps", "stl_resolution"}
 MATERIAL_CARD_FIELDS = {("settings", "material_card"), ("flow", "fluid_material_card"),
                         ("thermal", "solid_material_card")}
 FLOW_MATERIAL_PROPERTIES = {("flow", "density"): "density", ("flow", "dynamic_viscosity"): "dynamic_viscosity"}
@@ -210,7 +212,7 @@ class Factor:
         elif type(value) is bool:
             self.choices = [("True", True), ("False", False)]
         self.numeric = not self.choices and type(value) in (int, float)
-        self.optional_number = value is None and key in ("minimum_substeps", "maximum_substeps", "stl_resolution")
+        self.optional_number = value is None and key in AUTOMATIC_NUMBER_FIELDS
         self.sampling = sampling
         self.can_vary = not sampling or self.numeric or self.optional_number
         if path in (FAMILY_PATH, TYPE_PATH):
@@ -254,7 +256,8 @@ class Factor:
                 self.fixed = number(initial, source)
                 self.fixed.valueChanged.connect(changed)
             else:
-                self.fixed = text_field("null")
+                self.fixed = text_field()
+                self.fixed.setPlaceholderText("Automatic")
                 self.fixed.textChanged.connect(changed)
             self.bounds = QWidget()
             bounds = QHBoxLayout(self.bounds)
@@ -360,8 +363,10 @@ class Factor:
         elif self.material_card:
             state.update(fixed=self.fixed.currentData(), levels=self.selection.text())
         else:
-            state.update(fixed=self.fixed.value() if self.numeric else self.fixed.text(),
-                         levels=self.selection.text())
+            fixed = self.fixed.value() if self.numeric else self.fixed.text()
+            if self.optional_number and not fixed.strip():
+                fixed = None
+            state.update(fixed=fixed, levels=self.selection.text())
             if self.numeric or self.optional_number:
                 state.update(mode=self.mode.currentData(), lower=self.first.value(), upper=self.last.value())
         return state
@@ -397,6 +402,8 @@ class Factor:
                     self.select_material(fixed)
             elif self.numeric:
                 self.restore_number(self.fixed, fixed)
+            elif self.optional_number and fixed in (None, "null"):
+                self.fixed.clear()
             elif isinstance(fixed, str):
                 self.fixed.setText(fixed)
             elif self.optional_number and type(fixed) in (int, float):
@@ -447,7 +454,10 @@ class Factor:
             values = [self.fixed.currentData()]
         else:
             text = self.fixed.text()
-            values = [text if isinstance(self.value, str) else json.loads(text)]
+            if self.optional_number and not text.strip():
+                values = [None]
+            else:
+                values = [text if isinstance(self.value, str) else json.loads(text)]
         if not isinstance(values, list) or not values or (varying and len(values) < 2):
             raise ValueError("Choose at least two distinct levels for a variable.")
         if varying and len(set(map(display, values))) != len(values):
@@ -493,7 +503,10 @@ class ExperimentMatrix(QAbstractTableModel):
                 return self.details[row]
             return translate(self.states[row])
         path = self.columns[column - 1].path
-        return display(parameter_value(self.rows[row], path))
+        value = parameter_value(self.rows[row], path)
+        if value is None and path[-1] in AUTOMATIC_NUMBER_FIELDS:
+            return translate("Automatic")
+        return display(value)
 
     def set_state(self, row, state, detail=""):
         self.states[row] = state
@@ -666,7 +679,7 @@ class DoeRunDialog(QDialog):
 
 
 class NewDoePage(QWidget):
-    def __init__(self, host, preferences=None, *, sampling=False, open_lhs=None):
+    def __init__(self, host, preferences=None, *, sampling=False, header=None):
         super().__init__()
         self.host = host
         self.preferences = preferences
@@ -705,23 +718,32 @@ class NewDoePage(QWidget):
         analysis_layout = QVBoxLayout(self.analysis_settings)
         analysis_layout.setContentsMargins(0, 0, 0, 0)
         analysis_layout.setSpacing(0)
-        operation_row = QHBoxLayout()
-        operation_row.setContentsMargins(2, 2, 2, 0)
+        operation_bar = QWidget()
+        operation_row = QHBoxLayout(operation_bar)
+        operation_row.setContentsMargins(0, 0, 0, 0)
         operation_row.setSpacing(6)
         operation_row.addWidget(operation_label)
         operation_row.addWidget(self.operation)
-        operation_row.addStretch()
-        analysis_layout.addLayout(operation_row)
         analysis_layout.addWidget(self.inputs, 1)
         self.input_tabs = QTabWidget()
-        self.input_tabs.addTab(self.analysis_settings, "Analysis settings")
+        self.input_tabs.addTab(self.analysis_settings, "LHS" if sampling else "DoE")
         self.variations = self.table(["Parameter", "Values"])
-        self.variations.setAccessibleName("Variable settings")
+        self.variations.setAccessibleName("Variable Settings")
         self.variations.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        self.input_tabs.addTab(self.variations, "Variable settings")
-        self.input_navigation = DoENavigation(self.input_tabs, open_lhs)
-        if not sampling:
-            self.input_navigation.setMinimumWidth(DEFAULT_SETTINGS_WIDTH - 2 * SETTINGS_PADDING)
+        self.input_tabs.addTab(self.variations, "Variable Settings")
+        self.input_tabs.tabBar().hide()
+        self.variables_button = QPushButton("Variable Settings")
+        self.variables_button.setCheckable(True)
+        self.variables_button.setAutoDefault(False)
+        self.variables_button.setFixedHeight(CONTROL_HEIGHT)
+        self.variables_button.toggled.connect(lambda checked: self.input_tabs.setCurrentIndex(int(checked)))
+        self.input_tabs.currentChanged.connect(lambda index: self.variables_button.setChecked(index == 1))
+        operation_row.addWidget(self.variables_button)
+        operation_row.addStretch()
+        if header is None:
+            layout.addWidget(operation_bar)
+        else:
+            header.addWidget(operation_bar)
         self.sections = {}
         self.run = QPushButton("Run")
         self.run.clicked.connect(lambda: self.open_run_options(run=True))
@@ -749,7 +771,8 @@ class NewDoePage(QWidget):
         settings_layout = QVBoxLayout(settings_panel)
         settings_layout.setContentsMargins(SETTINGS_PADDING, 0, SETTINGS_PADDING, 0)
         settings_layout.setSpacing(2)
-        settings_layout.addWidget(self.input_navigation)
+        if not sampling:
+            settings_panel.setMinimumWidth(DEFAULT_SETTINGS_WIDTH)
         settings_layout.addWidget(self.input_tabs, 1)
         if sampling:
             self.lhs_count = NumericLineEdit(100, 2, 5000)
@@ -947,7 +970,6 @@ class NewDoePage(QWidget):
         expanded = {title: not section.content.isHidden() for title, section in self.sections.items()}
         self.sections.clear()
         self.factors.clear()
-        self.input_tabs.setCurrentWidget(self.analysis_settings)
         self.variations.setRowCount(0)
         panel = QWidget()
         stack = QVBoxLayout(panel)
@@ -1073,7 +1095,7 @@ class NewDoePage(QWidget):
                         lambda _checked=False, mesh=preview_group == "Mesh": self.open_input_preview(mesh))
                     actions.addWidget(preview)
                     body.addLayout(actions)
-                if title == "Structure" and not self.sampling:
+                if title == "Structure":
                     button = QPushButton("Apply")
                     button.setObjectName("structureApplyBtn")
                     button.setAutoDefault(False)
@@ -1373,7 +1395,7 @@ class NewDoePage(QWidget):
             show_restored_window(self.truba_jobs_window)
 
     def lock(self, busy):
-        for widget in (self.operation, self.input_navigation, self.input_tabs, self.apply_button, self.run_settings):
+        for widget in (self.operation, self.variables_button, self.input_tabs, self.apply_button, self.run_settings):
             widget.setEnabled(not busy)
         self.run.setEnabled(not busy and self.matrix_current)
         self.stop.setEnabled(busy)
@@ -1730,21 +1752,33 @@ class DoEStudioWindow(ExperimentWindow):
         workspace = QWidget()
         super().__init__(workspace, host)
         self.setObjectName("doeStudioWindow")
-        self.setWindowTitle("DoE · RustMech")
+        self.setWindowTitle("Experimental Design · RustMech")
 
         layout = QVBoxLayout(workspace)
         layout.setContentsMargins(2, 1, 2, 1)
         layout.setSpacing(2)
         pages = QStackedWidget()
-        self.lhs = NewDoePage(host, preferences, sampling=True)
-        self.doe = NewDoePage(host, preferences, open_lhs=lambda: pages.setCurrentWidget(self.lhs))
-        navigation = self.doe.input_navigation
-        layout.addWidget(navigation)
-        layout.addWidget(pages, 1)
+        controls = QStackedWidget()
+        self.doe = NewDoePage(host, preferences, header=controls)
+        self.lhs = NewDoePage(host, preferences, sampling=True, header=controls)
         pages.addWidget(self.doe)
         pages.addWidget(self.lhs)
-        navigation.buttons.idClicked.connect(
-            lambda index: pages.setCurrentWidget(self.doe) if index < self.doe.input_tabs.count() else None)
+        pages.currentChanged.connect(controls.setCurrentIndex)
+        self.navigation = DoENavigation(pages)
+        self.navigation.buttons.idClicked.connect(
+            lambda index: pages.widget(index).input_tabs.setCurrentIndex(0))
+        toolbar = QHBoxLayout()
+        toolbar.setSpacing(8)
+        toolbar.addWidget(self.navigation)
+        toolbar.addWidget(controls, 1)
+        layout.addLayout(toolbar)
+        layout.addWidget(pages, 1)
+        header_controls = (
+            self.navigation.buttons.button(0), self.navigation.buttons.button(1),
+            self.doe.operation, self.doe.variables_button, self.lhs.operation, self.lhs.variables_button,
+        )
+        for current, following in zip(header_controls, header_controls[1:]):
+            QWidget.setTabOrder(current, following)
 
         store = getattr(QApplication.instance(), "_rustmech_window_state", None)
         if store is None:

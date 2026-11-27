@@ -291,7 +291,11 @@ Move to fixed|Sabitlere taşı
 Fixed value|Sabit değer
 Analysis settings|Analiz ayarları
 Analysis Type|Analiz türü
-Variable settings|Değişken ayarları
+Variable Settings|Değişken ayarları
+Experimental Design|Deney Tasarımı
+&Experimental Design|&Deney Tasarımı
+Experimental Design · RustMech|Deney Tasarımı · RustMech
+STL Resolution|STL Çözünürlüğü
 Lower bound|Alt sınır
 Upper bound|Üst sınır
 Values|Değerler
@@ -891,7 +895,7 @@ The running TRUBA application did not respond.|Çalışan TRUBA uygulaması yan�
 Could not start the TRUBA application.|TRUBA uygulaması başlatılamadı.
 TRUBA source needs an absolute folder containing main.py and .venv/Scripts/pythonw.exe.|TRUBA kaynağı için main.py ve .venv/Scripts/pythonw.exe dosyalarını içeren klasörün tam yolunu kullanın.
 TRUBA.exe was not found. Set TRUBA_DESKTOP_EXE to its full path.|TRUBA.exe bulunamadı. TRUBA_DESKTOP_EXE değişkenine dosyanın tam yolunu girin.
-Open Design of Experiments settings.|Deney tasarımı ayarlarını açın.
+Open Experimental Design.|Deney Tasarımı penceresini açın.
 Select settings method|Ayar yöntemini seçin
 Select workspace|Çalışma alanını seçin
 Select a method to open its settings|Ayarlarını açmak için bir yöntem seçin
