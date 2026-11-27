@@ -11,7 +11,7 @@ import pytest
 from PySide6.QtCore import QObject, QSettings, Qt, QTimer, Signal
 from PySide6.QtGui import QContextMenuEvent
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QLabel
+from PySide6.QtWidgets import QApplication, QLabel, QScrollArea
 
 import esen_jobs as jobs
 import esen_md as md
@@ -194,24 +194,31 @@ def test_md_plan_library_reopens_generated_and_added_packages(tmp_path):
             first.md_plan_file.setCurrentIndex(first.md_plan_file.findData(md.ENTRY))
             assert first.md_plan_source.toPlainText() == md.INITIAL
             splitters = {split.objectName(): split for split in store.splitters(first)}
-            sections = splitters["esenMdAlloyAndDetails"]
-            top, bottom = sections.widget(0), sections.widget(1)
-            assert top.count() == 2
-            assert top.widget(0).isAncestorOf(first.md_elements)
-            assert top.widget(1).isAncestorOf(first.md_form)
-            assert bottom.count() == 3
-            assert bottom.widget(0).isAncestorOf(first.md_preview)
-            assert bottom.widget(1).isAncestorOf(first.md_source_groups["nist"][0])
-            assert bottom.widget(2).isAncestorOf(first.md_source_groups["lammps"][0])
+            alloy = first.findChild(QScrollArea, "esenMdAlloyElements")
+            sections = splitters["esenMdSettingsAndResults"]
+            sources = splitters["esenMdPotentialSources"]
+            assert alloy.isAncestorOf(first.md_elements)
+            assert sections.count() == 3
+            assert sections.widget(0).isAncestorOf(first.md_form)
+            assert sections.widget(1).isAncestorOf(first.md_preview)
+            assert sections.widget(2) is sources
+            assert sources.widget(0).isAncestorOf(first.md_source_groups["nist"][0])
+            assert sources.widget(1).isAncestorOf(first.md_source_groups["lammps"][0])
             assert first.tabs.widget(1).isAncestorOf(first.md_plans)
             first.tabs.setCurrentIndex(0)
             app.processEvents()
-            assert top.geometry().bottom() < bottom.y()
-            assert top.width() == bottom.width()
+            assert alloy.geometry().right() < sections.x()
+            assert alloy.height() == sections.height()
+            assert sections.widget(0).geometry().bottom() < sections.widget(1).y()
+            assert all(cell.width() == cell.height() >= 45 for cell, _ in first.md_elements.cells.values())
+            width = alloy.width()
+            first.resize(first.width() + 160, first.height() + 80)
+            app.processEvents()
+            assert alloy.width() == width
+            assert all(cell.width() == cell.height() >= 45 for cell, _ in first.md_elements.cells.values())
             assert not any(label.text() == "How to choose parameters" for label in first.findChildren(QLabel))
-            sections.setSizes([260, 440])
-            top.setSizes([480, 750])
-            bottom.setSizes([390, 460, 380])
+            sections.setSizes([390, 200, 358])
+            sources.setSizes([173, 178])
             first.tabs.setCurrentIndex(1)
             splitters["esenMdPlansAndTruba"].setSizes([280, 420])
             expected = {name: split.sizes() for name, split in splitters.items()}

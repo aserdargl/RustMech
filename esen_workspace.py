@@ -43,7 +43,7 @@ QFrame[esenCard="paper"] { background: #FFFFFF; border: 1px solid #D5DBE2; borde
 #esenWorkspace QPlainTextEdit { font-family: Consolas; font-size: 12px; }
 #esenFieldLabel { color: #475569; font-size: 11px; }
 #esenWorkspace QPushButton { padding: 0 7px; }
-#mdPeriodicTable QToolButton { padding: 0; font-size: 11px; min-height: 20px; max-height: -1px; }
+#mdPeriodicTable QToolButton { padding: 0; font-size: 11px; min-height: -1px; max-height: -1px; }
 #mdPeriodicTable QToolButton::menu-indicator { image: none; width: 0; height: 0; }
 #mdPeriodicTable QToolButton[inAlloy="true"] { background: #BFDBFE; border-color: #93C5FD; }
 #mdPeriodicTable QToolButton:hover, #mdPeriodicTable QToolButton:focus { border-color: #2563EB; }
@@ -129,7 +129,7 @@ class EsenWorkspace(QDialog):
         self.setWindowTitle(WORKSPACE_TITLE)
         self.setWindowFlag(Qt.WindowType.WindowMinMaxButtonsHint)
         self.setStyleSheet(STUDIO_STYLESHEET + ESEN_STYLE)
-        self.resize(1300, 780)
+        self.resize(1440, 920)
         self.truba = truba
         self.standalone = standalone
         self.history_root = history if history is not None else jobs.jobs_directory()
@@ -205,38 +205,39 @@ class EsenWorkspace(QDialog):
             QMessageBox.warning(self, "HPC", translate(str(error)))
 
     def _build_md(self):
-        page = QWidget()
-        outer = QVBoxLayout(page)
+        page = QScrollArea()
+        page.setFrameShape(QFrame.Shape.NoFrame)
+        page.setWidgetResizable(True)
+        columns = QWidget()
+        page.setWidget(columns)
+        outer = QHBoxLayout(columns)
         outer.setContentsMargins(8, 8, 8, 8)
+        outer.setSpacing(7)
         sections = QSplitter(Qt.Orientation.Vertical)
-        sections.setObjectName("esenMdAlloyAndDetails")
+        sections.setObjectName("esenMdSettingsAndResults")
         sections.setChildrenCollapsible(False)
         sections.setHandleWidth(7)
-        outer.addWidget(sections)
 
         alloy, alloy_layout = panel("Alloy elements", scrollable=True)
+        alloy.setObjectName("esenMdAlloyElements")
         defaults = [(element, 20) for element in ("Hf", "Nb", "Ta", "Ti", "Zr")]
         self.md_elements = AlloyElements(defaults)
         alloy_layout.addWidget(self.md_elements, 1)
 
-        top = QSplitter(Qt.Orientation.Horizontal)
-        top.setObjectName("esenMdAlloyAndSettings")
-        top.setChildrenCollapsible(False)
-        top.setHandleWidth(7)
-        top.addWidget(alloy)
-        sections.addWidget(top)
+        alloy.setFixedWidth(alloy.widget().minimumSizeHint().width() + alloy.verticalScrollBar().sizeHint().width())
+        outer.addWidget(alloy)
+        outer.addWidget(sections, 1)
 
         self.md_preview_button = command("Preview model", self._md_preview)
         self.md_prepare = command("Prepare package", self._start_md)
-        inputs, settings_layout = panel("Package settings", scrollable=True, header_action=self.md_prepare)
+        inputs, settings_layout = panel("Package settings", header_action=self.md_prepare)
         self.md_form = QWidget()
         form = QFormLayout(self.md_form)
         form.setContentsMargins(0, 0, 0, 0)
         configure_form(form)
         settings_layout.addWidget(self.md_form)
         self.md_settings_form = form
-        top.addWidget(inputs)
-        top.setSizes([640, 640])
+        sections.addWidget(inputs)
 
         self.md_project_path = QLineEdit(str(self.md_project_folder or ""))
         self.md_project_path.setReadOnly(True)
@@ -323,23 +324,21 @@ class EsenWorkspace(QDialog):
         settings_layout.addWidget(self.md_note)
         settings_layout.addStretch()
 
-        bottom = QSplitter(Qt.Orientation.Horizontal)
-        bottom.setObjectName("esenMdPreviewAndSources")
-        bottom.setChildrenCollapsible(False)
-        bottom.setHandleWidth(7)
         card, layout = panel("Model preview", paper=True, header_action=self.md_preview_button)
         self.md_preview = code_view("Model preview")
         self.md_preview.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
         self.md_preview.setMinimumHeight(125)
         layout.addWidget(self.md_preview, 1)
-        bottom.addWidget(card)
-        self._build_md_sources(bottom)
-        bottom.setSizes([430, 425, 425])
-        sections.addWidget(bottom)
-        sections.setStretchFactor(1, 1)
-        alloy_height = alloy.widget().sizeHint().height() + 2 * CONTROL_HEIGHT
-        sections.setSizes([max(alloy_height, inputs.widget().sizeHint().height()),
-                           bottom.sizeHint().height()])
+        sections.addWidget(card)
+
+        sources = QSplitter(Qt.Orientation.Vertical)
+        sources.setObjectName("esenMdPotentialSources")
+        sources.setChildrenCollapsible(False)
+        sources.setHandleWidth(7)
+        self._build_md_sources(sources)
+        sources.setSizes([165, 165])
+        sections.addWidget(sources)
+        sections.setSizes([inputs.sizeHint().height(), 190, 337])
         self.md_crystal.currentIndexChanged.connect(self._md_preview)
         return page
 
