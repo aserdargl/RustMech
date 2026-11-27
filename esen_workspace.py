@@ -232,7 +232,7 @@ class EsenWorkspace(QDialog):
         settings_layout.addWidget(self.md_form)
         self.md_settings_form = form
         top.addWidget(inputs)
-        top.setSizes([445, 830])
+        top.setSizes([640, 640])
 
         self.md_crystal = compact_combo((("BCC single crystal", "single"), ("BCC polycrystal", "poly")))
         self._form_row(form, "Crystal type", self.md_crystal)
