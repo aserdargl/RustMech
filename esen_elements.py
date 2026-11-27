@@ -131,7 +131,7 @@ class AlloyElements(QWidget):
         else:
             self.list_layout.addWidget(row, index - self.LEFT_COLUMN_ROWS, 1)
 
-    def remove_element(self, symbol):
+    def remove_element(self, symbol, *, focus=True):
         row, _ = self.rows.pop(symbol)
         self.list_layout.removeWidget(row)
         row.hide()
@@ -140,12 +140,16 @@ class AlloyElements(QWidget):
             self.list_layout.removeWidget(remaining)
             self._place_row(remaining, index)
         self._mark_added(symbol, False)
-        self.cells[symbol][0].setFocus()
+        if focus:
+            self.cells[symbol][0].setFocus()
         self.update_total()
         self.selection_changed.emit()
 
     def composition(self):
         return ", ".join(f"{symbol}:{percent.value():.4f}" for symbol, (_, percent) in self.rows.items())
+
+    def percentages(self):
+        return tuple((symbol, percent.value()) for symbol, (_, percent) in self.rows.items())
 
     def _show_edit_total(self, edited, text):
         state, _, _ = edited.validate(text, len(text))

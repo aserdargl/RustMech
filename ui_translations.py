@@ -101,6 +101,11 @@ Project folder|Proje klasörü
 Choose folder…|Klasör seç…
 Choose project folder|Proje klasörünü seç
 Choose an existing project folder.|Mevcut bir proje klasörü seçin.
+Invalid Molecular Dynamics project settings.|Molecular Dynamics proje ayarları geçersiz.
+Could not open the Molecular Dynamics project.|Molecular Dynamics projesi açılamadı.
+Could not save the Molecular Dynamics project.|Molecular Dynamics projesi kaydedilemedi.
+MEAM files missing: {files}|MEAM dosyaları bulunamadı: {files}
+Choose a MEAM potential for the restored elements.|Yüklenen elementler için bir MEAM potansiyeli seçin.
 Downloading MEAM files for {name}…|{name} için MEAM dosyaları indiriliyor…
 Could not download the MEAM files.|MEAM dosyaları indirilemedi.
 MEAM files saved in {path}|MEAM dosyaları {path} klasörüne kaydedildi.

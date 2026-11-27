@@ -1,6 +1,7 @@
 """Molecular dynamics preparation and TRUBA submission window."""
 
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import ExitStack
 from datetime import datetime
 from math import cbrt, isclose, prod
 from pathlib import Path
@@ -18,6 +19,7 @@ from app_settings import show_application_settings
 from esen_elements import AlloyElements
 import esen_jobs as jobs
 import esen_md as md
+from esen_md_project import MdProject, load_md_project, resolve_md_path, save_md_project, store_md_path
 from esen_meam_catalog import LAMMPS_MEAM, download_meam_source, load_nist_catalog, matching_sources
 from file_dialog import QFileDialog
 from studio_style import (
@@ -28,6 +30,7 @@ from ui_language import translate
 
 
 WORKSPACE_TITLE = "Molecular Dynamics"
+DEFAULT_MD_PROJECT = MdProject()
 ACTIVE_TRUBA_STATES = frozenset({"Submitting", "Submitted", "Queued", "Running", "Cancellation requested"})
 PANEL_PADDING = 7
 
@@ -136,7 +139,8 @@ class EsenWorkspace(QDialog):
         self.preferences = QSettings("RustMech", "RustMech")
         self.md_default_plans_root = self.history_root.parent / "md-preparations"
         saved_folder = self.preferences.value("esen/md/projectFolder", "", type=str)
-        self.md_project_folder = Path(saved_folder) if saved_folder else None
+        self.md_project_folder = None
+        self.md_project_dirty = False
         saved_aliases = self.preferences.value("esen/md/meamAliases", {})
         self.md_aliases = saved_aliases if isinstance(saved_aliases, dict) else {}
         self.executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="md")
@@ -169,6 +173,18 @@ class EsenWorkspace(QDialog):
         shell.addWidget(self.tabs)
         self.tabs.addTab(self._build_md(), WORKSPACE_TITLE)
         self.tabs.addTab(self._build_md_truba(), "TRUBA Submission")
+
+        self.md_save_timer = QTimer(self)
+        self.md_save_timer.setSingleShot(True)
+        self.md_save_timer.setInterval(250)
+        self.md_save_timer.timeout.connect(self._save_md_project)
+        if saved_folder:
+            self._open_md_project(Path(saved_folder))
+        self.md_elements.changed.connect(self._schedule_md_project_save)
+        self.md_crystal.currentIndexChanged.connect(self._schedule_md_project_save)
+        self.md_order.textChanged.connect(self._schedule_md_project_save)
+        for field in self._md_project_number_fields():
+            field.valueChanged.connect(self._schedule_md_project_save)
 
         language = getattr(QApplication.instance(), "_rustmech_language", None)
         if language is not None:
@@ -220,8 +236,7 @@ class EsenWorkspace(QDialog):
 
         alloy, alloy_layout = panel("Alloy elements", scrollable=True)
         alloy.setObjectName("esenMdAlloyElements")
-        defaults = [(element, 20) for element in ("Hf", "Nb", "Ta", "Ti", "Zr")]
-        self.md_elements = AlloyElements(defaults)
+        self.md_elements = AlloyElements(DEFAULT_MD_PROJECT.elements)
         alloy_layout.addWidget(self.md_elements, 1)
 
         alloy.setFixedWidth(alloy.widget().minimumSizeHint().width() + alloy.verticalScrollBar().sizeHint().width())
@@ -254,36 +269,37 @@ class EsenWorkspace(QDialog):
         self.md_order.setPlaceholderText("Example: Hf Nb Ta Ti Zr")
         self.md_order.setToolTip("Enter the element order used by indices in the MEAM parameter file.")
         self.md_dimensions = []
-        for axis, label in (("x", "Box length X"), ("y", "Box length Y"), ("z", "Box length Z")):
+        for (axis, label), default in zip((("x", "Box length X"), ("y", "Box length Y"), ("z", "Box length Z")),
+                                          DEFAULT_MD_PROJECT.dimensions):
             dimension = CompactDoubleSpinBox()
             dimension.setDecimals(5)
             dimension.setRange(0.00001, 10_000)
             dimension.setSingleStep(0.1)
-            dimension.setValue(self.preferences.value(f"esen/md/box/{axis}", 17.0, type=float))
+            dimension.setValue(self.preferences.value(f"esen/md/box/{axis}", default, type=float))
             self._form_row(form, label, dimension, field_layout=stepper_with_unit(dimension, "nm"))
             dimension.editingFinished.connect(
-                lambda field=dimension, key=axis: self.preferences.setValue(f"esen/md/box/{key}", field.value())
+                lambda field=dimension, key=axis: self._save_md_draft_setting(f"box/{key}", field.value())
             )
             self.md_dimensions.append(dimension)
         self.md_grains = CompactSpinBox()
         self.md_grains.setRange(2, md.MAX_GRAINS)
-        self.md_grains.setValue(12)
+        self.md_grains.setValue(DEFAULT_MD_PROJECT.grains)
         self.md_grains.setToolTip("Number of Voronoi grains in the periodic box.")
         self._form_row(form, "Grain count", self.md_grains)
         self.md_lattice = CompactDoubleSpinBox()
         self.md_lattice.setDecimals(4)
         self.md_lattice.setRange(0.0001, 100.0)
-        self.md_lattice.setValue(3.40)
+        self.md_lattice.setValue(DEFAULT_MD_PROJECT.lattice)
         self._form_row(form, "Lattice parameter", self.md_lattice,
                        field_layout=stepper_with_unit(self.md_lattice, "Å"))
         self.md_temperature = CompactSpinBox()
         self.md_temperature.setRange(1, 10000)
-        self.md_temperature.setValue(300)
+        self.md_temperature.setValue(DEFAULT_MD_PROJECT.temperature)
         self._form_row(form, "Temperature", self.md_temperature,
                        field_layout=stepper_with_unit(self.md_temperature, "K"))
         self.md_seed = CompactSpinBox()
         self.md_seed.setRange(1, 900_000_000)
-        self.md_seed.setValue(765896)
+        self.md_seed.setValue(DEFAULT_MD_PROJECT.seed)
         self._form_row(form, "Random seed", self.md_seed)
         self.md_seed.setFixedWidth(123)
         self.md_file_buttons = []
@@ -470,17 +486,93 @@ class EsenWorkspace(QDialog):
     def _choose_md_project(self):
         initial = str(self.md_project_folder or Path.home())
         folder = QFileDialog.getExistingDirectory(self, translate("Choose project folder"), initial)
-        if not folder:
+        return self._open_md_project(Path(folder)) if folder else False
+
+    def _open_md_project(self, path):
+        if not self._save_md_project(commit_edits=True):
             return False
-        path = Path(folder).resolve()
-        if not path.is_dir():
-            self.md_note.setText(translate("Choose an existing project folder."))
+        try:
+            path = path.resolve()
+            if not path.is_dir():
+                raise ValueError("Choose an existing project folder.")
+            project = load_md_project(path)
+            if project is None:
+                project = self._capture_md_project(path) if self.md_project_folder is None else DEFAULT_MD_PROJECT
+                save_md_project(path, project)
+            if any(symbol not in self.md_elements.cells for symbol, _ in project.elements):
+                raise ValueError("Invalid Molecular Dynamics project settings.")
+            library = resolve_md_path(path, project.library)
+            parameters = resolve_md_path(path, project.parameters)
+        except (OSError, ValueError) as error:
+            message = translate("Could not open the Molecular Dynamics project.")
+            self.md_note.setText(f"{message}\n{translate(str(error))}")
             return False
         self.md_project_folder = path
         self.md_project_path.setText(str(path))
         self.preferences.setValue("esen/md/projectFolder", str(path))
         self.md_prepared = None
+        self._apply_md_project(project, library, parameters)
         self._refresh_md_plans()
+        missing = [Path(filename).name for filename in (library, parameters)
+                   if filename and not Path(filename).is_file()]
+        self.md_note.setText(translate("MEAM files missing: {files}").format(files=", ".join(missing)) if missing else "")
+        return True
+
+    def _md_project_number_fields(self):
+        return (*self.md_dimensions, self.md_grains, self.md_lattice, self.md_temperature, self.md_seed)
+
+    def _capture_md_project(self, folder):
+        return MdProject(
+            elements=self.md_elements.percentages(), crystal=self.md_crystal.currentData(),
+            dimensions=tuple(field.value() for field in self.md_dimensions), grains=self.md_grains.value(),
+            lattice=self.md_lattice.value(), temperature=self.md_temperature.value(), seed=self.md_seed.value(),
+            library=store_md_path(folder, self.md_library.text()),
+            parameters=store_md_path(folder, self.md_parameters.text()),
+            order=self.md_order.text(), aliases=self.md_aliases,
+        )
+
+    def _apply_md_project(self, project, library, parameters):
+        numeric_fields = self._md_project_number_fields()
+        with ExitStack() as signals:
+            for widget in (self.md_elements, self.md_crystal, self.md_order, *numeric_fields):
+                signals.enter_context(QSignalBlocker(widget))
+            if self.md_elements.percentages() != project.elements:
+                for symbol in tuple(self.md_elements.rows):
+                    self.md_elements.remove_element(symbol, focus=False)
+                for symbol, percentage in project.elements:
+                    self.md_elements.add_element(symbol, percentage)
+            self.md_crystal.setCurrentIndex(self.md_crystal.findData(project.crystal))
+            values = (*project.dimensions, project.grains, project.lattice, project.temperature, project.seed)
+            for field, value in zip(numeric_fields, values):
+                field.setValue(value)
+            self._set_md_meam_file("library", library)
+            self._set_md_meam_file("parameters", parameters)
+            self._set_md_meam_aliases(project.aliases)
+            self.md_order.setText(project.order)
+        self._md_preview()
+        self._refresh_md_sources()
+
+    def _schedule_md_project_save(self, *_):
+        if self.md_project_folder is not None:
+            self.md_project_dirty = True
+            self.md_save_timer.start()
+
+    def _save_md_project(self, *, commit_edits=False):
+        if commit_edits:
+            for field in self._md_project_number_fields():
+                field.interpretText()
+            for _, percentage in self.md_elements.rows.values():
+                percentage.interpretText()
+        self.md_save_timer.stop()
+        if not self.md_project_dirty:
+            return True
+        try:
+            save_md_project(self.md_project_folder, self._capture_md_project(self.md_project_folder))
+        except (OSError, ValueError) as error:
+            message = translate("Could not save the Molecular Dynamics project.")
+            self.md_note.setText(f"{message}\n{translate(str(error))}")
+            return False
+        self.md_project_dirty = False
         return True
 
     def _select_md_source(self, item):
@@ -489,6 +581,9 @@ class EsenWorkspace(QDialog):
         source = item.data(Qt.ItemDataRole.UserRole)
         if ((self.md_project_folder is None or not self.md_project_folder.is_dir())
                 and not self._choose_md_project()):
+            return
+        if not source.elements.issuperset(self.md_elements.rows):
+            self.md_note.setText(translate("Choose a MEAM potential for the restored elements."))
             return
         self.md_download_task = self.executor.submit(download_meam_source, source, self.md_project_folder)
         self._set_md_inputs_enabled(False)
@@ -511,6 +606,7 @@ class EsenWorkspace(QDialog):
         self._set_md_meam_aliases(downloaded.aliases)
         self.md_order.setText(" ".join(downloaded.order))
         self._save_md_order()
+        self._schedule_md_project_save()
         self.md_note.setText(translate("MEAM files saved in {path}").format(path=downloaded.library.parent))
 
     def _build_md_plans(self):
@@ -653,7 +749,8 @@ class EsenWorkspace(QDialog):
 
     def _localize_md(self, *_):
         self._size_command_buttons()
-        self.md_elements.update_total()
+        with QSignalBlocker(self.md_elements):
+            self.md_elements.update_total()
         self._md_preview()
         self._refresh_md_plans()
         self._refresh_md_sources()
@@ -674,20 +771,25 @@ class EsenWorkspace(QDialog):
             except OSError as error:
                 self.md_note.setText(str(error))
             self._save_md_order()
+            self._schedule_md_project_save()
 
     def _set_md_meam_file(self, key, path):
         filename = str(path)
         field = getattr(self, f"md_{key}")
         field.setText(filename)
         field.setToolTip(filename)
-        self.preferences.setValue(f"esen/md/{key}", filename)
+        self._save_md_draft_setting(key, filename)
 
     def _set_md_meam_aliases(self, aliases):
         self.md_aliases = aliases
-        self.preferences.setValue("esen/md/meamAliases", aliases)
+        self._save_md_draft_setting("meamAliases", aliases)
 
     def _save_md_order(self):
-        self.preferences.setValue("esen/md/order", self.md_order.text())
+        self._save_md_draft_setting("order", self.md_order.text())
+
+    def _save_md_draft_setting(self, key, value):
+        if self.md_project_folder is None:
+            self.preferences.setValue(f"esen/md/{key}", value)
 
     def _md_model(self):
         for stepper in (*self.md_dimensions, self.md_grains, self.md_lattice, self.md_temperature, self.md_seed):
@@ -936,7 +1038,14 @@ class EsenWorkspace(QDialog):
     def dispose(self):
         if not self._disposed:
             self._disposed = True
+            if self.md_project_folder is not None:
+                self._save_md_project(commit_edits=True)
             self.timer.stop()
             self.poll_timer.stop()
             self.executor.shutdown(wait=False, cancel_futures=True)
             self.close()
+
+    def closeEvent(self, event):
+        if self.md_project_folder is not None:
+            self._save_md_project(commit_edits=True)
+        super().closeEvent(event)

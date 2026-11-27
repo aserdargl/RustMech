@@ -16,6 +16,7 @@ from PySide6.QtWidgets import QApplication, QLabel, QScrollArea
 import esen_jobs as jobs
 import esen_md as md
 from esen_elements import AlloyElements
+from esen_md_project import PROJECT_FILE, load_md_project
 from esen_meam_catalog import parse_nist_catalog
 from esen_workspace import EsenWorkspace
 from ui_language import LANGUAGE_KEY, LanguageManager
@@ -408,6 +409,90 @@ def test_selecting_meam_source_downloads_both_files_into_saved_project(tmp_path,
         assert restored.md_aliases == ({"Cu": "CuAlt"} if provider == "nist" else {})
     finally:
         restored.dispose()
+
+
+def test_md_project_restores_independent_drafts_and_relocates_meam_paths(tmp_path):
+    app = QApplication.instance() or QApplication([])
+    preferences = QSettings(str(tmp_path / "qt.ini"), QSettings.Format.IniFormat)
+    first, second, corrupt = (tmp_path / name for name in ("First Project", "Second Project", "Corrupt Project"))
+    for folder in (first, second, corrupt):
+        folder.mkdir()
+    (corrupt / PROJECT_FILE).write_text("{invalid", encoding="utf-8")
+    pair = first / "meam-potentials" / "source"
+    pair.mkdir(parents=True)
+    library, parameters = pair / "library.meam", pair / "alloy.meam"
+    library.touch()
+    parameters.touch()
+    truba = SimpleNamespace(analysis_auth=lambda: None)
+    with patch("esen_workspace.QSettings", return_value=preferences):
+        workspace = EsenWorkspace(truba, history=tmp_path / "jobs")
+
+    def choose(folder):
+        with patch("esen_workspace.QFileDialog.getExistingDirectory", return_value=str(folder)):
+            workspace.md_pick_project.click()
+
+    try:
+        workspace.show()
+        app.processEvents()
+        choose(first)
+        for symbol in tuple(workspace.md_elements.rows):
+            workspace.md_elements.remove_element(symbol)
+        composition = (("Cu", 66.6667), ("Ni", 33.3333), ("Fe", 0.0))
+        for symbol, percent in composition:
+            workspace.md_elements.add_element(symbol, percent)
+        workspace.md_crystal.setCurrentIndex(workspace.md_crystal.findData("poly"))
+        values = (4.12345, 5.2, 6.3, 17, 3.4321, 625, 821)
+        for field, value in zip(workspace._md_project_number_fields(), values):
+            field.setValue(value)
+        workspace._set_md_meam_file("library", library)
+        workspace._set_md_meam_file("parameters", parameters)
+        workspace._set_md_meam_aliases({"Cu": "CuAlt"})
+        workspace.md_order.setText("Ni CuAlt Fe")
+        QTest.qWait(400)
+        state = load_md_project(first)
+        assert state.elements == composition
+        assert state.library == "meam-potentials/source/library.meam"
+        assert state.parameters == "meam-potentials/source/alloy.meam"
+
+        choose(second)
+        assert "Cu" not in workspace.md_elements.rows
+        assert workspace.md_library.text() == ""
+        workspace.md_temperature.setValue(900)
+        for symbol in tuple(workspace.md_elements.rows):
+            workspace.md_elements.remove_element(symbol)
+        choose(first)
+        assert workspace.md_elements.percentages() == composition
+        assert workspace.md_crystal.currentData() == "poly"
+        assert tuple(field.value() for field in workspace._md_project_number_fields()) == values
+        assert workspace.md_library.text() == str(library)
+        assert workspace.md_parameters.text() == str(parameters)
+        assert workspace.md_order.text() == "Ni CuAlt Fe"
+        assert workspace.md_aliases == {"Cu": "CuAlt"}
+        assert load_md_project(second).temperature == 900
+        assert load_md_project(second).elements == ()
+
+        choose(corrupt)
+        assert workspace.md_project_folder == first
+        assert "Could not open" in workspace.md_note.text()
+        assert (corrupt / PROJECT_FILE).read_text(encoding="utf-8") == "{invalid"
+        workspace.md_elements.rows["Fe"][1].lineEdit().setText("0.1250")
+        workspace.close()
+    finally:
+        workspace.dispose()
+
+    moved = tmp_path / "Moved Project"
+    first.rename(moved)
+    with patch("esen_workspace.QSettings", return_value=preferences):
+        workspace = EsenWorkspace(truba, history=tmp_path / "jobs")
+    try:
+        choose(moved)
+        assert workspace.md_elements.percentages() == (*composition[:-1], ("Fe", 0.125))
+        assert workspace.md_order.text() == "Ni CuAlt Fe"
+        assert Path(workspace.md_library.text()) == moved / library.relative_to(first)
+        assert Path(workspace.md_parameters.text()).is_file()
+        assert workspace.md_plans_root == moved / "md-preparations"
+    finally:
+        workspace.dispose()
 
 
 def test_md_tab_enter_previews_and_submits_package_to_truba(tmp_path, potentials):

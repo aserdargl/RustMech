@@ -70,6 +70,9 @@ girin ve önizlemedeki atom sayısını kontrol edin.
 bir potansiyele tıkladığınızda kütüphane ve parametre dosyaları proje
 klasörünün `meam-potentials` alt klasörüne indirilir ve MEAM alanları
 doldurulur. Hazırlanan paketler `md-preparations` alt klasöründe saklanır.
+Elementler, atom yüzdeleri, paket ayarları ve kullanılan MEAM dosyaları
+`rustmech-md.json` dosyasına otomatik kaydedilir. Aynı proje klasörünü yeniden
+seçtiğinizde ayarlar ve dosya alanları geri yüklenir.
 MEAM dosyalarını elle de seçebilirsiniz. Her iki alanın yanındaki
 **Kaynaklar** menüsü LAMMPS dosyalarına, NIST potansiyel arşivine ve MEAM
 dosya kılavuzuna erişim sağlar. Alaşımınız için birlikte yayımlanan dosya
