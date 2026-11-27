@@ -89,7 +89,7 @@ class RemoteOperationTests(unittest.TestCase):
             def solve(_, grid, ratio, distribution, case, *, on_progress):
                 self.assertEqual((grid, ratio, distribution), (128, .05, None))
                 on_progress('DAMASK progress')
-                for name in ('stiffness_mpa.csv', 'status.json', 'xx_plus.hdf5', 'cell.vti'):
+                for name in ('stiffness_mpa.csv', 'elastic_constants.csv', 'status.json', 'xx_plus.hdf5', 'cell.vti'):
                     (case / name).touch()
 
             with patch('remote_worker.probe', return_value=dict(damask=True)), patch(
@@ -99,7 +99,8 @@ class RemoteOperationTests(unittest.TestCase):
             stage.assert_any_call('DAMASK progress')
             mesh.assert_not_called()
             self.assertEqual(Path(result['run_folder']), (output / 'fft').resolve())
-            self.assertEqual({path.name for path in (output / 'fft').iterdir()}, {'stiffness_mpa.csv', 'status.json'})
+            self.assertEqual({path.name for path in (output / 'fft').iterdir()},
+                             {'stiffness_mpa.csv', 'elastic_constants.csv', 'status.json'})
 
     def test_fft_runtime_preparation_is_scoped_to_fft_setup(self):
         request = dict(operation='prepare', source_sha256='checksum', native_sha256='native')

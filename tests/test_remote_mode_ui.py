@@ -437,12 +437,13 @@ class RemoteModeUiTests(unittest.TestCase):
         folder = Path(self.temp.name) / 'fft'
         folder.mkdir()
         status = dict(grid=32, solid_volume_fraction=.3, void_stiffness_ratio=.01,
-                      stiffness_mpa=[[1000] * 6 for _ in range(6)])
+                      stiffness_mpa=[[1000 if i == j else 0 for j in range(6)] for i in range(6)])
         (folder / 'status.json').write_text(json.dumps(status), encoding='utf-8')
         result = dict(operation='fft_solve', run_folder=str(folder))
         self.window._background_analysis_updated({}, (result, folder.parent))
         self.assertEqual(self.window.fft_result_folder, folder)
         self.assertIn('32³', self.window.fft_result_summary.text())
+        self.assertIn('Ex = 1000 MPa', self.window.fft_elastic_constants.text())
 
     def test_enabling_remote_mode_and_runtime_checks_without_session_submit_nothing(self):
         with patch.object(self.controller.executor, 'submit') as submit:

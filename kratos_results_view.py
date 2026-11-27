@@ -11,6 +11,7 @@ from PySide6.QtWidgets import QDialog,QVBoxLayout,QHBoxLayout,QLabel,QPushButton
 from studio_style import STUDIO_STYLESHEET,CompactDoubleSpinBox,CONTROL_HEIGHT
 from preview_viewport import create_preview_viewport
 from kratos_backend import KratosResults
+from mechanical_results import compression_result_metrics, compression_result_readout
 
 
 class KratosResultsDialog(QDialog):
@@ -60,6 +61,12 @@ class KratosResultsDialog(QDialog):
         self.status=QLabel()
         self.status.setWordWrap(True)
         layout.addWidget(self.status)
+        from ui_language import translate
+        metrics = compression_result_readout(compression_result_metrics(self.folder, report), translate)
+        if metrics:
+            readout = QLabel(metrics)
+            readout.setWordWrap(True)
+            layout.addWidget(readout)
         self.steps.currentIndexChanged.connect(self.render_result)
         self.field.currentIndexChanged.connect(self.render_result)
         self.scale.valueChanged.connect(self.render_result)

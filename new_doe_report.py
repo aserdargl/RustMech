@@ -12,11 +12,12 @@ LEARNING_CSV_NAME = "deep_learning_dataset.csv"
 LEARNING_RUN_PREFIX = "DeepLearning_"
 FINAL_STATES = {"Completed", "Failed", "Stopped", "Skipped"}
 TABLES = {
-    "fft_solve": ("stiffness_mpa.csv",),
-    "mechanical": ("force_displacement.csv", "standardized_stress_strain.csv", "quality_report.csv"),
+    "fft_solve": ("stiffness_mpa.csv", "elastic_constants.csv"),
+    "mechanical": ("force_displacement.csv", "stress_strain.csv", "standardized_stress_strain.csv",
+                   "compression_metrics.csv", "quality_report.csv"),
     "mpm_solve": ("mpm_force_displacement.csv",),
     "peridynamic_solve": ("force_displacement.csv", "layer_damage.csv"),
-    "flow_solve": ("axial_profile.csv",),
+    "flow_solve": ("axial_profile.csv", "flow_metrics.csv", "darcy_forchheimer.csv"),
     "thermal_solve": ("temperature_history.csv",),
 }
 SUMMARIES = {

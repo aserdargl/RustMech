@@ -19,7 +19,7 @@ from flow_workspace import FlowWorkspace
 from flow_analysis import FlowSettings
 from model import ROOT
 from studio_style import ActionFlowLayout, CompactSpinBox, CompactDoubleSpinBox,configure_form,field_label,CONTROL_HEIGHT
-from thermal_analysis import ThermalSettings,execute_thermal_case,export_thermal_case
+from thermal_analysis import ThermalSettings,execute_thermal_case,export_thermal_case,thermal_performance_metrics
 
 
 class ThermalWorkspace(FlowWorkspace):
@@ -331,12 +331,33 @@ class ThermalWorkspace(FlowWorkspace):
         self.chart.draw_idle()
 
     def show_frame(self,index):
+        from ui_language import translate
+
         if not self.thermal_report: return
         try:
             frame = self.thermal_report["frames"][index]
             self.grid = pv.read(self.display_directory/frame["water"])
             self.solid_grid = pv.read(self.display_directory/frame["tpms"]) if "tpms" in frame else None
             row = self.thermal_report["history"][index]
+            performance = ""
+            if "inlet_mass_kg_s" in row:
+                metrics = thermal_performance_metrics(row, ThermalSettings(**self.manifest["thermal"]),
+                                                      FlowSettings(**self.manifest["flow"]))
+                fields = (
+                    ("channel_hydraulic_power_W", "Channel hydraulic power", " W"),
+                    ("water_sensible_heat_loss_W", "Water sensible heat loss", " W"),
+                    ("interface_water_to_solid_W", "Water-to-solid heat rate", " W"),
+                    ("interface_mean_heat_flux_W_m2", "Mean interface heat flux", " W/m²"),
+                    ("apparent_h_W_m2_K", "Apparent h", " W/(m²·K)"),
+                    ("apparent_Nusselt", "Nusselt", ""),
+                    ("apparent_thermal_resistance_K_W", "Apparent thermal resistance", " K/W"),
+                    ("interface_heat_to_hydraulic_power_ratio", "Heat transfer / hydraulic power", ""),
+                )
+                available = row | metrics
+                shown = [f"{translate(label)}: {value:.5g}{unit}" if value is not None else f"{translate(label)}: —"
+                         for key, label, unit in fields if key in available for value in (available[key],)]
+                performance = "\n" + " · ".join(shown)
+                self.results.setToolTip(translate("Apparent h uses the interface area and the mean bulk-to-wall temperature difference. Nusselt uses the channel hydraulic diameter."))
             self.time_label.setText(f"t = {frame['time_s']:.6g} s")
             solid = f" · TPMS: {row['tpms_mean_C']:.4g} °C [{row['tpms_min_C']:.4g}, {row['tpms_max_C']:.4g}]" if "tpms_mean_C" in row else ""
             coupling = f"Interface heat imbalance: {row['interface_heat_mismatch_W']:.3g} W · interface ΔT: {row['interface_temperature_jump_K']:.3g} K.\n" if "interface_heat_mismatch_W" in row else ""
@@ -344,7 +365,7 @@ class ThermalWorkspace(FlowWorkspace):
             self.results.setText(f"{self.thermal_report['status'].upper()} · t = {frame['time_s']:.6g} s · water mean: {row['water_mean_C']:.4g} °C · outlet: {row['outlet_bulk_C']:.4g} °C{solid}\n"
                 f"Static Δp: {row['pressure_drop_Pa']:.5g} Pa. "+coupling+
                 f"Sampled solid: {geometry['specimen_solid_fraction']*100:.4g}% · solid components: {geometry.get('solid_components','—')}. Check mesh, time-step and coupling refinement.\nConstant properties; insulated exterior; no boiling or buoyancy."+
-                ("\n"+self.thermal_report["warnings"][-1] if self.thermal_report["status"]!="completed" else ""))
+                ("\n"+self.thermal_report["warnings"][-1] if self.thermal_report["status"]!="completed" else "")+performance)
             if hasattr(self,"time_cursor"):
                 self.time_cursor.set_xdata([frame["time_s"]]*2)
                 self.chart.draw_idle()

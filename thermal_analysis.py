@@ -16,7 +16,8 @@ import pyvista as pv
 from scipy import ndimage
 from scipy.spatial import cKDTree
 
-from flow_analysis import FlowSettings as FlowSettings, build_flow_grid, sample_channel_solid, write_poly_mesh, _header, _write, _wsl, linux_path
+from flow_analysis import (FlowSettings as FlowSettings, build_flow_grid, hydraulic_metrics, sample_channel_solid,
+                           write_poly_mesh, _header, _write, _wsl, linux_path)
 from model import Settings as Settings
 
 
@@ -215,18 +216,45 @@ def _interface_diagnostics(blocks,regions,thermal):
     if "tpms" not in regions: return {}
     patches = {region:blocks[region]["boundary"][name] for region,name in
                (("water","water_to_tpms"),("tpms","tpms_to_water"))}
-    heat,temps,centres = {},{},{}
+    heat,temps,centres,areas = {},{},{},{}
     for region,k in (("water",thermal.water_conductivity),("tpms",thermal.solid_conductivity)):
         patch,grid = patches[region],regions[region]
         centres[region] = patch.cell_centers().points
         distance,index = cKDTree(grid.cell_centers().points).query(centres[region])
         temps[region] = np.asarray(patch.cell_data["T"])
-        areas = patch.compute_cell_sizes(length=False,volume=False).cell_data["Area"]
-        heat[region] = float(np.sum(k*(np.asarray(grid.cell_data["T"])[index]-temps[region])/distance*areas))
+        areas[region] = patch.compute_cell_sizes(length=False,volume=False).cell_data["Area"]
+        heat[region] = float(np.sum(k*(np.asarray(grid.cell_data["T"])[index]-temps[region])/distance*areas[region]))
     _,matching = cKDTree(centres["tpms"]).query(centres["water"])
     return dict(interface_water_to_solid_W=heat["water"],interface_solid_outward_W=heat["tpms"],
                 interface_heat_mismatch_W=abs(heat["water"]+heat["tpms"]),
-                interface_temperature_jump_K=float(np.max(np.abs(temps["water"]-temps["tpms"][matching]))))
+                interface_temperature_jump_K=float(np.max(np.abs(temps["water"]-temps["tpms"][matching]))),
+                interface_area_m2=float(areas["water"].sum()),
+                interface_wall_mean_C=float(np.average(temps["water"], weights=areas["water"]))-273.15)
+
+
+def thermal_performance_metrics(row, thermal, flow):
+    drop = row["inlet_bulk_C"] - row["outlet_bulk_C"]
+    inlet_flow = row["inlet_mass_kg_s"] / flow.density
+    values = hydraulic_metrics(row["pressure_drop_Pa"], inlet_flow)
+    solved = row["time_s"] > 0
+    values.update(water_bulk_temperature_drop_K=drop,
+                  water_sensible_heat_loss_W=row["outlet_mass_kg_s"] * thermal.water_cp * drop if solved else None)
+    if "interface_water_to_solid_W" in row:
+        heat = row["interface_water_to_solid_W"]
+        power = values["channel_hydraulic_power_W"]
+        values["interface_heat_to_hydraulic_power_ratio"] = abs(heat) / power if solved and power > 0 else None
+    if "interface_area_m2" in row and "interface_water_to_solid_W" in row:
+        area = row["interface_area_m2"]
+        bulk = (row["inlet_bulk_C"] + row["outlet_bulk_C"]) / 2
+        difference = bulk - row["interface_wall_mean_C"]
+        flux = heat / area if solved and area > 0 else None
+        coefficient = flux / difference if flux is not None and abs(difference) > 1e-6 and flux * difference > 0 else None
+        values.update(interface_mean_heat_flux_W_m2=flux, reference_bulk_temperature_C=bulk,
+                      reference_bulk_to_wall_delta_K=difference, apparent_h_W_m2_K=coefficient,
+                      apparent_Nusselt=coefficient * flow.hydraulic_diameter_mm / (1000 * thermal.water_conductivity)
+                      if coefficient is not None else None,
+                      apparent_thermal_resistance_K_W=1 / (coefficient * area) if coefficient is not None else None)
+    return values
 
 
 def summarize_thermal_case(directory):
@@ -245,6 +273,7 @@ def summarize_thermal_case(directory):
     times = sorted(reader.time_values)
     time_folders = {float(p.name):p for p in directory.iterdir() if p.is_dir() and re.fullmatch(r"[\deE+.\-]+",p.name)}
     thermal = ThermalSettings(**manifest["thermal"])
+    flow = FlowSettings(**manifest["flow"])
     if max(times)<thermal.duration_s*(1-1e-7): raise RuntimeError("CHT did not reach the requested physical duration.")
     frames = directory/"frames"
     frames.mkdir(exist_ok=True)
@@ -290,6 +319,7 @@ def summarize_thermal_case(directory):
         row["outlet_bulk_C"] = thermal.initial_water_c if time==0 else at("outlet_bulkT")-273.15
         row["inlet_mass_kg_s"],row["outlet_mass_kg_s"] = -at("inlet_phi"),at("outlet_phi")
         row["pressure_drop_Pa"] = 0. if time==0 else at("inlet_p")-at("outlet_p")
+        row.update(thermal_performance_metrics(row, thermal, flow))
         history.append(row)
         entries.append(entry)
     with (directory/"temperature_history.csv").open("w",newline="") as stream:
@@ -297,6 +327,8 @@ def summarize_thermal_case(directory):
         writer.writeheader()
         writer.writerows(history)
     report = dict(status="completed",duration_s=max(times),frames=entries,history=history,
+                  final_performance=thermal_performance_metrics(history[-1], thermal, flow),
+                  performance_reference="Apparent h uses the water-side interface area and the difference between mean inlet/outlet bulk temperature and area-weighted interface temperature. Nusselt uses the channel hydraulic diameter.",
                   warnings=manifest["mesh"]["warnings"]+[
                       "Constant thermophysical properties: temperature does not change density or viscosity. No buoyancy, boiling, external heat loss or pipe thermal mass.",
                       "Transient results require mesh, time-step and fluid/solid coupling refinement checks; clean solver completion is not an accuracy guarantee."],

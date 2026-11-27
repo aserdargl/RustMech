@@ -121,13 +121,17 @@ class ThermalWorkspaceTests(unittest.TestCase):
                 frame[region] = filename
             entries.append(frame)
             history.append(dict(time_s=float(index),water_mean_C=20+10*index,outlet_bulk_C=20+10*index,
-                                tpms_mean_C=20+5*index,tpms_min_C=20+5*index,tpms_max_C=20+5*index,pressure_drop_Pa=1))
+                                tpms_mean_C=20+5*index,tpms_min_C=20+5*index,tpms_max_C=20+5*index,
+                                pressure_drop_Pa=1,inlet_bulk_C=80,inlet_mass_kg_s=.02,outlet_mass_kg_s=.02,
+                                interface_area_m2=.02,interface_wall_mean_C=35,interface_water_to_solid_W=40))
         (directory/"thermal_summary.json").write_text(json.dumps(dict(status="completed",frames=entries,history=history,warnings=[])))
         workspace = self.dialog().thermal_workspace
         workspace.load_directory(directory)
         self.assertEqual(workspace.time_slider.value(),1)
         self.assertTrue(np.all(workspace.solid_grid.cell_data["Temperature_C"]==25))
+        self.assertIn("Nusselt: 1", workspace.results.text())
         workspace.time_slider.setValue(0)
+        self.assertIn("Nusselt: —", workspace.results.text())
         self.assertTrue(np.all(workspace.grid.cell_data["Temperature_C"]==20))
         self.assertEqual(workspace.plotter.add_mesh.call_args.kwargs["scalars"], "Temperature_C")
         workspace.play.click()

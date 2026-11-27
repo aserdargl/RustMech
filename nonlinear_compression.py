@@ -61,7 +61,7 @@ from analysis_process import AnalysisProcess, run_single_analysis, run_resume_an
 from app_settings import ASK_WORKSPACE_ON_STARTUP, show_application_settings
 from damask_fft import (
     COMPONENTS, MIN_GRID, DamaskAnalysisProcess, fft_dimensions, sample_periodic_cell,
-    validate_periodic_fft,
+    directional_elastic_constants, validate_periodic_fft,
 )
 from file_dialog import ANALYSIS_RESULTS_FOLDERS, choose_analysis_results_folder
 from studio_style import (ActionFlowLayout, CompactDoubleSpinBox, CONTROL_HEIGHT, STUDIO_STYLESHEET,
@@ -120,6 +120,7 @@ from mechanical_analysis import (
     run_batch_experiment,
 )
 from mechanical_results import (
+    compression_result_metrics, compression_result_readout,
     export_field_results as export_field_results,
     export_geometry as export_geometry,
     export_graphs as export_graphs,
@@ -1153,6 +1154,9 @@ class RustMechDialog(QDialog):
         self.result_preview_field.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
         self.result_preview_field.currentIndexChanged.connect(self.render_preview)
         self.result_preview_controls.hide()
+        self.compression_metrics_label = QLabel()
+        self.compression_metrics_label.setWordWrap(True)
+        self.compression_metrics_label.hide()
 
         # Keep warnings together with the status messages at the bottom.
         self.fragment_status = QLabel()
@@ -1428,6 +1432,7 @@ class RustMechDialog(QDialog):
         self.preview_splitter.setStretchFactor(1, 0)
         self.preview_splitter.setSizes([800, 32])
         right.addWidget(self.result_preview_controls, 0, Qt.AlignmentFlag.AlignLeft)
+        right.addWidget(self.compression_metrics_label)
         right.addWidget(self.preview_splitter, 1)
         preferences = self.solver_profile_store.settings if self._persist_solver_profiles else None
         self.peridynamic_results = PeridynamicResults(preferences)
@@ -2230,6 +2235,10 @@ class RustMechDialog(QDialog):
         fields.addWidget(self.fft_result_summary)
         self.fft_result_summary.hide()
         fields.addWidget(self.fft_matrix)
+        self.fft_elastic_constants = QLabel()
+        self.fft_elastic_constants.setWordWrap(True)
+        fields.addWidget(self.fft_elastic_constants)
+        self.fft_elastic_constants.hide()
         self.fft_results_button = QPushButton("Open FFT results")
         self.fft_results_button.setAutoDefault(False)
         self.fft_results_button.hide()
@@ -2265,6 +2274,8 @@ class RustMechDialog(QDialog):
         )
 
     def _show_fft_results(self, result, folder, *, remember=True):
+        from ui_language import translate
+
         labels = "    " + "".join(f"{label:>8}" for label in COMPONENTS)
         rows = [
             f"{label:>4}" + "".join(f" {value:7.3g}" for value in row)
@@ -2277,6 +2288,23 @@ class RustMechDialog(QDialog):
             f"{cell}{result['grid']}³ · ϕ = {result['solid_volume_fraction']:.1%} · "
             f"Eᵥ/Eₛ = {result['void_stiffness_ratio']:.4g} · MPa"
         )
+        constants = result.get("elastic_constants")
+        if constants is None:
+            constants = directional_elastic_constants(result["stiffness_mpa"])
+        lines = [translate("Directional elastic constants")]
+        if constants:
+            for stem, axes in (("E", ("x", "y", "z")), ("G", COMPONENTS[3:])):
+                lines.append(" · ".join(f"{stem}{axis} = {constants[f'{stem}_{axis}_MPa']:.5g} MPa"
+                                        for axis in axes))
+            for pairs in (("xy", "xz", "yx"), ("yz", "zx", "zy")):
+                lines.append(" · ".join(f"ν{axes} = {constants['nu_' + axes]:.5g}" for axes in pairs))
+            lines.append(f"Emax/Emin = {constants['young_modulus_axis_ratio']:.5g} · "
+                         f"Aᵁ = {constants['universal_anisotropy_index']:.5g}")
+        else:
+            lines.append(translate("Unavailable for a singular or non-positive-definite stiffness matrix."))
+        self.fft_elastic_constants.setText("\n".join(lines))
+        self.fft_elastic_constants.setToolTip("In νij, i is the loading axis and j is the lateral axis.")
+        self.fft_elastic_constants.show()
         self.fft_result_folder = folder
         self.fft_result_heading.show()
         self.fft_result_summary.show()
@@ -3523,6 +3551,8 @@ class RustMechDialog(QDialog):
         self.result_preview_controls.setVisible(has_results and not (fft_selected or peridynamic))
         self.peridynamic_results.setVisible(peridynamic and self.peridynamic_results.folder is not None)
         model_view = not (fft_selected or peridynamic) and self.result_preview_field.currentData() is None
+        self.compression_metrics_label.setVisible(has_results and not (fft_selected or peridynamic or model_view)
+                                                  and bool(self.compression_metrics_label.text()))
         self.mesh_kpis.setVisible(model_view)
         self._mesh_details_action.setVisible(model_view)
         self.telemetry_details.setVisible(model_view and self._mesh_details_action.isChecked())
@@ -4337,6 +4367,12 @@ class RustMechDialog(QDialog):
         self._result_preview_data = None
         title = "Saved mechanical result · Final load step" if historical else "Latest mechanical result · Final load step"
         self.result_preview_field.setToolTip(f"{translate(title)}\n{folder}")
+        try:
+            report = json.loads((Path(folder) / "summary.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            report = {}
+        metrics = compression_result_metrics(folder, report)
+        self.compression_metrics_label.setText(compression_result_readout(metrics, translate))
         self._sync_preview_readout()
 
     def _detach_remote_jobs(self):

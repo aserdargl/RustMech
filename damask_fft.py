@@ -26,6 +26,37 @@ TENSOR_INDICES = ((0, 0), (1, 1), (2, 2), (1, 2), (0, 2), (0, 1))
 STRAIN = 1e-4
 MIN_GRID = 8
 RESULT_FILE = "stiffness_mpa.csv"
+ELASTIC_CONSTANTS_FILE = "elastic_constants.csv"
+
+
+def directional_elastic_constants(stiffness):
+    """Return engineering constants along the grid axes from the symmetric compliance."""
+    matrix = np.asarray(stiffness, dtype=float)
+    if matrix.shape != (6, 6) or not np.isfinite(matrix).all():
+        return {}
+    matrix = (matrix + matrix.T) / 2
+    eigenvalues = np.linalg.eigvalsh(matrix)
+    if eigenvalues[0] <= eigenvalues[-1] * np.finfo(float).eps * 6:
+        return {}
+    compliance = np.linalg.solve(matrix, np.eye(6))
+    constants = {f"E_{axis}_MPa": float(1 / compliance[i, i]) for i, axis in enumerate("xyz")}
+    constants.update({f"G_{plane}_MPa": float(1 / compliance[i, i])
+                      for i, plane in enumerate(COMPONENTS[3:], start=3)})
+    constants.update({f"nu_{load}{lateral}": float(-compliance[j, i] / compliance[i, i])
+                      for i, load in enumerate("xyz") for j, lateral in enumerate("xyz") if i != j})
+    young = [constants[f"E_{axis}_MPa"] for axis in "xyz"]
+    normal_stiffness = matrix[:3, :3]
+    normal_compliance = compliance[:3, :3]
+    stiffness_deviator = (3 * np.trace(normal_stiffness) - normal_stiffness.sum()) / 2
+    compliance_deviator = (3 * np.trace(normal_compliance) - normal_compliance.sum()) / 2
+    bulk_voigt = normal_stiffness.sum() / 9
+    bulk_reuss = 1 / normal_compliance.sum()
+    shear_voigt = (stiffness_deviator + 3 * np.trace(matrix[3:, 3:])) / 15
+    shear_reuss = 15 / (4 * compliance_deviator + 3 * np.trace(compliance[3:, 3:]))
+    constants.update(young_modulus_axis_ratio=max(young) / min(young),
+                     universal_anisotropy_index=float(max(0., 5 * shear_voigt / shear_reuss
+                                                          + bulk_voigt / bulk_reuss - 6)))
+    return constants
 CANCEL_FILE = ".cancel"
 
 # Run beside the DAMASK binary, using the Linux HDF5 reader. A cancellation
@@ -257,13 +288,22 @@ def solve_cell(solid, size_mm, young_mpa, poisson, void_ratio, distribution, fol
         writer = csv.writer(stream)
         writer.writerow(["MPa", *COMPONENTS])
         writer.writerows((label, *row) for label, row in zip(COMPONENTS, stiffness))
+    elastic = directional_elastic_constants(stiffness)
+    elastic_tmp = folder / "elastic_constants.tmp"
+    if elastic:
+        with elastic_tmp.open("w", newline="", encoding="utf-8") as stream:
+            writer = csv.DictWriter(stream, fieldnames=list(elastic))
+            writer.writeheader()
+            writer.writerow(elastic)
     metadata.update(state="complete", relative_asymmetry=float(asymmetry),
-                    stiffness_mpa=stiffness.tolist(), directory=str(folder))
+                    stiffness_mpa=stiffness.tolist(), elastic_constants=elastic, directory=str(folder))
     status_tmp = folder / "status.tmp"
     write_json(status_tmp, metadata)
     if (folder / CANCEL_FILE).exists():
         raise RuntimeError("DAMASK analysis cancelled.")
     tmp.replace(folder / RESULT_FILE)
+    if elastic:
+        elastic_tmp.replace(folder / ELASTIC_CONSTANTS_FILE)
     status_tmp.replace(folder / "status.json")
     return metadata
 

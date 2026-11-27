@@ -1,5 +1,6 @@
 """Compact cylindrical-channel CFD workspace using the shared Datenburg controls."""
 from dataclasses import asdict, replace
+import csv
 from datetime import datetime
 import json
 from pathlib import Path
@@ -16,7 +17,8 @@ from PySide6.QtWidgets import (QCheckBox, QFormLayout, QHBoxLayout,
 
 from analysis_process import AnalysisProcess
 from file_dialog import QFileDialog, choose_analysis_results_folder
-from flow_analysis import FlowSettings, export_flow_case, export_geometry_inspection, execute_flow_case, stop_flow_case
+from flow_analysis import (FlowSettings, POROUS_FIT_FILE, execute_flow_case, export_flow_case,
+                           export_geometry_inspection, fit_porous_resistance, hydraulic_metrics, stop_flow_case)
 from model import ROOT
 from preview_viewport import create_preview_viewport
 from studio_style import ActionFlowLayout, CompactDoubleSpinBox, CONTROL_HEIGHT, configure_form, field_label
@@ -221,6 +223,31 @@ class FlowWorkspace(QWidget):
         self.results.setWordWrap(True)
         self.results.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         right_layout.addWidget(self.results)
+        self.resistance_result = QLabel()
+        self.resistance_result.setWordWrap(True)
+        self.resistance_result.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.resistance_result.hide()
+        right_layout.addWidget(self.resistance_result)
+        self.resistance_cases = []
+        self.resistance_controls = QWidget()
+        actions = ActionFlowLayout(self.resistance_controls, equal_width=True)
+        actions.setContentsMargins(0, 0, 0, 0)
+        self.fit_resistance_button = QPushButton("Fit Darcy–Forchheimer resistance")
+        self.add_resistance_case_button = QPushButton("Add CFD case…")
+        self.clear_resistance_cases_button = QPushButton("Clear case selection")
+        for button, slot in ((self.add_resistance_case_button, self.add_resistance_case),
+                             (self.fit_resistance_button, self.fit_resistance),
+                             (self.clear_resistance_cases_button, self.clear_resistance_cases)):
+            button.setAutoDefault(False)
+            button.setDefault(False)
+            button.setFixedHeight(CONTROL_HEIGHT)
+            button.setObjectName("secondaryActionBtn")
+            button.clicked.connect(slot)
+            actions.addWidget(button)
+        self.resistance_case_count = QLabel()
+        actions.addWidget(self.resistance_case_count)
+        self.resistance_controls.hide()
+        right_layout.addWidget(self.resistance_controls)
         self.status = QLabel("Ready")
         self.status.setWordWrap(True)
         right_layout.addWidget(self.status)
@@ -428,7 +455,57 @@ class FlowWorkspace(QWidget):
         directory = self.display_directory or self.case_directory
         if directory: QDesktopServices.openUrl(QUrl.fromLocalFile(str(directory)))
 
+    def _update_resistance_selection(self):
+        from ui_language import translate
+
+        count = len(self.resistance_cases)
+        self.fit_resistance_button.setEnabled(count >= 3)
+        self.clear_resistance_cases_button.setEnabled(count > 1)
+        self.resistance_case_count.setText(translate("{count} CFD cases selected").format(count=count))
+        self.resistance_case_count.setToolTip("\n".join(str(path.parent) for path in self.resistance_cases))
+
+    def add_resistance_case(self):
+        start = self.resistance_cases[-1].parent.parent
+        filename, _ = QFileDialog.getOpenFileName(self, "Select a matching CFD case", str(start),
+                                                 "Flow case (flow_case.json)")
+        if filename:
+            path = Path(filename).resolve()
+            if path not in self.resistance_cases:
+                self.resistance_cases.append(path)
+                self._update_resistance_selection()
+
+    def clear_resistance_cases(self):
+        del self.resistance_cases[1:]
+        self._update_resistance_selection()
+
+    def fit_resistance(self):
+        from ui_language import translate
+
+        directory = self.display_directory
+        try:
+            fit = fit_porous_resistance(self.resistance_cases, directory)
+        except (OSError, ValueError, TypeError, KeyError, RuntimeError) as error:
+            self.status.setText(translate(str(error)))
+        else:
+            self._show_resistance(fit)
+            self.status.setText(translate("Saved {file}").format(file=directory / POROUS_FIT_FILE))
+
+    def _show_resistance(self, fit):
+        from ui_language import translate
+
+        permeability = fit.get("apparent_permeability_m2")
+        display_k = f"{float(permeability):.5g} m²" if permeability not in (None, "") else "—"
+        beta = float(fit["apparent_forchheimer_1_m"])
+        residual = float(fit["relative_fit_residual"])
+        self.resistance_result.setText(
+            f"{translate('Apparent permeability')} = {display_k} · β = {beta:.5g} m⁻¹ · "
+            f"{translate('Relative fit residual')} = {residual:.2%}\n"
+            + translate("The fit includes entrance, exit and any bypass effects."))
+        self.resistance_result.show()
+
     def load_directory(self,directory):
+        from ui_language import translate
+
         directory = Path(directory)
         manifest = json.loads((directory/"flow_case.json").read_text())
         result = directory/"flow_result.vtu"
@@ -452,15 +529,35 @@ class FlowWorkspace(QWidget):
         self.case_label.setText(f"Saved case: {'Empty channel' if flow['empty_pipe'] else name} · {config.section_label} · {flow['inlet_speed']:g} m/s · {flow['turbulence']}")
         self.case_label.setToolTip("Displayed results use this saved case. A new run uses the current Model workspace geometry and the flow inputs at left.")
         summary_path = directory/"flow_summary.json"
+        self.resistance_controls.hide()
+        self.resistance_cases = []
+        self.resistance_result.hide()
         if summary_path.exists():
             summary = json.loads(summary_path.read_text())
+            powers = summary.get("hydraulic_metrics") or hydraulic_metrics(
+                summary["pressure_drop_total_Pa"], summary["inlet_flow_m3_s"], summary["pressure_drop_specimen_Pa"])
             self.results.setText(f"{summary['status'].upper()} · Re = {summary['reynolds_diameter']:.5g} · {self.grid.n_cells:,} fluid cells\n"
                 f"Static Δp, channel: {summary['pressure_drop_total_Pa']:.6g} Pa · Insert section: {summary['pressure_drop_specimen_Pa']:.6g} Pa\n"
                 f"Q inlet / outlet: {summary['inlet_flow_m3_s']*6e7:.6g} / {summary['outlet_flow_m3_s']*6e7:.6g} mL/min · mass imbalance: {summary['mass_imbalance_fraction']*100:.4g}%\n"
                 f"Maximum speed: {summary['maximum_speed_m_s']:.6g} m/s · Cartesian precheck solid fraction: {summary['mesh']['specimen_solid_fraction']*100:.4g}%\n"
+                f"{translate('Hydraulic power (channel / insert)')}: {powers['channel_hydraulic_power_W']:.5g} / "
+                f"{powers['insert_hydraulic_power_W']:.5g} W\n"
                 f"Insert pressure planes: {summary['specimen_pressure_planes_mm'][0]:.5g} / {summary['specimen_pressure_planes_mm'][1]:.5g} mm (includes entrance/exit effects).\n"+
                 "\n".join(summary["warnings"]))
-            self.status.setText("Results and axial_profile.csv saved. "+str(directory))
+            self.status.setText(str(directory))
+            fit_available = (summary["status"] == "converged" and not config.empty_pipe
+                             and summary["mesh"].get("solid_cells", 0) > 0)
+            if fit_available:
+                self.resistance_cases = [(directory / "flow_case.json").resolve()]
+                self._update_resistance_selection()
+                self.resistance_controls.show()
+            fit_path = directory / POROUS_FIT_FILE
+            if fit_available and fit_path.is_file():
+                try:
+                    with fit_path.open(encoding="utf-8", newline="") as stream:
+                        self._show_resistance(next(csv.DictReader(stream)))
+                except (OSError, KeyError, ValueError, StopIteration):
+                    pass
             if summary.get("mesh",{}).get("method")=="snappyHexMesh":
                 layers = summary["mesh"].get("layers",{})
                 fraction = layers.get("face_coverage_fraction")

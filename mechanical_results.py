@@ -376,6 +376,80 @@ def export_field_results(
     return report
 
 
+def compression_plateau_metrics(strain, stress):
+    """Use a fixed 20–30% window and the subsequent upward 1.3× crossing."""
+    lower, upper = 0.20, 0.30
+    metrics = dict(plateau_window_start=lower, plateau_window_end=upper,
+                   densification_stress_multiplier=1.3, plateau_stress_MPa=None,
+                   densification_strain=None, densification_stress_MPa=None,
+                   energy_density_to_densification_MJ_m3=None,
+                   energy_absorption_efficiency_at_densification=None)
+    if (len(strain) < 2 or strain[0] > lower or strain[-1] < upper - 1e-12
+            or not np.isfinite(strain).all() or not np.isfinite(stress).all() or np.any(np.diff(strain) <= 0)):
+        return metrics
+    inside = (strain > lower) & (strain < upper)
+    window = np.r_[lower, strain[inside], upper]
+    values = np.interp(window, strain, stress)
+    plateau = float(np.trapezoid(values, window) / (upper - lower))
+    if plateau <= 0:
+        return metrics
+    metrics["plateau_stress_MPa"] = plateau
+    threshold = 1.3 * plateau
+    after = strain > upper
+    search_strain = np.r_[upper, strain[after]]
+    search_stress = np.r_[values[-1], stress[after]]
+    crossings = np.flatnonzero((search_stress[:-1] <= threshold) &
+                               (search_stress[1:] >= threshold) &
+                               (search_stress[1:] > search_stress[:-1]))
+    if crossings.size and search_stress[0] <= threshold:
+        i = crossings[0]
+        end = float(np.interp(threshold, search_stress[i:i+2], search_strain[i:i+2]))
+        before = strain < end
+        energy = float(np.trapezoid(np.r_[stress[before], threshold], np.r_[strain[before], end]))
+        metrics.update(densification_strain=end, densification_stress_MPa=threshold,
+                       energy_density_to_densification_MJ_m3=energy,
+                       energy_absorption_efficiency_at_densification=energy / (end * max(threshold, stress[before].max())))
+    return metrics
+
+
+def compression_result_metrics(folder, report):
+    graphs = report.get("graphs", {})
+    if "plateau_stress_MPa" in graphs:
+        return graphs
+    # Archived compression summaries store work and its density, which recover
+    # the nominal area even for imported specimens.
+    work = graphs.get("energy_absorption_J", 0)
+    density = graphs.get("volumetric_energy_absorption_J_cm3", 0)
+    height = report.get("settings", {}).get("size", 0)
+    if min(work, density, height) <= 0:
+        return {}
+    try:
+        travel, force = np.loadtxt(Path(folder) / "04_Graphs" / "force_displacement.csv",
+                                   delimiter=",", skiprows=1, usecols=(1, 2), ndmin=2).T
+        area = 1000 * work / (density * height)
+        return compression_plateau_metrics(travel / height, force / area)
+    except (OSError, ValueError):
+        return {}
+
+
+def compression_result_readout(metrics, translate):
+    if "plateau_stress_MPa" not in metrics:
+        return ""
+    plateau = metrics["plateau_stress_MPa"]
+    strain = metrics["densification_strain"]
+    pairs = [
+        ("Plateau stress (20–30%)", f"{plateau:.5g} MPa" if plateau is not None else "—"),
+        ("Densification strain (1.3×)", f"{strain:.2%}" if strain is not None else "—"),
+    ]
+    if strain is not None:
+        pairs.extend([
+            ("Densification stress", f"{metrics['densification_stress_MPa']:.5g} MPa"),
+            ("Energy density to densification", f"{metrics['energy_density_to_densification_MJ_m3']:.5g} MJ/m³"),
+            ("Energy absorption efficiency", f"{metrics['energy_absorption_efficiency_at_densification']:.2%}"),
+        ])
+    return " · ".join(f"{translate(label)}: {value}" for label, value in pairs)
+
+
 def export_graphs(
     history: np.ndarray,
     settings: Settings,
@@ -411,6 +485,7 @@ def export_graphs(
 
     strain = x / max(float(settings.size), 1e-9)
     nominal_stress_mpa = force / max(area_mm2, 1e-9)
+    plateau = compression_plateau_metrics(strain, nominal_stress_mpa)
     if len(strain) >= 2 and (strain[1] - strain[0]) > 1e-12:
         effective_modulus_mpa = float(
             (nominal_stress_mpa[1] - nominal_stress_mpa[0]) / (strain[1] - strain[0])
@@ -433,6 +508,11 @@ def export_graphs(
             ]
         )
         writer.writerows(np.column_stack((history, work)))
+
+    with (folder / "stress_strain.csv").open("w", newline="", encoding="utf-8") as stream:
+        writer = csv.writer(stream)
+        writer.writerow(["Compressive_Strain", "Nominal_Stress_MPa"])
+        writer.writerows(zip(strain, nominal_stress_mpa))
 
     # Save standardized 100-point stress-strain curve for Deep Learning
     if len(strain) >= 2 and strain[-1] > 0:
@@ -461,7 +541,7 @@ def export_graphs(
             figure.tight_layout()
             figure.savefig(folder / filename, dpi=200)
             plt.close(figure)
-    return {
+    report = {
         "maximum_force_N": float(force.max()),
         "external_compression_work_J": ea_j,
         "energy_absorption_J": ea_j,
@@ -473,4 +553,10 @@ def export_graphs(
         "final_force_N": float(force[-1]),
         "loading_mode": settings.loading_mode,
         "completed": loading_target_reached(settings, x[-1], force[-1], history[-1, 0]),
+        **plateau,
     }
+    with (folder / "compression_metrics.csv").open("w", newline="", encoding="utf-8") as stream:
+        writer = csv.DictWriter(stream, fieldnames=list(report))
+        writer.writeheader()
+        writer.writerow(report)
+    return report

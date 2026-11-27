@@ -540,6 +540,33 @@ Model izotropik ve gevrektir. Poisson oranı 0,25, temas sürtünmesizdir. Kriti
 bağ uzamasını ve parçacık çözünürlüğünü deney verileriyle doğrulayın.
 **Kırılma yöntemleri planı** aynı sayfada açılır. [TPMS kırılma ve çökme yol haritası](assets/help/tpms_fracture_roadmap.md)
 
+### Türetilen analiz sonuçları
+
+- **FFT:** `elastic_constants.csv` hücre eksenlerindeki Young ve kayma
+  modüllerini, altı Poisson oranını, eksenler arası Emax/Emin oranını
+  ve evrensel elastik anizotropi indeksini içerir. Rijitlik matrisi pozitif
+  tanımlı ve sayısal olarak terslenebilir olduğunda hesaplanır.
+- **FEM basma:** `04_Graphs/compression_metrics.csv` nominal gerilmenin %20–30
+  gerinim aralığındaki ortalamasını plato gerilmesi olarak kaydeder. Yoğunlaşma
+  gerinimi, bu aralıktan sonraki ilk yukarı yönlü 1,3× plato gerilmesi
+  kesişiminin doğrusal enterpolasyonudur. Bu eşik yöntemi, yoğunlaşmayı seçilen
+  tanıma göre tahmin eder. Koşu gerekli aralığa veya eşiğe ulaşmazsa ilgili CSV
+  hücresi boş kalır. `stress_strain.csv` çözücünün kayıt adımlarını içerir.
+- **CFD:** `flow_metrics.csv` kanalın ve numune bölgesinin hidrolik gücünü
+  statik basınç farkı ile giriş debisinin çarpımı olarak verir. **CFD koşusu ekle**
+  ile açık koşuya farklı debilerde yakınsamış en az iki eşleşen koşu ekleyip
+  **Darcy–Forchheimer katsayılarını hesapla** düğmesine basın.
+  `darcy_forchheimer.csv` görünür geçirgenliği,
+  Forchheimer katsayısını, kullanılan noktaları ve uyum hatasını saklar.
+  Uyum, giriş kesiti alanına göre yüzeysel hızı ve kaydedilen basınç düzlemleri
+  arasındaki gradyanı kullanır. Giriş, çıkış ve varsa baypas etkileri hesaba dahildir.
+- **CHT:** `temperature_history.csv` her kayıt adımı için ısı akısını, görünür ısı
+  transfer katsayısını, Nusselt sayısını, görünür ısıl direnci ve ısı geçiş
+  gücünün hidrolik güce oranını içerir. Katsayı, su tarafındaki arayüz alanı ile
+  giriş/çıkış yığın sıcaklıklarının ortalaması ve alan ağırlıklı arayüz sıcaklığı
+  arasındaki farkı kullanır. Nusselt sayısı kanalın hidrolik çapına dayanır.
+  Isı geçişi veya sıcaklık farkı katsayıyı tanımlamaya elvermediğinde hücre boş kalır.
+
 ## Windows'ta yerel Kratos
 
 Mekanik çalışma alanında **Yerel** hesaplama hedefini ve **Kratos Multiphysics**

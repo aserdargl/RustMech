@@ -1476,7 +1476,42 @@ TURKISH.update({
     'Dynamic viscosity': 'Dinamik viskozite',
 })
 
+TURKISH.update({
+    "Directional elastic constants": "Yönsel elastik sabitler",
+    "Unavailable for a singular or non-positive-definite stiffness matrix.": "Tekil veya pozitif tanımlı olmayan rijitlik matrisi için hesaplanamıyor.",
+    "In νij, i is the loading axis and j is the lateral axis.": "νij ifadesinde i yükleme ekseni, j enine eksendir.",
+    "Plateau stress (20–30%)": "Plato gerilmesi (%20–30)",
+    "Densification strain (1.3×)": "Yoğunlaşma gerinimi (1,3×)",
+    "Densification stress": "Yoğunlaşma gerilmesi",
+    "Energy density to densification": "Yoğunlaşmaya kadar enerji yoğunluğu",
+    "Energy absorption efficiency": "Enerji soğurma verimi",
+    "Hydraulic power (channel / insert)": "Hidrolik güç (kanal / numune)",
+    "Channel hydraulic power": "Kanal hidrolik gücü",
+    "Fit Darcy–Forchheimer resistance": "Darcy–Forchheimer katsayılarını hesapla",
+    "Add CFD case…": "CFD koşusu ekle…",
+    "Clear case selection": "Koşu seçimini temizle",
+    "Select a matching CFD case": "Eşleşen bir CFD koşusu seçin",
+    "Apparent permeability": "Görünür geçirgenlik",
+    "Relative fit residual": "Bağıl uyum hatası",
+    "The fit includes entrance, exit and any bypass effects.": "Hesap giriş, çıkış ve varsa baypas etkilerini içerir.",
+    "CFD cases must match in geometry, fluid properties, mesh and pressure planes.": "CFD koşularında geometri, akışkan özellikleri, ağ ve basınç düzlemleri eşleşmelidir.",
+    "Select at least three converged CFD cases at distinct flow rates.": "Farklı debilerde yakınsamış en az üç CFD koşusu seçin.",
+    "Select at least three distinct flow rates.": "En az üç farklı debi seçin.",
+    "Use a wider range of flow rates to identify both resistance terms.": "Her iki direnç terimini belirlemek için daha geniş bir debi aralığı kullanın.",
+    "Water sensible heat loss": "Suyun duyulur ısı kaybı",
+    "Water-to-solid heat rate": "Sudan katıya ısı geçiş gücü",
+    "Mean interface heat flux": "Ortalama arayüz ısı akısı",
+    "Apparent h": "Görünür ısı transfer katsayısı",
+    "Apparent thermal resistance": "Görünür ısıl direnç",
+    "Heat transfer / hydraulic power": "Isı geçişi / hidrolik güç",
+    "Apparent h uses the interface area and the mean bulk-to-wall temperature difference. Nusselt uses the channel hydraulic diameter.": "Görünür ısı transfer katsayısı arayüz alanı ve ortalama akışkan–duvar sıcaklık farkıyla hesaplanır. Nusselt hesabında kanalın hidrolik çapı kullanılır.",
+})
+
 TEMPLATES = {
+    "{count} CFD cases selected": "{count} CFD koşusu seçildi",
+    "Saved {file}": "{file} kaydedildi",
+    "Select converged CFD cases containing a solid insert. Check {case}.": "Katı numune içeren yakınsamış CFD koşularını seçin. {case} koşusunu kontrol edin.",
+    "Positive, finite flow and insert pressure loss are required. Check {case}.": "Debi ve numune basınç kaybı sonlu ve pozitif olmalıdır. {case} koşusunu kontrol edin.",
     '{count} experiments ready.': '{count} deney hazır.',
     'No periodic FFT cell size in {low}–{high} mm fits outer X/Y/Z = {x}/{y}/{z} mm.':
         '{low}–{high} mm aralığında X/Y/Z = {x}/{y}/{z} mm dış ölçülerine uyan periyodik FFT hücre boyutu yok.',

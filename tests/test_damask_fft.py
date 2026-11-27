@@ -10,7 +10,7 @@ from unittest.mock import patch
 import numpy as np
 
 from damask_fft import (
-    DamaskAnalysisProcess, RESULT_FILE, _solve_load, run_periodic_fft,
+    DamaskAnalysisProcess, ELASTIC_CONSTANTS_FILE, RESULT_FILE, _solve_load, run_periodic_fft,
     sample_periodic_cell, solve_cell,
 )
 from model import Settings
@@ -99,6 +99,8 @@ class DamaskFFTTests(unittest.TestCase):
                 self.assertEqual(len(result["load_cases"]), 12)
                 self.assertTrue(all(case["converged"] for case in result["load_cases"].values()))
                 self.assertTrue((directory / RESULT_FILE).is_file())
+                self.assertTrue((directory / ELASTIC_CONSTANTS_FILE).is_file())
+                self.assertGreater(result["elastic_constants"]["E_x_MPa"], 0)
 
     def test_stopping_a_running_solver_does_not_publish_a_matrix(self):
         with patch("damask_fft.new_run_folder", return_value=self.folder):

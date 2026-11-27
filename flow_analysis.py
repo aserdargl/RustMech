@@ -7,18 +7,22 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, replace
 from functools import lru_cache
+import csv
+from hashlib import file_digest
 import json
 import math
 from pathlib import Path
 import re
 import shlex
 import subprocess
+from uuid import uuid4
 
 import numpy as np
 import pyvista as pv
 from scipy import ndimage
+from scipy.optimize import nnls
 
-from model import Settings, validate_geometry
+from model import Settings, settings_from_dict, validate_geometry
 from mesh_engine import geometry_threshold
 from structure_library import evaluate_priority_field
 
@@ -487,6 +491,87 @@ def _last_monitor(directory,name):
     return float(rows[-1][0]),float(rows[-1][1])
 
 
+def hydraulic_metrics(pressure_drop_pa, flow_m3_s, insert_pressure_drop_pa=None):
+    values = {"channel_hydraulic_power_W": pressure_drop_pa * flow_m3_s}
+    if insert_pressure_drop_pa is not None:
+        values["insert_hydraulic_power_W"] = insert_pressure_drop_pa * flow_m3_s
+    return values
+
+
+POROUS_FIT_FILE = "darcy_forchheimer.csv"
+
+
+def fit_porous_resistance(case_files, output_directory):
+    """Fit the measured insert pressure gradient using superficial velocity."""
+    reference = None
+    samples = []
+    for path in dict.fromkeys(Path(path).resolve() for path in case_files):
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+        report = json.loads((path.parent / "flow_summary.json").read_text(encoding="utf-8"))
+        config = FlowSettings(**manifest["flow"])
+        if report["status"] != "converged" or config.empty_pipe or report["mesh"]["solid_cells"] <= 0:
+            raise ValueError(f"Select converged CFD cases containing a solid insert. Check {path.parent.name}.")
+        specimen = settings_from_dict(manifest["specimen"])
+        if specimen.imported_geometry_path:
+            # Compare the saved fluid meshes, so overwritten or moved input
+            # surfaces cannot make different geometry appear identical.
+            with (path.parent / "fluid_mesh.vtu").open("rb") as stream:
+                geometry = file_digest(stream, "sha256").hexdigest()
+        else:
+            geometry = (specimen.dimensions, specimen.structure_family, specimen.structure_name,
+                        specimen.tpms_morphology, specimen.cell_size, specimen.solid_fraction,
+                        specimen.random_seed)
+        planes = report["specimen_pressure_planes_mm"]
+        area = report["mesh"]["inlet_area_m2"]
+        length = (planes[1] - planes[0]) / 1000
+        comparable = (geometry, replace(config, inlet_speed=1., iterations=1000,
+                      distribution="", foam_bashrc="", fluid_material_card=None), area, planes)
+        if reference is None:
+            reference = comparable
+        elif comparable != reference:
+            raise ValueError("CFD cases must match in geometry, fluid properties, mesh and pressure planes.")
+        flow = report["inlet_flow_m3_s"]
+        pressure = report["pressure_drop_specimen_Pa"]
+        if not np.isfinite([area, length, flow, pressure]).all() or min(area, length, flow, pressure) <= 0:
+            raise ValueError(f"Positive, finite flow and insert pressure loss are required. Check {path.parent.name}.")
+        samples.append((str(path.parent), flow, pressure, flow / area, pressure / length))
+    if len(samples) < 3:
+        raise ValueError("Select at least three converged CFD cases at distinct flow rates.")
+    velocity, gradient = np.asarray([sample[3:] for sample in samples]).T
+    distinct = [velocity.min()]
+    for speed in sorted(velocity):
+        if not math.isclose(speed, distinct[-1], rel_tol=1e-5):
+            distinct.append(speed)
+    if len(distinct) < 3:
+        raise ValueError("Select at least three distinct flow rates.")
+    scale = velocity.max()
+    scaled = velocity / scale
+    matrix = np.column_stack((scaled, scaled**2))
+    if np.linalg.cond(matrix) > 1e4:
+        raise ValueError("Use a wider range of flow rates to identify both resistance terms.")
+    coefficients, residual = nnls(matrix, gradient)
+    linear, quadratic = coefficients / (scale, scale**2)
+    values = dict(apparent_permeability_m2=float(config.dynamic_viscosity / linear) if linear > 0 else None,
+                  apparent_forchheimer_1_m=float(quadratic / config.density),
+                  darcy_linear_Pa_s_m2=float(linear), forchheimer_quadratic_Pa_s2_m3=float(quadratic),
+                  relative_fit_residual=float(residual / np.linalg.norm(gradient)),
+                  reference_inlet_area_m2=area, pressure_plane_spacing_m=length,
+                  fit_cases=len(samples), distinct_flow_rates=len(distinct))
+    target = Path(output_directory) / POROUS_FIT_FILE
+    temporary = target.with_name(f".{target.name}.{uuid4().hex}.tmp")
+    try:
+        with temporary.open("w", newline="", encoding="utf-8") as stream:
+            writer = csv.writer(stream)
+            writer.writerow(("case_directory", "inlet_flow_m3_s", "insert_pressure_drop_Pa", "superficial_velocity_m_s",
+                             "pressure_gradient_Pa_m", "fitted_gradient_Pa_m", *values))
+            writer.writerows((*sample, float(prediction), *values.values())
+                             for sample, prediction in zip(samples, matrix @ coefficients))
+        temporary.replace(target)
+    finally:
+        temporary.unlink(missing_ok=True)
+    return values
+
+
 def summarize_flow_case(directory):
     directory = Path(directory)
     manifest = json.loads((directory/"flow_case.json").read_text())
@@ -543,7 +628,6 @@ def summarize_flow_case(directory):
         mask = np.isclose(centres,at,rtol=0,atol=1e-5)
         if not mask.any(): raise RuntimeError("Cannot locate pressure measurement section.")
         return float(pressure[mask].mean()),float(velocity[mask,2].mean()),float(np.linalg.norm(velocity[mask],axis=1).max())
-    import csv
     with (directory/"axial_profile.csv").open("w",newline="") as stream:
         writer = csv.writer(stream)
         writer.writerow(("z_mm","mean_pressure_Pa","mean_axial_velocity_m_s","max_speed_m_s"))
@@ -560,6 +644,9 @@ def summarize_flow_case(directory):
                    maximum_speed_m_s=float(np.linalg.norm(velocity,axis=1).max()),
                    final_initial_residuals=residuals,mesh=manifest["mesh"],warnings=manifest["mesh"]["warnings"])
     if not converged: summary["warnings"].append("SIMPLE residual criteria and/or 1% mass-balance criterion not satisfied; these are provisional results.")
+    summary["hydraulic_metrics"] = hydraulic_metrics(summary["pressure_drop_total_Pa"],
+                                                      summary["inlet_flow_m3_s"],
+                                                      summary["pressure_drop_specimen_Pa"])
     if fitted:
         summary["pressure_definition"] = "Static, area-averaged pressure on interpolated planes adjacent to the insert section; includes entrance/exit effects."
         paths = list((directory/"postProcessing/yPlus").glob("*/*.dat"))
@@ -574,5 +661,12 @@ def summarize_flow_case(directory):
                         if not np.isfinite(values).all():
                             raise RuntimeError("Non-finite y+ output.")
                         summary["y_plus"][parts[1]] = dict(minimum=values[0],maximum=values[1],average=values[2])
+    with (directory/"flow_metrics.csv").open("w", newline="", encoding="utf-8") as stream:
+        keys = ("status", "reynolds_diameter", "pressure_drop_total_Pa", "pressure_drop_specimen_Pa",
+                "inlet_flow_m3_s", "outlet_flow_m3_s", "mass_imbalance_fraction", "maximum_speed_m_s")
+        row = {key: summary[key] for key in keys} | summary["hydraulic_metrics"]
+        writer = csv.DictWriter(stream, fieldnames=list(row))
+        writer.writeheader()
+        writer.writerow(row)
     (directory/"flow_summary.json").write_text(json.dumps(summary,indent=2),encoding="utf-8")
     return summary
