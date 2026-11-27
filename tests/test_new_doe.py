@@ -235,6 +235,7 @@ class NewDoeTests(unittest.TestCase):
         page.apply_button.click()
         self.assertEqual(len(page.rows), 3, page.status.text())
         self.assertFalse(page.export_csv.isEnabled())
+        self.assertEqual(page.preview.mapToGlobal(QPoint()).y(), page.sections["Structure"].mapToGlobal(QPoint()).y())
 
         def solve(request, folder, _controller):
             job = Mock()
@@ -321,6 +322,11 @@ class NewDoeTests(unittest.TestCase):
         page = self.page()
         page.operation.setCurrentIndex(page.operation.findData("mechanical"))
         self.assertEqual(list(page.sections)[:3], ["Standard test", "Structure", "Mesh"])
+        for expanded in (True, False):
+            page.sections["Standard test"].set_expanded(expanded)
+            self.app.processEvents()
+            self.assertEqual(page.preview.mapToGlobal(QPoint()).y(),
+                             page.sections["Structure"].mapToGlobal(QPoint()).y())
         fields = {factor.path[-1]: factor for factor in page.factors}
         fields["cell_size"].fixed.setValue(2.5)
         fields["mesh_resolution"].variable.setChecked(True)
@@ -809,6 +815,8 @@ class NewDoeTests(unittest.TestCase):
             self.assertIs(settings_table.cellWidget(row, 0), fields[key].variable)
             self.assertEqual(settings_table.item(row, 1).text(), fields[key].label)
         self.assertTrue(page.preview.isVisible())
+        self.assertEqual(page.preview.mapToGlobal(QPoint()).y(), geometry.mapToGlobal(QPoint()).y())
+        self.assertFalse(any(label.text() == "Experiment matrix" for label in page.findChildren(QLabel)))
         self.assertGreater(page.preview.mapTo(page, QPoint()).x(),
                            page.input_tabs.mapTo(page, QPoint()).x() + page.input_tabs.width())
         self.assertLess(page.input_tabs.width(), page.preview.width())

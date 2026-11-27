@@ -8,7 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
 
-from PySide6.QtCore import QAbstractTableModel, QModelIndex, QSignalBlocker, Qt, QTimer, QUrl
+from PySide6.QtCore import QAbstractTableModel, QEvent, QModelIndex, QPoint, QSignalBlocker, Qt, QTimer, QUrl
 from PySide6.QtGui import QDesktopServices, QIcon
 from PySide6.QtWidgets import (QAbstractItemView, QApplication, QButtonGroup, QCheckBox, QComboBox,
                                QDialog, QDoubleSpinBox, QFormLayout, QHeaderView,
@@ -808,22 +808,12 @@ class NewDoePage(QWidget):
         matrix_layout = QVBoxLayout(matrix_panel)
         matrix_layout.setContentsMargins(0, 0, 0, 0)
         matrix_layout.setSpacing(0)
-        matrix_title = QLabel("Experiment matrix")
-        matrix_title.setObjectName("sectionSubheader")
-        matrix_title.setFixedHeight(CONTROL_HEIGHT)
-        matrix_title.setContentsMargins(4, 0, 0, 0)
         if sampling:
             self.export_csv = QPushButton("Export CSV")
             self.export_csv.setFixedHeight(CONTROL_HEIGHT)
             self.export_csv.setAutoDefault(False)
             self.export_csv.setEnabled(False)
             self.export_csv.clicked.connect(self.export_learning_results)
-            matrix_heading = QHBoxLayout()
-            matrix_heading.addWidget(matrix_title, 1)
-            matrix_heading.addWidget(self.export_csv)
-            matrix_layout.addLayout(matrix_heading)
-        else:
-            matrix_layout.addWidget(matrix_title)
         self.preview = QTableView()
         self.preview.setAccessibleName("Experiment matrix")
         self.preview.setMinimumWidth(220)
@@ -851,11 +841,15 @@ class NewDoePage(QWidget):
         command_row = QHBoxLayout()
         command_row.setSpacing(4)
         command_row.addWidget(self.status, 1)
+        if sampling:
+            command_row.addWidget(self.export_csv)
         command_row.addWidget(self.truba_jobs_button)
         command_row.addWidget(self.run_settings)
         for button in self.commands:
             command_row.addWidget(button)
         matrix_layout.addLayout(command_row)
+        self.input_tabs.currentChanged.connect(self.align_matrix_top)
+        self.inputs.verticalScrollBar().valueChanged.connect(self.align_matrix_top)
         self.run.setEnabled(False)
         self.stop.setEnabled(False)
         self.open.setEnabled(False)
@@ -929,6 +923,26 @@ class NewDoePage(QWidget):
         self.apply_button.setFixedWidth(apply_width)
         if self.host is not None and not self.loaded:
             self.load()
+        self.align_matrix_top()
+
+    def eventFilter(self, watched, event):
+        if watched is self.sections.get("Structure") and event.type() in (QEvent.Type.Move, QEvent.Type.Show):
+            self.align_matrix_top()
+        return super().eventFilter(watched, event)
+
+    def align_matrix_top(self, *_):
+        matrix_panel = self.preview.parentWidget()
+        if self.input_tabs.currentWidget() is self.variations:
+            top = self.variations.mapTo(self.splitter, QPoint()).y()
+        else:
+            viewport = self.inputs.viewport()
+            structure = self.sections.get("Structure", viewport)
+            top = max(viewport.mapTo(self.splitter, QPoint()).y(), structure.mapTo(self.splitter, QPoint()).y())
+        matrix_layout = matrix_panel.layout()
+        inset = max(0, top - matrix_panel.y())
+        if matrix_layout.contentsMargins().top() != inset:
+            matrix_layout.setContentsMargins(0, inset, 0, 0)
+            matrix_layout.activate()
 
     def size_operation(self):
         metrics = self.operation.fontMetrics()
@@ -1020,6 +1034,8 @@ class NewDoePage(QWidget):
                     continue
                 section = SidebarGroupBox(title)
                 self.sections[title] = section
+                if title == "Structure":
+                    section.installEventFilter(self)
                 stack.addWidget(section)
                 body = QVBoxLayout(section.content)
                 body.setContentsMargins(2, 0, 2, 1)
@@ -1136,6 +1152,7 @@ class NewDoePage(QWidget):
             self.status.setText(str(error))
             self.loaded = False
         self.apply_button.setEnabled(self.loaded)
+        self.align_matrix_top()
 
     @staticmethod
     def fit_parameter_table(table):
