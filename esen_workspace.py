@@ -379,13 +379,12 @@ class EsenWorkspace(QDialog):
         self.md_prepare.setProperty("primary", True)
         controls.addWidget(self.md_prepare, alignment=Qt.AlignmentFlag.AlignRight)
 
+        card, layout = panel("Model Preview", paper=True, header_action=self.md_preview_button)
         self.md_note = QLabel()
         self.md_note.setTextFormat(Qt.TextFormat.PlainText)
         self.md_note.setWordWrap(True)
         self.md_note.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        settings_layout.addWidget(self.md_note)
-
-        card, layout = panel("Model Preview", paper=True, header_action=self.md_preview_button)
+        layout.addWidget(self.md_note)
         self.md_preview = code_view("Model Preview")
         self.md_preview.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
         self.md_preview.setMinimumHeight(125)

@@ -8,10 +8,10 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
-from PySide6.QtCore import QLocale, QObject, QSettings, Qt, QTimer, Signal
+from PySide6.QtCore import QLocale, QObject, QPoint, QSettings, Qt, QTimer, Signal
 from PySide6.QtGui import QContextMenuEvent
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QCheckBox, QDialog, QLabel, QPushButton, QScrollArea, QWidget
+from PySide6.QtWidgets import QApplication, QCheckBox, QDialog, QLabel, QPushButton, QScrollArea, QSplitter, QWidget
 
 from app_settings import PERIODIC_TABLE_DEFAULT_FONT_SIZE, PERIODIC_TABLE_FAMILY_COLORS, PERIODIC_TABLE_FONT_SIZE
 import esen_jobs as jobs
@@ -299,6 +299,40 @@ def test_alloy_elements_fill_columns_of_five_with_dividers():
         assert elements.total_label.text().endswith("100 %")
     finally:
         elements.close()
+
+
+def test_prepare_button_follows_package_settings_splitter(tmp_path):
+    app = QApplication.instance() or QApplication([])
+    preferences = QSettings(str(tmp_path / "qt.ini"), QSettings.Format.IniFormat)
+    with patch("esen_workspace.QSettings", return_value=preferences):
+        workspace = EsenWorkspace(None, history=tmp_path / "jobs")
+    try:
+        workspace.resize(1600, 1000)
+        workspace.show()
+        app.processEvents()
+        sections = workspace.findChild(QSplitter, "esenMdSettingsAndResults")
+        settings_panel = sections.widget(0)
+
+        def button_gap():
+            bottom = workspace.md_seed.mapTo(settings_panel, QPoint(0, workspace.md_seed.height())).y()
+            top = workspace.md_prepare.mapTo(settings_panel, QPoint()).y()
+            return top - bottom
+
+        for crystal, status in (("single", ""), ("poly", "First line\nSecond line")):
+            workspace.md_crystal.setCurrentIndex(workspace.md_crystal.findData(crystal))
+            workspace.md_note.setText(status)
+            app.processEvents()
+            minimum, maximum = sections.getRange(1)
+            assert maximum > minimum
+            sections.moveSplitter(maximum, 1)
+            app.processEvents()
+            assert button_gap() > 1
+            sections.moveSplitter(minimum, 1)
+            app.processEvents()
+            assert button_gap() == 1
+    finally:
+        workspace.close()
+        workspace.dispose()
 
 
 def test_periodic_table_click_toggles_element_and_restores_its_last_share(tmp_path):
