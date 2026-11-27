@@ -65,7 +65,6 @@ Peridynamics · PMB|Peridinamik · PMB
 Sampling TPMS particles…|TPMS parçacıkları örnekleniyor…
 Building peridynamic bonds…|Peridinamik bağlar oluşturuluyor…
 Peridynamic results saved.|Peridinamik sonuçlar kaydedildi.
-MD Preparation|MD Hazırlama
 Saved MD plans|Kayıtlı MD planları
 Add package…|Paket ekle…
 Open folder|Klasörü aç
@@ -143,7 +142,7 @@ TRUBA connection changed. Press Prepare and run on TRUBA to submit the prepared 
 TRUBA is busy. Press Prepare and run on TRUBA again when it is ready.|TRUBA meşgul. Hazır olduğunda Hazırla ve TRUBA’da çalıştır düğmesine tekrar basın.
 Submitting the MD job to TRUBA…|MD işi TRUBA’ya gönderiliyor…
 Follow the job in TRUBA and open downloaded results from Results.|İşi TRUBA’da izleyin, indirilen çıktıları Sonuçlar penceresinden açın.
-Open MD Preparation|MD Hazırlama sekmesini aç
+Open Molecular Dynamics|Molecular Dynamics penceresini aç
 Job settings|İş ayarları
 Date modified|Değiştirilme tarihi
 Run on|Çalıştırma hedefi

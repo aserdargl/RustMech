@@ -1065,7 +1065,7 @@ class RustMechDialog(QDialog):
         self.designs_button.setMenu(designs_menu)
         self.md_workspace = None
         self.md_button = _WorkspaceCommandButton("Molecular Dynamics")
-        self.md_button.setToolTip("Open MD Preparation")
+        self.md_button.setToolTip("Open Molecular Dynamics")
         self.md_button.clicked.connect(self.show_md_workspace)
         self.result_history_button = _WorkspaceCommandButton("Results")
         self.result_history_button.setToolTip("Browse saved analysis results")

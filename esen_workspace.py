@@ -127,7 +127,7 @@ class EsenWorkspace(QDialog):
         self.setWindowTitle(WORKSPACE_TITLE)
         self.setWindowFlag(Qt.WindowType.WindowMinMaxButtonsHint)
         self.setStyleSheet(STUDIO_STYLESHEET + ESEN_STYLE)
-        self.resize(1300, 750)
+        self.resize(1300, 780)
         self.truba = truba
         self.history_root = history if history is not None else jobs.jobs_directory()
         self.md_plans_root = self.history_root.parent / "md-preparations"
@@ -145,7 +145,7 @@ class EsenWorkspace(QDialog):
         self.tabs.setObjectName("esenWorkspaceTabs")
         self.tabs.tabBar().setExpanding(False)
         shell.addWidget(self.tabs)
-        self.tabs.addTab(self._build_md(), "MD Preparation")
+        self.tabs.addTab(self._build_md(), WORKSPACE_TITLE)
 
         language = getattr(QApplication.instance(), "_rustmech_language", None)
         if language is not None:
@@ -173,23 +173,27 @@ class EsenWorkspace(QDialog):
         page = QWidget()
         outer = QVBoxLayout(page)
         outer.setContentsMargins(8, 8, 8, 8)
-        outer.setSpacing(7)
+        sections = QSplitter(Qt.Orientation.Vertical)
+        sections.setObjectName("esenMdAlloyAndDetails")
+        sections.setChildrenCollapsible(False)
+        sections.setHandleWidth(7)
+        outer.addWidget(sections)
+
+        alloy, alloy_layout = panel("Alloy elements", scrollable=True)
+        defaults = [(element, 20) for element in ("Hf", "Nb", "Ta", "Ti", "Zr")]
+        self.md_elements = AlloyElements(defaults)
+        alloy_layout.addWidget(self.md_elements)
+        alloy_layout.addStretch()
+        sections.addWidget(alloy)
+
         split = QSplitter(Qt.Orientation.Horizontal)
         split.setObjectName("esenMdSettingsAndPreview")
         split.setChildrenCollapsible(False)
         split.setHandleWidth(7)
-        outer.addWidget(split, 1)
+        sections.addWidget(split)
 
-        inputs, layout = panel("Alloy elements", scrollable=True)
-        self.md_form = QWidget()
-        fields = QVBoxLayout(self.md_form)
-        fields.setContentsMargins(0, 0, 0, 0)
-        fields.setSpacing(5)
-        defaults = [(element, 20) for element in ("Hf", "Nb", "Ta", "Ti", "Zr")]
-        self.md_elements = AlloyElements(defaults)
-        fields.addWidget(self.md_elements)
-        settings, settings_layout = panel()
-        fields.addWidget(settings)
+        inputs, settings_layout = panel(scrollable=True)
+        self.md_form = inputs.widget()
         self.md_preview_button = command("Preview model", self._md_preview)
         self.md_prepare = command("Prepare package", lambda: self._start_md(submit=False))
         self.md_run = command("Prepare and run on TRUBA", self._start_md, role="esenRun")
@@ -199,8 +203,7 @@ class EsenWorkspace(QDialog):
         configure_form(form)
         settings_layout.addLayout(form)
         self.md_settings_form = form
-        layout.addWidget(self.md_form)
-        layout.addStretch()
+        settings_layout.addStretch()
         split.addWidget(inputs)
 
         self.md_crystal = compact_combo((("BCC single crystal", "single"), ("BCC polycrystal", "poly")))
@@ -296,6 +299,8 @@ class EsenWorkspace(QDialog):
         self._build_md_help(layout)
         preview_split.addWidget(self._build_md_plans())
         preview_split.setSizes([390, 310])
+        sections.setStretchFactor(1, 1)
+        sections.setSizes([alloy.widget().sizeHint().height(), split.sizeHint().height()])
         self.md_queue.currentIndexChanged.connect(self._md_preview)
         self.md_crystal.currentIndexChanged.connect(self._md_preview)
         return page
@@ -584,6 +589,7 @@ class EsenWorkspace(QDialog):
             self.md_note.setText(translate(str(error)))
             return
         self.md_task = future, request, settings, auth
+        self.md_elements.setEnabled(False)
         self.md_form.setEnabled(False)
         self.md_prepare.setEnabled(False)
         self.md_run.setEnabled(False)
@@ -598,6 +604,7 @@ class EsenWorkspace(QDialog):
             self.md_note.setText(translate("Model prepared. Waiting for the current TRUBA operation…"))
             return
         self.md_task = None
+        self.md_elements.setEnabled(True)
         self.md_form.setEnabled(True)
         self.md_prepare.setEnabled(True)
         self.md_run.setEnabled(True)

@@ -182,9 +182,18 @@ def test_md_plan_library_reopens_generated_and_added_packages(tmp_path):
             assert first.md_plans.currentItem().data(Qt.ItemDataRole.UserRole) == added
             first.md_plan_file.setCurrentIndex(first.md_plan_file.findData(md.ENTRY))
             assert first.md_plan_source.toPlainText() == md.INITIAL
-            split = next(s for s in store.splitters(first) if s.objectName() == "esenMdPreviewAndPlans")
-            split.setSizes([280, 420])
-            expected = split.sizes()
+            splitters = {split.objectName(): split for split in store.splitters(first)}
+            sections = splitters["esenMdAlloyAndDetails"]
+            alloy, details = sections.widget(0), sections.widget(1)
+            assert alloy.isAncestorOf(first.md_elements)
+            assert details.isAncestorOf(first.md_form)
+            assert details.isAncestorOf(first.md_preview)
+            assert details.isAncestorOf(first.md_plans)
+            assert alloy.geometry().bottom() < details.y()
+            assert alloy.width() == details.width()
+            sections.setSizes([260, 440])
+            splitters["esenMdPreviewAndPlans"].setSizes([280, 420])
+            expected = {name: split.sizes() for name, split in splitters.items()}
             first.close()
 
             second = EsenWorkspace(truba, history=tmp_path / "jobs")
@@ -193,8 +202,8 @@ def test_md_plan_library_reopens_generated_and_added_packages(tmp_path):
             second.show()
             app.processEvents()
             assert second.md_plans.count() == 2
-            restored = next(s for s in store.splitters(second) if s.objectName() == "esenMdPreviewAndPlans")
-            assert restored.sizes() == expected
+            restored = {split.objectName(): split.sizes() for split in store.splitters(second)}
+            assert restored == expected
     finally:
         for window in reversed(windows):
             window.dispose()
@@ -250,7 +259,7 @@ def test_md_tab_enter_previews_and_submits_package_to_truba(tmp_path, potentials
         app.processEvents()
         assert workspace.windowTitle() == "Molecular Dynamics"
         assert workspace.tabs.count() == 1
-        assert workspace.tabs.tabText(0) == "MD Preparation"
+        assert workspace.tabs.tabText(0) == "Molecular Dynamics"
         assert not workspace.md_grains.isVisible()
         workspace.md_dimensions[1].setValue(1.02)
         workspace.md_dimensions[2].setValue(1.36)
