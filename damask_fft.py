@@ -119,13 +119,19 @@ def new_run_folder():
     return Path(mkdtemp(prefix="FFT_DAMASK_", dir=root))
 
 
+def whole_fft_periods(periods):
+    """Identify axis lengths that contain a positive whole number of cells."""
+    nearest = np.rint(periods)
+    return (nearest >= 1) & np.isclose(periods, nearest, rtol=0, atol=1e-8)
+
+
 def validate_periodic_fft(settings):
     if settings.imported_geometry_path or settings.test_profile != "custom" or not has_repeating_cell(settings):
         return ["FFT requires a procedural periodic TPMS or lattice cell."]
     errors = validate_geometry(settings, include_mesh=False)
     if not errors and (settings.size_x is not None or settings.size_y is not None):
         periods = np.asarray(settings.dimensions) / settings.cell_size
-        if not np.allclose(periods, np.rint(periods), rtol=0, atol=1e-8) or np.any(periods < 1 - 1e-8):
+        if not whole_fft_periods(periods).all():
             errors.append("For periodic FFT, each outer dimension must be a whole multiple of the cell period.")
     if not np.isfinite(settings.young_modulus) or settings.young_modulus <= 0:
         errors.append("FFT requires a positive Young's modulus.")

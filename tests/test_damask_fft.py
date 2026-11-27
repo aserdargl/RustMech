@@ -1,3 +1,5 @@
+from collections import Counter
+from dataclasses import asdict
 import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -12,6 +14,29 @@ from damask_fft import (
     sample_periodic_cell, solve_cell,
 )
 from model import Settings
+from new_doe_operations import CELL_SIZE_PATH, OUTER_SIZE_PATHS, lhs_matrix, validate
+
+
+class PeriodicExperimentMatrixTests(unittest.TestCase):
+    def test_lhs_uses_only_periodic_cell_sizes_for_fixed_outer_dimensions(self):
+        base = dict(operation="fft_solve", grid=16, void_ratio=0.01, settings=asdict(Settings()))
+        axes = dict(zip(OUTER_SIZE_PATHS, ([18.0], [18.0], [18.0])))
+        dimensions = {**axes, CELL_SIZE_PATH: [4.5, 6.0]}
+        rows = list(lhs_matrix(base, dimensions, 100, 42))
+        self.assertEqual(Counter(row["settings"]["cell_size"] for row in rows), {4.5: 50, 6.0: 50})
+        for row in rows:
+            self.assertEqual(tuple(row["settings"][path[-1]] for path in OUTER_SIZE_PATHS), (18, 18, 18))
+            validate(row)
+
+        dimensions[OUTER_SIZE_PATHS[1]] = [12.0]
+        rows = list(lhs_matrix(base, dimensions, 4, 42))
+        self.assertEqual([row["settings"]["cell_size"] for row in rows], [6.0] * 4)
+        for row in rows:
+            validate(row)
+
+        dimensions[CELL_SIZE_PATH] = [4.5, 5.5]
+        with self.assertRaisesRegex(ValueError, "No periodic FFT cell size in 4.5–5.5 mm fits outer X/Y/Z = 18/12/18"):
+            list(lhs_matrix(base, dimensions, 4, 42))
 
 
 class DamaskInputTests(unittest.TestCase):

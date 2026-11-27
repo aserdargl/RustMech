@@ -1,7 +1,7 @@
 """Operation inputs and solver dispatch for independent factorial experiments."""
 from dataclasses import asdict
 from itertools import product
-from math import floor, prod
+from math import ceil, floor, prod
 from pathlib import Path
 
 import numpy as np
@@ -21,6 +21,8 @@ OPERATIONS = {
 MAX_ROWS = 10000
 FAMILY_PATH = ("settings", "structure_family")
 TYPE_PATH = ("settings", "structure_name")
+CELL_SIZE_PATH = ("settings", "cell_size")
+OUTER_SIZE_PATHS = tuple(("settings", key) for key in ("size_x", "size_y", "size"))
 
 
 def snapshot(host, operation):
@@ -170,8 +172,31 @@ def _lhs_samples(
     return result
 
 
+def _fixed_outer_fft_cell_sizes(base, dimensions, low, high):
+    from damask_fft import whole_fft_periods
+
+    x, y, z = (dimensions.get(path, [base["settings"][path[-1]]])[0] for path in OUTER_SIZE_PATHS)
+    if x is None and y is None:
+        return None  # Legacy requests with implicit outer sizes always sample one cell.
+    lengths = [z if length is None else length for length in (x, y, z)]
+    shortest = min(lengths)
+    first = max(1, ceil(np.nextafter(shortest / high, -np.inf)))
+    last = floor(np.nextafter(shortest / low, np.inf))
+    candidates = []
+    for start in range(first, last + 1, 65536):
+        counts = np.arange(start, min(start + 65536, last + 1))
+        # Clipping keeps an exact UI bound when dividing introduces a one-ULP difference.
+        sizes = np.clip(shortest / counts, low, high)
+        valid = whole_fft_periods(np.asarray(lengths)[:, None] / sizes).all(axis=0)
+        candidates.append(sizes[valid][::-1])
+    if not any(part.size for part in candidates):
+        raise ValueError(f"No periodic FFT cell size in {low:g}–{high:g} mm fits "
+                         f"outer X/Y/Z = {lengths[0]:g}/{lengths[1]:g}/{lengths[2]:g} mm.")
+    return np.concatenate(candidates[::-1])
+
+
 def lhs_matrix(base, dimensions, count, seed):
-    """Stratify each numeric range independently within each selected structure."""
+    """Stratify numeric inputs within each selected structure."""
     varying = {path: values for path, values in dimensions.items() if len(values) == 2
                and path not in (FAMILY_PATH, TYPE_PATH)}
     if not varying:
@@ -180,6 +205,12 @@ def lhs_matrix(base, dimensions, count, seed):
     geometry = structure_levels(base, dimensions)
     if count * len(geometry) > MAX_ROWS:
         raise ValueError(f"Reduce the number of levels to at most {MAX_ROWS:,} experiments.")
+    allowed_cells = None
+    if (base["operation"] == "fft_solve" and CELL_SIZE_PATH in varying
+            and not any(path in varying for path in OUTER_SIZE_PATHS)):
+        allowed_cells = _fixed_outer_fft_cell_sizes(base, dimensions, *varying[CELL_SIZE_PATH])
+        if allowed_cells is not None:
+            varying[CELL_SIZE_PATH] = (0, len(allowed_cells) - 1)
     limits = [(low, high + 1 if type(low) is int else high) for low, high in varying.values()]
     samples = _lhs_samples(count, limits, seed)
     for family, name in geometry:
@@ -188,7 +219,10 @@ def lhs_matrix(base, dimensions, count, seed):
         levels[FAMILY_PATH], levels[TYPE_PATH] = [family], [name]
         for sample in samples:
             for (path, (low, high)), value in zip(varying.items(), sample):
-                levels[path] = [min(high, floor(value)) if type(low) is int else float(value)]
+                value = min(high, floor(value)) if type(low) is int else float(value)
+                if path == CELL_SIZE_PATH and allowed_cells is not None:
+                    value = float(allowed_cells[value])
+                levels[path] = [value]
             yield next(matrix(base, levels))
 
 

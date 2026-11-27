@@ -1425,6 +1425,8 @@ TURKISH.update({
 
 TEMPLATES = {
     '{count} experiments ready.': '{count} deney hazır.',
+    'No periodic FFT cell size in {low}–{high} mm fits outer X/Y/Z = {x}/{y}/{z} mm.':
+        '{low}–{high} mm aralığında X/Y/Z = {x}/{y}/{z} mm dış ölçülerine uyan periyodik FFT hücre boyutu yok.',
     'Select a structure type for {family}.': '{family} için bir yapı türü seçin.',
     'Running experiment {index} / {total}': 'Deney çalıştırılıyor {index} / {total}',
     '{count} experiments finished · {failed} failed.': '{count} deney tamamlandı · {failed} hata.',
