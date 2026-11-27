@@ -83,8 +83,8 @@ periyodik Voronoi tanelerini oluşturduktan sonra gerçek atom sayısı ve bile�
 paketin `model.json` dosyasına yazılır. Aynı tohumla belirlenen tane konumları
 ve yönelimleri `grain-nodes.txt` içinde saklanır.
 
-**Parametreler nasıl seçilir?** bölümündeki hesaplayıcı, BCC (110) XRD düzlem
-aralığından `a = √2 × d₁₁₀` ile başlangıç kafes parametresini bulur. Örneğin
+Başlangıç kafes parametresini BCC (110) XRD düzlem aralığından
+`a = √2 × d₁₁₀` ile hesaplayabilirsiniz. Örneğin
 `d₁₁₀ = 2,4000 Å` için `a = 3,3941 Å`. Aynı bileşim, BCC fazı ve hedef
 sıcaklık için MEAM doğrulaması yaparken küçük bir periyodik tek kristali
 sıfır basınçta gevşetin. Hedef sıcaklıkta NPT dengelemesi sonrasında ortalama

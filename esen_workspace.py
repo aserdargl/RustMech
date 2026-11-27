@@ -2,7 +2,7 @@
 
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
-from math import cbrt, isclose, prod, sqrt
+from math import cbrt, isclose, prod
 from pathlib import Path
 import re
 
@@ -168,7 +168,7 @@ class EsenWorkspace(QDialog):
         language = getattr(QApplication.instance(), "_rustmech_language", None)
         if language is not None:
             for button in (self.md_preview_button, self.md_prepare, self.md_run,
-                           self.md_apply_lattice, self.md_retry_sources,
+                           self.md_retry_sources,
                            *(button for _, _, button in self.md_source_groups.values()),
                            *self.md_file_buttons, *self.md_plan_buttons):
                 language.localize(button)
@@ -212,31 +212,27 @@ class EsenWorkspace(QDialog):
         alloy, alloy_layout = panel("Alloy elements", scrollable=True)
         defaults = [(element, 20) for element in ("Hf", "Nb", "Ta", "Ti", "Zr")]
         self.md_elements = AlloyElements(defaults)
-        alloy_row = QHBoxLayout()
-        alloy_row.setSpacing(7)
-        alloy_row.addWidget(self.md_elements, alignment=Qt.AlignmentFlag.AlignTop)
-        alloy_row.addLayout(self._build_md_sources(), 1)
-        alloy_layout.addLayout(alloy_row, 1)
-        sections.addWidget(alloy)
+        alloy_layout.addWidget(self.md_elements)
+        alloy_layout.addStretch()
 
-        split = QSplitter(Qt.Orientation.Horizontal)
-        split.setObjectName("esenMdSettingsAndPreview")
-        split.setChildrenCollapsible(False)
-        split.setHandleWidth(7)
-        sections.addWidget(split)
+        top = QSplitter(Qt.Orientation.Horizontal)
+        top.setObjectName("esenMdAlloyAndSettings")
+        top.setChildrenCollapsible(False)
+        top.setHandleWidth(7)
+        top.addWidget(alloy)
+        sections.addWidget(top)
 
-        inputs, settings_layout = panel(scrollable=True)
-        self.md_form = inputs.widget()
         self.md_preview_button = command("Preview model", self._md_preview)
         self.md_prepare = command("Prepare package", self._start_md)
-        settings_layout.addLayout(button_row(self.md_prepare))
-        form = QFormLayout()
+        inputs, settings_layout = panel("Package settings", scrollable=True, header_action=self.md_prepare)
+        self.md_form = QWidget()
+        form = QFormLayout(self.md_form)
         form.setContentsMargins(0, 0, 0, 0)
         configure_form(form)
-        settings_layout.addLayout(form)
+        settings_layout.addWidget(self.md_form)
         self.md_settings_form = form
-        settings_layout.addStretch()
-        split.addWidget(inputs)
+        top.addWidget(inputs)
+        top.setSizes([445, 830])
 
         self.md_crystal = compact_combo((("BCC single crystal", "single"), ("BCC polycrystal", "poly")))
         self._form_row(form, "Crystal type", self.md_crystal)
@@ -307,21 +303,29 @@ class EsenWorkspace(QDialog):
             stepper.editingFinished.connect(self._md_preview)
         self.md_order.editingFinished.connect(self._save_md_order)
 
-        card, layout = panel("Model preview", paper=True, scrollable=True, header_action=self.md_preview_button)
-        split.addWidget(card)
-        split.setSizes([480, 700])
-        self.md_preview = code_view("Model preview")
-        self.md_preview.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
-        self.md_preview.setMinimumHeight(125)
-        layout.addWidget(self.md_preview, 1)
         self.md_note = QLabel()
         self.md_note.setTextFormat(Qt.TextFormat.PlainText)
         self.md_note.setWordWrap(True)
         self.md_note.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        layout.addWidget(self.md_note)
-        self._build_md_help(layout)
+        settings_layout.addWidget(self.md_note)
+        settings_layout.addStretch()
+
+        bottom = QSplitter(Qt.Orientation.Horizontal)
+        bottom.setObjectName("esenMdPreviewAndSources")
+        bottom.setChildrenCollapsible(False)
+        bottom.setHandleWidth(7)
+        card, layout = panel("Model preview", paper=True, header_action=self.md_preview_button)
+        self.md_preview = code_view("Model preview")
+        self.md_preview.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
+        self.md_preview.setMinimumHeight(125)
+        layout.addWidget(self.md_preview, 1)
+        bottom.addWidget(card)
+        self._build_md_sources(bottom)
+        bottom.setSizes([430, 425, 425])
+        sections.addWidget(bottom)
         sections.setStretchFactor(1, 1)
-        sections.setSizes([alloy.widget().sizeHint().height(), split.sizeHint().height()])
+        sections.setSizes([max(alloy.widget().sizeHint().height(), inputs.widget().sizeHint().height()),
+                           bottom.sizeHint().height()])
         self.md_crystal.currentIndexChanged.connect(self._md_preview)
         return page
 
@@ -358,9 +362,7 @@ class EsenWorkspace(QDialog):
         split.setSizes([630, 450])
         return page
 
-    def _build_md_sources(self):
-        groups = QHBoxLayout()
-        groups.setSpacing(7)
+    def _build_md_sources(self, row):
         self.md_source_groups = {}
         self.md_retry_sources = command("Retry NIST catalog", self._load_md_sources)
         for provider, title in (("nist", "NIST MEAM potentials"), ("lammps", "LAMMPS MEAM potentials")):
@@ -384,10 +386,9 @@ class EsenWorkspace(QDialog):
             entries.currentItemChanged.connect(
                 lambda current, _previous, button=open_source: button.setEnabled(current is not None)
             )
-            groups.addWidget(card, 1)
+            row.addWidget(card)
             self.md_source_groups[provider] = entries, status, open_source
         self.md_elements.selection_changed.connect(self._refresh_md_sources)
-        return groups
 
     def _load_md_sources(self):
         if self.md_catalog_task is not None or self._disposed:
@@ -583,56 +584,12 @@ class EsenWorkspace(QDialog):
                 self.md_plan_hint.setText(f'{translate("Could not open the package folder.")}\n{path}')
                 self.md_plan_hint.show()
 
-    def _build_md_help(self, layout):
-        help_card, help_layout = panel("How to choose parameters")
-        layout.addWidget(help_card)
-        for text in (
-            "Preparation checks the structure and MEAM mapping. Confirm scientific suitability with a small LAMMPS run and compare against reference data for your alloy.",
-            "The lattice parameter a is one BCC cell edge in Å. Use a value for the same alloy and phase. The initial 3.4000 Å is an example.",
-            "From the BCC (110) XRD spacing, use a = √2 × d₁₁₀. With MEAM, relax a small periodic single crystal at zero pressure. At the target temperature, average the equilibrated NPT box length and divide by the cell repeats along that axis.",
-            "BCC has two atoms per cell. For a polycrystal, the box volume divided by the grain count gives the mean grain volume. Fix the random seed to reproduce grain positions, orientations and alloy site assignments.",
-            "The E20 template uses a fixed 3.9 Å CNA cutoff. Check the cutoff for your lattice parameter before interpreting CNA results.",
-        ):
-            hint = QLabel(text)
-            hint.setWordWrap(True)
-            hint.setObjectName("mutedHintLabel")
-            help_layout.addWidget(hint)
-        self.md_xrd_spacing = CompactDoubleSpinBox()
-        self.md_xrd_spacing.setDecimals(4)
-        self.md_xrd_spacing.setRange(0, 70.7106)
-        self.md_xrd_spacing.setSingleStep(0.001)
-        xrd_form = QFormLayout()
-        configure_form(xrd_form)
-        help_layout.addLayout(xrd_form)
-        self._form_row(xrd_form, "XRD d₁₁₀", self.md_xrd_spacing,
-                       field_layout=stepper_with_unit(self.md_xrd_spacing, "Å"))
-        self.md_apply_lattice = command("Use calculated a", self._apply_md_lattice)
-        self.md_xrd_result = QLabel()
-        self.md_xrd_result.setObjectName("mutedHintLabel")
-        xrd_action = ActionFlowLayout()
-        xrd_action.addWidget(self.md_apply_lattice)
-        xrd_action.addWidget(self.md_xrd_result)
-        help_layout.addLayout(xrd_action)
-        self.md_xrd_spacing.valueChanged.connect(self._md_lattice_result)
-        self._md_lattice_result()
-
     def _localize_md(self, *_):
         self._size_command_buttons()
         self.md_elements.update_total()
         self._md_preview()
         self._refresh_md_plans()
         self._refresh_md_sources()
-
-    def _md_lattice_result(self):
-        spacing = self.md_xrd_spacing.value()
-        self.md_apply_lattice.setEnabled(spacing > 0)
-        self.md_xrd_result.setText(f"a = {sqrt(2) * spacing:.4f} Å" if spacing else "")
-
-    def _apply_md_lattice(self):
-        self.md_xrd_spacing.interpretText()
-        if spacing := self.md_xrd_spacing.value():
-            self.md_lattice.setValue(sqrt(2) * spacing)
-            self._md_preview()
 
     def _pick_md_meam(self, key, title):
         field = getattr(self, f"md_{key}")

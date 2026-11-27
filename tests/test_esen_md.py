@@ -185,16 +185,23 @@ def test_md_plan_library_reopens_generated_and_added_packages(tmp_path):
             assert first.md_plan_source.toPlainText() == md.INITIAL
             splitters = {split.objectName(): split for split in store.splitters(first)}
             sections = splitters["esenMdAlloyAndDetails"]
-            alloy, details = sections.widget(0), sections.widget(1)
-            assert alloy.isAncestorOf(first.md_elements)
-            assert details.isAncestorOf(first.md_form)
-            assert details.isAncestorOf(first.md_preview)
+            top, bottom = sections.widget(0), sections.widget(1)
+            assert top.count() == 2
+            assert top.widget(0).isAncestorOf(first.md_elements)
+            assert top.widget(1).isAncestorOf(first.md_form)
+            assert bottom.count() == 3
+            assert bottom.widget(0).isAncestorOf(first.md_preview)
+            assert bottom.widget(1).isAncestorOf(first.md_source_groups["nist"][0])
+            assert bottom.widget(2).isAncestorOf(first.md_source_groups["lammps"][0])
             assert first.tabs.widget(1).isAncestorOf(first.md_plans)
             first.tabs.setCurrentIndex(0)
             app.processEvents()
-            assert alloy.geometry().bottom() < details.y()
-            assert alloy.width() == details.width()
+            assert top.geometry().bottom() < bottom.y()
+            assert top.width() == bottom.width()
+            assert not any(label.text() == "How to choose parameters" for label in first.findChildren(QLabel))
             sections.setSizes([260, 440])
+            top.setSizes([480, 750])
+            bottom.setSizes([390, 460, 380])
             first.tabs.setCurrentIndex(1)
             splitters["esenMdPlansAndTruba"].setSizes([280, 420])
             expected = {name: split.sizes() for name, split in splitters.items()}
@@ -360,9 +367,8 @@ def test_md_tab_enter_previews_and_submits_package_to_truba(tmp_path, potentials
         workspace.md_crystal.setCurrentIndex(workspace.md_crystal.findData("poly"))
         assert workspace.md_grains.isVisible()
         assert "Characteristic grain size" in workspace.md_preview.toPlainText()
-        workspace.md_xrd_spacing.setValue(2.4)
-        assert workspace.md_xrd_result.text() == "a = 3.3941 Å"
-        workspace.md_apply_lattice.click()
+        workspace.md_lattice.lineEdit().setText("3.3941")
+        QTest.keyClick(workspace.md_lattice.lineEdit(), Qt.Key.Key_Return)
         assert workspace.md_lattice.value() == pytest.approx(3.3941)
         assert workspace.md_task is None
         assert not list(workspace.history_root.glob("*/job.json"))
