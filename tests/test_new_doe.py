@@ -28,7 +28,7 @@ class NewDoeTests(unittest.TestCase):
         self.assertIs(page.window(), self.window.doe_window)
         return page
 
-    def test_experimental_design_toolbar_aligns_both_methods_and_the_active_controls(self):
+    def test_experimental_design_places_active_controls_below_the_method_buttons(self):
         page = self.page()
         self.assertTrue(page.loaded)
         self.assertEqual(self.window.doe_button.text(), "Experimental Design")
@@ -43,14 +43,28 @@ class NewDoeTests(unittest.TestCase):
         doe_button, lhs_button = page.window().navigation.buttons.buttons()
         variables_button = page.variables_button
         self.assertEqual([doe_button.text(), lhs_button.text(), variables_button.text()],
-                         ["DoE", "LHS", "Variable Settings"])
-        for current in (page, self.lhs_page()):
+                         ["DoE", "LHS", "Variable"])
+        self.assertEqual(variables_button.accessibleName(), "Variable Settings")
+        self.assertGreater(doe_button.width(), 48)
+        doe_top_left = doe_button.mapToGlobal(QPoint())
+        self.assertEqual(lhs_button.mapToGlobal(QPoint()).y(), doe_top_left.y())
+        self.assertGreater(lhs_button.mapToGlobal(QPoint()).x(), doe_top_left.x())
+        row_centers = []
+        for button, current in ((doe_button, page), (lhs_button, self.window.lhs_page)):
+            button.click()
+            self.app.processEvents()
             label = next(label for label in current.operation.parentWidget().findChildren(QLabel)
                          if label.buddy() is current.operation)
-            controls = (doe_button, lhs_button, label, current.operation, current.variables_button)
+            controls = (label, current.operation, current.variables_button)
+            self.assertTrue(all(control.isVisible() for control in controls))
+            self.assertEqual(label.mapToGlobal(QPoint()).x(), doe_top_left.x())
             centers = [control.mapToGlobal(control.rect().center()) for control in controls]
             self.assertEqual(len({point.y() for point in centers}), 1)
+            self.assertTrue(all(control.mapToGlobal(QPoint()).y() >= doe_top_left.y() + doe_button.height()
+                                for control in controls))
             self.assertEqual([point.x() for point in centers], sorted(point.x() for point in centers))
+            row_centers.append(centers)
+        self.assertEqual(*row_centers)
         doe_button.click()
         self.assertTrue(page.input_tabs.tabBar().isHidden())
         self.assertEqual(doe_button.size(), lhs_button.size())

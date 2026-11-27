@@ -17,7 +17,7 @@ class DoENavigation(QWidget):
             button.setCheckable(True)
             button.setAutoDefault(False)
             button.setProperty("managesLocalizedWidth", True)
-            button.setFixedSize(48, CONTROL_HEIGHT)
+            button.setFixedSize(64, CONTROL_HEIGHT)
             self.buttons.addButton(button, index)
             layout.addWidget(button)
         self.buttons.button(pages.currentIndex()).setChecked(True)

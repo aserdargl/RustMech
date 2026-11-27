@@ -732,7 +732,9 @@ class NewDoePage(QWidget):
         self.variations.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         self.input_tabs.addTab(self.variations, "Variable Settings")
         self.input_tabs.tabBar().hide()
-        self.variables_button = QPushButton("Variable Settings")
+        self.variables_button = QPushButton("Variable")
+        self.variables_button.setAccessibleName("Variable Settings")
+        self.variables_button.setToolTip("Variable Settings")
         self.variables_button.setCheckable(True)
         self.variables_button.setAutoDefault(False)
         self.variables_button.setFixedHeight(CONTROL_HEIGHT)
@@ -1767,11 +1769,8 @@ class DoEStudioWindow(ExperimentWindow):
         self.navigation = DoENavigation(pages)
         self.navigation.buttons.idClicked.connect(
             lambda index: pages.widget(index).input_tabs.setCurrentIndex(0))
-        toolbar = QHBoxLayout()
-        toolbar.setSpacing(8)
-        toolbar.addWidget(self.navigation)
-        toolbar.addWidget(controls, 1)
-        layout.addLayout(toolbar)
+        layout.addWidget(self.navigation, alignment=Qt.AlignmentFlag.AlignLeft)
+        layout.addWidget(controls)
         layout.addWidget(pages, 1)
         header_controls = (
             self.navigation.buttons.button(0), self.navigation.buttons.button(1),
