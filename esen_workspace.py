@@ -10,7 +10,7 @@ import re
 from PySide6.QtCore import QSettings, QSignalBlocker, Qt, QTimer, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
-    QApplication, QDialog, QFormLayout, QFrame, QHBoxLayout, QLabel,
+    QApplication, QDialog, QFormLayout, QFrame, QGridLayout, QHBoxLayout, QLabel,
     QLineEdit, QListWidget, QListWidgetItem, QMenu, QMessageBox, QPlainTextEdit, QPushButton,
     QScrollArea, QSizePolicy, QSplitter, QTabWidget, QVBoxLayout, QWidget,
 )
@@ -269,17 +269,21 @@ class EsenWorkspace(QDialog):
         self.md_settings_form = form
         sections.addWidget(inputs)
 
+        file_rows = QGridLayout()
+        file_rows.setHorizontalSpacing(form.horizontalSpacing())
+        file_rows.setVerticalSpacing(form.verticalSpacing())
+        file_rows.setColumnStretch(4, 1)
+        form.addRow(file_rows)
+
         self.md_project_path = QLineEdit(str(self.md_project_folder or ""))
         self.md_project_path.setReadOnly(True)
         self.md_pick_project = command("Choose folder…", self._choose_md_project)
-        project_row = QHBoxLayout()
-        project_row.setSpacing(4)
-        project_row.addWidget(self.md_project_path, 1)
-        project_row.addWidget(self.md_pick_project)
-        self._form_row(form, "Project folder", self.md_project_path, field_layout=project_row)
+        file_rows.addWidget(self._form_label("Project folder", self.md_project_path), 0, 0)
+        file_rows.addWidget(self.md_project_path, 0, 1)
+        file_rows.addWidget(self.md_pick_project, 0, 2, 1, 2, Qt.AlignmentFlag.AlignLeft)
 
         self.md_file_buttons = []
-        for key, title in (("library", "MEAM library"), ("parameters", "MEAM parameters")):
+        for row, (key, title) in enumerate((("library", "MEAM library"), ("parameters", "MEAM parameters")), 1):
             field = QLineEdit()
             field.setReadOnly(True)
             field.setText(str(self.preferences.value(f"esen/md/{key}", "")))
@@ -297,17 +301,16 @@ class EsenWorkspace(QDialog):
             sources.setMenu(menu)
             sources.setAccessibleName("MEAM library sources" if key == "library" else "MEAM parameter sources")
             self.md_file_buttons.extend((pick, sources))
-            row = QHBoxLayout()
-            row.setSpacing(4)
-            row.addWidget(field, 1)
-            row.addWidget(pick)
-            row.addWidget(sources)
-            self._form_row(form, title, field, field_layout=row)
+            file_rows.addWidget(self._form_label(title, field), row, 0)
+            file_rows.addWidget(field, row, 1)
+            file_rows.addWidget(pick, row, 2, Qt.AlignmentFlag.AlignLeft)
+            file_rows.addWidget(sources, row, 3, Qt.AlignmentFlag.AlignLeft)
 
         self.md_order = QLineEdit(str(self.preferences.value("esen/md/order", "")))
         self.md_order.setPlaceholderText("Example: Hf Nb Ta Ti Zr")
         self.md_order.setToolTip("Enter the element order used by indices in the MEAM parameter file.")
-        self._form_row(form, "MEAM element order", self.md_order)
+        file_rows.addWidget(self._form_label("MEAM element order", self.md_order), 3, 0)
+        file_rows.addWidget(self.md_order, 3, 1)
         self.md_crystal = compact_combo((("BCC single crystal", "single"), ("BCC polycrystal", "poly")))
         self._form_row(form, "Crystal type", self.md_crystal)
 
@@ -960,7 +963,7 @@ class EsenWorkspace(QDialog):
                 button.setFixedWidth(width)
 
     @staticmethod
-    def _form_row(form, name, field, *, field_layout=None):
+    def _form_label(name, field):
         label = field_label(name, field)
         label.setObjectName("esenFieldLabel")
         if isinstance(field, CompactComboBox):
@@ -969,7 +972,10 @@ class EsenWorkspace(QDialog):
             label.setToolTip(name)
             field.textChanged.connect(field.setToolTip)
             field.setToolTip(field.text())
-        form.addRow(label, field if field_layout is None else field_layout)
+        return label
+
+    def _form_row(self, form, name, field, *, field_layout=None):
+        form.addRow(self._form_label(name, field), field if field_layout is None else field_layout)
 
     def _load_active_jobs(self):
         for path in self.history_root.glob("*/job.json"):
