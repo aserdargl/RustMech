@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
 from esen_elements import AlloyElements
 import esen_jobs as jobs
 import esen_md as md
+from esen_meam_catalog import LAMMPS_MEAM, load_nist_catalog, matching_sources
 from file_dialog import QFileDialog
 from studio_style import (
     ActionFlowLayout, CompactComboBox, CompactDoubleSpinBox, CompactSpinBox, CONTROL_HEIGHT,
@@ -135,6 +136,9 @@ class EsenWorkspace(QDialog):
         self.executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="md")
         self.md_task = None
         self.md_prepared = None
+        self.md_catalog_task = None
+        self.md_nist_sources = None
+        self.md_catalog_failed = False
         self.remote_task = None
         self._active_truba_jobs = {}
         self._disposed = False
@@ -150,7 +154,9 @@ class EsenWorkspace(QDialog):
         language = getattr(QApplication.instance(), "_rustmech_language", None)
         if language is not None:
             for button in (self.md_preview_button, self.md_prepare, self.md_run,
-                           self.md_apply_lattice, *self.md_file_buttons, *self.md_plan_buttons):
+                           self.md_apply_lattice, self.md_retry_sources,
+                           *(button for _, _, button in self.md_source_groups.values()),
+                           *self.md_file_buttons, *self.md_plan_buttons):
                 language.localize(button)
             language.changed.connect(self._localize_md)
         self._localize_md()
@@ -168,6 +174,8 @@ class EsenWorkspace(QDialog):
     def showEvent(self, event):
         super().showEvent(event)
         self._refresh_md_plans()
+        if self.md_nist_sources is None and not self.md_catalog_failed:
+            self._load_md_sources()
 
     def _build_md(self):
         page = QWidget()
@@ -182,8 +190,11 @@ class EsenWorkspace(QDialog):
         alloy, alloy_layout = panel("Alloy elements", scrollable=True)
         defaults = [(element, 20) for element in ("Hf", "Nb", "Ta", "Ti", "Zr")]
         self.md_elements = AlloyElements(defaults)
-        alloy_layout.addWidget(self.md_elements)
-        alloy_layout.addStretch()
+        alloy_row = QHBoxLayout()
+        alloy_row.setSpacing(7)
+        alloy_row.addWidget(self.md_elements, alignment=Qt.AlignmentFlag.AlignTop)
+        alloy_row.addLayout(self._build_md_sources(), 1)
+        alloy_layout.addLayout(alloy_row, 1)
         sections.addWidget(alloy)
 
         split = QSplitter(Qt.Orientation.Horizontal)
@@ -304,6 +315,94 @@ class EsenWorkspace(QDialog):
         self.md_queue.currentIndexChanged.connect(self._md_preview)
         self.md_crystal.currentIndexChanged.connect(self._md_preview)
         return page
+
+    def _build_md_sources(self):
+        groups = QHBoxLayout()
+        groups.setSpacing(7)
+        self.md_source_groups = {}
+        self.md_retry_sources = command("Retry NIST catalog", self._load_md_sources)
+        for provider, title in (("nist", "NIST MEAM potentials"), ("lammps", "LAMMPS MEAM potentials")):
+            entries = QListWidget()
+            entries.setAccessibleName(title)
+            entries.setMinimumHeight(90)
+            entries.setWordWrap(True)
+            entries.itemActivated.connect(self._open_md_source)
+            open_source = command(
+                "Open source", lambda _checked=False, source=entries: self._open_md_source(source.currentItem())
+            )
+            card, layout = panel(title, paper=True, header_action=open_source)
+            status = QLabel()
+            status.setWordWrap(True)
+            status_row = QHBoxLayout()
+            status_row.addWidget(status, 1)
+            if provider == "nist":
+                status_row.addWidget(self.md_retry_sources)
+            layout.addLayout(status_row)
+            layout.addWidget(entries, 1)
+            entries.currentItemChanged.connect(
+                lambda current, _previous, button=open_source: button.setEnabled(current is not None)
+            )
+            groups.addWidget(card, 1)
+            self.md_source_groups[provider] = entries, status, open_source
+        self.md_elements.selection_changed.connect(self._refresh_md_sources)
+        return groups
+
+    def _load_md_sources(self):
+        if self.md_catalog_task is not None or self._disposed:
+            return
+        self.md_catalog_failed = False
+        self.md_catalog_task = self.executor.submit(load_nist_catalog)
+        self._refresh_md_sources()
+
+    def _check_md_sources(self):
+        if self.md_catalog_task is None or not self.md_catalog_task.done():
+            return
+        task, self.md_catalog_task = self.md_catalog_task, None
+        try:
+            self.md_nist_sources = task.result()
+        except Exception:
+            self.md_catalog_failed = True
+        self._refresh_md_sources()
+
+    def _refresh_md_sources(self):
+        selected = self.md_elements.rows.keys()
+        self.md_retry_sources.setVisible(self.md_catalog_failed)
+        for provider, catalog in (("nist", self.md_nist_sources or ()), ("lammps", LAMMPS_MEAM)):
+            entries, status, open_source = self.md_source_groups[provider]
+            matches = matching_sources(catalog, selected)
+            previous = entries.currentItem()
+            previous_url = previous.data(Qt.ItemDataRole.UserRole) if previous is not None else None
+            entries.clear()
+            for entry in matches:
+                elements = "–".join(sorted(entry.elements))
+                item = QListWidgetItem(f"{elements}\n{entry.name}")
+                item.setToolTip(item.text())
+                item.setData(Qt.ItemDataRole.UserRole, entry.url)
+                entries.addItem(item)
+                if entry.url == previous_url:
+                    entries.setCurrentItem(item)
+            if matches and entries.currentItem() is None:
+                entries.setCurrentRow(0)
+            open_source.setEnabled(bool(matches))
+
+            if provider == "nist" and self.md_catalog_failed:
+                message = "NIST catalog unavailable."
+            elif provider == "nist" and self.md_nist_sources is None:
+                message = "Loading NIST catalog…"
+            elif not selected:
+                message = "Add elements to filter MEAM potentials."
+            elif not matches:
+                message = "No MEAM potentials cover all selected elements."
+            elif len(matches) == 1:
+                message = "1 MEAM match"
+            else:
+                message = "{count} MEAM matches"
+            status.setText(translate(message).format(count=len(matches)))
+
+    @staticmethod
+    def _open_md_source(item):
+        if item is not None:
+            QDesktopServices.openUrl(QUrl(item.data(Qt.ItemDataRole.UserRole)))
 
     def _build_md_plans(self):
         card, layout = panel("Saved MD plans", paper=True)
@@ -479,6 +578,7 @@ class EsenWorkspace(QDialog):
         self.md_elements.update_total()
         self._md_preview()
         self._refresh_md_plans()
+        self._refresh_md_sources()
 
     def _md_lattice_result(self):
         spacing = self.md_xrd_spacing.value()
@@ -702,6 +802,7 @@ class EsenWorkspace(QDialog):
         self.remote_task = directory, future, True
 
     def _tick(self):
+        self._check_md_sources()
         if self.remote_task is not None and self.remote_task[1].done():
             directory, future, submitting = self.remote_task
             self.remote_task = None

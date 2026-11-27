@@ -26,6 +26,7 @@ PERIODS = (
 
 class AlloyElements(QWidget):
     changed = Signal()
+    selection_changed = Signal()
     LEFT_COLUMN_ROWS = 5
 
     def __init__(self, defaults, parent=None):
@@ -117,6 +118,7 @@ class AlloyElements(QWidget):
         percent.editingFinished.connect(self.update_total)
         percent.lineEdit().textEdited.connect(lambda text: self._show_edit_total(percent, text))
         self.update_total()
+        self.selection_changed.emit()
 
     def _place_row(self, row, index):
         if index < self.LEFT_COLUMN_ROWS:
@@ -135,6 +137,7 @@ class AlloyElements(QWidget):
         self._mark_added(symbol, False)
         self.cells[symbol][0].setFocus()
         self.update_total()
+        self.selection_changed.emit()
 
     def composition(self):
         return ", ".join(f"{symbol}:{percent.value():.4f}" for symbol, (_, percent) in self.rows.items())

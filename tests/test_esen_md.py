@@ -15,9 +15,15 @@ from PySide6.QtWidgets import QApplication, QLabel
 import esen_jobs as jobs
 import esen_md as md
 from esen_elements import AlloyElements
+from esen_meam_catalog import parse_nist_catalog
 from esen_workspace import EsenWorkspace
 from ui_language import LANGUAGE_KEY, LanguageManager
 from window_state import WindowStateStore
+
+
+@pytest.fixture(autouse=True)
+def offline_meam_catalog(monkeypatch):
+    monkeypatch.setattr("esen_workspace.load_nist_catalog", tuple)
 
 
 @pytest.fixture
@@ -239,6 +245,72 @@ def test_alloy_elements_fill_left_column_then_continue_on_right():
         assert elements.total_label.text().endswith("100 %")
     finally:
         elements.close()
+
+
+def test_meam_sources_follow_selected_elements_and_recover_from_network_error(tmp_path):
+    catalog = parse_nist_catalog(
+        'id,potid,elements,pair_style,status\n'
+        '2024--Cu-Ni--LAMMPS--ipr1,cu-ni,"[\'Cu\', \'Ni\']",meam,active\n'
+        '2025--Cu-Ni-Al--LAMMPS--ipr1,cu-ni-al,"[\'Cu\', \'Ni\', \'Al\']",meam,active\n'
+        '2026--Cu-Ni--LAMMPS--ipr1,cu-ni-eam,"[\'Cu\', \'Ni\']",eam,active\n'
+        '2026--Cu-Ni--LAMMPS--ipr2,cu-ni-old,"[\'Cu\', \'Ni\']",meam,retracted\n'
+    )
+    app = QApplication.instance() or QApplication([])
+    preferences = QSettings(str(tmp_path / "qt.ini"), QSettings.Format.IniFormat)
+    with patch("esen_workspace.QSettings", return_value=preferences):
+        workspace = EsenWorkspace(SimpleNamespace(analysis_auth=lambda: None), history=tmp_path / "jobs")
+
+    unavailable, available = Future(), Future()
+    unavailable.set_exception(OSError("connection failed"))
+    available.set_result(catalog)
+    nist, nist_status, open_nist = workspace.md_source_groups["nist"]
+    lammps, lammps_status, open_lammps = workspace.md_source_groups["lammps"]
+    try:
+        with patch.object(workspace.executor, "submit", side_effect=(unavailable, available)) as submit:
+            workspace.show()
+            app.processEvents()
+            workspace._check_md_sources()
+            assert workspace.md_retry_sources.isVisible()
+            assert "unavailable" in nist_status.text()
+
+            elements = workspace.md_elements
+            for symbol in tuple(elements.rows):
+                elements.remove_element(symbol)
+            assert nist.count() == lammps.count() == 0
+            elements.add_element("Cu", 100)
+            assert nist.count() == 0
+            assert lammps.item(0).text() == "Cu\nCu.meam"
+            assert "unavailable" not in lammps_status.text()
+
+            workspace.md_retry_sources.click()
+            workspace._check_md_sources()
+            assert not workspace.md_retry_sources.isVisible()
+            assert nist.count() == 2
+            assert lammps.count() == 2
+            assert nist.item(0).text().startswith("Cu–Ni\n")
+            with patch("esen_workspace.QDesktopServices.openUrl") as open_url:
+                open_lammps.click()
+                assert open_url.call_args.args[0].path().endswith("/Cu.meam")
+                open_nist.click()
+                assert open_url.call_args.args[0].toString() == catalog[0].url
+            elements.add_element("Ni")
+            assert nist.count() == 2
+            assert lammps.count() == 0
+            elements.add_element("Al")
+            assert nist.count() == 1
+            assert nist.item(0).text().startswith("Al–Cu–Ni\n")
+            current = nist.currentItem()
+            elements.rows["Al"][1].setValue(10)
+            assert nist.currentItem() is current
+            elements.remove_element("Ni")
+            assert lammps.count() == 1
+            elements.add_element("Hf")
+            assert nist.count() == lammps.count() == 0
+            assert not open_nist.isEnabled()
+            assert not open_lammps.isEnabled()
+            assert submit.call_count == 2
+    finally:
+        workspace.dispose()
 
 
 def test_md_tab_enter_previews_and_submits_package_to_truba(tmp_path, potentials):

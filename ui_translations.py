@@ -120,6 +120,16 @@ MEAM library|MEAM kütüphanesi
 MEAM parameters|MEAM parametreleri
 Sources|Kaynaklar
 Find the MEAM library and parameters supplied together for your alloy.|Alaşımınız için birlikte yayımlanan MEAM kütüphanesini ve parametre dosyasını bulun.
+NIST MEAM potentials|NIST MEAM potansiyelleri
+LAMMPS MEAM potentials|LAMMPS MEAM potansiyelleri
+Open source|Kaynağı aç
+Retry NIST catalog|NIST kataloğunu yeniden yükle
+Add elements to filter MEAM potentials.|MEAM potansiyellerini filtrelemek için element ekleyin.
+NIST catalog unavailable.|NIST kataloğuna erişilemedi.
+Loading NIST catalog…|NIST kataloğu yükleniyor…
+No MEAM potentials cover all selected elements.|Seçilen elementlerin tamamını kapsayan MEAM potansiyeli bulunamadı.
+1 MEAM match|1 MEAM eşleşmesi
+{count} MEAM matches|{count} MEAM eşleşmesi
 MEAM library sources|MEAM kütüphanesi kaynakları
 MEAM parameter sources|MEAM parametre kaynakları
 LAMMPS potential files|LAMMPS potansiyel dosyaları
