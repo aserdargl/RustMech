@@ -58,6 +58,7 @@ from PySide6.QtWidgets import (
 )
 
 from analysis_process import AnalysisProcess, run_single_analysis, run_resume_analysis
+from app_settings import ASK_WORKSPACE_ON_STARTUP, show_application_settings
 from damask_fft import (
     COMPONENTS, MIN_GRID, DamaskAnalysisProcess, fft_dimensions, sample_periodic_cell,
     validate_periodic_fft,
@@ -449,6 +450,11 @@ class RustMechDialog(QDialog):
         self.about_button = _WorkspaceCommandButton("About")
         self.about_button.setObjectName("aboutBtn")
         self.about_button.clicked.connect(self.show_about)
+        self.app_settings_button = _WorkspaceCommandButton("Settings")
+        self.app_settings_button.setObjectName("appSettingsButton")
+        self.app_settings_button.setAutoDefault(False)
+        self.app_settings_button.clicked.connect(
+            lambda: show_application_settings(self, self.solver_profile_store.settings))
         self._compute_commands = (self.truba_connect_button, self.truba_button, self.sync_button)
         from ui_language import LanguageSelector
         self.language_selector = LanguageSelector(self.language_manager, self)
@@ -1095,10 +1101,12 @@ class RustMechDialog(QDialog):
         navigation.addWidget(compute_slot, 1)
         for button in self._compute_commands:
             navigation.addWidget(button)
+        navigation.addWidget(self.app_settings_button)
         navigation.addWidget(self.about_button)
         navigation.addWidget(self.language_selector)
         header_controls = (*(button for group in self._workspace_commands for button in group),
-                           *self._compute_commands, self.about_button, self.language_selector.combo)
+                           *self._compute_commands, self.app_settings_button, self.about_button,
+                           self.language_selector.combo)
         for current, following in zip(header_controls, header_controls[1:]):
             QWidget.setTabOrder(current, following)
 
@@ -1603,7 +1611,7 @@ class RustMechDialog(QDialog):
             self.truba_connect_button: (translate("Connect"), translate("Connected")),
         }
         commands = (*(button for group in self._workspace_commands for button in group),
-                    *self._compute_commands, self.about_button)
+                    *self._compute_commands, self.app_settings_button, self.about_button)
         # Reserve one common width for the longest word and its menu arrow.
         command_width = max(button.fontMetrics().horizontalAdvance(word)
                             + (23 if isinstance(button, QToolButton) else 16)
@@ -4399,8 +4407,9 @@ def main() -> int:
 
     configure_application(app)
     profiles = SolverProfileStore()
-    language = install_language(app, profiles.settings)
-    workspace = _choose_startup_workspace(language)
+    workspace = "analysis"
+    if profiles.settings.value(ASK_WORKSPACE_ON_STARTUP, False, type=bool):
+        workspace = _choose_startup_workspace(install_language(app, profiles.settings))
     if workspace is None:
         return 0
     if workspace == "md":

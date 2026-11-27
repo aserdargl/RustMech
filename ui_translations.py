@@ -355,6 +355,7 @@ Finding planar faces and validating geometry…|Düzlemsel yüzeyler bulunuyor v
 Language|Dil
 Interface language|Arayüz dili
 Settings|Ayarlar
+Ask which workspace to open at startup|Açılışta hangi çalışma alanının açılacağını sor
 Setup|Kurulum
 Geometry|Geometri
 Structure|Yapı

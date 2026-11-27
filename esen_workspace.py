@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QScrollArea, QSizePolicy, QSplitter, QTabWidget, QVBoxLayout, QWidget,
 )
 
+from app_settings import show_application_settings
 from esen_elements import AlloyElements
 import esen_jobs as jobs
 import esen_md as md
@@ -150,9 +151,16 @@ class EsenWorkspace(QDialog):
         self.tabs.setObjectName("esenWorkspaceTabs")
         self.tabs.tabBar().setExpanding(False)
         if standalone:
+            corner = QWidget()
+            actions = QHBoxLayout(corner)
+            actions.setContentsMargins(0, 0, 0, 0)
+            actions.setSpacing(4)
             hpc = command("HPC", self._open_truba_connection,
                           hint="Open the Connection tab in the TRUBA application")
-            self.tabs.setCornerWidget(hpc)
+            settings = command("Settings", lambda: show_application_settings(self, self.preferences))
+            actions.addWidget(hpc)
+            actions.addWidget(settings)
+            self.tabs.setCornerWidget(corner)
         shell.addWidget(self.tabs)
         self.tabs.addTab(self._build_md(), WORKSPACE_TITLE)
         self.tabs.addTab(self._build_md_truba(), "TRUBA Submission")
