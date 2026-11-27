@@ -11,7 +11,7 @@ import pytest
 from PySide6.QtCore import QObject, QSettings, Qt, QTimer, Signal
 from PySide6.QtGui import QContextMenuEvent
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QLabel, QScrollArea
+from PySide6.QtWidgets import QApplication, QLabel, QScrollArea, QWidget
 
 import esen_jobs as jobs
 import esen_md as md
@@ -212,8 +212,15 @@ def test_md_plan_library_reopens_generated_and_added_packages(tmp_path):
             assert alloy.height() == sections.height()
             assert sections.widget(0).geometry().bottom() < sections.widget(1).y()
             assert first.md_prepare.text() == "Prepare Package"
+            assert first.md_prepare.property("primary") is True
             assert first.md_prepare.geometry().top() > first.md_form.geometry().bottom()
             assert first.md_prepare.geometry().right() == first.md_form.geometry().right()
+            divider = first.md_elements.findChild(QWidget, "mdCompositionDivider")
+            table = first.md_elements.findChild(QWidget, "mdPeriodicTable")
+            composition_row = next(iter(first.md_elements.rows.values()))[0]
+            assert divider.height() == 1
+            assert divider.y() - table.geometry().bottom() >= 6
+            assert composition_row.y() - divider.geometry().bottom() >= 6
             assert all(cell.width() == cell.height() >= 45 for cell, _ in first.md_elements.cells.values())
             width = alloy.width()
             first.resize(first.width() + 160, first.height() + 80)
@@ -538,7 +545,7 @@ def test_md_tab_enter_previews_and_submits_package_to_truba(tmp_path, potentials
         preview = workspace.md_preview.toPlainText()
         assert "2 × 3 × 4" in preview
         assert "0.68 × 1.02 × 1.36 nm" in preview
-        assert "Generated atom count   48" in preview
+        assert "Generated Atom Count   48" in preview
         assert "rounded" in preview
 
         for source_button in workspace.md_file_buttons[1::2]:
@@ -550,7 +557,7 @@ def test_md_tab_enter_previews_and_submits_package_to_truba(tmp_path, potentials
         assert workspace.md_task is None
         workspace.md_crystal.setCurrentIndex(workspace.md_crystal.findData("poly"))
         assert workspace.md_grains.isVisible()
-        assert "Characteristic grain size" in workspace.md_preview.toPlainText()
+        assert "Characteristic Grain Size" in workspace.md_preview.toPlainText()
         workspace.md_lattice.lineEdit().setText("3.3941")
         QTest.keyClick(workspace.md_lattice.lineEdit(), Qt.Key.Key_Return)
         assert workspace.md_lattice.value() == pytest.approx(3.3941)

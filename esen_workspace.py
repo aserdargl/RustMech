@@ -46,27 +46,12 @@ QFrame[esenCard="paper"] { background: #FFFFFF; border: 1px solid #D5DBE2; borde
 #esenWorkspace QPlainTextEdit { font-family: Consolas; font-size: 12px; }
 #esenFieldLabel { color: #475569; font-size: 11px; }
 #esenWorkspace QPushButton { padding: 0 7px; }
+#mdCompositionDivider { background: #D5DBE2; border: none; }
 #mdPeriodicTable QToolButton { padding: 0; font-size: 12px; min-height: -1px; max-height: -1px; }
 #mdPeriodicTable QToolButton::menu-indicator { image: none; width: 0; height: 0; }
 #mdPeriodicTable QToolButton[inAlloy="true"] { background: #BFDBFE; border-color: #93C5FD; }
 #mdPeriodicTable QToolButton:hover, #mdPeriodicTable QToolButton:focus { border-color: #2563EB; }
 #mdPeriodicTable QToolButton:pressed { background: #93C5FD; }
-#esenWorkspace QPushButton#esenPrepare {
-    color: #FFFFFF; font-weight: 600; padding: 0 12px;
-    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #3475C3, stop:1 #285EA6);
-    border: 1px solid #214D89; border-top-color: #548CCA;
-    border-bottom: 3px solid #173D70; border-radius: 4px;
-}
-#esenWorkspace QPushButton#esenPrepare:hover {
-    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #367CCA, stop:1 #2D66B0);
-}
-#esenWorkspace QPushButton#esenPrepare:focus { border-color: #0F172A; }
-#esenWorkspace QPushButton#esenPrepare:pressed {
-    background: #245692; border-top: 3px solid #173D70; border-bottom-width: 1px;
-}
-#esenWorkspace QPushButton#esenPrepare:disabled {
-    color: #808080; background: #EBEBEB; border-color: #D6D6D6;
-}
 #esenRun { color: #FFFFFF; background: #285EA6; }
 #esenRun:hover { background: #245692; }
 #esenRun:focus { border-color: #0F172A; }
@@ -250,7 +235,7 @@ class EsenWorkspace(QDialog):
         sections.setChildrenCollapsible(False)
         sections.setHandleWidth(7)
 
-        alloy, alloy_layout = panel("Alloy elements", scrollable=True)
+        alloy, alloy_layout = panel("Alloy Elements", scrollable=True)
         alloy.setObjectName("esenMdAlloyElements")
         self.md_elements = AlloyElements(DEFAULT_MD_PROJECT.elements)
         alloy_layout.addWidget(self.md_elements, 1)
@@ -259,8 +244,8 @@ class EsenWorkspace(QDialog):
         outer.addWidget(alloy)
         outer.addWidget(sections, 1)
 
-        self.md_preview_button = command("Preview model", self._md_preview)
-        inputs, settings_layout = panel("Package settings")
+        self.md_preview_button = command("Preview Model", self._md_preview)
+        inputs, settings_layout = panel("Package Settings")
         self.md_form = QWidget()
         form = QFormLayout(self.md_form)
         form.setContentsMargins(0, 0, 0, 0)
@@ -277,13 +262,13 @@ class EsenWorkspace(QDialog):
 
         self.md_project_path = QLineEdit(str(self.md_project_folder or ""))
         self.md_project_path.setReadOnly(True)
-        self.md_pick_project = command("Choose folder…", self._choose_md_project)
-        file_rows.addWidget(self._form_label("Project folder", self.md_project_path), 0, 0)
+        self.md_pick_project = command("Choose Folder…", self._choose_md_project)
+        file_rows.addWidget(self._form_label("Project Folder", self.md_project_path), 0, 0)
         file_rows.addWidget(self.md_project_path, 0, 1)
         file_rows.addWidget(self.md_pick_project, 0, 2, 1, 2, Qt.AlignmentFlag.AlignLeft)
 
         self.md_file_buttons = []
-        for row, (key, title) in enumerate((("library", "MEAM library"), ("parameters", "MEAM parameters")), 1):
+        for row, (key, title) in enumerate((("library", "MEAM Library"), ("parameters", "MEAM Parameters")), 1):
             field = QLineEdit()
             field.setReadOnly(True)
             field.setText(str(self.preferences.value(f"esen/md/{key}", "")))
@@ -293,13 +278,13 @@ class EsenWorkspace(QDialog):
             sources = command("Sources", hint="Find the MEAM library and parameters supplied together for your alloy.")
             menu = QMenu(sources)
             for label, url in (
-                ("LAMMPS potential files", "https://github.com/lammps/lammps/tree/develop/potentials"),
-                ("NIST potentials by element system", "https://www.ctcms.nist.gov/potentials/system/"),
-                ("LAMMPS MEAM file guide", "https://docs.lammps.org/stable/pair_meam.html"),
+                ("LAMMPS Potential Files", "https://github.com/lammps/lammps/tree/develop/potentials"),
+                ("NIST Potentials By Element System", "https://www.ctcms.nist.gov/potentials/system/"),
+                ("LAMMPS MEAM File Guide", "https://docs.lammps.org/stable/pair_meam.html"),
             ):
                 menu.addAction(label, lambda _checked=False, link=url: QDesktopServices.openUrl(QUrl(link)))
             sources.setMenu(menu)
-            sources.setAccessibleName("MEAM library sources" if key == "library" else "MEAM parameter sources")
+            sources.setAccessibleName("MEAM Library Sources" if key == "library" else "MEAM Parameter Sources")
             self.md_file_buttons.extend((pick, sources))
             file_rows.addWidget(self._form_label(title, field), row, 0)
             file_rows.addWidget(field, row, 1)
@@ -309,13 +294,13 @@ class EsenWorkspace(QDialog):
         self.md_order = QLineEdit(str(self.preferences.value("esen/md/order", "")))
         self.md_order.setPlaceholderText("Example: Hf Nb Ta Ti Zr")
         self.md_order.setToolTip("Enter the element order used by indices in the MEAM parameter file.")
-        file_rows.addWidget(self._form_label("MEAM element order", self.md_order), 3, 0)
+        file_rows.addWidget(self._form_label("MEAM Element Order", self.md_order), 3, 0)
         file_rows.addWidget(self.md_order, 3, 1)
-        self.md_crystal = compact_combo((("BCC single crystal", "single"), ("BCC polycrystal", "poly")))
-        self._form_row(form, "Crystal type", self.md_crystal)
+        self.md_crystal = compact_combo((("BCC Single Crystal", "single"), ("BCC Polycrystal", "poly")))
+        self._form_row(form, "Crystal Type", self.md_crystal)
 
         self.md_dimensions = []
-        for (axis, label), default in zip((("x", "Box length X"), ("y", "Box length Y"), ("z", "Box length Z")),
+        for (axis, label), default in zip((("x", "Box Length X"), ("y", "Box Length Y"), ("z", "Box Length Z")),
                                           DEFAULT_MD_PROJECT.dimensions):
             dimension = CompactDoubleSpinBox()
             dimension.setDecimals(5)
@@ -331,12 +316,12 @@ class EsenWorkspace(QDialog):
         self.md_grains.setRange(2, md.MAX_GRAINS)
         self.md_grains.setValue(DEFAULT_MD_PROJECT.grains)
         self.md_grains.setToolTip("Number of Voronoi grains in the periodic box.")
-        self._form_row(form, "Grain count", self.md_grains)
+        self._form_row(form, "Grain Count", self.md_grains)
         self.md_lattice = CompactDoubleSpinBox()
         self.md_lattice.setDecimals(4)
         self.md_lattice.setRange(0.0001, 100.0)
         self.md_lattice.setValue(DEFAULT_MD_PROJECT.lattice)
-        self._form_row(form, "Lattice parameter", self.md_lattice,
+        self._form_row(form, "Lattice Parameter", self.md_lattice,
                        field_layout=stepper_with_unit(self.md_lattice, "Å"))
         self.md_temperature = CompactSpinBox()
         self.md_temperature.setRange(1, 10000)
@@ -346,7 +331,7 @@ class EsenWorkspace(QDialog):
         self.md_seed = CompactSpinBox()
         self.md_seed.setRange(1, 900_000_000)
         self.md_seed.setValue(DEFAULT_MD_PROJECT.seed)
-        self._form_row(form, "Random seed", self.md_seed)
+        self._form_row(form, "Random Seed", self.md_seed)
         self.md_elements.changed.connect(self._md_preview)
         for stepper in self._md_project_number_fields():
             stepper.setFixedWidth(128)  # Leave room for the full nine-digit seed.
@@ -360,10 +345,11 @@ class EsenWorkspace(QDialog):
         settings_layout.addWidget(self.md_note)
         settings_layout.addStretch()
         self.md_prepare = command("Prepare Package", self._start_md, role="esenPrepare")
+        self.md_prepare.setProperty("primary", True)
         settings_layout.addWidget(self.md_prepare, alignment=Qt.AlignmentFlag.AlignRight)
 
-        card, layout = panel("Model preview", paper=True, header_action=self.md_preview_button)
-        self.md_preview = code_view("Model preview")
+        card, layout = panel("Model Preview", paper=True, header_action=self.md_preview_button)
+        self.md_preview = code_view("Model Preview")
         self.md_preview.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
         self.md_preview.setMinimumHeight(125)
         layout.addWidget(self.md_preview, 1)
@@ -390,16 +376,16 @@ class EsenWorkspace(QDialog):
         split.setHandleWidth(7)
         outer.addWidget(split)
 
-        card, layout = panel("Job settings")
+        card, layout = panel("Job Settings")
         form = QFormLayout()
         form.setContentsMargins(0, 0, 0, 0)
         configure_form(form)
         self.md_queue = compact_combo([(name, name) for name in jobs.MODULES])
         queue_index = self.md_queue.findData(self.preferences.value("esen/md/queue", jobs.DEFAULT_PARTITION))
         self.md_queue.setCurrentIndex(max(0, queue_index))
-        self._form_row(form, "TRUBA queue", self.md_queue)
+        self._form_row(form, "TRUBA Queue", self.md_queue)
         layout.addLayout(form)
-        self.md_run = command("Submit to TRUBA", self._run_md, role="esenRun")
+        self.md_run = command("Submit To TRUBA", self._run_md, role="esenRun")
         layout.addLayout(button_row(self.md_run))
         self.md_remote_note = QLabel()
         self.md_remote_note.setTextFormat(Qt.TextFormat.PlainText)
@@ -415,8 +401,8 @@ class EsenWorkspace(QDialog):
 
     def _build_md_sources(self, row):
         self.md_source_groups = {}
-        self.md_retry_sources = command("Retry NIST catalog", self._load_md_sources)
-        for provider, title in (("nist", "NIST MEAM potentials"), ("lammps", "LAMMPS MEAM potentials")):
+        self.md_retry_sources = command("Retry NIST Catalog", self._load_md_sources)
+        for provider, title in (("nist", "NIST MEAM Potentials"), ("lammps", "LAMMPS MEAM Potentials")):
             entries = QListWidget()
             entries.setAccessibleName(title)
             entries.setMinimumHeight(90)
@@ -424,7 +410,7 @@ class EsenWorkspace(QDialog):
             entries.itemClicked.connect(self._select_md_source)
             entries.itemActivated.connect(self._select_md_source)
             open_source = command(
-                "Open source", lambda _checked=False, source=entries: self._open_md_source(source.currentItem())
+                "Open Source", lambda _checked=False, source=entries: self._open_md_source(source.currentItem())
             )
             card, layout = panel(title, paper=True, header_action=open_source)
             status = QLabel()
@@ -507,7 +493,7 @@ class EsenWorkspace(QDialog):
 
     def _choose_md_project(self):
         initial = str(self.md_project_folder or Path.home())
-        folder = QFileDialog.getExistingDirectory(self, translate("Choose project folder"), initial)
+        folder = QFileDialog.getExistingDirectory(self, translate("Choose Project Folder"), initial)
         return self._open_md_project(Path(folder)) if folder else False
 
     def _open_md_project(self, path):
@@ -632,10 +618,10 @@ class EsenWorkspace(QDialog):
         self.md_note.setText(translate("MEAM files saved in {path}").format(path=downloaded.library.parent))
 
     def _build_md_plans(self):
-        card, layout = panel("Saved MD plans", paper=True)
+        card, layout = panel("Saved MD Plans", paper=True)
         card.setMinimumWidth(220)
-        self.md_add_plan = command("Add package…", self._add_md_plan)
-        self.md_open_plan = command("Open folder", self._open_md_plan)
+        self.md_add_plan = command("Add Package…", self._add_md_plan)
+        self.md_open_plan = command("Open Folder", self._open_md_plan)
         self.md_plan_buttons = (self.md_add_plan, self.md_open_plan)
         layout.addLayout(button_row(*self.md_plan_buttons))
 
@@ -644,17 +630,17 @@ class EsenWorkspace(QDialog):
         self.md_plan_hint.setWordWrap(True)
         layout.addWidget(self.md_plan_hint)
         self.md_plans = QListWidget()
-        self.md_plans.setAccessibleName("Saved MD plans")
+        self.md_plans.setAccessibleName("Saved MD Plans")
         self.md_plans.setWordWrap(True)
         self.md_plans.setMinimumHeight(95)
         self.md_plans.currentItemChanged.connect(self._show_md_plan)
         layout.addWidget(self.md_plans, 1)
 
-        self.md_plan_file = compact_combo([("Model details", ""), *((name, name) for name in md.PLAN_FILES)])
-        self.md_plan_file.setAccessibleName("MD package file")
+        self.md_plan_file = compact_combo([("Model Details", ""), *((name, name) for name in md.PLAN_FILES)])
+        self.md_plan_file.setAccessibleName("MD Package File")
         self.md_plan_file.currentIndexChanged.connect(self._show_md_plan)
         layout.addWidget(self.md_plan_file, alignment=Qt.AlignmentFlag.AlignLeft)
-        self.md_plan_source = code_view("MD package file")
+        self.md_plan_source = code_view("MD Package File")
         self.md_plan_source.setMinimumHeight(100)
         self.md_plan_source.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
         layout.addWidget(self.md_plan_source, 2)
@@ -681,7 +667,7 @@ class EsenWorkspace(QDialog):
             self.md_plans.clear()
             for folder, model, modified in sorted(plans, key=lambda plan: (-plan[2], str(plan[0]))):
                 title = "–".join(model["elements"])
-                crystal = translate("BCC polycrystal" if model["grains"] > 1 else "BCC single crystal")
+                crystal = translate("BCC Polycrystal" if model["grains"] > 1 else "BCC Single Crystal")
                 date = datetime.fromtimestamp(modified).strftime("%Y-%m-%d %H:%M")
                 item = QListWidgetItem(f'{title} · {model["temperature"]} K\n'
                                        f'{crystal} · {model["atoms"]:,} {translate("atoms")}\n{date}')
@@ -696,7 +682,7 @@ class EsenWorkspace(QDialog):
         self._show_md_plan()
 
     def _add_md_plan(self):
-        folder = QFileDialog.getExistingDirectory(self, translate("Add package…"))
+        folder = QFileDialog.getExistingDirectory(self, translate("Add Package…"))
         if not folder:
             return
         try:
@@ -725,29 +711,29 @@ class EsenWorkspace(QDialog):
         if not filename:
             model = item.data(Qt.ItemDataRole.UserRole + 1)
             details = []
-            for key, label in (("requested_box_angstrom", "Requested box dimensions"),
-                               ("box_angstrom", "Box dimensions")):
+            for key, label in (("requested_box_angstrom", "Requested Box Dimensions"),
+                               ("box_angstrom", "Box Dimensions")):
                 box = model.get(key)
                 if (isinstance(box, list) and len(box) == 3
                         and all(type(edge) in (int, float) for edge in box)):
                     details.append(f"{translate(label)}  {self._box_in_nm(box)}")
             if model["grains"] > 1 and type(model.get("estimated_atoms")) is int:
-                details.append(f'{translate("Estimated atom count")}  {model["estimated_atoms"]:,}')
+                details.append(f'{translate("Estimated Atom Count")}  {model["estimated_atoms"]:,}')
             if "target_atoms" in model:
-                details.append(f'{translate("Target atom count")}  {model["target_atoms"]}')
+                details.append(f'{translate("Target Atom Count")}  {model["target_atoms"]}')
             details.extend([
-                f'{translate("Prepared atom count")}  {model["atoms"]:,}',
-                f'{translate("Grain count")}  {model["grains"]}',
+                f'{translate("Prepared Atom Count")}  {model["atoms"]:,}',
+                f'{translate("Grain Count")}  {model["grains"]}',
                 f'{translate("Temperature")}  {model["temperature"]} K',
-                f'{translate("Lattice parameter")}  {model.get("lattice", "—")} Å',
-                f'{translate("Random seed")}  {model.get("seed", "—")}',
+                f'{translate("Lattice Parameter")}  {model.get("lattice", "—")} Å',
+                f'{translate("Random Seed")}  {model.get("seed", "—")}',
                 f'{translate("Protocol")}  {model.get("protocol", "—")}',
                 "",
-                translate("Prepared composition"),
+                translate("Prepared Composition"),
                 *(f'{element}  {count:,}  ({100 * count / model["atoms"]:.4f} %)'
                   for element, count in zip(model["elements"], model["counts"])),
                 "",
-                translate("MEAM element order"),
+                translate("MEAM Element Order"),
                 " ".join(model["meam_order"]),
             ])
             self.md_plan_source.setPlainText("\n".join(details))
@@ -835,18 +821,18 @@ class EsenWorkspace(QDialog):
         except ValueError as error:
             self.md_preview.setPlainText(translate(str(error)))
             return
-        lines = [f"{translate('Box dimensions')}   {self._box_in_nm(model.box)}"]
+        lines = [f"{translate('Box Dimensions')}   {self._box_in_nm(model.box)}"]
         if model.grains > 1:
             mean_size = cbrt(prod(model.box) / model.grains) / 10
-            lines.extend([translate("BCC polycrystal"),
-                          f"{translate('Estimated atom count')}   {model.atoms:,}",
-                          f"{translate('Grain count')}   {model.grains}",
-                          f"{translate('Characteristic grain size')}   {mean_size:.3f} nm",
+            lines.extend([translate("BCC Polycrystal"),
+                          f"{translate('Estimated Atom Count')}   {model.atoms:,}",
+                          f"{translate('Grain Count')}   {model.grains}",
+                          f"{translate('Characteristic Grain Size')}   {mean_size:.3f} nm",
                           translate("Atom count and composition counts are estimates until Atomsk builds the grain boundaries.")])
         else:
             cell = " × ".join(map(str, model.repeats))
-            lines.extend([f"{translate('BCC supercell')}   {cell}",
-                          f"{translate('Generated atom count')}   {model.atoms:,}"])
+            lines.extend([f"{translate('BCC Supercell')}   {cell}",
+                          f"{translate('Generated Atom Count')}   {model.atoms:,}"])
             if any(not isclose(requested, actual) for requested, actual in zip(model.requested_box_angstrom, model.box)):
                 lines.append(translate("Box dimensions were rounded to whole BCC unit cells."))
         lines.extend([
@@ -854,7 +840,7 @@ class EsenWorkspace(QDialog):
             *(f"{element:<3}  {count:>10,}    {100 * count / model.atoms:8.4f} %"
               for element, count in zip(model.elements, model.counts)),
             "",
-            translate("Atomsk → Minimization → Equilibration → Tension and CNA"),
+            translate("Atomsk → Minimization → Equilibration → Tension And CNA"),
         ])
         self.md_preview.setPlainText("\n".join(lines))
 

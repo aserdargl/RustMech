@@ -5,7 +5,7 @@ from decimal import Decimal
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QAction, QValidator
 from PySide6.QtWidgets import (
-    QGridLayout, QHBoxLayout, QLabel, QPushButton, QSizePolicy, QToolButton, QVBoxLayout, QWidget,
+    QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton, QSizePolicy, QToolButton, QVBoxLayout, QWidget,
 )
 
 from studio_style import CONTROL_HEIGHT, CompactDoubleSpinBox, stepper_with_unit
@@ -41,7 +41,7 @@ class AlloyElements(QWidget):
         layout.setSpacing(4)
         table = QWidget()
         table.setObjectName("mdPeriodicTable")
-        table.setAccessibleName("Periodic table")
+        table.setAccessibleName("Periodic Table")
         table.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         grid = QGridLayout(table)
         grid.setContentsMargins(0, 0, 0, 0)
@@ -55,6 +55,12 @@ class AlloyElements(QWidget):
         hint = QLabel("Click an element to add it.")
         hint.setWordWrap(True)
         layout.addWidget(hint)
+        layout.addSpacing(6)
+        divider = QFrame()
+        divider.setObjectName("mdCompositionDivider")
+        divider.setFixedHeight(1)
+        layout.addWidget(divider)
+        layout.addSpacing(6)
         self.list_layout = QGridLayout()
         self.list_layout.setVerticalSpacing(2)
         self.list_layout.setHorizontalSpacing(7)
@@ -161,7 +167,7 @@ class AlloyElements(QWidget):
         total = sum((Decimal(f"{pending if percent is edited else percent.value():.4f}")
                      for _, percent in self.rows.values()), Decimal(0))
         text = format(total.normalize(), "f").replace(".", self.locale().decimalPoint())
-        self.total_label.setText(f"{translate('Composition total')}  {text} %")
+        self.total_label.setText(f"{translate('Composition Total')}  {text} %")
         self.total_label.setStyleSheet("color: #0F172A;" if total == 100 else "color: #991B1B;")
 
     def update_total(self, *_):

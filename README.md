@@ -66,7 +66,7 @@ RustMech, GPL-3.0-or-later ile lisanslanır. [License](#license) bölümüne ve 
 **Ekle**’yi seçin. Listedeki her elementin atom yüzdesini girin ve toplamın
 %100 olduğunu kontrol edin. X, Y ve Z kutu boyutlarını nanometre cinsinden
 girin ve önizlemedeki atom sayısını kontrol edin.
-**Proje klasörü** alanından bir klasör seçin. NIST veya LAMMPS listesinden
+**Proje Klasörü** alanından bir klasör seçin. NIST veya LAMMPS listesinden
 bir potansiyele tıkladığınızda kütüphane ve parametre dosyaları proje
 klasörünün `meam-potentials` alt klasörüne indirilir ve MEAM alanları
 doldurulur. Hazırlanan paketler `md-preparations` alt klasöründe saklanır.
@@ -100,7 +100,7 @@ kutu uzunluğunu o eksendeki hücre tekrar sayısına bölün.
 **Paketi Hazırla**, Atomsk’ı bu bilgisayarda çalıştırır ve paket yolunu gösterir.
 Hazırlanan paket **TRUBA’ya Gönderim** sekmesinde seçili görünür. Bu sekmede
 önceden hazırlanmış bir paketi de seçebilir veya paket klasörünü ekleyebilirsiniz.
-TRUBA kuyruğunu seçip **TRUBA’ya gönder** düğmesine bastığınızda E20 şablonuyla
+TRUBA kuyruğunu seçip **TRUBA’ya Gönder** düğmesine bastığınızda E20 şablonuyla
 minimizasyon, dengeleme, çekme ve CNA işi gönderilir. Şablon 3,9 Å sabit CNA
 kesim yarıçapı kullanır.
 Farklı kafes parametrelerinde CNA sonuçlarını yorumlamadan önce kesim

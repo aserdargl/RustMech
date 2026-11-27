@@ -65,41 +65,42 @@ Peridynamics · PMB|Peridinamik · PMB
 Sampling TPMS particles…|TPMS parçacıkları örnekleniyor…
 Building peridynamic bonds…|Peridinamik bağlar oluşturuluyor…
 Peridynamic results saved.|Peridinamik sonuçlar kaydedildi.
-Saved MD plans|Kayıtlı MD planları
-Add package…|Paket ekle…
+Saved MD Plans|Kayıtlı MD Planları
+Add Package…|Paket Ekle…
 Open folder|Klasörü aç
-Model details|Model ayrıntıları
-MD package file|MD paket dosyası
+Open Folder|Klasörü Aç
+Model Details|Model Ayrıntıları
+MD Package File|MD Paket Dosyası
 atoms|atom
-Prepared atom count|Hazırlanan atom sayısı
-Prepared composition|Hazırlanan bileşim
+Prepared Atom Count|Hazırlanan Atom Sayısı
+Prepared Composition|Hazırlanan Bileşim
 Protocol|Protokol
 Prepare a package or add an existing MD package folder.|Bir paket hazırlayın veya mevcut bir MD paket klasörünü ekleyin.
 Choose a complete MD package folder.|Tüm gerekli dosyaları içeren bir MD paket klasörü seçin.
 Could not open the package folder.|Paket klasörü açılamadı.
 Open the folder to read the full file.|Dosyanın tamamını okumak için klasörü açın.
-BCC single crystal|BCC tek kristal
-BCC polycrystal|BCC polikristal
-Crystal type|Kristal tipi
-Grain count|Tane sayısı
+BCC Single Crystal|BCC Tek Kristal
+BCC Polycrystal|BCC Polikristal
+Crystal Type|Kristal Tipi
+Grain Count|Tane Sayısı
 Number of Voronoi grains in the periodic box.|Periyodik kutudaki Voronoi tane sayısı.
-Box dimensions|Kutu boyutları
-Requested box dimensions|Girilen kutu boyutları
-Box length X|Kutu boyutu X
-Box length Y|Kutu boyutu Y
-Box length Z|Kutu boyutu Z
-Estimated atom count|Tahmini atom sayısı
+Box Dimensions|Kutu Boyutları
+Requested Box Dimensions|Girilen Kutu Boyutları
+Box Length X|Kutu Boyutu X
+Box Length Y|Kutu Boyutu Y
+Box Length Z|Kutu Boyutu Z
+Estimated Atom Count|Tahmini Atom Sayısı
 Each box dimension must be at least one lattice parameter.|Her kutu boyutu en az kafes parametresi kadar olmalı.
 For a 3D polycrystal, each box dimension must exceed one lattice parameter.|Üç boyutlu polikristal için her kutu boyutu kafes parametresinden büyük olmalı.
 The box exceeds the supported atom count.|Kutu boyutları desteklenen atom sayısını aşıyor.
 Check the grain count.|Tane sayısını kontrol edin.
 Increase the box dimensions or reduce the grain count.|Kutu boyutlarını artırın veya tane sayısını azaltın.
-Characteristic grain size|Karakteristik tane boyutu
+Characteristic Grain Size|Karakteristik Tane Boyutu
 Atom count and composition counts are estimates until Atomsk builds the grain boundaries.|Atomsk tane sınırlarını oluşturana kadar atom sayıları tahminidir.
-Package settings|Paket ayarları
-Project folder|Proje klasörü
-Choose folder…|Klasör seç…
-Choose project folder|Proje klasörünü seç
+Package Settings|Paket Ayarları
+Project Folder|Proje Klasörü
+Choose Folder…|Klasör Seç…
+Choose Project Folder|Proje Klasörünü Seç
 Choose an existing project folder.|Mevcut bir proje klasörü seçin.
 Invalid Molecular Dynamics project settings.|Molecular Dynamics proje ayarları geçersiz.
 Could not open the Molecular Dynamics project.|Molecular Dynamics projesi açılamadı.
@@ -116,47 +117,48 @@ The MEAM folder is outside the project folder.|MEAM klasörü proje klasörünü
 Each alloy element needs a distinct MEAM symbol.|Her alaşım elementi için farklı bir MEAM sembolü gerekir.
 Prepare Package|Paketi Hazırla
 Package prepared at {path}|Paket hazırlandı. {path}
-Alloy elements|Elementler
-Periodic table|Periyodik tablo
+Alloy Elements|Elementler
+Periodic Table|Periyodik Tablo
 Click an element to add it.|Eklemek istediğiniz elemente tıklayın.
-Composition total|Toplam
+Composition Total|Toplam
 Add at least one element.|En az bir element ekleyin.
-Target atom count|Hedef atom sayısı
-Generated atom count|Üretilecek atom sayısı
-Lattice parameter|Kafes parametresi
+Target Atom Count|Hedef Atom Sayısı
+Generated Atom Count|Üretilecek Atom Sayısı
+Lattice Parameter|Kafes Parametresi
 Temperature|Sıcaklık
 Random seed|Rastgele tohum
-TRUBA queue|TRUBA kuyruğu
-MEAM library|MEAM kütüphanesi
-MEAM parameters|MEAM parametreleri
+Random Seed|Rastgele Tohum
+TRUBA Queue|TRUBA Kuyruğu
+MEAM Library|MEAM Kütüphanesi
+MEAM Parameters|MEAM Parametreleri
 Sources|Kaynaklar
 Find the MEAM library and parameters supplied together for your alloy.|Alaşımınız için birlikte yayımlanan MEAM kütüphanesini ve parametre dosyasını bulun.
-NIST MEAM potentials|NIST MEAM potansiyelleri
-LAMMPS MEAM potentials|LAMMPS MEAM potansiyelleri
-Open source|Kaynağı aç
-Retry NIST catalog|NIST kataloğunu yeniden yükle
+NIST MEAM Potentials|NIST MEAM Potansiyelleri
+LAMMPS MEAM Potentials|LAMMPS MEAM Potansiyelleri
+Open Source|Kaynağı Aç
+Retry NIST Catalog|NIST Kataloğunu Yeniden Yükle
 Add elements to filter MEAM potentials.|MEAM potansiyellerini filtrelemek için element ekleyin.
 NIST catalog unavailable.|NIST kataloğuna erişilemedi.
 Loading NIST catalog…|NIST kataloğu yükleniyor…
 No MEAM potentials cover all selected elements.|Seçilen elementlerin tamamını kapsayan MEAM potansiyeli bulunamadı.
 1 MEAM match|1 MEAM eşleşmesi
 {count} MEAM matches|{count} MEAM eşleşmesi
-MEAM library sources|MEAM kütüphanesi kaynakları
-MEAM parameter sources|MEAM parametre kaynakları
-LAMMPS potential files|LAMMPS potansiyel dosyaları
-NIST potentials by element system|Element sistemine göre NIST potansiyelleri
-LAMMPS MEAM file guide|LAMMPS MEAM dosya kılavuzu
-MEAM element order|MEAM element sırası
+MEAM Library Sources|MEAM Kütüphanesi Kaynakları
+MEAM Parameter Sources|MEAM Parametre Kaynakları
+LAMMPS Potential Files|LAMMPS Potansiyel Dosyaları
+NIST Potentials By Element System|Element Sistemine Göre NIST Potansiyelleri
+LAMMPS MEAM File Guide|LAMMPS MEAM Dosya Kılavuzu
+MEAM Element Order|MEAM Element Sırası
 Example: Hf Nb Ta Ti Zr|Örnek Hf Nb Ta Ti Zr
 Enter the element order used by indices in the MEAM parameter file.|MEAM parametre dosyasındaki indekslerin izlediği element sırasını yazın.
 Browse…|Gözat…
 MEAM files (*.meam);;All files (*)|MEAM dosyaları (*.meam);;Tüm dosyalar (*)
-Preview model|Modeli önizle
+Preview Model|Modeli Önizle
 TRUBA Submission|TRUBA’ya Gönderim
-Submit to TRUBA|TRUBA’ya gönder
-BCC supercell|BCC süper hücresi
+Submit To TRUBA|TRUBA’ya Gönder
+BCC Supercell|BCC Süper Hücresi
 Box dimensions were rounded to whole BCC unit cells.|Kutu boyutları tam BCC birim hücrelerine yuvarlandı.
-Atomsk → Minimization → Equilibration → Tension and CNA|Atomsk → Minimizasyon → Dengeleme → Çekme ve CNA
+Atomsk → Minimization → Equilibration → Tension And CNA|Atomsk → Minimizasyon → Dengeleme → Çekme Ve CNA
 Choose the MEAM library and parameter files.|MEAM kütüphanesini ve parametre dosyasını seçin.
 Generating the structure with Atomsk…|Atomsk ile yapı üretiliyor…
 TRUBA is busy. Try again when the current operation is complete.|TRUBA meşgul. Geçerli işlem tamamlandığında tekrar deneyin.
@@ -164,7 +166,7 @@ Submitting the MD job to TRUBA…|MD işi TRUBA’ya gönderiliyor…
 Follow the job in TRUBA and open downloaded results from Results.|İşi TRUBA’da izleyin, indirilen çıktıları Sonuçlar penceresinden açın.
 Follow the job in TRUBA. Downloaded results are saved in the package's Results folder.|İşi TRUBA’da izleyin. İndirilen çıktılar, paketin Results klasörüne kaydedilir.
 Open Molecular Dynamics|Molecular Dynamics penceresini aç
-Job settings|İş ayarları
+Job Settings|İş Ayarları
 Date modified|Değiştirilme tarihi
 Run on|Çalıştırma hedefi
 MPI processes|MPI süreçleri
@@ -496,6 +498,7 @@ Displacement / mm|Yer değiştirme / mm
 Latest mechanical result · Final load step|Son mekanik analiz sonucu · Son yük adımı
 Result field|Sonuç alanı
 Model preview|Model önizlemesi
+Model Preview|Model Önizlemesi
 von Mises stress / MPa|von Mises gerilmesi / MPa
 Compression|Basma
 General geometry|Genel geometri
