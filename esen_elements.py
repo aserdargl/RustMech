@@ -5,12 +5,11 @@ from decimal import Decimal
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QAction, QValidator
 from PySide6.QtWidgets import (
-    QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton, QSizePolicy, QToolButton, QVBoxLayout, QWidget,
+    QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QSizePolicy, QToolButton, QVBoxLayout, QWidget,
 )
 
 from app_settings import PERIODIC_TABLE_DEFAULT_FONT_SIZE
 from studio_style import CONTROL_HEIGHT, CompactDoubleSpinBox, stepper_with_unit
-from ui_language import translate
 
 
 # A dot reserves an empty group. Lanthanides and actinides are shown below.
@@ -62,7 +61,7 @@ def _element_family(period, group, symbol):
 class AlloyElements(QWidget):
     changed = Signal()
     selection_changed = Signal()
-    ROWS_PER_COLUMN = 5
+    ROWS_PER_COLUMN = 3
     CELL_SIZE = 45
 
     def __init__(self, defaults, parent=None, *, symbol_font_size=PERIODIC_TABLE_DEFAULT_FONT_SIZE, preferences=None):
@@ -101,10 +100,18 @@ class AlloyElements(QWidget):
         self.list_layout.setHorizontalSpacing(7)
         self.list_layout.setAlignment(Qt.AlignmentFlag.AlignLeft)
         layout.addLayout(self.list_layout)
-        self.total_label = QLabel()
-        self.total_label.setObjectName("mdCompositionTotal")
-        layout.addWidget(self.total_label)
-        layout.addStretch()
+        total_row = QHBoxLayout()
+        total_row.setSpacing(4)
+        label = QLabel("Total")
+        self.total_field = QLineEdit()
+        self.total_field.setObjectName("mdCompositionTotal")
+        self.total_field.setReadOnly(True)
+        self.total_field.setFixedSize(112, CONTROL_HEIGHT)
+        label.setBuddy(self.total_field)
+        total_row.addWidget(label)
+        total_row.addWidget(self.total_field)
+        total_row.addStretch()
+        layout.addLayout(total_row)
         for symbol, share in defaults:
             self.add_element(symbol, share)
         self.update_total()
@@ -246,8 +253,8 @@ class AlloyElements(QWidget):
         total = sum((Decimal(f"{pending if percent is edited else percent.value():.4f}")
                      for _, percent in self.rows.values()), Decimal(0))
         text = format(total.normalize(), "f").replace(".", self.locale().decimalPoint())
-        self.total_label.setText(f"{translate('Composition Total')}  {text} %")
-        self.total_label.setStyleSheet("color: #0F172A;" if total == 100 else "color: #991B1B;")
+        self.total_field.setText(f"{text} %")
+        self.total_field.setStyleSheet("color: #0F172A;" if total == 100 else "color: #991B1B;")
 
     def update_total(self, *_):
         self._show_total()

@@ -201,10 +201,10 @@ def test_md_plan_library_reopens_generated_and_added_packages(tmp_path):
             sections = splitters["esenMdSettingsAndResults"]
             sources = first.findChild(QWidget, "esenMdPotentialSources")
             assert alloy.isAncestorOf(first.md_elements)
-            assert sections.count() == 3
+            assert sections.count() == 2
             assert sections.widget(0).isAncestorOf(first.md_form)
             assert sections.widget(1).isAncestorOf(first.md_preview)
-            assert sections.widget(2) is sources
+            assert alloy.isAncestorOf(sources)
             nist_card = sources.layout().itemAtPosition(0, 0).widget()
             lammps_card = sources.layout().itemAtPosition(0, 1).widget()
             assert nist_card.isAncestorOf(first.md_source_groups["nist"][0])
@@ -213,6 +213,7 @@ def test_md_plan_library_reopens_generated_and_added_packages(tmp_path):
             first.tabs.setCurrentIndex(0)
             app.processEvents()
             assert nist_card.geometry().right() < lammps_card.x()
+            assert first.md_elements.geometry().bottom() < sources.y()
             assert nist_card.y() == lammps_card.y()
             assert nist_card.width() == lammps_card.width()
             assert alloy.geometry().right() < sections.x()
@@ -236,7 +237,7 @@ def test_md_plan_library_reopens_generated_and_added_packages(tmp_path):
             assert nist_card.width() == lammps_card.width()
             assert all(cell.width() == cell.height() >= 45 for cell, _ in first.md_elements.cells.values())
             assert not any(label.text() == "How to choose parameters" for label in first.findChildren(QLabel))
-            sections.setSizes([415, 185, 348])
+            sections.setSizes([415, 533])
             app.processEvents()
             first.tabs.setCurrentIndex(1)
             splitters["esenMdPlansAndTruba"].setSizes([280, 420])
@@ -262,11 +263,10 @@ def test_md_plan_library_reopens_generated_and_added_packages(tmp_path):
         app.removeEventFilter(store)
 
 
-def test_alloy_elements_fill_columns_of_five_with_dividers():
+def test_alloy_elements_fill_columns_of_three_and_show_read_only_total():
     app = QApplication.instance() or QApplication([])
     first = ("Hf", "Nb", "Ta", "Ti", "Zr")
-    additional = ("Fe", "Mo", "W", "V", "Cr", "Ni", "Al", "Mg", "Cu", "Co",
-                  "Mn", "Si", "Zn", "Ag", "Au", "Pt")
+    additional = ("Fe", "Mo", "W", "V", "Cr", "Ni", "Al", "Mg")
     elements = AlloyElements((symbol, 20) for symbol in first)
     elements.show()
     try:
@@ -279,24 +279,29 @@ def test_alloy_elements_fill_columns_of_five_with_dividers():
             return elements.list_layout.itemAtPosition(row, 2 * column).widget()
 
         for index, symbol in enumerate(first + additional):
-            column, row = divmod(index, 5)
+            column, row = divmod(index, 3)
             assert row_at(row, column) is elements.rows[symbol][0]
         for column in (1, 3, 5, 7):
             divider = elements.list_layout.itemAtPosition(0, column).widget()
             assert divider.objectName() == "mdCompositionDivider"
             assert divider.width() == 1
-            assert elements.list_layout.itemAtPosition(4, column).widget() is divider
+            assert elements.list_layout.itemAtPosition(2, column).widget() is divider
         assert row_at(0, 0).y() == row_at(0, 1).y()
         assert row_at(0, 0).geometry().right() < row_at(0, 1).x()
 
         elements.rows["Fe"][1].setValue(20)
         elements.remove_element("Nb")
-        assert row_at(4, 0) is elements.rows["Fe"][0]
-        assert row_at(0, 1) is elements.rows["Mo"][0]
-        assert row_at(4, 3) is elements.rows["Pt"][0]
+        assert row_at(2, 0) is elements.rows["Ti"][0]
+        assert row_at(0, 1) is elements.rows["Zr"][0]
+        assert row_at(2, 3) is elements.rows["Mg"][0]
         assert elements.list_layout.itemAtPosition(0, 7) is None
         assert elements.composition().startswith("Hf:20.0000, Ta:20.0000, Ti:20.0000, Zr:20.0000, Fe:20.0000")
-        assert elements.total_label.text().endswith("100 %")
+        label = next(label for label in elements.findChildren(QLabel) if label.buddy() is elements.total_field)
+        assert label.text() == "Total"
+        assert elements.total_field.isReadOnly()
+        elements.total_field.selectAll()
+        QTest.keyClicks(elements.total_field, "999")
+        assert elements.total_field.text() == "100 %"
     finally:
         elements.close()
 
@@ -709,10 +714,10 @@ def test_md_tab_enter_previews_and_submits_package_to_truba(tmp_path, potentials
 
         elements = workspace.md_elements
         assert len(elements.cells) == 118
-        assert elements.total_label.text().endswith("100 %")
+        assert elements.total_field.text() == "100 %"
         for symbol in ("Ta", "Ti", "Zr"):
             elements.remove_element(symbol)
-        assert elements.total_label.text().endswith("40 %")
+        assert elements.total_field.text() == "40 %"
 
         cell, add_action = elements.cells["Fe"]
         menus = []
@@ -740,9 +745,9 @@ def test_md_tab_enter_previews_and_submits_package_to_truba(tmp_path, potentials
             edit.setFocus()
             edit.selectAll()
             QTest.keyClicks(edit, "50")
-            assert elements.total_label.text().endswith(f"{total} %")
+            assert elements.total_field.text() == f"{total} %"
             QTest.keyClick(edit, Qt.Key.Key_Return)
-        assert elements.total_label.text().endswith("100 %")
+        assert elements.total_field.text() == "100 %"
         assert "Hf       " in workspace.md_preview.toPlainText()
         assert workspace.md_task is None
 

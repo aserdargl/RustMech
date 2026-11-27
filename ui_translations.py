@@ -119,7 +119,7 @@ Prepare Package|Paketi Hazırla
 Package prepared at {path}|Paket hazırlandı. {path}
 Alloy Elements|Elementler
 Periodic Table|Periyodik Tablo
-Composition Total|Toplam
+Total|Toplam
 Add at least one element.|En az bir element ekleyin.
 Target Atom Count|Hedef Atom Sayısı
 Generated Atom Count|Üretilecek Atom Sayısı

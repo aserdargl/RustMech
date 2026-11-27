@@ -119,7 +119,7 @@ class EsenTests(unittest.TestCase):
             first.showMaximized()
             app.processEvents()
             splitters = {split.objectName(): split for split in store.splitters(first)}
-            splitters["esenMdSettingsAndResults"].setSizes([460, 350, 225])
+            splitters["esenMdSettingsAndResults"].setSizes([460, 575])
             first.tabs.setCurrentIndex(1)
             app.processEvents()
             splitters["esenMdPlansAndTruba"].setSizes([600, 420])

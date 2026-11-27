@@ -271,7 +271,11 @@ class EsenWorkspace(QDialog):
                                         symbol_font_size=periodic_table_font_size(self.preferences),
                                         preferences=self.preferences)
         self.md_elements.set_family_colors_enabled(self.preferences.value(PERIODIC_TABLE_FAMILY_COLORS, True, type=bool))
-        alloy_layout.addWidget(self.md_elements, 1)
+        alloy_layout.addWidget(self.md_elements)
+        sources = MeamSourceRow()
+        self._build_md_sources(sources.layout())
+        alloy_layout.addSpacing(6)
+        alloy_layout.addWidget(sources, 1)
 
         alloy.setFixedWidth(alloy.widget().minimumSizeHint().width() + alloy.verticalScrollBar().sizeHint().width())
         outer.addWidget(alloy)
@@ -391,10 +395,7 @@ class EsenWorkspace(QDialog):
         layout.addWidget(self.md_preview, 1)
         sections.addWidget(card)
 
-        sources = MeamSourceRow()
-        self._build_md_sources(sources.layout())
-        sections.addWidget(sources)
-        sections.setSizes([inputs.sizeHint().height(), 190, 337])
+        sections.setSizes([inputs.sizeHint().height(), 337])
         self.md_crystal.currentIndexChanged.connect(self._md_preview)
         return page
 
