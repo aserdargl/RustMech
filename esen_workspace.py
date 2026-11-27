@@ -15,7 +15,7 @@ from PySide6.QtWidgets import (
     QScrollArea, QSizePolicy, QSplitter, QTabWidget, QVBoxLayout, QWidget,
 )
 
-from app_settings import PERIODIC_TABLE_FAMILY_COLORS, show_application_settings
+from app_settings import PERIODIC_TABLE_FAMILY_COLORS, periodic_table_font_size, show_application_settings
 from esen_elements import AlloyElements
 import esen_jobs as jobs
 import esen_md as md
@@ -47,7 +47,7 @@ QFrame[esenCard="paper"] { background: #FFFFFF; border: 1px solid #D5DBE2; borde
 #esenFieldLabel { color: #475569; font-size: 11px; }
 #esenWorkspace QPushButton { padding: 0 7px; }
 #mdCompositionDivider { background: #D5DBE2; border: none; }
-#mdPeriodicTable QToolButton { padding: 0; font-size: 12px; min-height: -1px; max-height: -1px; }
+#mdPeriodicTable QToolButton { padding: 0; min-height: -1px; max-height: -1px; }
 #mdPeriodicTable QToolButton::menu-indicator { image: none; width: 0; height: 0; }
 #mdPeriodicTable QToolButton[inAlloy="true"] { background: #BFDBFE; border-color: #93C5FD; }
 #mdPeriodicTable QToolButton:hover, #mdPeriodicTable QToolButton:focus { border-color: #2563EB; }
@@ -169,6 +169,7 @@ class EsenWorkspace(QDialog):
                           hint="Open the Connection tab in the TRUBA application")
             settings = command("Settings", lambda: show_application_settings(
                 self, self.preferences, on_periodic_colors_changed=self.md_elements.set_family_colors_enabled,
+                on_periodic_font_changed=self.md_elements.set_symbol_font_size,
             ))
             actions.addWidget(hpc)
             actions.addWidget(settings)
@@ -239,7 +240,8 @@ class EsenWorkspace(QDialog):
 
         alloy, alloy_layout = panel("Alloy Elements", scrollable=True)
         alloy.setObjectName("esenMdAlloyElements")
-        self.md_elements = AlloyElements(DEFAULT_MD_PROJECT.elements)
+        self.md_elements = AlloyElements(DEFAULT_MD_PROJECT.elements,
+                                        symbol_font_size=periodic_table_font_size(self.preferences))
         self.md_elements.set_family_colors_enabled(self.preferences.value(PERIODIC_TABLE_FAMILY_COLORS, True, type=bool))
         alloy_layout.addWidget(self.md_elements, 1)
 

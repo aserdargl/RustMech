@@ -13,13 +13,14 @@ from PySide6.QtGui import QContextMenuEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QCheckBox, QDialog, QLabel, QPushButton, QScrollArea, QWidget
 
-from app_settings import PERIODIC_TABLE_FAMILY_COLORS
+from app_settings import PERIODIC_TABLE_DEFAULT_FONT_SIZE, PERIODIC_TABLE_FAMILY_COLORS, PERIODIC_TABLE_FONT_SIZE
 import esen_jobs as jobs
 import esen_md as md
 from esen_elements import AlloyElements
 from esen_md_project import PROJECT_FILE, load_md_project
 from esen_meam_catalog import parse_nist_catalog
 from esen_workspace import EsenWorkspace
+from studio_style import CompactSpinBox
 from ui_language import LANGUAGE_KEY, LanguageManager
 from window_state import WindowStateStore
 
@@ -296,7 +297,7 @@ def test_alloy_elements_fill_columns_of_five_with_dividers():
         elements.close()
 
 
-def test_periodic_table_border_colors_follow_saved_settings(tmp_path):
+def test_periodic_table_appearance_follows_saved_settings(tmp_path):
     app = QApplication.instance() or QApplication([])
     path = str(tmp_path / "qt.ini")
     preferences = QSettings(path, QSettings.Format.IniFormat)
@@ -308,24 +309,33 @@ def test_periodic_table_border_colors_follow_saved_settings(tmp_path):
             workspace.show()
             app.processEvents()
             table = workspace.md_elements.table
-            assert table.styleSheet()
+            cell = workspace.md_elements.cells["Hf"][0]
+            assert cell.font().pixelSize() == PERIODIC_TABLE_DEFAULT_FONT_SIZE
+            assert "elementFamily" in table.styleSheet()
             settings_button = next(button for button in workspace.tabs.cornerWidget().findChildren(QPushButton)
                                    if button.text() == "Settings")
 
-            def change_colors(dialog):
+            def change_appearance(dialog):
                 checkbox = next(box for box in dialog.findChildren(QCheckBox)
                                 if box.text() == "Color periodic table borders by element family")
+                size = dialog.findChild(CompactSpinBox, "periodicTableFontSize")
+                assert size.value() == PERIODIC_TABLE_DEFAULT_FONT_SIZE
                 assert checkbox.isChecked()
                 checkbox.click()
-                assert not table.styleSheet()
+                assert "elementFamily" not in table.styleSheet()
+                assert cell.font().pixelSize() == PERIODIC_TABLE_DEFAULT_FONT_SIZE
                 assert not QSettings(path, QSettings.Format.IniFormat).value(
                     PERIODIC_TABLE_FAMILY_COLORS, True, type=bool,
                 )
                 checkbox.click()
-                assert table.styleSheet()
+                size.setValue(24)
+                assert "elementFamily" in table.styleSheet()
+                assert cell.font().pixelSize() == 24
+                assert QSettings(path, QSettings.Format.IniFormat).value(PERIODIC_TABLE_FONT_SIZE, type=int) == 24
                 checkbox.click()
+                assert cell.font().pixelSize() == 24
 
-            with patch.object(QDialog, "exec", change_colors):
+            with patch.object(QDialog, "exec", change_appearance):
                 settings_button.click()
         finally:
             workspace.close()
@@ -334,7 +344,10 @@ def test_periodic_table_border_colors_follow_saved_settings(tmp_path):
     with patch("esen_workspace.QSettings", return_value=QSettings(path, QSettings.Format.IniFormat)):
         reopened = EsenWorkspace(None, history=tmp_path / "jobs")
         try:
-            assert not reopened.md_elements.table.styleSheet()
+            assert "elementFamily" not in reopened.md_elements.table.styleSheet()
+            cell = reopened.md_elements.cells["Hf"][0]
+            cell.ensurePolished()
+            assert cell.font().pixelSize() == 24
         finally:
             reopened.dispose()
 

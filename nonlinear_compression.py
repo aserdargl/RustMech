@@ -1818,8 +1818,11 @@ class RustMechDialog(QDialog):
     def _show_application_settings(self):
         update_periodic_colors = (self.md_workspace.md_elements.set_family_colors_enabled
                                   if self.md_workspace is not None else None)
+        update_periodic_font = (self.md_workspace.md_elements.set_symbol_font_size
+                                if self.md_workspace is not None else None)
         show_application_settings(self, self.solver_profile_store.settings,
-                                  on_periodic_colors_changed=update_periodic_colors)
+                                  on_periodic_colors_changed=update_periodic_colors,
+                                  on_periodic_font_changed=update_periodic_font)
 
     def show_md_workspace(self):
         from esen_workspace import EsenWorkspace

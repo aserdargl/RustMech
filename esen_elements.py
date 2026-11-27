@@ -8,6 +8,7 @@ from PySide6.QtWidgets import (
     QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton, QSizePolicy, QToolButton, QVBoxLayout, QWidget,
 )
 
+from app_settings import PERIODIC_TABLE_DEFAULT_FONT_SIZE
 from studio_style import CONTROL_HEIGHT, CompactDoubleSpinBox, stepper_with_unit
 from ui_language import translate
 
@@ -64,8 +65,10 @@ class AlloyElements(QWidget):
     ROWS_PER_COLUMN = 5
     CELL_SIZE = 45
 
-    def __init__(self, defaults, parent=None):
+    def __init__(self, defaults, parent=None, *, symbol_font_size=PERIODIC_TABLE_DEFAULT_FONT_SIZE):
         super().__init__(parent)
+        self._symbol_font_size = symbol_font_size
+        self._family_colors_enabled = False
         self.cells = {}
         self.rows = {}
         layout = QVBoxLayout(self)
@@ -103,9 +106,20 @@ class AlloyElements(QWidget):
         for symbol, share in defaults:
             self.add_element(symbol, share)
         self.update_total()
+        self._update_table_style()
 
     def set_family_colors_enabled(self, enabled):
-        self.table.setStyleSheet(FAMILY_BORDER_STYLE if enabled else "")
+        self._family_colors_enabled = enabled
+        self._update_table_style()
+
+    def set_symbol_font_size(self, size):
+        self._symbol_font_size = size
+        self._update_table_style()
+
+    def _update_table_style(self):
+        font = f"QToolButton {{ font-size: {self._symbol_font_size}px; }}"
+        borders = FAMILY_BORDER_STYLE if self._family_colors_enabled else ""
+        self.table.setStyleSheet(font + borders)
 
     def _add_cell(self, grid, period, group, symbol):
         cell = QToolButton()

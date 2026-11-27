@@ -369,6 +369,7 @@ Interface language|Arayüz dili
 Settings|Ayarlar
 Ask which workspace to open at startup|Açılışta hangi çalışma alanının açılacağını sor
 Color periodic table borders by element family|Periyodik tablo çerçevelerini element ailesine göre renklendir
+Periodic Table Font Size|Periyodik Tablo Yazı Boyutu
 Alkali metals|Alkali metaller
 Alkaline earth metals|Toprak alkali metaller
 d-block metals|d bloğu metalleri
