@@ -26,6 +26,38 @@ PERIODS = (
 )
 
 
+FAMILY_COLORS = {
+    "Alkali metals": "#B4233F",
+    "Alkaline earth metals": "#B45309",
+    "d-block metals": "#2563A4",
+    "Other metals": "#64748B",
+    "Metalloids": "#827014",
+    "Other nonmetals": "#15803D",
+    "Halogens": "#0E7490",
+    "Noble gases": "#7C3DB4",
+    "Lanthanoids": "#BA377E",
+    "Actinoids": "#875238",
+}
+FAMILY_BORDER_STYLE = "\n".join(
+    f'QToolButton[elementFamily="{family}"] {{ border-width: 2px; border-color: {color}; }}'
+    for family, color in FAMILY_COLORS.items()
+) + """
+QToolButton[elementFamily]:hover, QToolButton[elementFamily]:focus { border-color: #2563EB; }
+"""
+
+
+def _element_family(period, group, symbol):
+    if period >= 7:
+        return ("Lanthanoids", "Actinoids")[period - 7]
+    if symbol in {"H", "C", "N", "O", "P", "S", "Se"}:
+        return "Other nonmetals"
+    if symbol in {"B", "Si", "Ge", "As", "Sb", "Te"}:
+        return "Metalloids"
+    return {0: "Alkali metals", 1: "Alkaline earth metals", 16: "Halogens", 17: "Noble gases"}.get(
+        group, "d-block metals" if 2 <= group <= 11 else "Other metals",
+    )
+
+
 class AlloyElements(QWidget):
     changed = Signal()
     selection_changed = Signal()
@@ -40,6 +72,7 @@ class AlloyElements(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(4)
         table = QWidget()
+        self.table = table
         table.setObjectName("mdPeriodicTable")
         table.setAccessibleName("Periodic Table")
         table.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
@@ -74,11 +107,17 @@ class AlloyElements(QWidget):
             self.add_element(symbol, share)
         self.update_total()
 
+    def set_family_colors_enabled(self, enabled):
+        self.table.setStyleSheet(FAMILY_BORDER_STYLE if enabled else "")
+
     def _add_cell(self, grid, period, group, symbol):
         cell = QToolButton()
         cell.setProperty("preserveLabelText", True)
         cell.setText(symbol)
         cell.setAccessibleName(symbol)
+        family = _element_family(period, group, symbol)
+        cell.setProperty("elementFamily", family)
+        cell.setToolTip(family)
         cell.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         cell.setFixedSize(self.CELL_SIZE, self.CELL_SIZE)
         cell.setContextMenuPolicy(Qt.ContextMenuPolicy.ActionsContextMenu)

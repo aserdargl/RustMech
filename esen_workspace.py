@@ -15,7 +15,7 @@ from PySide6.QtWidgets import (
     QScrollArea, QSizePolicy, QSplitter, QTabWidget, QVBoxLayout, QWidget,
 )
 
-from app_settings import show_application_settings
+from app_settings import PERIODIC_TABLE_FAMILY_COLORS, show_application_settings
 from esen_elements import AlloyElements
 import esen_jobs as jobs
 import esen_md as md
@@ -167,7 +167,9 @@ class EsenWorkspace(QDialog):
             actions.setSpacing(4)
             hpc = command("HPC", self._open_truba_connection,
                           hint="Open the Connection tab in the TRUBA application")
-            settings = command("Settings", lambda: show_application_settings(self, self.preferences))
+            settings = command("Settings", lambda: show_application_settings(
+                self, self.preferences, on_periodic_colors_changed=self.md_elements.set_family_colors_enabled,
+            ))
             actions.addWidget(hpc)
             actions.addWidget(settings)
             self.tabs.setCornerWidget(corner)
@@ -238,6 +240,7 @@ class EsenWorkspace(QDialog):
         alloy, alloy_layout = panel("Alloy Elements", scrollable=True)
         alloy.setObjectName("esenMdAlloyElements")
         self.md_elements = AlloyElements(DEFAULT_MD_PROJECT.elements)
+        self.md_elements.set_family_colors_enabled(self.preferences.value(PERIODIC_TABLE_FAMILY_COLORS, True, type=bool))
         alloy_layout.addWidget(self.md_elements, 1)
 
         alloy.setFixedWidth(alloy.widget().minimumSizeHint().width() + alloy.verticalScrollBar().sizeHint().width())

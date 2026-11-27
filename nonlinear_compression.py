@@ -453,8 +453,7 @@ class RustMechDialog(QDialog):
         self.app_settings_button = _WorkspaceCommandButton("Settings")
         self.app_settings_button.setObjectName("appSettingsButton")
         self.app_settings_button.setAutoDefault(False)
-        self.app_settings_button.clicked.connect(
-            lambda: show_application_settings(self, self.solver_profile_store.settings))
+        self.app_settings_button.clicked.connect(self._show_application_settings)
         self._compute_commands = (self.truba_connect_button, self.truba_button, self.sync_button)
         from ui_language import LanguageSelector
         self.language_selector = LanguageSelector(self.language_manager, self)
@@ -1815,6 +1814,12 @@ class RustMechDialog(QDialog):
             self.brand_header.style().unpolish(self.brand_header)
             self.brand_header.style().polish(self.brand_header)
             self.brand_header.update()
+
+    def _show_application_settings(self):
+        update_periodic_colors = (self.md_workspace.md_elements.set_family_colors_enabled
+                                  if self.md_workspace is not None else None)
+        show_application_settings(self, self.solver_profile_store.settings,
+                                  on_periodic_colors_changed=update_periodic_colors)
 
     def show_md_workspace(self):
         from esen_workspace import EsenWorkspace

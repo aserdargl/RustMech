@@ -369,6 +369,17 @@ Language|Dil
 Interface language|Arayüz dili
 Settings|Ayarlar
 Ask which workspace to open at startup|Açılışta hangi çalışma alanının açılacağını sor
+Color periodic table borders by element family|Periyodik tablo çerçevelerini element ailesine göre renklendir
+Alkali metals|Alkali metaller
+Alkaline earth metals|Toprak alkali metaller
+d-block metals|d bloğu metalleri
+Other metals|Diğer metaller
+Metalloids|Yarı metaller
+Other nonmetals|Diğer ametaller
+Halogens|Halojenler
+Noble gases|Soy gazlar
+Lanthanoids|Lantanitler
+Actinoids|Aktinitler
 Setup|Kurulum
 Geometry|Geometri
 Structure|Yapı

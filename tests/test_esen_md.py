@@ -11,8 +11,9 @@ import pytest
 from PySide6.QtCore import QObject, QSettings, Qt, QTimer, Signal
 from PySide6.QtGui import QContextMenuEvent
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QLabel, QScrollArea, QWidget
+from PySide6.QtWidgets import QApplication, QCheckBox, QDialog, QLabel, QPushButton, QScrollArea, QWidget
 
+from app_settings import PERIODIC_TABLE_FAMILY_COLORS
 import esen_jobs as jobs
 import esen_md as md
 from esen_elements import AlloyElements
@@ -286,6 +287,49 @@ def test_alloy_elements_fill_left_column_then_continue_on_right():
         assert elements.total_label.text().endswith("100 %")
     finally:
         elements.close()
+
+
+def test_periodic_table_border_colors_follow_saved_settings(tmp_path):
+    app = QApplication.instance() or QApplication([])
+    path = str(tmp_path / "qt.ini")
+    preferences = QSettings(path, QSettings.Format.IniFormat)
+    language = SimpleNamespace(localize_tree=lambda _: None)
+    with (patch("esen_workspace.QSettings", return_value=preferences),
+          patch("app_settings.install_language", return_value=language)):
+        workspace = EsenWorkspace(None, history=tmp_path / "jobs", standalone=True)
+        try:
+            workspace.show()
+            app.processEvents()
+            table = workspace.md_elements.table
+            assert table.styleSheet()
+            settings_button = next(button for button in workspace.tabs.cornerWidget().findChildren(QPushButton)
+                                   if button.text() == "Settings")
+
+            def change_colors(dialog):
+                checkbox = next(box for box in dialog.findChildren(QCheckBox)
+                                if box.text() == "Color periodic table borders by element family")
+                assert checkbox.isChecked()
+                checkbox.click()
+                assert not table.styleSheet()
+                assert not QSettings(path, QSettings.Format.IniFormat).value(
+                    PERIODIC_TABLE_FAMILY_COLORS, True, type=bool,
+                )
+                checkbox.click()
+                assert table.styleSheet()
+                checkbox.click()
+
+            with patch.object(QDialog, "exec", change_colors):
+                settings_button.click()
+        finally:
+            workspace.close()
+            workspace.dispose()
+
+    with patch("esen_workspace.QSettings", return_value=QSettings(path, QSettings.Format.IniFormat)):
+        reopened = EsenWorkspace(None, history=tmp_path / "jobs")
+        try:
+            assert not reopened.md_elements.table.styleSheet()
+        finally:
+            reopened.dispose()
 
 
 def test_meam_sources_follow_selected_elements_and_recover_from_network_error(tmp_path):
