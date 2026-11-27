@@ -263,11 +263,39 @@ class EsenWorkspace(QDialog):
         project_row.addWidget(self.md_pick_project)
         self._form_row(form, "Project folder", self.md_project_path, field_layout=project_row)
 
-        self.md_crystal = compact_combo((("BCC single crystal", "single"), ("BCC polycrystal", "poly")))
-        self._form_row(form, "Crystal type", self.md_crystal)
+        self.md_file_buttons = []
+        for key, title in (("library", "MEAM library"), ("parameters", "MEAM parameters")):
+            field = QLineEdit()
+            field.setReadOnly(True)
+            field.setText(str(self.preferences.value(f"esen/md/{key}", "")))
+            field.setToolTip(field.text())
+            setattr(self, f"md_{key}", field)
+            pick = command("Browse…", lambda _checked=False, k=key, label=title: self._pick_md_meam(k, label))
+            sources = command("Sources", hint="Find the MEAM library and parameters supplied together for your alloy.")
+            menu = QMenu(sources)
+            for label, url in (
+                ("LAMMPS potential files", "https://github.com/lammps/lammps/tree/develop/potentials"),
+                ("NIST potentials by element system", "https://www.ctcms.nist.gov/potentials/system/"),
+                ("LAMMPS MEAM file guide", "https://docs.lammps.org/stable/pair_meam.html"),
+            ):
+                menu.addAction(label, lambda _checked=False, link=url: QDesktopServices.openUrl(QUrl(link)))
+            sources.setMenu(menu)
+            sources.setAccessibleName("MEAM library sources" if key == "library" else "MEAM parameter sources")
+            self.md_file_buttons.extend((pick, sources))
+            row = QHBoxLayout()
+            row.setSpacing(4)
+            row.addWidget(field, 1)
+            row.addWidget(pick)
+            row.addWidget(sources)
+            self._form_row(form, title, field, field_layout=row)
+
         self.md_order = QLineEdit(str(self.preferences.value("esen/md/order", "")))
         self.md_order.setPlaceholderText("Example: Hf Nb Ta Ti Zr")
         self.md_order.setToolTip("Enter the element order used by indices in the MEAM parameter file.")
+        self._form_row(form, "MEAM element order", self.md_order)
+        self.md_crystal = compact_combo((("BCC single crystal", "single"), ("BCC polycrystal", "poly")))
+        self._form_row(form, "Crystal type", self.md_crystal)
+
         self.md_dimensions = []
         for (axis, label), default in zip((("x", "Box length X"), ("y", "Box length Y"), ("z", "Box length Z")),
                                           DEFAULT_MD_PROJECT.dimensions):
@@ -301,35 +329,9 @@ class EsenWorkspace(QDialog):
         self.md_seed.setRange(1, 900_000_000)
         self.md_seed.setValue(DEFAULT_MD_PROJECT.seed)
         self._form_row(form, "Random seed", self.md_seed)
-        self.md_seed.setFixedWidth(123)
-        self.md_file_buttons = []
-        for key, title in (("library", "MEAM library"), ("parameters", "MEAM parameters")):
-            field = QLineEdit()
-            field.setReadOnly(True)
-            field.setText(str(self.preferences.value(f"esen/md/{key}", "")))
-            field.setToolTip(field.text())
-            setattr(self, f"md_{key}", field)
-            pick = command("Browse…", lambda _checked=False, k=key, label=title: self._pick_md_meam(k, label))
-            sources = command("Sources", hint="Find the MEAM library and parameters supplied together for your alloy.")
-            menu = QMenu(sources)
-            for label, url in (
-                ("LAMMPS potential files", "https://github.com/lammps/lammps/tree/develop/potentials"),
-                ("NIST potentials by element system", "https://www.ctcms.nist.gov/potentials/system/"),
-                ("LAMMPS MEAM file guide", "https://docs.lammps.org/stable/pair_meam.html"),
-            ):
-                menu.addAction(label, lambda _checked=False, link=url: QDesktopServices.openUrl(QUrl(link)))
-            sources.setMenu(menu)
-            sources.setAccessibleName("MEAM library sources" if key == "library" else "MEAM parameter sources")
-            self.md_file_buttons.extend((pick, sources))
-            row = QHBoxLayout()
-            row.setSpacing(4)
-            row.addWidget(field, 1)
-            row.addWidget(pick)
-            row.addWidget(sources)
-            self._form_row(form, title, field, field_layout=row)
-        self._form_row(form, "MEAM element order", self.md_order)
         self.md_elements.changed.connect(self._md_preview)
-        for stepper in (*self.md_dimensions, self.md_grains, self.md_lattice, self.md_temperature, self.md_seed):
+        for stepper in self._md_project_number_fields():
+            stepper.setFixedWidth(128)  # Leave room for the full nine-digit seed.
             stepper.editingFinished.connect(self._md_preview)
         self.md_order.editingFinished.connect(self._save_md_order)
 
