@@ -142,30 +142,25 @@ def test_polycrystal_package_uses_actual_atom_count_and_seeded_nodes(tmp_path, p
         "Atoms # atomic")[1].splitlines() if line) == {"1": 4, "2": 12}
 
 
+def write_test_package(folder):
+    folder.mkdir(parents=True)
+    for name in md.REQUIRED_PACKAGE_FILES:
+        (folder / name).touch()
+    (folder / md.ENTRY).write_text(md.INITIAL, encoding="utf-8")
+    (folder / md.PLAN_METADATA).write_text(json.dumps({
+        "elements": ["Nb"], "counts": [128], "atoms": 128, "grains": 1,
+        "temperature": 300, "target_atoms": 128, "meam_order": ["Nb"],
+    }), encoding="utf-8")
+    return folder
+
+
 def test_md_plan_library_reopens_generated_and_added_packages(tmp_path):
-    class Truba(QObject):
-        connection_changed = Signal(bool)
-
-        def analysis_auth(self):
-            return None
-
-    def package(folder):
-        folder.mkdir(parents=True)
-        for name in md.REQUIRED_PACKAGE_FILES:
-            (folder / name).touch()
-        (folder / md.ENTRY).write_text(md.INITIAL, encoding="utf-8")
-        (folder / md.PLAN_METADATA).write_text(json.dumps({
-            "elements": ["Nb"], "counts": [128], "atoms": 128, "grains": 1,
-            "temperature": 300, "target_atoms": 128, "meam_order": ["Nb"],
-        }), encoding="utf-8")
-        return folder
-
     app = QApplication.instance() or QApplication([])
     settings = QSettings(str(tmp_path / "qt.ini"), QSettings.Format.IniFormat)
     store = WindowStateStore(app, settings)
-    generated = package(tmp_path / "md-preparations" / "md-bcc-300K-sample")
-    added = package(tmp_path / "shared-plan")
-    truba = Truba()
+    generated = write_test_package(tmp_path / "md-preparations" / "md-bcc-300K-sample")
+    added = write_test_package(tmp_path / "shared-plan")
+    truba = SimpleNamespace(analysis_auth=lambda: None)
     windows = []
     try:
         with patch("esen_workspace.QSettings", return_value=settings):
@@ -194,11 +189,14 @@ def test_md_plan_library_reopens_generated_and_added_packages(tmp_path):
             assert alloy.isAncestorOf(first.md_elements)
             assert details.isAncestorOf(first.md_form)
             assert details.isAncestorOf(first.md_preview)
-            assert details.isAncestorOf(first.md_plans)
+            assert first.tabs.widget(1).isAncestorOf(first.md_plans)
+            first.tabs.setCurrentIndex(0)
+            app.processEvents()
             assert alloy.geometry().bottom() < details.y()
             assert alloy.width() == details.width()
             sections.setSizes([260, 440])
-            splitters["esenMdPreviewAndPlans"].setSizes([280, 420])
+            first.tabs.setCurrentIndex(1)
+            splitters["esenMdPlansAndTruba"].setSizes([280, 420])
             expected = {name: split.sizes() for name, split in splitters.items()}
             first.close()
 
@@ -208,6 +206,8 @@ def test_md_plan_library_reopens_generated_and_added_packages(tmp_path):
             second.show()
             app.processEvents()
             assert second.md_plans.count() == 2
+            second.tabs.setCurrentIndex(0)
+            app.processEvents()
             restored = {split.objectName(): split.sizes() for split in store.splitters(second)}
             assert restored == expected
     finally:
@@ -330,8 +330,12 @@ def test_md_tab_enter_previews_and_submits_package_to_truba(tmp_path, potentials
         workspace.show()
         app.processEvents()
         assert workspace.windowTitle() == "Molecular Dynamics"
-        assert workspace.tabs.count() == 1
+        assert workspace.tabs.count() == 2
         assert workspace.tabs.tabText(0) == "Molecular Dynamics"
+        assert workspace.tabs.tabText(1) == "TRUBA Submission"
+        assert not workspace.md_queue.isVisible()
+        assert not workspace.md_run.isVisible()
+        assert not workspace.md_run.isEnabled()
         assert not workspace.md_grains.isVisible()
         workspace.md_dimensions[1].setValue(1.02)
         workspace.md_dimensions[2].setValue(1.36)
@@ -361,8 +365,6 @@ def test_md_tab_enter_previews_and_submits_package_to_truba(tmp_path, potentials
         workspace.md_apply_lattice.click()
         assert workspace.md_lattice.value() == pytest.approx(3.3941)
         assert workspace.md_task is None
-        workspace.md_run.click()
-        assert "TRUBA" in workspace.md_note.text()
         assert not list(workspace.history_root.glob("*/job.json"))
 
         elements = workspace.md_elements
@@ -420,8 +422,7 @@ def test_md_tab_enter_previews_and_submits_package_to_truba(tmp_path, potentials
         workspace.md_order.setText("Nb Hf")
         workspace.md_library.setText(str(potentials[0]))
         workspace.md_parameters.setText(str(potentials[1]))
-        package = tmp_path / "model"
-        package.mkdir()
+        package = write_test_package(workspace.md_plans_root / "md-bcc-test")
         prepared = Future()
         prepared.set_result(package)
         with patch("esen_md.atomsk_executable", return_value="atomsk"), \
@@ -433,21 +434,28 @@ def test_md_tab_enter_previews_and_submits_package_to_truba(tmp_path, potentials
             workspace._check_md()
             submit.assert_not_called()
             assert str(package) in workspace.md_note.text()
+            assert workspace.tabs.currentIndex() == 0
+            assert workspace.md_plans.currentItem().data(Qt.ItemDataRole.UserRole) == package
+            workspace.tabs.setCurrentIndex(1)
+            workspace.md_run.click()
+            assert "TRUBA" in workspace.md_remote_note.text()
+            submit.assert_not_called()
             truba.auth = SimpleNamespace(username="account")
             workspace.md_grains.setValue(13)
-            workspace.md_run.click()
-            runs = [call for call in execute.call_args_list if call.args[0] is md.prepare_job]
-            assert [call.args[2].grains for call in runs] == [12, 13]
             workspace.remote_task = object()
-            workspace._check_md()
+            workspace.md_run.click()
             submit.assert_not_called()
             workspace.remote_task = None
-            workspace._check_md()
+            workspace.md_run.click()
+            execute.assert_called_once()
             directory, record, files, settings, auth = submit.call_args.args
-        assert workspace.tabs.currentIndex() == 0
+        assert workspace.tabs.currentIndex() == 1
+        assert str(package) in workspace.md_note.text()
         assert jobs.read_job(directory) == record
         assert record["target"] == "remote"
-        assert files == (package, md.ENTRY, (), True)
+        root, entry, extra, whole_folder = files
+        assert (root, entry, whole_folder) == (package, md.ENTRY, False)
+        assert {entry, *extra} == set(md.REQUIRED_PACKAGE_FILES)
         assert settings["resume_input"] == md.RESTART
         assert settings["partition"] == "barbun"
         assert settings["module"] == jobs.DEFAULT_MODULE

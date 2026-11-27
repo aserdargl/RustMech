@@ -141,15 +141,14 @@ Enter the element order used by indices in the MEAM parameter file.|MEAM paramet
 Browse…|Gözat…
 MEAM files (*.meam);;All files (*)|MEAM dosyaları (*.meam);;Tüm dosyalar (*)
 Preview model|Modeli önizle
-Prepare and run on TRUBA|Hazırla ve TRUBA’da çalıştır
+TRUBA Submission|TRUBA’ya Gönderim
+Submit to TRUBA|TRUBA’ya gönder
 BCC supercell|BCC süper hücresi
 Box dimensions were rounded to whole BCC unit cells.|Kutu boyutları tam BCC birim hücrelerine yuvarlandı.
 Atomsk → Minimization → Equilibration → Tension and CNA|Atomsk → Minimizasyon → Dengeleme → Çekme ve CNA
 Choose the MEAM library and parameter files.|MEAM kütüphanesini ve parametre dosyasını seçin.
 Generating the structure with Atomsk…|Atomsk ile yapı üretiliyor…
-Model prepared. Waiting for the current TRUBA operation…|Model hazır. TRUBA’daki mevcut işlemin tamamlanması bekleniyor…
-TRUBA connection changed. Press Prepare and run on TRUBA to submit the prepared model.|TRUBA bağlantısı değişti. Hazır modeli göndermek için Hazırla ve TRUBA’da çalıştır düğmesine basın.
-TRUBA is busy. Press Prepare and run on TRUBA again when it is ready.|TRUBA meşgul. Hazır olduğunda Hazırla ve TRUBA’da çalıştır düğmesine tekrar basın.
+TRUBA is busy. Try again when the current operation is complete.|TRUBA meşgul. Geçerli işlem tamamlandığında tekrar deneyin.
 Submitting the MD job to TRUBA…|MD işi TRUBA’ya gönderiliyor…
 Follow the job in TRUBA and open downloaded results from Results.|İşi TRUBA’da izleyin, indirilen çıktıları Sonuçlar penceresinden açın.
 Open Molecular Dynamics|Molecular Dynamics penceresini aç

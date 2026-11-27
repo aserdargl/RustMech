@@ -60,9 +60,9 @@ python tools\run_tests.py all
 
 RustMech, GPL-3.0-or-later ile lisanslanır. [License](#license) bölümüne ve [LICENSE](LICENSE) dosyasına bakın.
 
-## MD Hazırlama
+## Molecular Dynamics
 
-**Molecular Dynamics → MD Hazırlama** sekmesinde periyodik tablodaki elemente sağ tıklayıp
+**Molecular Dynamics** sekmesinde periyodik tablodaki elemente sağ tıklayıp
 **Ekle**’yi seçin. Listedeki her elementin atom yüzdesini girin ve toplamın
 %100 olduğunu kontrol edin. X, Y ve Z kutu boyutlarını nanometre cinsinden
 girin ve önizlemedeki atom sayısını kontrol edin.
@@ -91,8 +91,11 @@ sıfır basınçta gevşetin. Hedef sıcaklıkta NPT dengelemesi sonrasında ort
 kutu uzunluğunu o eksendeki hücre tekrar sayısına bölün.
 
 **Paketi hazırla**, Atomsk’ı bu bilgisayarda çalıştırır ve paket yolunu gösterir.
-**Hazırla ve TRUBA’da çalıştır**, E20 şablonuyla minimizasyon, dengeleme, çekme
-ve CNA işini gönderir. Şablon 3,9 Å sabit CNA kesim yarıçapı kullanır.
+Hazırlanan paket **TRUBA’ya Gönderim** sekmesinde seçili görünür. Bu sekmede
+önceden hazırlanmış bir paketi de seçebilir veya paket klasörünü ekleyebilirsiniz.
+TRUBA kuyruğunu seçip **TRUBA’ya gönder** düğmesine bastığınızda E20 şablonuyla
+minimizasyon, dengeleme, çekme ve CNA işi gönderilir. Şablon 3,9 Å sabit CNA
+kesim yarıçapı kullanır.
 Farklı kafes parametrelerinde CNA sonuçlarını yorumlamadan önce kesim
 yarıçapını doğrulayın. İşi TRUBA’da izleyin. Tamamlanan işin yerel
 çıktılarını RustMech’in **Sonuçlar** penceresinden açabilirsiniz.

@@ -102,7 +102,7 @@ class EsenTests(unittest.TestCase):
         self.assertIn("Continuation submitted.", record["detail"])
 
     @unittest.skipUnless(os.name == "nt", "Windows Job Object")
-    def test_md_workspace_restores_maximized_geometry_and_both_splitters(self):
+    def test_md_workspace_restores_maximized_geometry_and_splitters_in_both_tabs(self):
         app = QApplication.instance() or QApplication([])
         preferences = QSettings(str(self.root / "settings.ini"), QSettings.Format.IniFormat)
         store = WindowStateStore(app, preferences)
@@ -118,10 +118,13 @@ class EsenTests(unittest.TestCase):
             app.processEvents()
             first.showMaximized()
             app.processEvents()
-            outer, inner = store.splitters(first)
-            outer.setSizes([560, 800])
-            inner.setSizes([520, 280])
-            expected = {split.objectName(): split.sizes() for split in (outer, inner)}
+            splitters = {split.objectName(): split for split in store.splitters(first)}
+            splitters["esenMdAlloyAndDetails"].setSizes([460, 610])
+            splitters["esenMdSettingsAndPreview"].setSizes([520, 280])
+            first.tabs.setCurrentIndex(1)
+            app.processEvents()
+            splitters["esenMdPlansAndTruba"].setSizes([600, 420])
+            expected = {name: split.sizes() for name, split in splitters.items()}
             normal = first.normalGeometry()
             self.assertEqual(store.key(first), "windows/EsenWorkspace/esenWorkspace")
             first.close()
@@ -129,6 +132,8 @@ class EsenTests(unittest.TestCase):
             second = EsenWorkspace(truba, history=self.history)
             self.addCleanup(second.dispose)
             second.show()
+            app.processEvents()
+            second.tabs.setCurrentIndex(1)
             app.processEvents()
 
         self.assertTrue(second.isMaximized())

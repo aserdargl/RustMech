@@ -150,6 +150,7 @@ class EsenWorkspace(QDialog):
         self.tabs.tabBar().setExpanding(False)
         shell.addWidget(self.tabs)
         self.tabs.addTab(self._build_md(), WORKSPACE_TITLE)
+        self.tabs.addTab(self._build_md_truba(), "TRUBA Submission")
 
         language = getattr(QApplication.instance(), "_rustmech_language", None)
         if language is not None:
@@ -206,9 +207,8 @@ class EsenWorkspace(QDialog):
         inputs, settings_layout = panel(scrollable=True)
         self.md_form = inputs.widget()
         self.md_preview_button = command("Preview model", self._md_preview)
-        self.md_prepare = command("Prepare package", lambda: self._start_md(submit=False))
-        self.md_run = command("Prepare and run on TRUBA", self._start_md, role="esenRun")
-        settings_layout.addLayout(button_row(self.md_prepare, self.md_run))
+        self.md_prepare = command("Prepare package", self._start_md)
+        settings_layout.addLayout(button_row(self.md_prepare))
         form = QFormLayout()
         form.setContentsMargins(0, 0, 0, 0)
         configure_form(form)
@@ -255,10 +255,6 @@ class EsenWorkspace(QDialog):
         self.md_seed.setValue(765896)
         self._form_row(form, "Random seed", self.md_seed)
         self.md_seed.setFixedWidth(123)
-        self.md_queue = compact_combo([(name, name) for name in jobs.MODULES])
-        queue_index = self.md_queue.findData(self.preferences.value("esen/md/queue", jobs.DEFAULT_PARTITION))
-        self.md_queue.setCurrentIndex(max(0, queue_index))
-        self._form_row(form, "TRUBA queue", self.md_queue)
         self.md_file_buttons = []
         for key, title in (("library", "MEAM library"), ("parameters", "MEAM parameters")):
             field = QLineEdit()
@@ -290,14 +286,9 @@ class EsenWorkspace(QDialog):
             stepper.editingFinished.connect(self._md_preview)
         self.md_order.editingFinished.connect(self._save_md_order)
 
-        preview_split = QSplitter(Qt.Orientation.Horizontal)
-        preview_split.setObjectName("esenMdPreviewAndPlans")
-        preview_split.setChildrenCollapsible(False)
-        preview_split.setHandleWidth(7)
-        split.addWidget(preview_split)
-        split.setSizes([480, 700])
         card, layout = panel("Model preview", paper=True, scrollable=True, header_action=self.md_preview_button)
-        preview_split.addWidget(card)
+        split.addWidget(card)
+        split.setSizes([480, 700])
         self.md_preview = code_view("Model preview")
         self.md_preview.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
         self.md_preview.setMinimumHeight(125)
@@ -308,12 +299,42 @@ class EsenWorkspace(QDialog):
         self.md_note.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         layout.addWidget(self.md_note)
         self._build_md_help(layout)
-        preview_split.addWidget(self._build_md_plans())
-        preview_split.setSizes([390, 310])
         sections.setStretchFactor(1, 1)
         sections.setSizes([alloy.widget().sizeHint().height(), split.sizeHint().height()])
-        self.md_queue.currentIndexChanged.connect(self._md_preview)
         self.md_crystal.currentIndexChanged.connect(self._md_preview)
+        return page
+
+    def _build_md_truba(self):
+        page = QWidget()
+        outer = QVBoxLayout(page)
+        outer.setContentsMargins(8, 8, 8, 8)
+        split = QSplitter(Qt.Orientation.Horizontal)
+        split.setObjectName("esenMdPlansAndTruba")
+        split.setChildrenCollapsible(False)
+        split.setHandleWidth(7)
+        outer.addWidget(split)
+
+        card, layout = panel("Job settings")
+        form = QFormLayout()
+        form.setContentsMargins(0, 0, 0, 0)
+        configure_form(form)
+        self.md_queue = compact_combo([(name, name) for name in jobs.MODULES])
+        queue_index = self.md_queue.findData(self.preferences.value("esen/md/queue", jobs.DEFAULT_PARTITION))
+        self.md_queue.setCurrentIndex(max(0, queue_index))
+        self._form_row(form, "TRUBA queue", self.md_queue)
+        layout.addLayout(form)
+        self.md_run = command("Submit to TRUBA", self._run_md, role="esenRun")
+        layout.addLayout(button_row(self.md_run))
+        self.md_remote_note = QLabel()
+        self.md_remote_note.setTextFormat(Qt.TextFormat.PlainText)
+        self.md_remote_note.setWordWrap(True)
+        self.md_remote_note.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        layout.addWidget(self.md_remote_note)
+        layout.addStretch()
+
+        split.addWidget(self._build_md_plans())
+        split.addWidget(card)
+        split.setSizes([630, 450])
         return page
 
     def _build_md_sources(self):
@@ -487,6 +508,7 @@ class EsenWorkspace(QDialog):
         item = self.md_plans.currentItem()
         self.md_open_plan.setEnabled(item is not None)
         self.md_plan_file.setEnabled(item is not None)
+        self.md_run.setEnabled(item is not None)
         self.md_plan_hint.setVisible(item is None)
         if item is None:
             self.md_plan_hint.setText(translate("Prepare a package or add an existing MD package folder."))
@@ -654,64 +676,47 @@ class EsenWorkspace(QDialog):
               for element, count in zip(model.elements, model.counts)),
             "",
             translate("Atomsk → Minimization → Equilibration → Tension and CNA"),
-            f"TRUBA · {translate('Queue')}   {self.md_queue.currentText()}",
         ])
         self.md_preview.setPlainText("\n".join(lines))
 
-    def _start_md(self, *, submit=True):
+    def _start_md(self):
         if self.md_task is not None:
             return
         self._md_preview()
-        auth = self.truba.analysis_auth() if submit else None
         try:
-            if submit and auth is None:
-                raise ValueError(translate("Connect using the main TRUBA button."))
             model = self._md_model()
             order = md.meam_order(self.md_order.text(), model.elements)
             library, parameters = Path(self.md_library.text()), Path(self.md_parameters.text())
             if not library.is_file() or not parameters.is_file():
                 raise ValueError(translate("Choose the MEAM library and parameter files."))
-            settings = None
-            if auth is not None:
-                partition = self.md_queue.currentData()
-                settings = self._remote_settings(partition, auth)
-                ranks, memory, walltime = jobs.full_node_resources(partition, jobs.BASELINES)
-                jobs.remote_script(md.ENTRY, ranks, memory=memory, walltime=walltime, **settings)
-                self.preferences.setValue("esen/md/queue", partition)
             inputs = (model, library, parameters, order)
             request = (inputs, tuple(path.stat().st_mtime_ns for path in (library, parameters)))
             if self.md_prepared is not None and self.md_prepared[0] == request and self.md_prepared[1].is_dir():
-                self._finish_md(self.md_prepared[1], settings, auth)
+                self._finish_md(self.md_prepared[1])
                 return
             executable = md.atomsk_executable()
             future = self.executor.submit(md.prepare_job, self.md_plans_root, *inputs, executable)
         except (OSError, ValueError) as error:
             self.md_note.setText(translate(str(error)))
             return
-        self.md_task = future, request, settings, auth
+        self.md_task = future, request
         self.md_elements.setEnabled(False)
         self.md_form.setEnabled(False)
         self.md_prepare.setEnabled(False)
-        self.md_run.setEnabled(False)
         self.md_note.setText(translate("Generating the structure with Atomsk…"))
 
     def _check_md(self):
         if self.md_task is None or not self.md_task[0].done():
             return
-        future, request, settings, auth = self.md_task
-        if (settings is not None and self.remote_task is not None
-                and self.truba.analysis_auth() == auth and future.exception() is None):
-            self.md_note.setText(translate("Model prepared. Waiting for the current TRUBA operation…"))
-            return
+        future, request = self.md_task
         self.md_task = None
         self.md_elements.setEnabled(True)
         self.md_form.setEnabled(True)
         self.md_prepare.setEnabled(True)
-        self.md_run.setEnabled(True)
         try:
             folder = future.result()
             self.md_prepared = request, folder
-            self._finish_md(folder, settings, auth)
+            self._finish_md(folder)
         except Exception as error:
             folder = self.md_prepared[1] if self.md_prepared and self.md_prepared[0] == request else None
             self.md_note.setText(f"{error}\n{folder}" if folder is not None else str(error))
@@ -737,26 +742,37 @@ class EsenWorkspace(QDialog):
             resume_input=md.RESTART,
         )
 
-    def _finish_md(self, folder, settings, auth):
+    def _finish_md(self, folder):
         self._refresh_md_plans(folder)
-        if settings is None:
-            self.md_note.setText(translate("Package prepared at {path}").format(path=folder))
-        else:
-            self._submit_md(folder, settings, auth)
+        self.md_note.setText(translate("Package prepared at {path}").format(path=folder))
 
-    def _submit_md(self, folder, settings, auth):
-        if self.truba.analysis_auth() != auth:
-            raise ValueError(translate("TRUBA connection changed. Press Prepare and run on TRUBA to submit the prepared model."))
-        if self.remote_task is not None:
-            raise ValueError(translate("TRUBA is busy. Press Prepare and run on TRUBA again when it is ready."))
-        directory, record = jobs.new_job(folder, md.ENTRY, "remote", None, parent=self.history_root,
-                                         batch_folder=folder.name)
-        self._submit_remote(directory, record, (folder, md.ENTRY, (), True), settings, auth)
-        self.md_prepared = None
-        self.md_note.setText(translate("Submitting the MD job to TRUBA…"))
+    def _run_md(self):
+        if (item := self.md_plans.currentItem()) is None:
+            return
+        try:
+            auth = self.truba.analysis_auth()
+            if auth is None:
+                raise ValueError(translate("Connect using the main TRUBA button."))
+            if self.remote_task is not None:
+                raise ValueError(translate("TRUBA is busy. Try again when the current operation is complete."))
+            folder = item.data(Qt.ItemDataRole.UserRole)
+            md.read_plan(folder)
+            partition = self.md_queue.currentData()
+            settings = self._remote_settings(partition, auth)
+            ranks, memory, walltime = jobs.full_node_resources(partition, jobs.BASELINES)
+            jobs.remote_script(md.ENTRY, ranks, memory=memory, walltime=walltime, **settings)
+            self.preferences.setValue("esen/md/queue", partition)
+            directory, record = jobs.new_job(folder, md.ENTRY, "remote", None, parent=self.history_root,
+                                             batch_folder=folder.name)
+            extra = tuple(name for name in md.REQUIRED_PACKAGE_FILES if name != md.ENTRY)
+            self._submit_remote(directory, record, (folder, md.ENTRY, extra, False), settings, auth)
+        except (OSError, ValueError) as error:
+            self.md_remote_note.setText(translate(str(error)))
+            return
+        self.md_remote_note.setText(translate("Submitting the MD job to TRUBA…"))
 
     def _size_command_buttons(self):
-        for group in ((self.md_prepare, self.md_run), self.md_file_buttons, self.md_plan_buttons):
+        for group in (self.md_file_buttons, self.md_plan_buttons):
             width = max(button.sizeHint().width() for button in group) + 2
             for button in group:
                 button.setFixedWidth(width)
@@ -812,15 +828,15 @@ class EsenWorkspace(QDialog):
                 self._update_tracked_job(directory, record)
             except Exception as error:
                 if submitting:
-                    self.md_note.setText(str(error))
+                    self.md_remote_note.setText(str(error))
             else:
                 if submitting:
                     if record["state"] in ACTIVE_TRUBA_STATES:
-                        self.md_note.setText(translate(
+                        self.md_remote_note.setText(translate(
                             "Follow the job in TRUBA and open downloaded results from Results."
                         ))
                     else:
-                        self.md_note.setText(record.get("detail") or translate("Failed"))
+                        self.md_remote_note.setText(record.get("detail") or translate("Failed"))
         self._check_md()
 
     def _poll_remote(self):
