@@ -13,7 +13,10 @@ from PySide6.QtWidgets import (
 )
 
 from model import Settings
-from peridynamic_analysis import CompressionOptions, POISSON_RATIO
+from peridynamic_analysis import (
+    CompressionOptions, MAX_PARTICLE_INTERVALS, MIN_PARTICLE_INTERVALS, POISSON_RATIO,
+    minimum_particle_resolution,
+)
 from structure_library import TPMS_FUNCTIONS, TPMS_MORPHOLOGIES
 from studio_style import (CONTROL_HEIGHT, CompactComboBox, CompactDoubleSpinBox, CompactSpinBox,
                           SidebarGroupBox, configure_form, field_label)
@@ -84,7 +87,7 @@ class PeridynamicSettingsPanel(QWidget):
             ("cell_size", "TPMS period / mm", 0.01, 10000, 3, 0.25),
             ("solid_fraction", "Solid fraction / %", 1, 99, 2, 1),
             ("young_modulus", "Elastic modulus / MPa", 0.001, 10_000_000, 3, 100),
-            ("resolution", "Particles per axis", 12, 72, None, 4),
+            ("resolution", "Particles per axis", MIN_PARTICLE_INTERVALS, MAX_PARTICLE_INTERVALS, None, 4),
             ("horizon_ratio", "Horizon / spacing", 2.5, 4, 2, 0.25),
             ("critical_stretch_percent", "Critical bond stretch / %", 0.01, 20, 3, 0.1),
             ("compression_percent", "Compression / %", 0.1, 35, 2, 1),
@@ -152,8 +155,8 @@ class PeridynamicSettingsPanel(QWidget):
             if not isinstance(control, QComboBox):
                 control.interpretText()
         self._applied_geometry = self.geometry_values()
-        self.save()
         self.changed.emit()
+        self.save()
 
     def values(self):
         return {key: control.currentData() if isinstance(control, QComboBox) else control.value()
@@ -166,10 +169,19 @@ class PeridynamicSettingsPanel(QWidget):
 
     def update_spacing(self):
         self.structure_apply_button.setEnabled(self.has_pending_geometry())
-        settings, options = self.inputs()
-        spacing = settings.size / options.resolution
-        self.spacing.setText(translate("Spacing {spacing} mm · Horizon {horizon} mm").format(
-            spacing=f"{spacing:.4g}", horizon=f"{options.horizon_ratio * spacing:.4g}"))
+        settings, _ = self.inputs()
+        minimum = minimum_particle_resolution(settings)
+        resolution = self.controls["resolution"]
+        lower_bound = min(minimum, MAX_PARTICLE_INTERVALS)
+        if resolution.minimum() != lower_bound:
+            with QSignalBlocker(resolution):
+                resolution.setMinimum(lower_bound)
+                # Refresh the shared stepper's visible editor after a blocked value change.
+                resolution.setValue(resolution.value())
+        spacing = settings.size / resolution.value()
+        summary = translate("Spacing {spacing} mm · Horizon {horizon} mm").format(
+            spacing=f"{spacing:.4g}", horizon=f"{self.controls['horizon_ratio'].value() * spacing:.4g}")
+        self.spacing.setText(summary + "\n" + translate("Minimum particles per axis: {value}").format(value=minimum))
 
     def save(self):
         if self.preferences is not None:

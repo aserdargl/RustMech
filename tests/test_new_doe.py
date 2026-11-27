@@ -393,6 +393,21 @@ class NewDoeTests(unittest.TestCase):
             reopened.close()
             structure_window.close()
 
+            resolution = fields["mesh_resolution"]
+            resolution.mode.setCurrentIndex(resolution.mode.findData("list"))
+            resolution.selection.clear()
+            fallback = page.open_input_preview(True)
+            self.assertTrue(fallback.isVisible())
+            _, request, with_mesh, _ = submit.call_args.args
+            self.assertTrue(with_mesh)
+            self.assertEqual(request["settings"]["mesh_resolution"], resolution.fixed.value())
+            self.assertIn("Using fixed value", fallback.findChild(QLabel, "doePreviewNote").text())
+            self.assertTrue(resolution.variable.isChecked())
+            page.create()
+            self.assertIn("Enter numeric values.", page.status.text())
+            fallback.close()
+            self.app.processEvents()
+
             page.operation.setCurrentIndex(page.operation.findData("fft_solve"))
             grid = next(factor for factor in page.factors if factor.path == ("grid",))
             grid.fixed.setValue(48)

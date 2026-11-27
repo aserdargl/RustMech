@@ -419,11 +419,15 @@ class SurfacePreviewUITests(unittest.TestCase):
 
                 window._select_settings_method(window._peridynamic_method_index)
                 panel = window.peridynamic_settings
-                panel.controls["size"].setValue(7)
+                panel.controls["size"].setValue(18)
+                panel.controls["cell_size"].setValue(4.5)
                 self.assertEqual(panel.inputs()[0].size, initial.size)
                 self.assertFalse(window.apply_button.isEnabled())
                 panel.structure_apply_button.click()
-                self.assertEqual(panel.inputs()[0].size, 7)
+                self.assertEqual(panel.inputs()[0].size, 18)
+                self.assertEqual(panel.controls["resolution"].minimum(), 32)
+                self.assertEqual(panel.inputs()[1].resolution, 32)
+                self.assertEqual(panel.controls["resolution"].lineEdit().text(), "32")
                 panel.controls["size"].setValue(10)
             finally:
                 window.close()
@@ -432,7 +436,8 @@ class SurfacePreviewUITests(unittest.TestCase):
                 self.assertEqual(restored.controls["size"].value(), 9)
                 self.assertEqual(restored.preview_settings().size, 8)
                 self.assertEqual(restored.peridynamic_settings.controls["size"].value(), 10)
-                self.assertEqual(restored.peridynamic_settings.inputs()[0].size, 7)
+                self.assertEqual(restored.peridynamic_settings.inputs()[0].size, 18)
+                self.assertEqual(restored.peridynamic_settings.inputs()[1].resolution, 32)
             finally:
                 restored.close()
 

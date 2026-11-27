@@ -155,7 +155,9 @@ def parameter_value(request, path):
     return (request if len(path) == 1 else request[path[0]])[path[-1]]
 
 
-def number(value, source):
+def number(value, source, bounds=None):
+    if bounds is not None:
+        return NumericLineEdit(value, *bounds, width=NUMBER_WIDTH)
     if isinstance(source, (QSpinBox, QDoubleSpinBox)):
         return NumericLineEdit(value, min(value, source.minimum()), max(value, source.maximum()),
                                width=NUMBER_WIDTH)
@@ -243,8 +245,14 @@ class Factor:
             self.fixed.currentIndexChanged.connect(changed)
         elif self.numeric or self.optional_number:
             initial = value if self.numeric else (0.1 if key == "stl_resolution" else 1)
-            self.first = number(initial, source)
-            self.last = number(initial, source)
+            bounds = None
+            if path == ("options", "resolution"):
+                # A DoE can vary the specimen geometry independently of the main workspace.
+                from peridynamic_analysis import MAX_PARTICLE_INTERVALS, MIN_PARTICLE_INTERVALS
+
+                bounds = (MIN_PARTICLE_INTERVALS, MAX_PARTICLE_INTERVALS)
+            self.first = number(initial, source, bounds)
+            self.last = number(initial, source, bounds)
             self.mode = CompactComboBox()
             self.mode.addItem("Min / max", "bounds")
             self.mode.addItem("Value list", "list")
@@ -254,7 +262,7 @@ class Factor:
             self.selection.setAccessibleName(self.label + " " + translate("Value list"))
             self.selection.textChanged.connect(changed)
             if self.numeric:
-                self.fixed = number(initial, source)
+                self.fixed = number(initial, source, bounds)
                 self.fixed.valueChanged.connect(changed)
             else:
                 self.fixed = text_field()
@@ -435,10 +443,10 @@ class Factor:
         if type(value) in (int, float) and control.minimum() <= value <= control.maximum() and isfinite(value):
             control.setValue(value)
 
-    def levels_for_matrix(self):
-        varying = self.variable.isChecked()
+    def levels_for_matrix(self, *, fixed=False):
+        varying = self.variable.isChecked() and not fixed
         if self.choices:
-            values = self.selected_choices()
+            values = self.selected_choices() if varying else [self.fixed.currentData()]
         elif (self.numeric or self.optional_number) and varying:
             if not self.sampling and self.mode.currentData() == "list":
                 values = explicit_numbers(self.selection.text(), type(self.first.value()),
@@ -1182,15 +1190,28 @@ class NewDoePage(QWidget):
             return
         op = self.base["operation"]
         dimensions = {}
+        notes = []
         varying = False
+        request = error_message = None
+
+        def preview_levels(factor):
+            nonlocal varying
+            try:
+                levels = factor.levels_for_matrix()
+            except (ValueError, TypeError) as error:
+                if not mesh or not factor.variable.isChecked():
+                    raise ValueError(f"{factor.label}: {error}") from error
+                levels = factor.levels_for_matrix(fixed=True)
+                notes.append(translate("Using fixed value for {name}: {value} ({error})").format(
+                    name=translate(factor.label), value=display(levels[0]), error=translate(str(error))))
+            else:
+                varying |= factor.variable.isChecked()
+            return levels
+
         try:
             for factor in self.factors:
                 if factor.path in (FAMILY_PATH, TYPE_PATH):
-                    try:
-                        dimensions[factor.path] = factor.levels_for_matrix()
-                    except ValueError as error:
-                        raise ValueError(f"{factor.label}: {error}") from error
-                    varying |= factor.variable.isChecked()
+                    dimensions[factor.path] = preview_levels(factor)
             family, name = structure_levels(self.base, dimensions)[0]
             dimensions[FAMILY_PATH], dimensions[TYPE_PATH] = [family], [name]
             for factor in self.factors:
@@ -1212,19 +1233,17 @@ class NewDoePage(QWidget):
                 if factor.variable.isChecked() and (factor.numeric or factor.optional_number):
                     factor.first.interpretText()
                     factor.last.interpretText()
-                try:
-                    dimensions[factor.path] = factor.levels_for_matrix()[:1]
-                except (ValueError, TypeError) as error:
-                    raise ValueError(f"{factor.label}: {error}") from error
-                varying |= factor.variable.isChecked()
+                dimensions[factor.path] = preview_levels(factor)[:1]
             request = next(matrix(self.base, dimensions))
         except (TypeError, ValueError) as error:
-            self.status.setText(translate(str(error)))
-            return
+            if not mesh:
+                self.status.setText(translate(str(error)))
+                return
+            error_message = str(error)
         for previous in self.findChildren(DoeInputPreview, options=Qt.FindChildOption.FindDirectChildrenOnly):
             if previous.objectName() == ("mesh" if mesh else "structure"):
                 previous.close()
-        dialog = DoeInputPreview(self, request, mesh=mesh, varying=varying)
+        dialog = DoeInputPreview(self, request, mesh=mesh, varying=varying, notes=notes, error=error_message)
         show_restored_window(dialog)
         return dialog
 

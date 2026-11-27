@@ -3,6 +3,7 @@
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime
 import csv
+from math import ceil, nextafter
 from pathlib import Path
 from uuid import uuid4
 
@@ -13,7 +14,7 @@ from scipy.sparse.csgraph import connected_components
 from scipy.spatial import cKDTree
 
 from analysis_process import report_analysis_step
-from model import ROOT, validate_geometry, write_json
+from model import ROOT, is_finite_number, validate_geometry, write_json
 from structure_library import TPMS_FUNCTIONS, TPMS_MORPHOLOGIES, evaluate_priority_field
 
 
@@ -24,6 +25,8 @@ CONTACT_STIFFNESS = 2.0
 CONTACT_DISTANCE = 0.9
 CONTACT_SKIN = 0.3
 MAX_DAMAGE_ROUNDS = 100
+MIN_PARTICLE_INTERVALS = 12
+MAX_PARTICLE_INTERVALS = 72
 
 
 @dataclass(frozen=True)
@@ -33,6 +36,14 @@ class CompressionOptions:
     critical_stretch_percent: float = 1.5
     compression_percent: float = 12.0
     increments: int = 16
+
+
+def minimum_particle_resolution(settings):
+    """Return the Z-axis intervals needed for eight intervals per TPMS period."""
+    size, period = settings.size, settings.cell_size
+    if not all(is_finite_number(value) and value > 0 for value in (size, period)):
+        return MIN_PARTICLE_INTERVALS
+    return max(MIN_PARTICLE_INTERVALS, ceil(nextafter(8 * size / period, 0)))
 
 
 def validate_compression(settings, options):
@@ -51,12 +62,12 @@ def validate_compression(settings, options):
                 or not bounds[0] <= value <= bounds[1]):
             errors.append(f"{label} must be between {bounds[0]:g} and {bounds[1]:g}.")
     for value, bounds, label in (
-        (options.resolution, (12, 72), "Particles per axis"),
+        (options.resolution, (MIN_PARTICLE_INTERVALS, MAX_PARTICLE_INTERVALS), "Particles per axis"),
         (options.increments, (2, 80), "Load increments"),
     ):
         if type(value) is not int or not bounds[0] <= value <= bounds[1]:
             errors.append(f"{label} must be an integer from {bounds[0]} to {bounds[1]}.")
-    if not errors and options.resolution * settings.cell_size / settings.size < 8:
+    if not errors and options.resolution < minimum_particle_resolution(settings):
         errors.append("Use at least eight particle intervals per TPMS period.")
     return errors
 
@@ -219,7 +230,7 @@ def run_compression(settings, options, folder=None, *, on_progress=report_analys
     spacing = settings.size / n
     lengths = np.asarray(settings.dimensions)
     counts = np.maximum(1, np.rint(lengths / spacing).astype(int))
-    if counts.max() > 72:
+    if counts.max() > MAX_PARTICLE_INTERVALS:
         raise ValueError("Use at most 72 particle intervals along each specimen axis.")
     steps = lengths / counts
     axes = [(np.arange(count) + 0.5) * step for count, step in zip(counts, steps)]

@@ -67,3 +67,20 @@ class PeridynamicAnalysisTests(unittest.TestCase):
         self.assertTrue(validate_compression(Settings(), CompressionOptions(resolution=12)))
         self.assertTrue(validate_compression(Settings(structure_family="lattice"), CompressionOptions()))
         self.assertTrue(validate_compression(Settings(), CompressionOptions(horizon_ratio=float("nan"))))
+
+    def test_doe_preview_raises_the_sampling_resolution_to_the_geometry_minimum(self):
+        from threading import Event
+
+        from doe_preview import build_input_preview
+
+        request = dict(operation="peridynamic_solve", settings=asdict(Settings(size=18, cell_size=4.5)),
+                       options=asdict(CompressionOptions(resolution=16)))
+        points, style, summary = build_input_preview(request, True, Event())
+        self.assertEqual(style, "points")
+        self.assertGreater(points.n_points, 0)
+        self.assertIn("Particles per axis (Z): 32", summary)
+        self.assertEqual(request["options"]["resolution"], 16)
+
+        request["settings"]["cell_size"] = 1.5
+        with self.assertRaisesRegex(ValueError, "requires 96 particles per axis"):
+            build_input_preview(request, True, Event())

@@ -395,10 +395,14 @@ Building preview…|Önizleme oluşturuluyor…
 No geometry to display.|Görüntülenecek geometri yok.
 Cartesian grid|Kartezyen ağ
 Cartesian precheck|Kartezyen ön kontrol
+Scaled Jacobian|Ölçekli Jacobian
 Cells|Hücreler
 Boundary layers|Sınır katmanları
 Solid voxels|Katı vokseller
+Voxel spacing|Voksel aralığı
 Particles|Parçacıklar
+Particle spacing|Parçacık aralığı
+Background grid|Arka plan ağı
 Family|Aile
 Morphology|Morfoloji
 Dimensions|Ölçüler
@@ -1585,6 +1589,13 @@ TEMPLATES = {
     'Analysis completed. Results: {path}': 'Analiz tamamlandı. Sonuçlar: {path}',
     'Analysis failed: {error}': 'Analiz başarısız: {error}',
     'Preview unavailable: {error}': 'Önizleme kullanılamıyor: {error}',
+    'Using fixed value for {name}: {value} ({error})': '{name} için sabit değer kullanılıyor: {value} ({error})',
+    'Invalid or unmeasurable elements: {value}': 'Geçersiz veya ölçülemeyen elemanlar: {value}',
+    'Scaled Jacobian: {low}–{high}': 'Ölçekli Jacobian: {low}–{high}',
+    'Minimum particles per axis: {value}': 'Eksen başına en az parçacık: {value}',
+    'Particles per axis (Z): {value} · Minimum: {minimum}': 'Eksen başına parçacık (Z): {value} · En az: {minimum}',
+    'This TPMS period requires {minimum} particles per axis. The limit is {maximum}. Increase the period or reduce the specimen size.':
+        'Bu TPMS periyodu eksen başına {minimum} parçacık gerektiriyor. Üst sınır {maximum}. Periyodu artırın veya numuneyi küçültün.',
     'Error: {error}': 'Hata: {error}',
     'Failed: {error}': 'Başarısız: {error}',
     'TRUBA job {value}': 'TRUBA işi {value}',
