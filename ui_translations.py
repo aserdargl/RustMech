@@ -151,6 +151,7 @@ Generating the structure with Atomsk…|Atomsk ile yapı üretiliyor…
 TRUBA is busy. Try again when the current operation is complete.|TRUBA meşgul. Geçerli işlem tamamlandığında tekrar deneyin.
 Submitting the MD job to TRUBA…|MD işi TRUBA’ya gönderiliyor…
 Follow the job in TRUBA and open downloaded results from Results.|İşi TRUBA’da izleyin, indirilen çıktıları Sonuçlar penceresinden açın.
+Follow the job in TRUBA. Downloaded results are saved in the package's Results folder.|İşi TRUBA’da izleyin. İndirilen çıktılar, paketin Results klasörüne kaydedilir.
 Open Molecular Dynamics|Molecular Dynamics penceresini aç
 Job settings|İş ayarları
 Date modified|Değiştirilme tarihi
@@ -188,6 +189,7 @@ Open file|Dosyayı aç
 Load files or drop them on the input list.|Dosyaları yükleyin veya girdi listesine sürükleyip bırakın.
 Load existing files. To include a folder, use Job folder.|Mevcut dosyaları yükleyin. Klasör eklemek için İş klasörü düğmesini kullanın.
 Connect using the main TRUBA button.|Ana penceredeki TRUBA düğmesinden bağlanın.
+Open HPC and connect to TRUBA.|HPC düğmesiyle bağlantı panelini açın ve TRUBA’ya bağlanın.
 Submitting|Gönderiliyor
 jobs pending or running|iş kuyrukta veya çalışıyor
 not submitted|deney gönderilmedi
@@ -887,6 +889,8 @@ Resources…|Kaynaklar…
 Compute resources|Hesaplama kaynakları
 Local inputs|Yerel girdiler
 Analysis|Analiz
+Which workspace would you like to open?|Hangi çalışma alanını açmak istersiniz?
+Molecular dynamics|Moleküler Dinamik
 TRUBA files|TRUBA dosyaları
 Local results|Yerel sonuçlar
 RustMech analyses|RustMech analizleri

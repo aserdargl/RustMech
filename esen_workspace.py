@@ -10,7 +10,7 @@ from PySide6.QtCore import QSettings, QSignalBlocker, Qt, QTimer, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QApplication, QDialog, QFormLayout, QFrame, QHBoxLayout, QLabel,
-    QLineEdit, QListWidget, QListWidgetItem, QMenu, QPlainTextEdit, QPushButton,
+    QLineEdit, QListWidget, QListWidgetItem, QMenu, QMessageBox, QPlainTextEdit, QPushButton,
     QScrollArea, QSizePolicy, QSplitter, QTabWidget, QVBoxLayout, QWidget,
 )
 
@@ -122,7 +122,7 @@ def code_view(name):
 
 class EsenWorkspace(QDialog):
     # The class and object names are part of the saved window-state key.
-    def __init__(self, truba, parent=None, *, history=None):
+    def __init__(self, truba, parent=None, *, history=None, standalone=False):
         super().__init__(parent)
         self.setObjectName("esenWorkspace")
         self.setWindowTitle(WORKSPACE_TITLE)
@@ -130,6 +130,7 @@ class EsenWorkspace(QDialog):
         self.setStyleSheet(STUDIO_STYLESHEET + ESEN_STYLE)
         self.resize(1300, 780)
         self.truba = truba
+        self.standalone = standalone
         self.history_root = history if history is not None else jobs.jobs_directory()
         self.md_plans_root = self.history_root.parent / "md-preparations"
         self.preferences = QSettings("RustMech", "RustMech")
@@ -148,6 +149,10 @@ class EsenWorkspace(QDialog):
         self.tabs = QTabWidget()
         self.tabs.setObjectName("esenWorkspaceTabs")
         self.tabs.tabBar().setExpanding(False)
+        if standalone:
+            hpc = command("HPC", self._open_truba_connection,
+                          hint="Open the Connection tab in the TRUBA application")
+            self.tabs.setCornerWidget(hpc)
         shell.addWidget(self.tabs)
         self.tabs.addTab(self._build_md(), WORKSPACE_TITLE)
         self.tabs.addTab(self._build_md_truba(), "TRUBA Submission")
@@ -177,6 +182,14 @@ class EsenWorkspace(QDialog):
         self._refresh_md_plans()
         if self.md_nist_sources is None and not self.md_catalog_failed:
             self._load_md_sources()
+
+    def _open_truba_connection(self):
+        from truba_desktop import open_truba_desktop
+
+        try:
+            open_truba_desktop()
+        except OSError as error:
+            QMessageBox.warning(self, "HPC", translate(str(error)))
 
     def _build_md(self):
         page = QWidget()
@@ -752,7 +765,8 @@ class EsenWorkspace(QDialog):
         try:
             auth = self.truba.analysis_auth()
             if auth is None:
-                raise ValueError(translate("Connect using the main TRUBA button."))
+                raise ValueError("Open HPC and connect to TRUBA." if self.standalone else
+                                 "Connect using the main TRUBA button.")
             if self.remote_task is not None:
                 raise ValueError(translate("TRUBA is busy. Try again when the current operation is complete."))
             folder = item.data(Qt.ItemDataRole.UserRole)
@@ -833,6 +847,8 @@ class EsenWorkspace(QDialog):
                 if submitting:
                     if record["state"] in ACTIVE_TRUBA_STATES:
                         self.md_remote_note.setText(translate(
+                            "Follow the job in TRUBA. Downloaded results are saved in the package's Results folder."
+                            if self.standalone else
                             "Follow the job in TRUBA and open downloaded results from Results."
                         ))
                     else:

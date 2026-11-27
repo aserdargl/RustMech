@@ -4395,8 +4395,30 @@ def main() -> int:
         return 0
     app = QApplication.instance() or QApplication([sys.argv[0]])
     from app_identity import configure_application
+    from ui_language import install_language
+
     configure_application(app)
     profiles = SolverProfileStore()
+    language = install_language(app, profiles.settings)
+    workspace = _choose_startup_workspace(language)
+    if workspace is None:
+        return 0
+    if workspace == "md":
+        from esen_workspace import EsenWorkspace
+
+        session = TrubaSession(app)
+        try:
+            dialog = EsenWorkspace(session, standalone=True)
+            try:
+                session.start()
+                dialog.exec()
+            finally:
+                dialog.dispose()
+        finally:
+            session.shutdown()
+            session.deleteLater()
+        return 0
+
     settings = profiles.restore_workspace()
     dialog = RustMechDialog(settings, solver_profile_store=profiles)
     try:
@@ -4406,6 +4428,36 @@ def main() -> int:
         dialog.close()
         app.processEvents()
     return 0
+
+
+def _choose_startup_workspace(language):
+    dialog = QDialog()
+    dialog.setObjectName("startupWorkspace")
+    dialog.setWindowTitle("RustMech")
+    dialog.setStyleSheet(STUDIO_STYLESHEET)
+    layout = QVBoxLayout(dialog)
+    layout.setContentsMargins(12, 10, 12, 12)
+    layout.addWidget(QLabel("Which workspace would you like to open?"))
+
+    buttons = QHBoxLayout()
+    layout.addLayout(buttons)
+    choices = {1: "md", 2: "analysis"}
+    controls = []
+    for result, label in ((1, "Molecular dynamics"), (2, "Analysis")):
+        button = QPushButton(label)
+        button.setAutoDefault(False)
+        button.setFixedHeight(CONTROL_HEIGHT)
+        button.setProperty("managesLocalizedWidth", True)
+        button.clicked.connect(partial(dialog.done, result))
+        buttons.addWidget(button)
+        controls.append(button)
+    buttons.addStretch()
+
+    language.localize_tree(dialog)
+    width = max(button.sizeHint().width() for button in controls)
+    for button in controls:
+        button.setFixedWidth(width)
+    return choices.get(dialog.exec())
 
 
 if __name__ == "__main__":
