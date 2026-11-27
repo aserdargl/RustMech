@@ -489,16 +489,31 @@ class RustMechDialog(QDialog):
 
         geometry_form = self.add_group(
             geometry_fields,
-            "Structure / Dimensions",
-            settings,
+            "Structure",
+            replace(settings, size_x=settings.dimensions[0], size_y=settings.dimensions[1]),
             [
                 ("random_seed", "Random seed", 1, 999999, 1, None),
-                ("size", "Cube size", 1, 100, 0.5, 3),
+                ("size_x", "X", 0.001, 100, 0.5, 3),
+                ("size_y", "Y", 0.001, 100, 0.5, 3),
+                ("size", "Z", 0.001, 100, 0.5, 3),
                 ("cell_size", "Period / pore scale", 0.1, 100, 0.5, 3),
                 ("solid_fraction", "Solid fraction", 1, 99, 1, 2),
             ],
-            units={"size": "mm", "cell_size": "mm", "solid_fraction": "%"},
+            units={"size_x": "mm", "size_y": "mm", "size": "mm", "cell_size": "mm", "solid_fraction": "%"},
         )
+        self._geometry_form = geometry_form
+        self.cube_button = QPushButton("Cube")
+        self.cube_button.setObjectName("cubeModeButton")
+        self.cube_button.setCheckable(True)
+        self.cube_button.setAutoDefault(False)
+        self.cube_button.setDefault(False)
+        self.cube_button.setFixedHeight(CONTROL_HEIGHT)
+        self.cube_button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        self.cube_button.setToolTip("Use X for all three specimen dimensions.")
+        x_row = self.controls["size_x"].parentWidget().layout()
+        x_row.insertSpacing(2, 4)
+        x_row.insertWidget(3, self.cube_button)
+        self._load_specimen_dimensions(settings)
         self.stl_resolution_input = QLineEdit()
         self.stl_resolution_input.setFixedSize(80, CONTROL_HEIGHT)
         self.stl_resolution_input.setPlaceholderText("auto")
@@ -606,10 +621,6 @@ class RustMechDialog(QDialog):
         self.import_geometry_label.setObjectName('mutedHintLabel')
         geometry_form.addRow(self.import_geometry_label)
         self._add_structure_apply_row(geometry_form, self.structure_apply_button)
-        if self.imported_geometry_path:
-            self.controls['size'].setRange(min(.000001, settings.size), max(100, settings.size))
-            self.controls['size'].setValue(settings.size)
-        self.controls['size'].setEnabled(not bool(self.imported_geometry_path))
         self._sync_import_controls()
         self.mesh_type_combo = NoWheelComboBox()
         for mesh_type in (*MESH_TYPES, *DERIVED_SOLID_MESH_TYPES):
@@ -665,8 +676,6 @@ class RustMechDialog(QDialog):
         self.tetra_strategy_combo.currentIndexChanged.connect(self.geometry_changed)
         self.mesh_type_combo.currentIndexChanged.connect(self._sync_mesh_type)
         self._sync_mesh_type()
-        self._geometry_form = geometry_form
-
         self.family_combo.currentIndexChanged.connect(self._on_family_changed)
         self.family_combo.activated.connect(
             lambda index: self.import_geometry()
@@ -1539,6 +1548,9 @@ class RustMechDialog(QDialog):
         self.poll.start()
 
         self.stl_resolution_input.textChanged.connect(self.geometry_changed)
+        self.cube_button.toggled.connect(self._cube_mode_changed)
+        for name in ("size_x", "size_y", "size"):
+            self.controls[name].valueChanged.connect(self._mirror_cube_dimensions)
         for name, control in self.controls.items():
             if name in GEOMETRY_FIELDS:
                 control.valueChanged.connect(self.geometry_changed)
@@ -1667,8 +1679,8 @@ class RustMechDialog(QDialog):
             self.import_geometry_label.setText(selected.imported_geometry_name or 'No imported geometry')
             self.stl_resolution_input.setText(
                 "auto" if selected.stl_resolution is None else f"{selected.stl_resolution:.12g}")
-            for name in ('size','mesh_resolution','local_mesh_size','cell_size','solid_fraction','random_seed','core_fraction','compression'):
-                if name=='size':self.controls[name].setMaximum(max(100,selected.size))
+            self._load_specimen_dimensions(selected)
+            for name in ('mesh_resolution','local_mesh_size','cell_size','solid_fraction','random_seed','core_fraction','compression'):
                 self.controls[name].setValue(getattr(selected,name))
             for combo,value in ((self.architecture_combo,selected.specimen_architecture),
                 (self.mesh_type_combo,selected.mesh_type),(self.tetra_strategy_combo,selected.tetra_strategy),
@@ -1703,7 +1715,7 @@ class RustMechDialog(QDialog):
         self._test_form.setRowVisible(self.architecture_combo,active)
         self._test_form.setRowVisible(self.controls['core_fraction'].parentWidget(),
                                       active and settings.specimen_architecture=='porous_centre')
-        self.controls['size'].setEnabled(not active and not bool(self.imported_geometry_path))
+        self._sync_specimen_dimension_controls()
         self.family_combo.model().item(self.family_combo.findData('imported')).setEnabled(not active)
         self.clear_import_button.setEnabled(not active)
         for identifier in ('solid','porous_centre','porous_all'):
@@ -1725,8 +1737,6 @@ class RustMechDialog(QDialog):
         else:self.standard_hint.setText('Free geometry and existing compression setup.')
         for combo in self.platen_contact_combos.values():combo.setEnabled(not active)
         self._sync_loading_ui()
-        label=self._geometry_form.labelForField(self.controls['size'].parentWidget())
-        if label is not None:label.setText('Specimen height' if active else 'Cube size')
         if self.workspace_tabs.currentIndex()==0:
             self.brand_title_label.setText('Nonlinear Compression' if not active else f'Standard {kind(settings).title()}')
 
@@ -2011,7 +2021,7 @@ class RustMechDialog(QDialog):
         if family not in ("tpms", "lattice"):
             family, name = defaults.structure_family, defaults.structure_name
 
-        form = self.add_group(fields, "Structure / Dimensions", settings, ())
+        form = self.add_group(fields, "Structure", settings, ())
         form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.FieldsStayAtSizeHint)
         self.fft_family_combo = NoWheelComboBox()
         for key in ("tpms", "lattice"):
@@ -2390,7 +2400,8 @@ class RustMechDialog(QDialog):
         for name, label, low, high, step, decimals in specs:
             control = (
                 NumericInputBox()
-                if name in ("size", "cell_size", "solid_fraction", "mesh_resolution", "local_mesh_size")
+                if name in ("size_x", "size_y", "size", "cell_size", "solid_fraction",
+                            "mesh_resolution", "local_mesh_size")
                 else NoWheelSpinBox() if decimals is None else NoWheelDoubleSpinBox()
             )
             if name == "cores":
@@ -2809,6 +2820,45 @@ class RustMechDialog(QDialog):
         value = self.collect().automatic_surface_resolution
         self.stl_resolution_input.setText(f"{value:.12g}")
 
+    def _load_specimen_dimensions(self, settings: Settings) -> None:
+        from standard_tests import profile
+
+        standard = profile(settings)
+        dimensions = standard.dimensions if standard else settings.dimensions
+        for name, length in zip(("size_x", "size_y", "size"), dimensions):
+            control = self.controls[name]
+            with QSignalBlocker(control):
+                control.setRange(min(0.001, length), max(100, length))
+                control.setValue(length)
+        with QSignalBlocker(self.cube_button):
+            self.cube_button.setChecked(standard is not None or (settings.size_x is None and settings.size_y is None))
+
+    def _sync_specimen_dimension_controls(self) -> None:
+        imported = bool(self.imported_geometry_path)
+        editable = not imported and self.test_profile_combo.currentData() == "custom"
+        self.cube_button.setVisible(editable)
+        self.cube_button.setEnabled(editable)
+        cube = self.cube_button.isChecked()
+        for name in ("size_x", "size_y", "size"):
+            control = self.controls[name]
+            control.setEnabled(editable and (name == "size_x" or not cube))
+            if name != "size":
+                self._geometry_form.setRowVisible(control.parentWidget(), not imported)
+
+    def _mirror_cube_dimensions(self, length: float) -> None:
+        if not (self.cube_button.isEnabled() and self.cube_button.isChecked()):
+            return
+        for name in ("size_x", "size_y", "size"):
+            control = self.controls[name]
+            with QSignalBlocker(control):
+                control.setRange(min(control.minimum(), length), max(control.maximum(), length))
+                control.setValue(length)
+
+    def _cube_mode_changed(self, _checked: bool) -> None:
+        self._sync_specimen_dimension_controls()
+        self._mirror_cube_dimensions(self.controls["size_x"].value())
+        self.geometry_changed()
+
     def collect(self, *, draft=False, applied_structure=False) -> Settings:
         stl_resolution = self._stl_resolution_value()
         if draft and stl_resolution is not None and not np.isfinite(stl_resolution):
@@ -2847,6 +2897,8 @@ class RustMechDialog(QDialog):
         if self.substeps_mode_combo.currentData() == "automatic":
             settings = replace(settings, substeps=Settings().substeps,
                                minimum_substeps=None, maximum_substeps=None)
+        if self.cube_button.isChecked() or self.imported_geometry_path:
+            settings = replace(settings, size_x=None, size_y=None)
         if self.imported_geometry_path:
             settings = replace(settings, size=self.imported_geometry_height)
         if applied_structure:
@@ -2877,11 +2929,11 @@ class RustMechDialog(QDialog):
             self.imported_geometry_role = "compression"
             self.imported_geometry_height = height
             self.import_geometry_label.setText(name + ' | support / compression faces selected')
-            size_control = self.controls['size']
-            size_control.setRange(min(size_control.minimum(), height), max(size_control.maximum(), height))
-            size_control.setValue(height)
-            size_control.setEnabled(False)
             self._sync_import_controls()
+            size_control = self.controls["size"]
+            with QSignalBlocker(size_control):
+                size_control.setRange(min(size_control.minimum(), height), max(size_control.maximum(), height))
+                size_control.setValue(height)
             self.mesh_type_combo.setCurrentIndex(self.mesh_type_combo.findData('TET4'))
             self.tetra_strategy_combo.setCurrentIndex(self.tetra_strategy_combo.findData('netgen'))
             self.geometry_changed()
@@ -2894,7 +2946,6 @@ class RustMechDialog(QDialog):
         self.imported_geometry_role = 'compression'
         self.imported_geometry_height = None
         self.import_geometry_label.setText('No imported geometry')
-        self.controls['size'].setEnabled(True)
         self._sync_import_controls()
         self.geometry_changed()
 
@@ -2910,8 +2961,10 @@ class RustMechDialog(QDialog):
         self._geometry_import_rows_visible(not generated)
         for widget in (self.structure_combo, self.morphology_combo,
                        self.stl_resolution_input, self.stl_auto_button,
-                       *(self.controls[name] for name in ('size', 'cell_size', 'solid_fraction', 'random_seed'))):
+                       *(self.controls[name] for name in ('cell_size', 'solid_fraction', 'random_seed'))):
             widget.setEnabled(generated)
+        self._sync_specimen_dimension_controls()
+        self._mirror_cube_dimensions(self.controls["size"].value())
 
     def _geometry_import_rows_visible(self, visible):
         form = self.import_geometry_label.parentWidget().layout()
@@ -2947,6 +3000,10 @@ class RustMechDialog(QDialog):
     def has_pending_geometry(self, fields=GEOMETRY_FIELDS, *, edited=None) -> bool:
         if edited is None:
             edited = self.collect()
+        for field, axis in (("size_x", 0), ("size_y", 1)):
+            if field in fields and edited.dimensions[axis] != self.active_geometry.dimensions[axis]:
+                return True
+        fields = (name for name in fields if name not in ("size_x", "size_y"))
         return any(getattr(edited, name) != getattr(self.active_geometry, name) for name in fields)
 
     def geometry_changed(self, *_) -> None:
@@ -3605,10 +3662,13 @@ class RustMechDialog(QDialog):
                 name="excluded_fragments",
             )
         if self.show_platens_cb.isChecked():
-            cube_sz = float(self.preview_settings().size)
+            settings = self.preview_settings()
             from standard_tests import fixture_surfaces
-            bottom_platen, top_platen = (fixture_surfaces(self.preview_settings()) if self.preview_settings().test_profile != 'custom' else
-                make_compression_platens(cube_sz, 0.0, self.preview.surface.bounds[:4] if self.preview_settings().imported_geometry_path else None))
+            if settings.test_profile != "custom":
+                bottom_platen, top_platen = fixture_surfaces(settings)
+            else:
+                xy_bounds = self.preview.surface.bounds[:4] if settings.rectangular or settings.imported_geometry_path else None
+                bottom_platen, top_platen = make_compression_platens(settings.size, 0.0, xy_bounds)
             self._add_preview_platens((bottom_platen, top_platen))
         self.fragment_status.setVisible(bool(removed_count))
         self.fragment_status.setText(
@@ -3696,10 +3756,9 @@ class RustMechDialog(QDialog):
     def _load_pool_geometry(self, path, height, name):
         settings = replace(self.collect(), imported_geometry_path=path,
                            imported_geometry_name=name, imported_geometry_role="compression", size=height, test_profile="custom",
+                           size_x=None, size_y=None,
                            mesh_type="TET4", tetra_strategy="netgen",
                            compression=min(self.controls["compression"].value(), height * 0.1))
-        self.controls['size'].setRange(min(self.controls['size'].minimum(), height),
-                                       max(self.controls['size'].maximum(), height))
         self.load_from_doe_row(settings)
         self.status.setText(f"{name}: configure material, mesh and solver; Designs > Add current model to analysis queue.")
 
@@ -3726,8 +3785,8 @@ class RustMechDialog(QDialog):
         page = self.workspace_tabs.currentIndex()
         settings = replace(self.collect(), imported_geometry_path=path, imported_geometry_name=name,
                            imported_geometry_role="general", size=size, test_profile="custom",
+                           size_x=None, size_y=None,
                            mesh_type="TET4", tetra_strategy="netgen")
-        self.controls["size"].setRange(min(self.controls["size"].minimum(), size), max(self.controls["size"].maximum(), size))
         self.load_from_doe_row(settings, preview=False)
         self.active_geometry = settings
         self.preview = None
@@ -3782,6 +3841,7 @@ class RustMechDialog(QDialog):
         self.imported_geometry_role = row_settings.imported_geometry_role
         self.imported_geometry_height = row_settings.size if row_settings.imported_geometry_path else None
         self.import_geometry_label.setText(self.imported_geometry_name or 'No imported geometry')
+        self._load_specimen_dimensions(row_settings)
         self._sync_import_controls()
         self.family_combo.blockSignals(True)
         self.family_combo.setCurrentIndex(
@@ -3807,7 +3867,6 @@ class RustMechDialog(QDialog):
             max(0, self.tetra_strategy_combo.findData(row_settings.tetra_strategy)))
         self.tetra_strategy_combo.blockSignals(False)
         for field_name in (
-            "size",
             "cell_size",
             "solid_fraction",
             "mesh_resolution",

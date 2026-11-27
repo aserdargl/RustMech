@@ -60,7 +60,7 @@ class PeridynamicSettingsPanel(QWidget):
         self.plan_button.toggled.connect(plan.setVisible)
         layout.addWidget(plan)
 
-        geometry_group = SidebarGroupBox("Structure / Dimensions")
+        geometry_group = SidebarGroupBox("Structure")
         geometry_form = QFormLayout(geometry_group.content)
         configure_form(geometry_form)
         layout.addWidget(geometry_group)

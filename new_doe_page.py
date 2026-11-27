@@ -122,7 +122,7 @@ def field_sources(host, op):
     if op == "peridynamic_solve":
         controls = host.peridynamic_settings.controls
         return dict(controls, size_x=controls["size"], size_y=controls["size"])
-    sources = dict(host.controls, size_x=host.controls["size"], size_y=host.controls["size"],
+    sources = dict(host.controls,
                    tpms_morphology=host.morphology_combo,
                    test_profile=host.test_profile_combo, specimen_architecture=host.architecture_combo)
     if op == "mechanical":

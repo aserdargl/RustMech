@@ -387,7 +387,6 @@ Structure Family|Yapı ailesi
 Structure family|Yapı ailesi
 Structure type|Yapı türü
 Type|Tür
-Structure / Dimensions|Yapı / Ölçüler
 Preview structure|Yapıyı önizle
 Preview mesh|Ağı önizle
 Structure preview|Yapı önizlemesi
@@ -405,6 +404,8 @@ Morphology|Morfoloji
 Dimensions|Ölçüler
 Size|Boyut
 Cube size|Küp boyutu
+Cube|Küp
+Use X for all three specimen dimensions.|Numunenin üç boyutu için de X değerini kullan.
 Cube size (mm)|Küp boyutu (mm)
 Cell size|Hücre boyutu
 Cell Size (mm)|Hücre boyutu (mm)
@@ -1029,6 +1030,9 @@ This initial transient CHT model supports laminar flow.|Bu ilk geçici CHT model
 Use the application's recommended numerical contact parameters. Clear to edit the algorithm, stiffness, penetration tolerances and damping. Contact types and friction coefficients remain your physical inputs.|Uygulamanın önerdiği sayısal temas parametrelerini kullanın. Algoritmayı, rijitliği, nüfuziyet toleranslarını ve sönümü düzenlemek için işareti kaldırın. Temas türleri ve sürtünme katsayıları fiziksel girdileriniz olarak kalır.
 Use the selected solver's default CPU count within its license limit.|Seçili çözücünün lisans sınırı içindeki varsayılan CPU sayısını kullanın.
 Uses the current Model TPMS, clipped to a concentric cylinder. Flow is along +Z. Specimen length = Model cube size. Geometry: mm; water: SI units.|Mevcut Model TPMS'sini eş merkezli silindire kırpar. Akış +Z yönündedir. Numune uzunluğu = Model küp boyutu. Geometri: mm; su: SI birimleri.
+Uses the current Model specimen in a cylindrical or rectangular channel. Flow is along +Z. Section length 0 uses the Model Z dimension. Placement rotates the finite specimen without stretching it. Geometry: mm; fluid: SI units.|Modeldeki numuneyi silindirik veya dikdörtgen kesitli bir kanalda kullanır. Akış +Z yönündedir. Bölüm uzunluğu 0 ise modelin Z boyutu kullanılır. Yerleştirme numuneyi boyutlarını değiştirmeden döndürür. Geometri: mm, akışkan: SI birimleri.
+Section length must be positive, or zero to use the Model Z dimension.|Bölüm uzunluğu pozitif olmalıdır. Modelin Z boyutunu kullanmak için 0 girin.
+Channel section exceeds specimen width along X or Y; enable intentional bypass to leave gaps.|Kanal kesiti numunenin X veya Y boyutunu aşıyor. Boşluk bırakmak için akışın numune çevresinden geçmesine izin verin.
 Waiting for TRUBA job and retrieving results…|TRUBA işi bekleniyor ve sonuçlar alınıyor…
 e.g. Ti-6Al-4V ELI / 316L SS|ör. Ti-6Al-4V ELI / 316L SS
 Internal self-contact|İç öz temas
@@ -1359,9 +1363,9 @@ _GEOMETRY_ENGLISH = {
     'structure_name': 'Choose the geometric pattern within the selected family, such as Gyroid. Different patterns produce different wall and connectivity arrangements at the same size and solid fraction.',
     'tpms_morphology': 'Choose how solid material is distributed. Sheet creates walls around the surface; Network A and B use the two complementary sides as solid.',
     'size': 'Length of one edge of the cubic specimen (mm). This sets the overall model size.',
-    'cell_size': 'Unit-cell period for periodic structures, or characteristic pore scale for porous structures (mm). Smaller values fit more cells or pores into the specimen. Must not exceed cube size.',
+    'cell_size': 'Unit-cell period for periodic structures, or characteristic pore scale for porous structures (mm). Smaller values fit more cells or pores into the specimen. Must not exceed specimen height (Z).',
     'solid_fraction': 'Target percentage of specimen volume occupied by solid material. For example, 30% solid corresponds to approximately 70% void. Discretization can cause the generated mesh to have a different actual solid fraction.',
-    'mesh_resolution': 'Global finite-element size (mm). For TET4/TET10 it is the global upper size bound; for HEX8/HEX20 it is the target voxel spacing, adjusted to fit the cube. Smaller values increase element count, memory and generation/solve time. Reference geometry is prepared automatically and does not change with mesh size. A coarse mesh may approximate geometry with more angular surfaces.',
+    'mesh_resolution': 'Global finite-element size (mm). For TET4/TET10 it is the global upper size bound; for HEX8/HEX20 it is the target voxel spacing, adjusted to fit the specimen. Smaller values increase element count, memory and generation/solve time. Reference geometry is prepared automatically and does not change with mesh size. A coarse mesh may approximate geometry with more angular surfaces.',
     'local_mesh_size': 'Local target element size for TET4/TET10 only (mm). Refines the top/bottom platen-contact surfaces and detected thin walls up to approximately five times this thickness. Helps represent contact and thin-wall details. Must not exceed global FE mesh size; for example, global 0.20 mm and local 0.05 mm. Smaller values can increase element count, memory and generation/solve time and do not alone guarantee solution accuracy. The new-project default is 0.05 mm. The periodic-cell method applies local size to the whole cell.',
     'mesh_type': 'Choose the finite-element type. HEX8/HEX20 use voxel-based 8/20-node hexahedra; TET4/TET10 use surface-conforming 4/10-node tetrahedra. HEX20 and TET10 are quadratic and contain more nodes. Local mesh size applies only to tetrahedral types.',
     'random_seed': 'Seed for random porous-structure generation. With other settings unchanged, the same seed produces the same geometry; a different seed produces a different pore arrangement.',
@@ -1386,7 +1390,7 @@ Penetration tolerance factor (FTOLN) must be between 0.001 and 0.5.|Nüfuziyet t
 Contact damping factor must be between 0 and 1.|Temas sönüm katsayısı 0 ile 1 arasında olmalıdır.
 Platen penetration tolerance factor must be between 0.000001 and 0.5.|Plaka nüfuziyet toleransı katsayısı 0.000001 ile 0.5 arasında olmalıdır.
 Compression must be a positive finite number.|Basma miktarı pozitif ve sonlu olmalıdır.
-Compression must be smaller than cube size.|Basma miktarı küp boyutundan küçük olmalıdır.
+Compression must be smaller than specimen height (Z).|Basma miktarı numune yüksekliğinden (Z) küçük olmalıdır.
 Substeps must satisfy minimum ≤ initial ≤ maximum.|Alt adımlar, en az ≤ başlangıç ≤ en fazla koşulunu sağlamalıdır.
 Enter a material name.|Malzeme adı girin.
 Unsupported material model.|Desteklenmeyen malzeme modeli.
@@ -1401,7 +1405,7 @@ Curve must start at zero plastic strain, with increasing strain and positive str
 This isotropic hardening model requires nondecreasing stress; softening is unsupported.|Bu izotropik pekleşme modeli azalmayan gerilme gerektirir; yumuşama desteklenmez.
 True curve needs at least two finite strain / stress pairs.|Gerçek eğri en az iki sonlu şekil değiştirme / gerilme çifti içermelidir.
 Total true strain must be nonnegative and strictly increasing.|Toplam gerçek şekil değiştirme sıfır veya pozitif ve kesin artan olmalıdır.
-Period / characteristic size must not exceed cube size.|Periyot / karakteristik boyut küp boyutunu aşamaz.
+Period / characteristic size must not exceed specimen height (Z).|Periyot / karakteristik boyut numune yüksekliğini (Z) aşamaz.
 Solid fraction must be between 0 and 100%.|Katı oranı %0 ile %100 arasında olmalıdır.
 Local mesh size must not exceed the global FE mesh size.|Yerel ağ boyutu genel SE ağı boyutunu aşamaz.
 Local mesh size must not exceed the global mesh size.|Yerel ağ boyutu genel ağ boyutunu aşamaz.

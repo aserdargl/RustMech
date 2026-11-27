@@ -58,7 +58,9 @@ class FlowWorkspace(QWidget):
         heading = QLabel("Channel · Isothermal CFD")
         heading.setWordWrap(True)
         left.addWidget(heading)
-        note = QLabel("Uses the current Model specimen in a cylindrical or rectangular channel. Flow is along +Z. Section length 0 uses the Model cube size. Placement rotates the finite specimen without stretching it. Geometry: mm; fluid: SI units.")
+        note = QLabel("Uses the current Model specimen in a cylindrical or rectangular channel. "
+                      "Flow is along +Z. Section length 0 uses the Model Z dimension. "
+                      "Placement rotates the finite specimen without stretching it. Geometry: mm; fluid: SI units.")
         note.setObjectName("mutedHintLabel")
         note.setWordWrap(True)
         left.addWidget(note)

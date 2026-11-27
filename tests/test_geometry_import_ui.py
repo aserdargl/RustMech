@@ -90,6 +90,7 @@ class GeometryImportUITests(unittest.TestCase):
                 try:
                     self.assertEqual(dialog.collect().imported_geometry_path, result[0])
                     self.assertFalse(dialog.controls['size'].isEnabled())
+                    self.assertTrue(dialog.cube_button.isHidden())
                     self.assertEqual(dialog.family_combo.currentData(), 'imported')
                     self.assertTrue(dialog.family_combo.isEnabled())
                     import_index = dialog.family_combo.findData('imported')
@@ -117,7 +118,9 @@ class GeometryImportUITests(unittest.TestCase):
                     self.assertFalse(dialog.preview_settings().imported_geometry_path)
                     dialog.clear_imported_geometry()
                     self.assertFalse(dialog.collect().imported_geometry_path)
-                    self.assertTrue(dialog.controls['size'].isEnabled())
+                    self.assertTrue(dialog.controls['size_x'].isEnabled())
+                    self.assertTrue(dialog.cube_button.isChecked())
+                    self.assertFalse(dialog.controls['size'].isEnabled())
                     self.assertEqual(dialog.family_combo.currentData(), 'lattice')
                 finally:
                     dialog.dispose()

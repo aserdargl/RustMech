@@ -157,12 +157,15 @@ class StandardUiTests(unittest.TestCase):
         from PySide6.QtCore import Qt
         from PySide6.QtTest import QTest
         with patch('window_state.install_window_state'),patch.object(RustMechDialog,'start_preview',lambda self:None):
-            dialog=RustMechDialog(Settings())
+            dialog=RustMechDialog(Settings(size_x=8, size_y=5))
             try:
                 dialog.test_profile_combo.setCurrentIndex(dialog.test_profile_combo.findData('astm_e8_subsize'))
                 self.assertEqual(dialog.collect().size,102)
                 self.assertEqual(dialog.controls['size'].value(),102)
                 self.assertFalse(dialog.controls['size'].isEnabled())
+                self.assertTrue(dialog.cube_button.isHidden())
+                self.assertIsNone(dialog.collect().size_x)
+                self.assertIsNone(dialog.collect().size_y)
                 self.assertFalse(dialog.family_combo.isEnabled())
                 dialog.architecture_combo.setCurrentIndex(dialog.architecture_combo.findData('porous_centre'))
                 self.assertTrue(dialog.family_combo.isEnabled())
@@ -173,7 +176,8 @@ class StandardUiTests(unittest.TestCase):
                 self.assertIsNone(dialog.sync_window)
                 dialog.test_profile_combo.setCurrentIndex(0)
                 self.assertEqual(dialog.collect().test_profile,'custom')
-                self.assertEqual(dialog.collect().size,6)
+                self.assertEqual(dialog.collect().dimensions,(8,5,6))
+                self.assertFalse(dialog.cube_button.isChecked())
                 self.assertTrue(dialog.controls['size'].isEnabled())
             finally:dialog.dispose();dialog.deleteLater()
 

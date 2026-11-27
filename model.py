@@ -307,7 +307,7 @@ def validate_geometry(settings: Settings, *, include_mesh: bool = True) -> list[
     if settings.solid_fraction >= 100:
         errors.append("Solid fraction must be between 0 and 100%.")
     if settings.cell_size > settings.size:
-        errors.append("Period / characteristic size must not exceed cube size.")
+        errors.append("Period / characteristic size must not exceed specimen height (Z).")
     if include_mesh and settings.mesh_type not in TETRAHEDRAL_MESH_TYPES:
         divisions = np.ceil(np.asarray(settings.dimensions) / settings.mesh_resolution)
         if min(divisions) < 4:
@@ -384,7 +384,7 @@ def validate_settings(settings: Settings) -> list[str]:
         errors.append("Compression must be a positive finite number.")
     elif (settings.loading_mode == "displacement" and is_finite_number(settings.size)
           and settings.compression >= settings.size):
-        errors.append("Compression must be smaller than cube size.")
+        errors.append("Compression must be smaller than specimen height (Z).")
     valid_substeps = True
     for name in ("cores", "substeps", "minimum_substeps", "maximum_substeps"):
         value = getattr(settings, name)

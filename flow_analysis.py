@@ -40,7 +40,7 @@ class FlowSettings:
     channel_shape: str = "cylinder"
     width_mm: float = 6.0
     height_mm: float = 6.0
-    section_length_mm: float = 0.0  # zero preserves the legacy cube-length section
+    section_length_mm: float = 0.0  # zero uses the specimen length along Z
     specimen_offset_x_mm: float = 0.0
     specimen_offset_y_mm: float = 0.0
     specimen_offset_z_mm: float = 0.0
@@ -113,9 +113,9 @@ class FlowSettings:
             if type(value) not in (int, float) or not math.isfinite(value):
                 raise ValueError(f"{name} must be finite.")
         if self.section_length_mm < 0:
-            raise ValueError("Section length must be positive, or zero for the Model cube length.")
+            raise ValueError("Section length must be positive, or zero to use the Model Z dimension.")
         if not self.empty_pipe and not self.allow_bypass and any(a > b + 1e-9 for a, b in zip(self.cross_section, specimen.dimensions[:2])):
-            raise ValueError("Channel section exceeds specimen cube size; enable intentional bypass to leave gaps.")
+            raise ValueError("Channel section exceeds specimen width along X or Y; enable intentional bypass to leave gaps.")
         if self.turbulence not in ("laminar", "kOmegaSST"):
             raise ValueError("Unsupported flow model.")
         h = self.cell_size_mm
@@ -281,7 +281,7 @@ def export_geometry_inspection(specimen, flow, directory):
 
 
 def sample_channel_solid(specimen, flow, points_mm):
-    """Sample the same finite cube in a translated/rotated channel section.
+    """Sample the finite specimen in a translated/rotated channel section.
 
     Rotations are extrinsic X, then Y, then Z, about the specimen centre.
     Changing section length clips the specimen; it never stretches its cells.

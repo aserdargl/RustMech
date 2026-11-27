@@ -114,6 +114,34 @@ class SolverProfileTests(unittest.TestCase):
         self.assertEqual(restored.imported_geometry_path, "")
         self.assertEqual(restored.imported_geometry_name, "")
 
+    def test_cube_toggle_applies_and_restores_independent_dimensions(self):
+        dialog = self.dialog(Settings(size=4, cell_size=2, stl_resolution=.1))
+        x, y, z = (dialog.controls[name] for name in ("size_x", "size_y", "size"))
+        self.assertTrue(dialog.cube_button.isChecked())
+        self.assertTrue(x.isEnabled())
+        self.assertFalse(y.isEnabled())
+        self.assertFalse(z.isEnabled())
+        x.setValue(5)
+        self.assertEqual(dialog.collect().dimensions, (5, 5, 5))
+
+        dialog.cube_button.click()
+        self.assertTrue(y.isEnabled())
+        self.assertTrue(z.isEnabled())
+        y.setValue(3)
+        z.setValue(4)
+        self.assertEqual(dialog.preview_settings().dimensions, (4, 4, 4))
+        dialog.structure_apply_button.click()
+        self.assertEqual(dialog.preview_settings().dimensions, (5, 3, 4))
+        dialog.dispose()
+
+        restored = self.dialog(self.store.restore_workspace())
+        self.assertFalse(restored.cube_button.isChecked())
+        self.assertEqual(restored.collect().dimensions, (5, 3, 4))
+        self.assertEqual(restored.preview_settings().dimensions, (5, 3, 4))
+        restored.cube_button.click()
+        self.assertEqual(restored.collect().dimensions, (5, 5, 5))
+        self.assertFalse(restored.controls["size"].isEnabled())
+
     def test_kratos_enter_only_confirms_and_settings_roundtrip(self):
         dialog = self.dialog()
         self.select(dialog, "kratos")

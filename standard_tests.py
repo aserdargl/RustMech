@@ -58,7 +58,7 @@ def apply_profile(settings, identifier):
     if identifier == 'custom':
         return replace(settings, test_profile='custom')
     p = PROFILES[identifier]
-    return replace(settings, test_profile=identifier, size=p.dimensions[2],
+    return replace(settings, test_profile=identifier, size=p.dimensions[2], size_x=None, size_y=None,
                    imported_geometry_path='', imported_geometry_name='',
                    specimen_architecture='porous_all' if p.kind == 'compression' else 'solid',
                    core_fraction=100., mesh_resolution=.5, local_mesh_size=.25,
