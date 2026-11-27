@@ -1,17 +1,19 @@
 """RustMech's TRUBA session and analysis file synchronization window."""
 
-from pathlib import Path
-from stat import S_ISDIR
+from pathlib import Path, PurePosixPath
+from stat import S_ISDIR, S_ISLNK
 
 from paramiko import SSHException
-from PySide6.QtCore import QDir, QObject, QThread, QTimer, Qt, QUrl, Signal
+from PySide6.QtCore import QDir, QObject, QSize, QThread, QTimer, Qt, QUrl, Signal
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
-    QDialog, QFileSystemModel, QGroupBox, QHeaderView, QHBoxLayout, QLabel, QPushButton, QSplitter,
-    QSizePolicy, QTableWidget, QTableWidgetItem, QTreeView, QTreeWidget, QTreeWidgetItem,
+    QDialog, QDialogButtonBox, QFileSystemModel, QGroupBox, QHeaderView, QHBoxLayout, QLabel,
+    QLineEdit, QPushButton, QSplitter, QSizePolicy, QStyle, QTableWidget, QTableWidgetItem,
+    QToolButton, QTreeView, QTreeWidget, QTreeWidgetItem,
     QVBoxLayout,
 )
 
+from file_dialog import QFileDialog, _style_dialog_buttons
 from studio_style import STUDIO_STYLESHEET
 from truba_credentials import state_directory
 from truba_desktop import DesktopSessionMonitor, DesktopStatus
@@ -84,20 +86,212 @@ class TrubaSession(QObject):
 
 
 class RemoteFileListing(QThread):
-    def __init__(self, auth, folder, parent):
+    def __init__(self, auth, folder, parent, *, browse=False):
         super().__init__(parent)
         self.auth = auth
         self.folder = folder
+        self.browse = browse
         self.files = None
 
     def run(self):
         try:
-            folder = validated_remote_path(self.folder, self.auth.username)
+            if self.browse:
+                path = PurePosixPath(self.folder)
+                if path.root != "/" or ".." in path.parts or "\0" in self.folder:
+                    return
+                folder = str(path)
+            else:
+                folder = validated_remote_path(self.folder, self.auth.username)
             with DesktopSSHClient(self.auth).open_sftp() as sftp:
                 entries = sftp.listdir_attr(folder)
-            self.files = sorted((entry.filename, S_ISDIR(entry.st_mode)) for entry in entries)
+                self.files = sorted(
+                    ((entry.filename, self._is_directory(sftp, folder, entry)) for entry in entries
+                     if entry.filename not in (".", "..") and "/" not in entry.filename),
+                    key=lambda item: (not item[1], item[0].casefold()),
+                )
         except (OSError, ValueError, RuntimeError, EOFError, SSHException):
             pass
+
+    @staticmethod
+    def _is_directory(sftp, folder, entry):
+        mode = entry.st_mode or 0
+        if S_ISLNK(mode):
+            try:
+                mode = sftp.stat(str(PurePosixPath(folder) / entry.filename)).st_mode or 0
+            except OSError:
+                return False
+        return S_ISDIR(mode)
+
+
+def _folder_button(icon, label, action):
+    button = QToolButton()
+    button.setIcon(button.style().standardIcon(icon))
+    button.setIconSize(QSize(16, 16))
+    button.setFixedWidth(30)
+    button.setToolTip(label)
+    button.setAccessibleName(label)
+    button.clicked.connect(action)
+    return button
+
+
+class LocalFolderView(QTreeView):
+    def __init__(self, title):
+        super().__init__(headerHidden=True)
+        self.setProperty("preserveItemText", True)
+        self.setAccessibleName(title)
+        self.file_model = QFileSystemModel(self)
+        self.file_model.setReadOnly(True)
+        self.file_model.setFilter(QDir.Filter.AllEntries | QDir.Filter.NoDotAndDotDot | QDir.Filter.Hidden)
+        self.activated.connect(self._open_file)
+
+    def show_folder(self, folder):
+        if not folder or not Path(folder).is_dir():
+            self.setModel(None)
+            return
+        if self.model() is None:
+            self.setModel(self.file_model)
+            for column in range(1, self.file_model.columnCount()):
+                self.hideColumn(column)
+        self.setRootIndex(self.file_model.setRootPath(folder))
+
+    def _open_file(self, index):
+        info = self.file_model.fileInfo(index)
+        if info.isFile():
+            QDesktopServices.openUrl(QUrl.fromLocalFile(info.absoluteFilePath()))
+
+
+class RemoteFolderView(QTreeWidget):
+    folder_activated = Signal(str)
+    folder_loaded = Signal(bool)
+
+    def __init__(self):
+        super().__init__(headerHidden=True, rootIsDecorated=False)
+        self.setProperty("preserveItemText", True)
+        self.setAccessibleName("TRUBA files")
+        self.request = None
+        self.worker = None
+        self.status = ""
+        self.itemActivated.connect(self._activate_item)
+
+    def show_folder(self, auth, folder, *, browse=False, reload=False):
+        request = (auth, folder, browse) if auth and folder else None
+        if request == self.request and not reload:
+            return
+        self.request = request
+        self.folder_loaded.emit(False)
+        if request:
+            self._show_status("Loading TRUBA files…")
+        elif auth:
+            self._show_status("Enter a TRUBA folder path.")
+        else:
+            self._show_status("Connect in TRUBA.")
+        self._start_listing()
+
+    def _show_status(self, status):
+        self.clear()
+        self.status = status
+        item = QTreeWidgetItem([translate(status)])
+        item.setFlags(Qt.ItemFlag.NoItemFlags)
+        self.addTopLevelItem(item)
+
+    def retranslate_status(self):
+        if self.status:
+            self.topLevelItem(0).setText(0, translate(self.status))
+
+    def _start_listing(self):
+        if self.request is None or self.worker is not None:
+            return
+        auth, folder, browse = self.request
+        self.worker = RemoteFileListing(auth, folder, self, browse=browse)
+        self.worker.finished.connect(self._listing_finished)
+        self.worker.start()
+
+    def _listing_finished(self):
+        worker, self.worker = self.worker, None
+        if (worker.auth, worker.folder, worker.browse) != self.request:
+            self._start_listing()
+        elif worker.files is None:
+            self._show_status("TRUBA files could not be listed.")
+        else:
+            if worker.files:
+                self.clear()
+                self.status = ""
+                style = self.style()
+                folder_icon = style.standardIcon(QStyle.StandardPixmap.SP_DirIcon)
+                file_icon = style.standardIcon(QStyle.StandardPixmap.SP_FileIcon)
+                items = []
+                for name, directory in worker.files:
+                    item = QTreeWidgetItem([name])
+                    item.setIcon(0, folder_icon if directory else file_icon)
+                    if directory:
+                        item.setData(0, Qt.ItemDataRole.UserRole, str(PurePosixPath(worker.folder) / name))
+                    items.append(item)
+                self.addTopLevelItems(items)
+            else:
+                self._show_status("Folder is empty.")
+            self.folder_loaded.emit(True)
+        worker.deleteLater()
+
+    def _activate_item(self, item, _column):
+        folder = item.data(0, Qt.ItemDataRole.UserRole)
+        if folder:
+            self.folder_activated.emit(folder)
+
+    def shutdown(self):
+        if self.worker is not None:
+            self.worker.finished.disconnect(self._listing_finished)
+            self.worker.wait()
+
+
+class TrubaFolderDialog(QDialog):
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.setObjectName("trubaFolderDialog")
+        self.setWindowTitle("Choose TRUBA folder")
+        self.setWindowFlag(Qt.WindowType.WindowMinimizeButtonHint)
+        self.setWindowFlag(Qt.WindowType.WindowMaximizeButtonHint)
+        self.resize(520, 380)
+        self.auth = None
+        self.folder = ""
+        layout = QVBoxLayout(self)
+        address = QHBoxLayout()
+        self.path = QLineEdit()
+        self.path.setAccessibleName("TRUBA folder path")
+        self.path.returnPressed.connect(lambda: self._browse(self.path.text()))
+        address.addWidget(self.path)
+        self.up_button = _folder_button(
+            QStyle.StandardPixmap.SP_FileDialogToParent, "Parent folder",
+            lambda: self._browse(str(PurePosixPath(self.folder).parent)),
+        )
+        address.addWidget(self.up_button)
+        layout.addLayout(address)
+        self.view = RemoteFolderView()
+        self.view.folder_activated.connect(self._browse)
+        layout.addWidget(self.view)
+
+        self.actions = QDialogButtonBox(QDialogButtonBox.StandardButton.Cancel)
+        self.select_button = self.actions.addButton("Select folder", QDialogButtonBox.ButtonRole.AcceptRole)
+        self.view.folder_loaded.connect(
+            lambda loaded: self.select_button.setEnabled(loaded and self.path.text() == self.folder),
+        )
+        self.path.textEdited.connect(lambda: self.select_button.setEnabled(False))
+        self.actions.accepted.connect(self.accept)
+        self.actions.rejected.connect(self.reject)
+        for button in self.actions.buttons():
+            button.setAutoDefault(False)
+        layout.addWidget(self.actions)
+
+    def _browse(self, folder):
+        self.folder = folder
+        self.path.setText(folder)
+        parent = str(PurePosixPath(folder).parent)
+        self.up_button.setEnabled(parent.startswith("/") and parent != folder)
+        self.view.show_folder(self.auth, folder, browse=True, reload=True)
+
+    def choose(self, auth, folder):
+        self.auth = auth
+        self._browse(folder)
+        return self.folder if self.exec() == QDialog.DialogCode.Accepted else ""
 
 
 class TrubaSyncWindow(QDialog):
@@ -107,8 +301,10 @@ class TrubaSyncWindow(QDialog):
         self.language_manager = language_manager
         self.records = []
         self.selected = None
-        self.remote_request = None
-        self.remote_worker = None
+        self.input_folder = ""
+        self.output_folder = ""
+        self.remote_folder = None
+        self.folder_dialog = TrubaFolderDialog(self)
         self.setObjectName("trubaSyncWindow")
         self.setWindowTitle("SYNC")
         self.setWindowFlag(Qt.WindowType.WindowMinimizeButtonHint)
@@ -122,20 +318,21 @@ class TrubaSyncWindow(QDialog):
         columns = QSplitter(Qt.Orientation.Horizontal)
         columns.setObjectName("syncFileColumns")
         columns.setChildrenCollapsible(False)
-        self.inputs = QTreeWidget(headerHidden=True, rootIsDecorated=False)
-        self.remote = QTreeWidget(headerHidden=True, rootIsDecorated=False)
-        self.outputs = QTreeView(headerHidden=True)
-        self.output_model = QFileSystemModel(self)
-        self.output_model.setReadOnly(True)
-        self.output_model.setFilter(QDir.Filter.AllEntries | QDir.Filter.NoDotAndDotDot)
-        self.outputs.setModel(self.output_model)
-        for column in range(1, self.output_model.columnCount()):
-            self.outputs.hideColumn(column)
-        self.inputs.itemActivated.connect(self._open_input)
-        self.outputs.activated.connect(self._open_output)
-        self.input_path = self._add_column(columns, "Local inputs", self.inputs)
-        self.remote_path = self._add_column(columns, "TRUBA files", self.remote)
-        self.output_path = self._add_column(columns, "Local results", self.outputs)
+        self.inputs = LocalFolderView("Local inputs")
+        self.outputs = LocalFolderView("Local outputs")
+        self.remote = RemoteFolderView()
+        self.remote.folder_activated.connect(self._set_remote_folder)
+        self.input_path, self.input_button = self._add_column(
+            columns, "Local inputs", self.inputs, "Choose local inputs folder",
+            lambda: self._choose_local_folder("input", self.input_path, "Choose local inputs folder"),
+        )
+        self.remote_path, self.remote_button = self._add_column(
+            columns, "TRUBA files", self.remote, "Choose TRUBA folder", self._choose_remote_folder,
+        )
+        self.output_path, self.output_button = self._add_column(
+            columns, "Local outputs", self.outputs, "Choose local outputs folder",
+            lambda: self._choose_local_folder("output", self.output_path, "Choose local outputs folder"),
+        )
         columns.setSizes([275, 370, 275])
 
         splitter = QSplitter(Qt.Orientation.Vertical)
@@ -154,7 +351,7 @@ class TrubaSyncWindow(QDialog):
         header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
         header.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
-        self.job_table.currentCellChanged.connect(self._select)
+        self.job_table.currentCellChanged.connect(self._job_changed)
         jobs_layout.addWidget(self.job_table)
         splitter.addWidget(jobs)
         splitter.setSizes([290, 170])
@@ -179,24 +376,30 @@ class TrubaSyncWindow(QDialog):
         self._language_changed()
 
     @staticmethod
-    def _add_column(splitter, title, view):
+    def _add_column(splitter, title, view, button_label, choose_folder):
         group = QGroupBox(title)
         layout = QVBoxLayout(group)
         path = QLabel()
         path.setObjectName("mutedHintLabel")
+        path.setProperty("preserveLabelText", True)
         path.setTextFormat(Qt.TextFormat.PlainText)
         path.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         path.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         layout.addWidget(path)
-        view.setAccessibleName(title)
         layout.addWidget(view)
+        button = _folder_button(QStyle.StandardPixmap.SP_DirOpenIcon, button_label, choose_folder)
+        layout.addWidget(button, alignment=Qt.AlignmentFlag.AlignLeft)
         splitter.addWidget(group)
-        return path
+        return path, button
 
     def _language_changed(self, *_):
         self.language_manager.localize_tree(self)
         self.job_table.setHorizontalHeaderLabels([translate(title) for title in
                                                   ("Analysis code", "Slurm job ID", "Analysis", "Status")])
+        self.remote.retranslate_status()
+        self.folder_dialog.view.retranslate_status()
+        _style_dialog_buttons(self.folder_dialog.actions)
+        self._update_remote_button(self.session.analysis_auth())
         self._update_hint()
 
     def _update_hint(self):
@@ -220,25 +423,23 @@ class TrubaSyncWindow(QDialog):
         records.sort(key=lambda item: self._modified(item[0]), reverse=True)
         if records == self.records:
             return
-        current = self.selected
+        current = next((row for row, (path, _) in enumerate(records) if path == self.selected),
+                       0 if records else -1)
         self.records = records
         self.job_table.blockSignals(True)
         try:
             self.job_table.setRowCount(len(records))
             for row, (path, record) in enumerate(records):
-                if path == self.selected:
-                    current = row
                 values = (analysis_code(record) or "—", str(record.get("job_id") or "—"),
                           job_description(record), str(record.get("state") or "—"))
                 for column, value in enumerate(values):
                     item = QTableWidgetItem(value)
                     item.setToolTip(value)
                     self.job_table.setItem(row, column, item)
-            row = current if isinstance(current, int) else (0 if records else -1)
-            self.job_table.setCurrentCell(row, 0)
+            self.job_table.setCurrentCell(current, 0)
         finally:
             self.job_table.blockSignals(False)
-        self._select(row)
+        self._select(current)
         self._update_hint()
 
     @staticmethod
@@ -248,101 +449,89 @@ class TrubaSyncWindow(QDialog):
         except OSError:
             return 0
 
-    def _select(self, row, *_):
+    def _job_changed(self, row, *_):
+        if 0 <= row < len(self.records) and self.records[row][0] != self.selected:
+            self.input_folder = self.output_folder = ""
+            self.remote_folder = None
+        self._select(row)
+
+    def _select(self, row, *, reload=False):
         selection = self.records[row] if 0 <= row < len(self.records) else (None, {})
         self.selected, record = selection
-        local = record.get("local_directory", "")
-        self._show_local_files(local)
+        self._show_local_files(record.get("local_directory", ""))
+        auth = self.session.analysis_auth()
+        self._update_remote_button(auth)
         folder = record.get("remote_directory")
         folder = folder if isinstance(folder, str) else ""
-        self.remote_path.setText(folder)
-        self.remote_path.setToolTip(folder)
-        auth = self.session.analysis_auth()
-        request = (auth, folder) if auth and folder and auth.username == record.get("username") else None
-        if request != self.remote_request or (request is None and self.remote.topLevelItemCount() == 0):
-            self.remote_request = request
-            self.remote.clear()
-            self._load_remote_files()
+        browse = False
+        if auth and self.remote_folder and auth.username == self.remote_folder[0]:
+            _, folder = self.remote_folder
+            browse = True
+        elif auth and not folder:
+            folder = f"/arf/scratch/{auth.username}"
+            browse = True
+        elif auth and auth.username != record.get("username"):
+            auth = None
+        self._set_path_label(self.remote_path, folder)
+        self.remote.show_folder(auth, folder, browse=browse, reload=reload)
 
     def _show_local_files(self, directory):
-        self.inputs.clear()
-        self.input_path.setText(directory)
-        self.input_path.setToolTip(directory)
-        self.output_path.clear()
-        self.output_path.setToolTip("")
-        self.outputs.hide()
-        if not directory:
-            return
-        root = Path(directory)
-        try:
-            entries = sorted(root.iterdir())
-        except OSError:
-            entries = []
-        for path in entries:
-            if path.is_file() and (path.suffix == ".slurm" or path.name in {
-                "request.json", "engine.tar.gz", "input.json", "mesh_input.npz",
-                "model.mdpa", "ProjectParameters.json", "materials.json", "run.slurm",
-            }):
-                item = QTreeWidgetItem([path.name])
-                item.setData(0, Qt.ItemDataRole.UserRole, str(path))
-                self.inputs.addTopLevelItem(item)
-        output = next((path for path in (root / "output", root / "results") if path.is_dir()), None)
-        if output is not None:
-            self.output_path.setText(str(output))
-            self.output_path.setToolTip(str(output))
-            self.outputs.setRootIndex(self.output_model.setRootPath(str(output)))
-            self.outputs.show()
+        output = self.output_folder
+        if not output and directory:
+            root = Path(directory)
+            output = next((str(path) for path in (root / "output", root / "results") if path.is_dir()), "")
+        for path, view, folder in ((self.input_path, self.inputs, self.input_folder or directory),
+                                   (self.output_path, self.outputs, output)):
+            self._set_path_label(path, folder)
+            view.show_folder(folder)
 
-    def _load_remote_files(self):
-        if self.remote_request is None:
-            if self.selected is not None and self.remote.topLevelItemCount() == 0:
-                item = QTreeWidgetItem([translate("Connect in TRUBA.")])
-                item.setToolTip(0, translate("Connect with this job's account in TRUBA."))
-                self.remote.addTopLevelItem(item)
-            return
-        if self.remote_worker is not None:
-            return
-        worker = RemoteFileListing(*self.remote_request, self)
-        self.remote_worker = worker
-        worker.finished.connect(self._remote_finished)
-        worker.start()
+    @staticmethod
+    def _set_path_label(label, folder):
+        label.setText(folder)
+        label.setToolTip(folder)
 
-    def _remote_finished(self):
-        worker, self.remote_worker = self.remote_worker, None
-        if (worker.auth, worker.folder) != self.remote_request:
-            self._load_remote_files()
-        else:
-            self.remote.clear()
-            if worker.files is None:
-                self.remote.addTopLevelItem(QTreeWidgetItem([translate("TRUBA files could not be listed.")]))
+    def _choose_local_folder(self, column, path, title):
+        chosen = QFileDialog.getExistingDirectory(self, title, path.text() or self.input_path.text())
+        if chosen:
+            if column == "input":
+                self.input_folder = chosen
             else:
-                for name, directory in worker.files:
-                    self.remote.addTopLevelItem(QTreeWidgetItem([name + "/" if directory else name]))
-        worker.deleteLater()
+                self.output_folder = chosen
+            self._select(self.job_table.currentRow())
+
+    def _update_remote_button(self, auth):
+        self.remote_button.setEnabled(auth is not None)
+        self.remote_button.setToolTip(translate("Choose TRUBA folder" if auth else "Connect in TRUBA."))
+
+    def _choose_remote_folder(self):
+        auth = self.session.analysis_auth()
+        if auth is None:
+            return
+        start = self.remote.request[1] if self.remote.request else f"/arf/scratch/{auth.username}"
+        folder = self.folder_dialog.choose(auth, start)
+        if folder and self.session.analysis_auth() == auth:
+            self._set_remote_folder(folder)
+
+    def _set_remote_folder(self, folder):
+        auth = self.session.analysis_auth()
+        if auth is not None:
+            self.remote_folder = (auth.username, folder)
+            self._select(self.job_table.currentRow())
 
     def _refresh_files(self):
         self.refresh()
-        if self.remote_worker is None:
-            self.remote_request = None
-            self.remote.clear()
-            self._select(self.job_table.currentRow())
+        self._select(self.job_table.currentRow(), reload=True)
         self.session.sync_background()
 
     def _connection_changed(self, *_):
+        if self.folder_dialog.isVisible():
+            self.folder_dialog.reject()
+            self.folder_dialog.view.show_folder(None, "")
         if self.isVisible():
             self._select(self.job_table.currentRow())
 
-    @staticmethod
-    def _open_input(item, _column):
-        QDesktopServices.openUrl(QUrl.fromLocalFile(item.data(0, Qt.ItemDataRole.UserRole)))
-
-    def _open_output(self, index):
-        path = self.output_model.fileInfo(index)
-        if path.isFile():
-            QDesktopServices.openUrl(QUrl.fromLocalFile(path.absoluteFilePath()))
-
     def shutdown(self):
         self.timer.stop()
-        if self.remote_worker is not None:
-            self.remote_worker.finished.disconnect(self._remote_finished)
-            self.remote_worker.wait()
+        self.folder_dialog.reject()
+        self.folder_dialog.view.shutdown()
+        self.remote.shutdown()

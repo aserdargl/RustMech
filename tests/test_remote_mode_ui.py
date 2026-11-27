@@ -305,7 +305,15 @@ class RemoteModeUiTests(unittest.TestCase):
         self.assertTrue(sync.isVisible())
         self.assertFalse(sync.isModal())
         self.assertEqual(sync.job_table.item(0, 1).text(), "1234")
-        self.assertEqual(sync.inputs.topLevelItem(0).text(0), "run.slurm")
+        model, root = sync.inputs.model(), sync.inputs.rootIndex()
+        for _ in range(100):
+            if model.rowCount(root) >= 2:
+                break
+            QTest.qWait(10)
+        self.assertEqual(
+            {model.fileName(model.index(row, 0, root)) for row in range(model.rowCount(root))},
+            {"output", "run.slurm"},
+        )
         self.assertEqual(sync.output_path.text(), str(output))
         self.assertIn("TRUBA", sync.remote.topLevelItem(0).text(0))
         record["state"] = "downloaded"

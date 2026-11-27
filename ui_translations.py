@@ -905,6 +905,16 @@ Which workspace would you like to open?|Hangi çalışma alanını açmak isters
 Molecular dynamics|Moleküler Dinamik
 TRUBA files|TRUBA dosyaları
 Local results|Yerel sonuçlar
+Local outputs|Yerel çıktılar
+Choose local inputs folder|Yerel girdi klasörünü seç
+Choose local outputs folder|Yerel çıktı klasörünü seç
+Choose TRUBA folder|TRUBA klasörünü seç
+TRUBA folder path|TRUBA klasör yolu
+Parent folder|Üst klasör
+Select folder|Klasörü seç
+Loading TRUBA files…|TRUBA dosyaları yükleniyor…
+Enter a TRUBA folder path.|TRUBA klasör yolunu girin.
+Folder is empty.|Klasör boş.
 RustMech analyses|RustMech analizleri
 Track jobs in TRUBA WORKS.|İşleri TRUBA’nın WORKS sekmesinden takip edin.
 Connect in TRUBA.|TRUBA’da bağlanın.
