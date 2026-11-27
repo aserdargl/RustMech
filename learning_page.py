@@ -45,13 +45,12 @@ class LearningPage(QWidget):
         data_layout.addWidget(self.source, 1)
         form.addRow("Dataset", data_row)
         self.target = CompactComboBox()
-        self.target.setFixedWidth(200)
         self.target.currentTextChanged.connect(self.target_changed)
         form.addRow("Prediction target", self.target)
         self.method = CompactComboBox()
-        self.method.setFixedWidth(200)
         for key, name in {"all": "All methods", **METHODS}.items():
             self.method.addItem(name, key)
+        self.method.currentTextChanged.connect(lambda name: self.method.setToolTip(translate(name)))
         self.location = CompactComboBox()
         self.location.addItem("Local", "local")
         self.location.addItem("TRUBA", "truba")
@@ -148,10 +147,12 @@ class LearningPage(QWidget):
         if self.target.findText(previous) >= 0:
             self.target.setCurrentText(previous)
         self.target.blockSignals(False)
+        self.target.setToolTip(self.target.currentText())
         self.status.setText(translate("Completed samples: {count}").format(count=len(rows)))
         self.refresh()
 
     def target_changed(self, target):
+        self.target.setToolTip(target)
         if target:
             self.save("output", target)
         self.refresh()
