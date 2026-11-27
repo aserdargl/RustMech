@@ -1,4 +1,4 @@
-"""Molecular dynamics preparation and TRUBA submission window."""
+"""Molecular dynamics preparation and execution window."""
 
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack
@@ -10,7 +10,7 @@ import re
 from PySide6.QtCore import QEvent, QSettings, QSignalBlocker, Qt, QTimer, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
-    QApplication, QDialog, QFormLayout, QFrame, QGridLayout, QHBoxLayout, QLabel,
+    QApplication, QCheckBox, QDialog, QFormLayout, QFrame, QGridLayout, QHBoxLayout, QLabel,
     QLineEdit, QListWidget, QListWidgetItem, QMenu, QMessageBox, QPlainTextEdit, QPushButton,
     QScrollArea, QSizePolicy, QSplitter, QTabWidget, QVBoxLayout, QWidget,
 )
@@ -19,6 +19,7 @@ from app_settings import PERIODIC_TABLE_FAMILY_COLORS, periodic_table_font_size,
 from esen_elements import AlloyElements
 import esen_jobs as jobs
 import esen_md as md
+import esen_md_suite as md_suite
 from esen_md_project import MdProject, load_md_project, resolve_md_path, save_md_project, store_md_path
 from esen_meam_catalog import LAMMPS_MEAM, download_meam_source, load_nist_catalog, matching_sources
 from file_dialog import QFileDialog
@@ -181,6 +182,8 @@ class EsenWorkspace(QDialog):
         self.md_nist_sources = None
         self.md_catalog_failed = False
         self.remote_task = None
+        self.md_local_task = None
+        self.md_local_output = None
         self._active_truba_jobs = {}
         self._disposed = False
 
@@ -205,7 +208,7 @@ class EsenWorkspace(QDialog):
             self.tabs.setCornerWidget(corner)
         shell.addWidget(self.tabs)
         self.tabs.addTab(self._build_md(), WORKSPACE_TITLE)
-        self.tabs.addTab(self._build_md_truba(), "TRUBA Submission")
+        self.tabs.addTab(self._build_md_run(), "MD Tests and Run")
 
         self.md_save_timer = QTimer(self)
         self.md_save_timer.setSingleShot(True)
@@ -221,7 +224,7 @@ class EsenWorkspace(QDialog):
 
         language = getattr(QApplication.instance(), "_rustmech_language", None)
         if language is not None:
-            for button in (self.md_preview_button, self.md_prepare, self.md_run,
+            for button in (self.md_preview_button, self.md_prepare, self.md_run, self.md_open_run,
                            self.md_retry_sources, self.md_pick_project,
                            *(button for _, _, button in self.md_source_groups.values()),
                            *self.md_file_buttons, *self.md_plan_buttons):
@@ -401,7 +404,7 @@ class EsenWorkspace(QDialog):
         self.md_crystal.currentIndexChanged.connect(self._md_preview)
         return page
 
-    def _build_md_truba(self):
+    def _build_md_run(self):
         page = QWidget()
         outer = QVBoxLayout(page)
         outer.setContentsMargins(8, 8, 8, 8)
@@ -411,28 +414,128 @@ class EsenWorkspace(QDialog):
         split.setHandleWidth(7)
         outer.addWidget(split)
 
-        card, layout = panel("Job Settings")
+        card, layout = panel("Job Settings", scrollable=True)
         form = QFormLayout()
         form.setContentsMargins(0, 0, 0, 0)
         configure_form(form)
+        self.md_target = compact_combo((("TRUBA", "remote"), ("Local", "local")))
+        target = self.preferences.value("esen/md/target", "remote")
+        self.md_target.setCurrentIndex(max(0, self.md_target.findData(target)))
+        self._form_row(form, "Execution Target", self.md_target)
         self.md_queue = compact_combo([(name, name) for name in jobs.MODULES])
         queue_index = self.md_queue.findData(self.preferences.value("esen/md/queue", jobs.DEFAULT_PARTITION))
         self.md_queue.setCurrentIndex(max(0, queue_index))
         self._form_row(form, "TRUBA Queue", self.md_queue)
+        self.md_local_folder = self._md_run_path(form, "Local Run Folder", "localFolder", self._pick_md_run_folder)
+        self.md_local_exe = self._md_run_path(form, "LAMMPS Executable", "localExecutable", self._pick_md_executable)
+        self.md_local_exe.setPlaceholderText("Auto-detect LAMMPS on PATH")
+        self.md_target_form = form
         layout.addLayout(form)
-        self.md_run = command("Submit To TRUBA", self._run_md, role="esenRun")
-        layout.addLayout(button_row(self.md_run))
+
+        layout.addWidget(QLabel("MD Tests"))
+        tests = QGridLayout()
+        tests.setColumnStretch(2, 1)
+        saved = self.preferences.value("esen/md/tests", ["tension"], type=list)
+        self.md_tests = {}
+        for index, (key, title) in enumerate(md_suite.TESTS.items()):
+            check = QCheckBox(title)
+            check.setChecked(key in saved)
+            check.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+            check.toggled.connect(self._update_md_run_controls)
+            tests.addWidget(check, index // 2, index % 2)
+            self.md_tests[key] = check
+        layout.addLayout(tests)
+
+        params = QFormLayout()
+        configure_form(params)
+        self.md_param_form = params
+        self.md_test_fields = {}
+        for key, title, unit, low, high, default, digits in (
+            ("strain", "Maximum Strain", "%", 0.1, 50, 50, 2),
+            ("rate", "Strain Rate", "×10⁹ s⁻¹", 0.1, 100, 10, 2),
+            ("relaxation", "Relaxation Strain", "%", 0.1, 20, 2, 2),
+            ("creep", "Creep Stress", "GPa", 0.01, 100, 1, 2),
+            ("hold", "Hold Time", "ps", 1, 1000, 50, 1),
+        ):
+            control = CompactDoubleSpinBox()
+            control.setDecimals(digits)
+            control.setRange(low, high)
+            control.setValue(self.preferences.value(f"esen/md/run/{key}", default, type=float))
+            control.setFixedWidth(90)
+            control.valueChanged.connect(lambda value, name=key: self.preferences.setValue(f"esen/md/run/{name}", value))
+            self._form_row(params, title, control, field_layout=stepper_with_unit(control, unit))
+            self.md_test_fields[key] = control
+        layout.addLayout(params)
+        self.md_run = command("Run", self._run_md, role="esenRun")
+        self.md_open_run = command("Open Run Folder", self._open_md_run_folder)
+        self.md_open_run.setEnabled(False)
+        layout.addLayout(button_row(self.md_run, self.md_open_run))
         self.md_remote_note = QLabel()
         self.md_remote_note.setTextFormat(Qt.TextFormat.PlainText)
         self.md_remote_note.setWordWrap(True)
         self.md_remote_note.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         layout.addWidget(self.md_remote_note)
+        self.md_local_note = QLabel()
+        self.md_local_note.setTextFormat(Qt.TextFormat.PlainText)
+        self.md_local_note.setWordWrap(True)
+        self.md_local_note.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        layout.addWidget(self.md_local_note)
         layout.addStretch()
 
         split.addWidget(self._build_md_plans())
         split.addWidget(card)
         split.setSizes([630, 450])
+        self.md_target.currentIndexChanged.connect(self._update_md_run_controls)
+        self._update_md_run_controls()
         return page
+
+    def _md_run_path(self, form, title, key, picker):
+        row = QHBoxLayout()
+        field = QLineEdit(self.preferences.value(f"esen/md/{key}", "", type=str))
+        field.textChanged.connect(lambda text: self.preferences.setValue(f"esen/md/{key}", text))
+        row.addWidget(field, 1)
+        row.addWidget(command("Browse…", picker))
+        self._form_row(form, title, field, field_layout=row)
+        return field
+
+    def _pick_md_run_folder(self):
+        directory = self.md_local_folder.text() or str(self.md_project_folder or Path.home())
+        path = QFileDialog.getExistingDirectory(self, translate("Local Run Folder"), directory)
+        if path:
+            self.md_local_folder.setText(path)
+
+    def _pick_md_executable(self):
+        path, _ = QFileDialog.getOpenFileName(self, translate("LAMMPS Executable"), self.md_local_exe.text(),
+                                              translate("Executables (*.exe);;All Files (*)"))
+        if path:
+            self.md_local_exe.setText(path)
+
+    def _selected_md_tests(self):
+        return tuple(key for key, check in self.md_tests.items() if check.isChecked())
+
+    def _update_md_run_controls(self, *_):
+        local = self.md_target.currentData() == "local"
+        tests = self._selected_md_tests()
+        self.preferences.setValue("esen/md/target", self.md_target.currentData())
+        self.preferences.setValue("esen/md/tests", list(tests))
+        for row, visible in enumerate((True, not local, local, local)):
+            self.md_target_form.setRowVisible(row, visible)
+        self.md_remote_note.setVisible(not local)
+        self.md_local_note.setVisible(local)
+        self.md_open_run.setVisible(local)
+        ramp = any(test in tests for test in ("tension", "compression", "shear", "notch"))
+        for row, visible in enumerate((ramp, ramp or "relaxation" in tests, "relaxation" in tests,
+                                       "creep" in tests, "relaxation" in tests or "creep" in tests)):
+            self.md_param_form.setRowVisible(row, visible)
+        self._update_md_run_button()
+
+    def _update_md_run_button(self):
+        busy = self.md_target.currentData() == "local" and self.md_local_task is not None
+        self.md_run.setEnabled(not busy and bool(self._selected_md_tests()) and self.md_plans.currentItem() is not None)
+
+    def _open_md_run_folder(self):
+        if self.md_local_output and not QDesktopServices.openUrl(QUrl.fromLocalFile(str(self.md_local_output))):
+            self.md_local_note.setText(str(self.md_local_output))
 
     def _build_md_sources(self, grid):
         self.md_source_groups = {}
@@ -739,7 +842,7 @@ class EsenWorkspace(QDialog):
         item = self.md_plans.currentItem()
         self.md_open_plan.setEnabled(item is not None)
         self.md_plan_file.setEnabled(item is not None)
-        self.md_run.setEnabled(item is not None)
+        self._update_md_run_button()
         self.md_plan_hint.setVisible(item is None)
         if item is None:
             self.md_plan_hint.setText(translate("Prepare a package or add an existing MD package folder."))
@@ -957,31 +1060,90 @@ class EsenWorkspace(QDialog):
     def _run_md(self):
         if (item := self.md_plans.currentItem()) is None:
             return
+        local = self.md_target.currentData() == "local"
+        note = self.md_local_note if local else self.md_remote_note
         try:
-            auth = self.truba.analysis_auth()
+            for field in self.md_test_fields.values():
+                field.interpretText()
+            values = {key: field.value() for key, field in self.md_test_fields.items()}
+            selection = md_suite.TestSelection(self._selected_md_tests(), values["strain"], values["rate"] * 1e9,
+                                              values["relaxation"], values["creep"], values["hold"])
+            selection.validate()
+            folder = item.data(Qt.ItemDataRole.UserRole)
+            md.read_plan(folder)
+            if local:
+                self._start_md_locally(folder, selection)
+                return
+
+            auth = self.truba.analysis_auth() if self.truba is not None else None
             if auth is None:
                 raise ValueError("Open HPC and connect to TRUBA." if self.standalone else
                                  "Connect using the main TRUBA button.")
             if self.remote_task is not None:
                 raise ValueError(translate("TRUBA is busy. Try again when the current operation is complete."))
-            folder = item.data(Qt.ItemDataRole.UserRole)
-            md.read_plan(folder)
             partition = self.md_queue.currentData()
             settings = self._remote_settings(partition, auth)
+            # Keep the original checkpoint chain for the unmodified E20 tensile run.
+            legacy = selection.tests == ("tension",) and selection.strain_percent == 50 and selection.rate_per_second == 1e10
+            entry = md.ENTRY if legacy else md_suite.ENTRY
+            if not legacy:
+                settings.pop("resume_input")
             ranks, memory, walltime = jobs.full_node_resources(partition, jobs.BASELINES)
-            jobs.remote_script(md.ENTRY, ranks, memory=memory, walltime=walltime, **settings)
+            jobs.remote_script(entry, ranks, memory=memory, walltime=walltime, **settings)
             self.preferences.setValue("esen/md/queue", partition)
-            directory, record = jobs.new_job(folder, md.ENTRY, "remote", None, parent=self.history_root,
+            directory, record = jobs.new_job(folder, entry, "remote", None, parent=self.history_root,
                                              batch_folder=folder.name)
-            extra = tuple(name for name in md.REQUIRED_PACKAGE_FILES if name != md.ENTRY)
-            self._submit_remote(directory, record, (folder, md.ENTRY, extra, False), settings, auth)
+            if legacy:
+                extra = tuple(name for name in md.REQUIRED_PACKAGE_FILES if name != entry)
+                self._submit_remote(directory, record, (folder, entry, extra, False), settings, auth)
+            else:
+                future = self.executor.submit(jobs.submit_md_suite, directory, record, folder, selection, settings, auth)
+                self.remote_task = directory, future, True
         except (OSError, ValueError) as error:
-            self.md_remote_note.setText(translate(str(error)))
+            note.setText(translate(str(error)))
             return
         self.md_remote_note.setText(translate("Submitting the MD job to TRUBA…"))
 
+    def _start_md_locally(self, package, selection):
+        if self.md_local_task is not None:
+            return
+        folder = self.md_local_folder.text().strip()
+        if not folder or not Path(folder).is_dir():
+            raise ValueError("Choose an existing local run folder.")
+        executable = jobs.lammps_executable(self.md_local_exe.text().strip())
+        directory, record = jobs.new_job(package, md_suite.ENTRY, "local", 1, parent=self.history_root)
+        work = Path(folder).resolve() / f"MD-{directory.name}"
+        future = self.executor.submit(jobs.run_md_locally, directory, record, package, work, selection, executable)
+        self.md_local_task = directory, future, work
+        self.md_local_output = work
+        self.md_open_run.setEnabled(False)
+        self._update_md_run_button()
+        self.md_local_note.setText(translate("Starting LAMMPS in {path}").format(path=work))
+
+    def _check_md_local(self):
+        if self.md_local_task is None:
+            return
+        directory, future, work = self.md_local_task
+        self.md_open_run.setEnabled(work.is_dir())
+        if not future.done():
+            step = jobs.local_md_step(work)
+            if step:
+                current = translate("Local MD running: {step}").format(step=translate(step))
+                self.md_local_note.setText(f"{current}\n{work}")
+            return
+        self.md_local_task = None
+        self._update_md_run_button()
+        try:
+            future.result()
+            record = jobs.read_job(directory)
+            status = (translate("Local MD completed.") if record["state"] == "Completed" else
+                      translate(record.get("detail") or "Failed"))
+        except Exception as error:
+            status = str(error)
+        self.md_local_note.setText(f"{status}\n{work}")
+
     def _size_command_buttons(self):
-        for group in (self.md_file_buttons, self.md_plan_buttons):
+        for group in (self.md_file_buttons, self.md_plan_buttons, (self.md_run, self.md_open_run)):
             width = max(button.sizeHint().width() for button in group) + 2
             for button in group:
                 button.setFixedWidth(width)
@@ -1032,6 +1194,7 @@ class EsenWorkspace(QDialog):
     def _tick(self):
         self._check_md_sources()
         self._check_md_download()
+        self._check_md_local()
         if self.remote_task is not None and self.remote_task[1].done():
             directory, future, submitting = self.remote_task
             self.remote_task = None
@@ -1055,7 +1218,7 @@ class EsenWorkspace(QDialog):
         self._check_md()
 
     def _poll_remote(self):
-        auth = self.truba.analysis_auth()
+        auth = self.truba.analysis_auth() if self.truba is not None else None
         if self.remote_task is not None or not auth:
             return
         directory = next((path for path, username in self._active_truba_jobs.items()

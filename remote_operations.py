@@ -21,9 +21,17 @@ ANALYSIS_OPERATIONS = frozenset({
     "mechanical", "fft_solve", "peridynamic_solve", "flow_solve", "thermal_solve", "doe_solve", "convergence_level",
 })
 
+# These operations use the ESEN Slurm adapter and its LAMMPS module rather than
+# deploying the Python compute worker.
+EXTERNAL_OPERATIONS = {"md_tests": "lammps"}
 
-def required_capability(request):
+
+def required_capability(request, *, external=False):
     operation = request.get("operation")
+    if external and isinstance(operation, str) and operation in EXTERNAL_OPERATIONS:
+        return EXTERNAL_OPERATIONS[operation]
+    if external:
+        raise ValueError(f"Unsupported external TRUBA operation: {operation!r}.")
     if not isinstance(operation, str) or operation not in OPERATIONS:
         raise ValueError(f"Unsupported TRUBA operation: {operation!r}.")
     capability = OPERATIONS[operation]

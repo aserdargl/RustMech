@@ -98,16 +98,32 @@ sıfır basınçta gevşetin. Hedef sıcaklıkta NPT dengelemesi sonrasında ort
 kutu uzunluğunu o eksendeki hücre tekrar sayısına bölün.
 
 **Paketi Hazırla**, Atomsk’ı bu bilgisayarda çalıştırır ve paket yolunu gösterir.
-Hazırlanan paket **TRUBA’ya Gönderim** sekmesinde seçili görünür. Bu sekmede
+Hazırlanan paket **MD Testleri ve Çalıştırma** sekmesinde seçili görünür. Bu sekmede
 önceden hazırlanmış bir paketi de seçebilir veya paket klasörünü ekleyebilirsiniz.
-TRUBA kuyruğunu seçip **TRUBA’ya Gönder** düğmesine bastığınızda E20 şablonuyla
-minimizasyon, dengeleme, çekme ve CNA işi gönderilir. Şablon 3,9 Å sabit CNA
-kesim yarıçapı kullanır.
+Çekme, basma, XY basit kayma, elastik sabitler, gerilme gevşemesi, sünme ve çentikli
+çekme arasından çalıştırmak istediğiniz testleri işaretleyin. Testlere göre görünen
+şekil değiştirme, hız, sünme gerilmesi ve bekletme süresi alanlarını ayarlayın.
+Her test aynı minimize edilmiş ve dengelenmiş hücreden bağımsız başlar.
+
+- **Yerel** seçildiğinde bir klasör seçin. `lmp` PATH üzerinde bulunmuyorsa
+  LAMMPS `.exe` dosyasını seçin. **Çalıştır**, seçilen klasörün altında bir `MD-…`
+  klasörü açar ve LAMMPS’i başlatır. LAMMPS girdisi, `run-local.ps1`, CSV dosyaları
+  ve günlükler burada saklanır.
+- **TRUBA** seçildiğinde kuyruğu seçip **Çalıştır**’a basın. RustMech, `run.slurm`
+  dosyasını hazırlar ve işi mevcut TRUBA bağlantısı üzerinden gönderir. Bağlantı
+  açıkken iş durumu arka planda güncellenir ve tamamlanan sonuçlar, paket içindeki
+  `Results` klasörüne indirilir. Yalnızca varsayılan ayarlarla çekme seçildiğinde
+  TRUBA, ara kayıttan devam edebilen mevcut E20 şablonunu kullanır.
+
+Elastik analiz ±%0,5 şekil değiştirmede ortalama gerilmeden 6×6 rijitlik matrisi
+ve kübik izdüşüm üretir. Gevşemede numune hedef uzamadan sonra sabit boyutta
+tutulur. Sünmede X yönündeki çekme gerilmesi 5 ps’de hedefe çıkarılır. Çentikli
+çekmede Y yüzeyleri serbest bırakılır ve Y kenarından giren çentik Z boyunca
+uzanır. Çentikli çekmede gerilme referansı, vakum hariç brüt hücre hacmidir.
+Çekme, basma, kayma ve çentikli çekme yörüngeleri 3,9 Å sabit CNA kesim yarıçapı kullanır.
 Farklı kafes parametrelerinde CNA sonuçlarını yorumlamadan önce kesim
-yarıçapını doğrulayın. İşi TRUBA’da izleyin. Tamamlanan işin yerel
-çıktılarını RustMech’in **Sonuçlar** penceresinden açabilirsiniz.
-TRUBA bağlantısı açıkken Molecular Dynamics, işin durumunu arka planda
-günceller ve tamamlanan sonuçları paket klasörüne indirir.
+yarıçapını doğrulayın. Tamamlanan yerel ve TRUBA işlerini RustMech’in
+**Sonuçlar** penceresinden açabilirsiniz.
 
 [Atomsk polikristal kılavuzu](https://atomsk.univ-lille.fr/doc/en/mode_polycrystal.html) ·
 [LAMMPS kutu gevşetme](https://docs.lammps.org/fix_box_relax.html) ·

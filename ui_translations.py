@@ -154,6 +154,35 @@ Browse…|Gözat…
 MEAM files (*.meam);;All files (*)|MEAM dosyaları (*.meam);;Tüm dosyalar (*)
 Preview Model|Modeli Önizle
 TRUBA Submission|TRUBA’ya Gönderim
+MD Tests and Run|MD Testleri ve Çalıştırma
+Execution Target|Çalıştırma Yeri
+MD Tests|MD Testleri
+Tensile Test|Çekme Testi
+Compression Test|Basma Testi
+Simple Shear Test|Basit Kayma Testi
+Elastic Constants|Elastik Sabitler
+Stress Relaxation|Gerilme Gevşemesi
+Creep Test|Sünme Testi
+Notched Tensile Test|Çentikli Çekme Testi
+Maximum Strain|En Büyük Birim Şekil Değiştirme
+Strain Rate|Birim Şekil Değiştirme Hızı
+Relaxation Strain|Gevşeme İçin Birim Şekil Değiştirme
+Creep Stress|Sünme Gerilmesi
+Hold Time|Bekletme Süresi
+Local Run Folder|Yerel Çalıştırma Klasörü
+LAMMPS Executable|LAMMPS Çalıştırılabilir Dosyası
+Auto-detect LAMMPS on PATH|LAMMPS’i PATH üzerinden bul
+Open Run Folder|Çalıştırma Klasörünü Aç
+Choose an existing local run folder.|Var olan bir yerel çalıştırma klasörü seçin.
+Choose the LAMMPS executable or install LAMMPS on PATH.|LAMMPS dosyasını seçin veya LAMMPS’i PATH’e ekleyin.
+Select at least one MD test.|En az bir MD testi seçin.
+Invalid MD test selection.|MD test seçimi geçersiz.
+Invalid MD test settings.|MD test ayarları geçersiz.
+Prepare the MD package again to use the selected tests.|Seçili testleri kullanmak için MD paketini yeniden hazırlayın.
+Starting LAMMPS in {path}|LAMMPS başlatılıyor · {path}
+Local MD running: {step}|Yerel MD çalışıyor · {step}
+Local MD completed.|Yerel MD tamamlandı.
+Minimization and equilibration|Minimizasyon ve dengeleme
 Submit To TRUBA|TRUBA’ya Gönder
 BCC Supercell|BCC Süper Hücresi
 Box dimensions were rounded to whole BCC unit cells.|Kutu boyutları tam BCC birim hücrelerine yuvarlandı.

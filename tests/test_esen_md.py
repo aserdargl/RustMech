@@ -16,6 +16,7 @@ from PySide6.QtWidgets import QApplication, QCheckBox, QDialog, QLabel, QPushBut
 from app_settings import PERIODIC_TABLE_DEFAULT_FONT_SIZE, PERIODIC_TABLE_FAMILY_COLORS, PERIODIC_TABLE_FONT_SIZE
 import esen_jobs as jobs
 import esen_md as md
+import esen_md_suite as md_suite
 from esen_elements import AlloyElements
 from esen_md_project import PROJECT_FILE, load_md_project
 from esen_meam_catalog import parse_nist_catalog
@@ -160,11 +161,82 @@ def write_test_package(folder):
     for name in md.REQUIRED_PACKAGE_FILES:
         (folder / name).touch()
     (folder / md.ENTRY).write_text(md.INITIAL, encoding="utf-8")
+    (folder / "analiz.inc").write_text("pair_coeff * * meam_kutuphane.meam Nb meam_parametreler.meam Nb\n"
+                                     "neighbor 3.0 bin\n", encoding="ascii")
     (folder / md.PLAN_METADATA).write_text(json.dumps({
         "elements": ["Nb"], "counts": [128], "atoms": 128, "grains": 1,
-        "temperature": 300, "target_atoms": 128, "meam_order": ["Nb"],
+        "temperature": 300, "seed": 42, "target_atoms": 128, "meam_order": ["Nb"],
     }), encoding="utf-8")
     return folder
+
+
+def test_md_run_dispatches_choices_to_local_and_truba(tmp_path, monkeypatch):
+    app = QApplication.instance() or QApplication([])
+    settings = QSettings(str(tmp_path / "qt.ini"), QSettings.Format.IniFormat)
+    auth = SimpleNamespace(username="account")
+    truba = SimpleNamespace(analysis_auth=lambda: auth)
+    monkeypatch.setattr("esen_workspace.QSettings", lambda *_: settings)
+    history = tmp_path / "jobs"
+    package = write_test_package(tmp_path / "md-preparations" / "md-bcc-sample")
+    workspace = EsenWorkspace(truba, history=history)
+    try:
+        workspace.tabs.setCurrentIndex(1)
+        workspace.show()
+        app.processEvents()
+        workspace.md_tests["tension"].setChecked(False)
+        assert not workspace.md_run.isEnabled()
+        workspace.md_tests["compression"].setChecked(True)
+        workspace.md_tests["creep"].setChecked(True)
+        workspace.md_target.setCurrentIndex(workspace.md_target.findData("local"))
+        assert workspace.md_local_folder.isVisible() and not workspace.md_queue.isVisible()
+        workspace.md_local_folder.setText(str(tmp_path))
+        executable = tmp_path / "lammps.exe"
+        future = Future()
+        with patch.object(workspace.executor, "submit", return_value=future) as submit, \
+                patch("esen_jobs.lammps_executable", return_value=executable), \
+                patch.object(truba, "analysis_auth", side_effect=AssertionError("Local run queried TRUBA")):
+            QTest.keyClick(workspace.md_local_folder, Qt.Key.Key_Return)
+            submit.assert_not_called()
+            workspace.md_run.click()
+        worker, job, record, source, work, selection, resolved = submit.call_args.args
+        assert (worker, source, resolved) == (jobs.run_md_locally, package, executable)
+        assert selection.tests == ("compression", "creep")
+        assert work.parent == tmp_path and job.parent == history
+        assert not workspace.md_run.isEnabled()
+        with patch("esen_jobs.subprocess.run", return_value=SimpleNamespace(returncode=0)) as launch:
+            worker(job, record, source, work, selection, resolved)
+        assert launch.call_args.kwargs["cwd"] == work
+        assert jobs.result_directory(job, jobs.read_job(job)) == work
+        script = (work / md_suite.ENTRY).read_text()
+        assert script.count("read_restart equilibrated.restart") == 2
+        assert "file compression.csv" in script and "file creep.csv" in script
+        assert "file tension.csv" not in script
+        future.set_result(None)
+        workspace._check_md_local()
+        assert workspace.md_open_run.isEnabled() and workspace.md_run.isEnabled()
+
+        workspace.md_target.setCurrentIndex(workspace.md_target.findData("remote"))
+        assert workspace.md_queue.isVisible() and not workspace.md_local_folder.isVisible()
+        with patch.object(workspace.executor, "submit", return_value=Future()) as submit:
+            workspace.md_run.click()
+        worker, job, record, source, selected, options, credentials = submit.call_args.args
+        assert (worker, source, selected, credentials) == (jobs.submit_md_suite, package, selection, auth)
+        assert "resume_input" not in options
+        with patch("esen_jobs.fetch_catalog", return_value=jobs.BASELINES), \
+                patch("esen_jobs.submit_remote") as remote:
+            def inspect_submission(directory, data, files, script, credentials):
+                root, entry, extra, whole_folder = files
+                assert (directory, entry, credentials) == (job, md_suite.ENTRY, auth)
+                assert set(extra) == set(md_suite.INPUTS) and not whole_folder
+                assert (root / entry).read_text() == (work / entry).read_text()
+                assert "#SBATCH --partition=" in script and f"-in {entry}" in script
+                assert data["capability"] == "lammps"
+
+            remote.side_effect = inspect_submission
+            worker(job, record, package, selection, options, auth)
+            remote.assert_called_once()
+    finally:
+        workspace.dispose()
 
 
 def test_md_plan_library_reopens_generated_and_added_packages(tmp_path):
@@ -694,7 +766,7 @@ def test_md_tab_enter_previews_and_submits_package_to_truba(tmp_path, potentials
         assert workspace.windowTitle() == "Molecular Dynamics"
         assert workspace.tabs.count() == 2
         assert workspace.tabs.tabText(0) == "Molecular Dynamics"
-        assert workspace.tabs.tabText(1) == "TRUBA Submission"
+        assert workspace.tabs.tabText(1) == "MD Tests and Run"
         assert not workspace.md_queue.isVisible()
         assert not workspace.md_run.isVisible()
         assert not workspace.md_run.isEnabled()

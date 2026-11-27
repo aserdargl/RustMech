@@ -11,11 +11,14 @@ from pathlib import Path, PurePosixPath, PureWindowsPath
 import re
 import shlex
 import shutil
+import subprocess
 import tarfile
 from tempfile import TemporaryDirectory
 from uuid import uuid4
 
 import esen_restart
+import esen_md_suite as md_suite
+from remote_operations import required_capability
 from truba_credentials import state_directory
 from truba_jobs import SAFE_NAME, validated_remote_path, write_record
 from truba_remote import RemoteContext, RemoteTransport, safe_extract
@@ -226,6 +229,86 @@ def submit_full_node(directory, record, files, settings, auth):
         save_job(directory, record, state="Failed", detail=str(error))
         return
     submit_remote(directory, record, files, script, auth)
+
+
+def _prepare_md_run(work, package, selection):
+    # Generate the input in an isolated folder and copy only the files it needs.
+    md_suite.write_run_input(work, package, selection)
+    for name in md_suite.INPUTS:
+        if name == md_suite.MANIFEST:
+            continue
+        source = package / name
+        if is_link(source) or not source.resolve().is_relative_to(package):
+            raise ValueError(f"Missing file or symbolic link: {name}")
+        shutil.copy2(source, work / name)
+
+
+def submit_md_suite(directory, record, package, selection, settings, auth):
+    try:
+        capability = required_capability({"operation": "md_tests"}, external=True)
+        save_job(directory, record, operation="md_tests", capability=capability, tests=list(selection.tests))
+        with TemporaryDirectory(prefix="md-suite-", dir=directory) as staging:
+            work = Path(staging)
+            _prepare_md_run(work, package.resolve(strict=True), selection)
+            files = (work, md_suite.ENTRY, md_suite.INPUTS, False)
+            submit_full_node(directory, record, files, settings, auth)
+    except Exception as error:
+        save_job(directory, record, state="Failed", detail=str(error))
+
+
+def lammps_executable(path):
+    executable = shutil.which(path or "lmp")
+    if executable is None and not path:
+        executable = shutil.which("lmp_serial")
+    if not executable or (os.name == "nt" and Path(executable).suffix.lower() != ".exe"):
+        raise ValueError("Choose the LAMMPS executable or install LAMMPS on PATH.")
+    return Path(executable).resolve()
+
+
+def _tail_local_log(path):
+    with path.open("rb") as log:
+        size = log.seek(0, os.SEEK_END)
+        log.seek(max(0, size - LOG_BYTES))
+        return log.read(LOG_BYTES).decode(errors="replace")
+
+
+def local_md_step(work):
+    try:
+        return script_step(_tail_local_log(work / LOGS[0]))
+    except OSError:
+        return ""
+
+
+def run_md_locally(directory, record, package, work, selection, executable):
+    try:
+        work.mkdir(exist_ok=False)
+        save_job(directory, record, local_work=str(work), tests=list(selection.tests))
+        _prepare_md_run(work, package.resolve(strict=True), selection)
+        if os.name == "nt":
+            quoted = str(executable).replace("'", "''")
+            (work / "run-local.ps1").write_text(
+                f"$env:OMP_NUM_THREADS = '1'\nPush-Location -LiteralPath $PSScriptRoot\ntry {{\n"
+                f"    & '{quoted}' -nonbuf -in {md_suite.ENTRY}\n"
+                "    exit $LASTEXITCODE\n} finally {\n    Pop-Location\n}\n", encoding="utf-8-sig")
+        save_job(directory, record, state="Running")
+        with (work / LOGS[0]).open("wb") as stdout, (work / LOGS[1]).open("wb") as stderr:
+            completed = subprocess.run([str(executable), "-nonbuf", "-in", md_suite.ENTRY],
+                                       cwd=work, stdin=subprocess.DEVNULL, stdout=stdout, stderr=stderr,
+                                       env={**os.environ, "OMP_NUM_THREADS": "1"},
+                                       creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        if completed.returncode:
+            message = f"LAMMPS returned exit code {completed.returncode}."
+            for name in LOGS:
+                errors = [line.strip() for line in _tail_local_log(work / name).splitlines()
+                          if line.startswith("ERROR")]
+                if errors:
+                    message += f"\n{errors[-1]}"
+                    break
+            save_job(directory, record, state="Failed", detail=message)
+        else:
+            save_job(directory, record, state="Completed")
+    except (OSError, ValueError) as error:
+        save_job(directory, record, state="Failed", detail=str(error))
 
 
 def remote_location(directory, record, auth):
@@ -498,6 +581,8 @@ def save_file_list(directory, record, paths, omitted, **changes):
 
 
 def result_directory(directory, record):
+    if record["target"] == "local" and record.get("local_work"):
+        return Path(record["local_work"])
     source = record.get("results_source") or record.get("source")
     if not source and "truba_input_folder" in record:
         source = directory
