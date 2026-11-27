@@ -225,7 +225,7 @@ def test_alloy_elements_fill_left_column_then_continue_on_right():
         elements.close()
 
 
-def test_md_tab_enter_previews_and_run_hands_package_to_esen(tmp_path, potentials):
+def test_md_tab_enter_previews_and_submits_package_to_truba(tmp_path, potentials):
     class Truba(QObject):
         connection_changed = Signal(bool)
         auth = None
@@ -239,13 +239,11 @@ def test_md_tab_enter_previews_and_run_hands_package_to_esen(tmp_path, potential
     with patch("esen_workspace.QSettings", return_value=preferences):
         workspace = EsenWorkspace(truba, history=tmp_path / "jobs")
     try:
-        workspace.tabs.setCurrentIndex(1)
         workspace.show()
         app.processEvents()
-        tab_bar = workspace.tabs.tabBar()
-        assert tab_bar.tabRect(0).width() == tab_bar.tabRect(1).width()
-        tab_bar.setTabText(1, "MD Hazırlama")
-        assert tab_bar.tabRect(0).width() == tab_bar.tabRect(1).width()
+        assert workspace.windowTitle() == "Molecular Dynamics"
+        assert workspace.tabs.count() == 1
+        assert workspace.tabs.tabText(0) == "MD Preparation"
         assert not workspace.md_grains.isVisible()
         workspace.md_atoms.lineEdit().setText("128")
         QTest.keyClick(workspace.md_atoms.lineEdit(), Qt.Key.Key_Return)
@@ -262,7 +260,7 @@ def test_md_tab_enter_previews_and_run_hands_package_to_esen(tmp_path, potential
         assert workspace.md_task is None
         workspace.md_run.click()
         assert "TRUBA" in workspace.md_note.text()
-        assert workspace.history.rowCount() == 0
+        assert not list(workspace.history_root.glob("*/job.json"))
 
         elements = workspace.md_elements
         assert len(elements.cells) == 118
@@ -337,10 +335,10 @@ def test_md_tab_enter_previews_and_run_hands_package_to_esen(tmp_path, potential
             workspace.md_run.click()
             runs = [call for call in execute.call_args_list if call.args[0] is md.prepare_job]
             assert [call.args[2].grains for call in runs] == [12, 13]
-            workspace.upload_task = object()
+            workspace.remote_task = object()
             workspace._check_md()
             submit.assert_not_called()
-            workspace.upload_task = None
+            workspace.remote_task = None
             workspace._check_md()
             directory, record, files, settings, auth = submit.call_args.args
         assert workspace.tabs.currentIndex() == 0

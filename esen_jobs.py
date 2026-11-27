@@ -1,12 +1,9 @@
-"""LAMMPS input snapshots, Windows execution and standalone TRUBA jobs."""
+"""LAMMPS input snapshots, TRUBA execution and result collection."""
 
 import base64
 from contextlib import suppress
 from datetime import datetime
 from filecmp import cmp
-from functools import partial
-import hashlib
-from itertools import islice
 import json
 import ntpath
 import os
@@ -14,18 +11,12 @@ from pathlib import Path, PurePosixPath, PureWindowsPath
 import re
 import shlex
 import shutil
-import signal
-import subprocess
 import tarfile
 from tempfile import TemporaryDirectory
-from time import monotonic, time
-from typing import NamedTuple
-from uuid import NAMESPACE_URL, uuid4, uuid5
+from uuid import uuid4
 
 import esen_restart
-from esen_windows_job import limited_process
 from truba_credentials import state_directory
-from truba_files import project_root, read_regular_file, require_regular_files, upload_tree
 from truba_jobs import SAFE_NAME, validated_remote_path, write_record
 from truba_remote import RemoteContext, RemoteTransport, safe_extract
 from truba_resources import BASELINES, candidates, fetch_catalog
@@ -47,22 +38,8 @@ SLURM_TERMINAL = frozenset({
 })
 LOG_BYTES = 16000
 FILE_LIMIT = 2000
-RUN_LIST = "Run.esen"
-RUN_LIST_LIMIT = 64 * 1024
 INPUT_ARCHIVE_COMPRESSION = 3
 RESULT_DIRECTORY = re.compile(r"(?:ESEN-[0-9a-f]{32}|\.esen-export-[0-9a-f]{32}-.+)", re.IGNORECASE)
-
-
-class FolderUpload(NamedTuple):
-    upload_id: str
-    username: str
-    directory: str = ""
-    direct: bool = False
-
-    def path(self):
-        if self.direct:
-            return str(project_root(self.username) / self.directory)
-        return upload_location(self.upload_id, self.username, self.directory) + "/inputs"
 
 
 def jobs_directory():
@@ -90,162 +67,8 @@ def is_link(path):
     return path.is_symlink() or getattr(path, "is_junction", lambda: False)()
 
 
-def is_input_script(name):
-    path = Path(name)
-    return path.name.lower().startswith("in.") or path.suffix.lower() == ".in"
-
-
 def is_slurm_script(name):
     return Path(name).suffix.lower() == ".slurm"
-
-
-def run_list_entries(contents):
-    """Read the ordered, relative Slurm paths from an ESEN run list."""
-    entries = []
-    seen = set()
-    for line in contents.decode("utf-8-sig").splitlines():
-        name = line.strip()
-        if not name or name.startswith("#"):
-            continue
-        path = relative_file(name).as_posix()
-        if not is_slurm_script(path):
-            raise ValueError(f"Expected a relative Slurm script path: {name}")
-        if path.casefold() in seen:
-            raise ValueError(f"Duplicate Slurm script in run list: {name}")
-        seen.add(path.casefold())
-        entries.append(PurePosixPath(path))
-    if not entries:
-        raise ValueError("The ESEN run list is empty.")
-    return entries
-
-
-def read_truba_run_list(auth, folder):
-    contents = read_regular_file(auth, folder, RUN_LIST, limit=RUN_LIST_LIMIT)
-    entries = run_list_entries(contents)
-    require_regular_files(auth, folder, entries)
-    return entries
-
-
-def read_slurm_script(path):
-    try:
-        script = path.read_text(encoding="utf-8-sig")
-    except UnicodeError as error:
-        raise ValueError(f"Save the Slurm script as UTF-8: {path.name}") from error
-    if not script.startswith("#!") or "\x00" in script:
-        raise ValueError(f"Start the Slurm script with an interpreter line: {path.name}")
-    return script
-
-
-def slurm_group_options(script):
-    """Return shareable Slurm directives, or None for an independent allocation."""
-    resources = {"-A", "-c", "-C", "-G", "-N", "-n", "-p", "-q", "-t",
-                 "--account", "--constraint", "--cpus-per-task", "--exclusive",
-                 "--gpus", "--gpus-per-node", "--gpus-per-task", "--gres", "--hint",
-                 "--mem", "--mem-per-cpu", "--mem-per-gpu", "--nodes", "--ntasks",
-                 "--ntasks-per-node", "--partition", "--qos", "--reservation", "--time"}
-    overridden = {"-D", "-e", "-J", "-o", "--chdir", "--error", "--job-name", "--output"}
-    options = []
-    for line in script.splitlines()[1:]:
-        line = line.strip()
-        if re.match(r"#SBATCH\s", line):
-            directive = line[7:].strip()
-            try:
-                parts = shlex.split(directive, comments=True)
-            except ValueError:
-                return None
-            if not parts or len(parts) > 2 or (len(parts) == 2 and parts[1].startswith("-")):
-                return None
-            flag = parts[0].split("=", 1)[0]
-            if flag in overridden:
-                continue
-            if flag not in resources:
-                return None
-            options.append(directive)
-        elif line and not line.startswith("#"):
-            break
-    return tuple(options)
-
-
-def folder_job_groups(source, names, maximum, *, slurm, restart=False):
-    """Keep compatible inputs in order and balance the number of cases per job."""
-    buckets = {}
-    for name in names:
-        if slurm and maximum > 1:
-            options = slurm_group_options(read_slurm_script(source / relative_file(name)))
-            key = options if options is not None else name
-        else:
-            key = name if restart else None
-        buckets.setdefault(key, []).append(name)
-    for entries in buckets.values():
-        count = (len(entries) + maximum - 1) // maximum
-        size, remainder = divmod(len(entries), count)
-        pending = iter(entries)
-        for index in range(count):
-            yield tuple(islice(pending, size + (index < remainder)))
-
-
-def group_case_paths(entries):
-    for index, entry in enumerate(entries, 1):
-        yield f"case-{index:04d}", relative_file(entry)
-
-
-def group_body(entries, *, launch=None):
-    lines = ['batch_root="$PWD"', "failed=0"]
-    for case, path in group_case_paths(entries):
-        command = launch(path.name) if launch else f'"$batch_root/{case}.sh"'
-        work = shlex.quote((Path("work") / case / path.parent).as_posix())
-        step = shlex.quote(f"ESEN_STEP={case} · {path.as_posix()}")
-        lines.extend((
-            f"printf '%s\\n' {step}",
-            "(",
-            f'    cd "$batch_root"/{work} || exit',
-            '    export SLURM_SUBMIT_DIR="$PWD"',
-            f"    exec {command}",
-            ') || { code=$?; printf "Case failed (exit %s)\\n" "$code" >&2; failed=1; }',
-        ))
-    return "\n".join((*lines, 'exit "$failed"', ""))
-
-
-def grouped_slurm_script(source, entries):
-    options = [slurm_group_options(read_slurm_script(source / relative_file(name))) for name in entries]
-    if options[0] is None or any(option != options[0] for option in options):
-        raise ValueError("The Slurm scripts no longer share the same resource settings.")
-    directives = "".join(f"#SBATCH {option}\n" for option in options[0])
-    return ("#!/bin/bash\n" + directives + "#SBATCH --output=stdout.log\n#SBATCH --error=stderr.log\n"
-            + group_body(entries))
-
-
-def scan_folder_files(root, *, include_results=False, directories=None):
-    """List regular files as paths relative to the selected folder."""
-    def walk_error(error):
-        raise error
-
-    root = root.resolve(strict=True)
-    found = []
-    for folder, dirs, files in os.walk(root, onerror=walk_error):
-        folder = Path(folder)
-        dirs[:] = sorted((name for name in dirs if (include_results or name.casefold() != "results")
-                          and not is_link(folder / name)), key=str.casefold)
-        if directories is not None:
-            directories.extend((folder / name).relative_to(root).as_posix() for name in dirs)
-        for name in sorted(files, key=str.casefold):
-            path = folder / name
-            if path.is_file() and not is_link(path):
-                found.append(path.relative_to(root).as_posix())
-    return found
-
-
-def scan_folder_tree(root, *, include_results=False):
-    directories = []
-    files = scan_folder_files(root, include_results=include_results, directories=directories)
-    modified = {name: file_modified_time(root / name) for name in (*directories, *files)}
-    return directories, files, modified
-
-
-def file_modified_time(path):
-    with suppress(OSError):
-        return int(path.stat().st_mtime)
-    return None
 
 
 def save_job(directory, record, **changes):
@@ -258,38 +81,18 @@ def read_job(directory):
     return json.loads((directory / "job.json").read_text(encoding="utf-8"))
 
 
-def new_job(root, entry, target, ranks, *, parent, batch_folder=None, folder_upload=None, work_subdir=None,
-            truba_input_folder=None, group_entries=()):
+def new_job(root, entry, target, ranks, *, parent, batch_folder=None):
     directory = parent / uuid4().hex
     directory.mkdir(parents=True, exist_ok=False)
     record = dict(name=entry, target=target, ranks=ranks, state="Preparing",
-                  created=datetime.now().astimezone().isoformat(timespec="seconds"), source=str(root) if root else "")
-    if truba_input_folder is not None:
-        record["truba_input_folder"] = truba_input_folder
+                  created=datetime.now().astimezone().isoformat(timespec="seconds"), source=str(root))
     if batch_folder is not None:
         record["batch_folder"] = batch_folder
-    if group_entries:
-        record["group_entries"] = list(group_entries)
-    if folder_upload is not None:
-        upload = FolderUpload(*folder_upload)
-        subdir = relative_file(entry).parent
-        if work_subdir is None:
-            work_subdir = subdir.as_posix() if subdir.parts else ""
-        record.update(folder_upload=upload.upload_id, username=upload.username, work_subdir=work_subdir)
-        if upload.directory:
-            record["upload_directory"] = upload.directory
-        if upload.direct:
-            record["direct_upload"] = True
-    if root and root.name == "inputs" and root.parent.parent == parent:
-        # Reused inputs are stored in job history, while their results belong in the original job folder.
-        with suppress(OSError, ValueError):
-            previous = read_job(root.parent)
-            record["results_source"] = previous.get("results_source") or previous.get("source")
     save_job(directory, record)
     return directory, record
 
 
-def snapshot_inputs(directory, root, entry, extra, whole_folder, stop=None, *, include_results=False):
+def snapshot_inputs(directory, root, entry, extra, whole_folder):
     root = root.resolve(strict=True)
     if whole_folder and directory.resolve().is_relative_to(root):
         raise ValueError("Choose a job folder outside the ESEN history directory.")
@@ -297,8 +100,6 @@ def snapshot_inputs(directory, root, entry, extra, whole_folder, stop=None, *, i
     snapshot.mkdir()
 
     def copy(name):
-        if stop is not None and stop.is_set():
-            raise InterruptedError("Input preparation cancelled.")
         relative = relative_file(name)
         source = root / relative
         if not source.is_file() or not source.resolve().is_relative_to(root) or is_link(source):
@@ -315,7 +116,7 @@ def snapshot_inputs(directory, root, entry, extra, whole_folder, stop=None, *, i
             folder = Path(folder)
             for name in dirs[:]:
                 source = folder / name
-                if is_link(source) or (not include_results and folder.name.casefold() == "results"
+                if is_link(source) or (folder.name.casefold() == "results"
                                        and RESULT_DIRECTORY.fullmatch(name)):
                     dirs.remove(name)
                 else:
@@ -346,139 +147,7 @@ def upload_location(upload_id, username, directory=""):
     relative = PurePosixPath(directory)
     if relative.is_absolute() or ".." in relative.parts or "\0" in directory:
         raise ValueError("This folder is outside the RustMech project.")
-    return str(project_root(username) / relative / "esen-folders" / upload_id)
-
-
-def _check_upload_directory(transport, username, directory, remote):
-    if not directory:
-        return
-    root = project_root(username)
-    target = shlex.quote(str(root / directory))
-    suffix = shlex.quote("/" + PurePosixPath(directory).as_posix())
-    store = shlex.quote(str(PurePosixPath(remote).parent))
-    snapshot = shlex.quote(remote)
-    transport.command(f"""set -e
-root=$(realpath -e -- {shlex.quote(str(root))})
-cd -P -- {target}
-test "$PWD" = "$root"{suffix}
-test ! -L {store}
-test ! -L {snapshot}
-test ! -L {snapshot}/inputs
-""")
-
-
-def upload_folder(history, root, auth, *, files=None, directory="", include_results=True, progress=None):
-    """Copy inputs to the open TRUBA folder and retain a local submission snapshot."""
-    if files is None and history.resolve().is_relative_to(root.resolve()):
-        raise ValueError("Choose a job folder outside the ESEN history directory.")
-    upload_id = uuid4().hex
-    destination = upload_snapshot(history, upload_id).parent
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    with TemporaryDirectory(dir=destination.parent) as temporary:
-        staging = Path(temporary)
-        snapshot = snapshot_inputs(staging, root, None, files or (), files is None, include_results=include_results)
-        if progress is None:
-            upload_tree(auth, PurePosixPath(directory), snapshot)
-        else:
-            upload_tree(auth, PurePosixPath(directory), snapshot, progress=progress)
-        staging.rename(destination)
-    return upload_id
-
-
-def sync_slurm_folder(history, root, auth, selected, *, files=None, directory="", progress=None):
-    """Publish one content-identified snapshot for the selected Slurm jobs."""
-    if files is None and history.resolve().is_relative_to(root.resolve()):
-        raise ValueError("Choose a job folder outside the ESEN history directory.")
-    uploads = history / ".uploads"
-    uploads.mkdir(parents=True, exist_ok=True)
-    project = f"{auth.username}\0{os.path.normcase(str(root.resolve()))}"
-    if directory:
-        project += f"\0{directory}"
-    project_key = hashlib.sha256(project.encode()).hexdigest()
-    latest = uploads / f"slurm-{project_key}.json"
-    previous_id = None
-    with suppress(OSError, ValueError, KeyError):
-        previous_id = json.loads(latest.read_text("utf-8"))["upload_id"]
-    with TemporaryDirectory(dir=uploads) as temporary:
-        staging = Path(temporary)
-        snapshot = snapshot_inputs(staging, root, None, files or (), files is None)
-        for name in selected:
-            path = snapshot / relative_file(name)
-            if is_slurm_script(name):
-                read_slurm_script(path)
-            elif not path.is_file():
-                raise ValueError(f"The selected input script is missing: {name}")
-
-        manifest = {}
-        for path in sorted(snapshot.rglob("*")):
-            digest = None
-            if path.is_file():
-                with path.open("rb") as stream:
-                    digest = hashlib.file_digest(stream, "sha256").hexdigest()
-            manifest[path.relative_to(snapshot).as_posix()] = digest
-        upload_id = hashlib.sha256(json.dumps(manifest, sort_keys=True).encode()).hexdigest()[:32]
-        destination = upload_snapshot(history, upload_id)
-        remote = upload_location(upload_id, auth.username, directory)
-        published = shlex.quote(remote + "/inputs")
-        transport = RemoteTransport(RemoteContext(transport="ssh"), auth)
-        _check_upload_directory(transport, auth.username, directory, remote)
-        if transport.command(f"if test -d {published}; then printf 'READY=1\\n'; fi").strip() != "READY=1":
-            previous = {}
-            previous_root = ""
-            if previous_id and previous_id != upload_id:
-                previous_snapshot = upload_snapshot(history, previous_id)
-                with suppress(OSError, ValueError):
-                    previous = json.loads((previous_snapshot.parent / "manifest.json").read_text("utf-8"))
-                previous_root = shlex.quote(upload_location(previous_id, auth.username, directory) + "/inputs")
-                if previous and transport.command(
-                    f"if test -d {previous_root}; then printf 'READY=1\\n'; fi"
-                ).strip() != "READY=1":
-                    previous = {}
-
-            unchanged = [name for name, digest in manifest.items()
-                         if digest is not None and previous.get(name) == digest]
-            reused = set(unchanged)
-            incoming = remote + "/.incoming-" + uuid4().hex
-            quoted = shlex.quote(incoming)
-            archive = staging / "inputs.tar.gz"
-            copy_list = staging / "copy.list"
-            copy_list.write_bytes(b"".join(name.encode("utf-8") + b"\0" for name in unchanged))
-            with tarfile.open(archive, "w:gz", compresslevel=INPUT_ARCHIVE_COMPRESSION) as bundle:
-                bundle.add(copy_list, arcname="copy.list")
-                for name in manifest:
-                    if name not in reused:
-                        bundle.add(snapshot / relative_file(name), arcname="inputs/" + name, recursive=False)
-            transport.command(f"umask 077; mkdir -p -- {quoted}/inputs")
-            try:
-                if progress is None:
-                    transport.put(archive, incoming + "/inputs.tar.gz")
-                else:
-                    progress(0, archive.stat().st_size)
-                    transport.put(archive, incoming + "/inputs.tar.gz", callback=progress)
-                copy = ""
-                if unchanged:
-                    copy = f"""cd {previous_root}
-while IFS= read -r -d '' name; do
-    cp --reflink=auto --parents -- "$name" {quoted}/inputs
-done < {quoted}/copy.list
-"""
-                transport.command(f"""set -e
-tar -xzf {quoted}/inputs.tar.gz -C {quoted}
-{copy}mv -T -- {quoted}/inputs {published} || test -d {published}
-""", timeout=1800)
-            finally:
-                with suppress(Exception):
-                    transport.command(f"rm -rf -- {quoted}")
-        destination.parent.mkdir(exist_ok=True)
-        if not destination.is_dir():
-            try:
-                snapshot.rename(destination)
-            except OSError:
-                if not destination.is_dir():
-                    raise
-        write_record(destination.parent / "manifest.json", manifest)
-        write_record(latest, {"upload_id": upload_id})
-    return upload_id
+    return str(PurePosixPath("/arf/scratch", username, "RustMech") / relative / "esen-folders" / upload_id)
 
 
 def job_inputs(directory, record):
@@ -487,88 +156,8 @@ def job_inputs(directory, record):
     return directory / "inputs"
 
 
-def local_command(entry, ranks, executable="lmp", mpi=""):
-    lammps = shutil.which(executable)
-    if not lammps:
-        raise ValueError(f"LAMMPS executable not found: {executable}")
-    arguments = [lammps, "-nonbuf", "-in", relative_file(entry).as_posix()]
-    if ranks > 1:
-        if not mpi and os.name == "nt":
-            ms_mpi = Path(os.environ.get("ProgramFiles", "C:/Program Files")) / "Microsoft MPI/Bin/mpiexec.exe"
-            if ms_mpi.is_file():
-                mpi = str(ms_mpi)
-        launcher = shutil.which(mpi or "mpiexec")
-        if not launcher:
-            raise ValueError("MPI launcher not found. Select mpiexec for this LAMMPS build.")
-        arguments = [launcher, "-n", str(ranks), *arguments]
-    return arguments
-
-
-def stop_process(process):
-    if os.name == "nt":
-        try:
-            completed = subprocess.run(
-                ["taskkill.exe", "/PID", str(process.pid), "/T", "/F"],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                creationflags=subprocess.CREATE_NO_WINDOW, timeout=5, check=False,
-            )
-            if completed.returncode == 0 or process.poll() is not None:
-                return
-        except (OSError, subprocess.TimeoutExpired):
-            pass
-        process.kill()
-    else:
-        try:
-            os.killpg(process.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-
-
-def run_local(directory, record, files, command, stop, *, memory_mib=0):
-    started = None
-    try:
-        snapshot = snapshot_inputs(directory, *files, stop=stop)
-        work = directory / "work"
-        shutil.copytree(snapshot, work)
-        if stop.is_set():
-            raise InterruptedError("Input preparation cancelled.")
-        options = {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {"start_new_session": True}
-        env = {**os.environ, "OMP_NUM_THREADS": "1"}
-        with (directory / LOGS[0]).open("wb") as stdout, (directory / LOGS[1]).open("wb") as stderr:
-            if memory_mib:
-                launch = limited_process(command, cwd=work, env=env, stdout=stdout, stderr=stderr,
-                                         memory_mib=memory_mib)
-            else:
-                launch = subprocess.Popen(command, cwd=work, stdin=subprocess.DEVNULL, stdout=stdout,
-                                          stderr=stderr, env=env, **options)
-            with launch as process:
-                started = monotonic()
-                cancel = process.kill if memory_mib else partial(stop_process, process)
-                try:
-                    save_job(directory, record, state="Running", command=command, memory_mib=memory_mib,
-                             started_at=time())
-                    while process.poll() is None:
-                        if stop.wait(0.25):
-                            cancel()
-                            process.wait()
-                            save_job(directory, record, state="Cancelled",
-                                     elapsed_seconds=int(monotonic() - started))
-                            return
-                finally:
-                    if process.poll() is None:
-                        cancel()
-                        process.wait()
-        save_job(directory, record, state="Completed" if process.returncode == 0 else "Failed",
-                 detail=f"Exit code: {process.returncode}", elapsed_seconds=int(monotonic() - started))
-    except InterruptedError:
-        save_job(directory, record, state="Cancelled")
-    except Exception as error:
-        timing = {} if started is None else {"elapsed_seconds": int(monotonic() - started)}
-        save_job(directory, record, state="Failed", detail=str(error), **timing)
-
-
 def remote_script(entry, ranks, partition, account, memory, walltime, module, executable, launcher,
-                  *, resume_input="", work_subdir="", group_entries=()):
+                  *, resume_input=""):
     if partition not in CPU_QUEUES or not SAFE_NAME.fullmatch(account) or account in (".", ".."):
         raise ValueError("Select a CPU queue and enter a valid TRUBA account.")
     RemoteContext(partition=partition, account=account, walltime=walltime).validate()
@@ -582,14 +171,12 @@ def remote_script(entry, ranks, partition, account, memory, walltime, module, ex
     if launcher not in ("mpirun", "srun"):
         raise ValueError("Select mpirun or srun.")
     entry = relative_file(entry).as_posix()
-    subdir = relative_file(work_subdir) if work_subdir else Path()
-    work = (Path("work") / subdir).as_posix()
-    def launch(name):
-        return f"{launcher} -n {ranks} {target} -nonbuf -in {shlex.quote(name)}"
+    work = "work"
+    invocation = f"{launcher} -n {ranks} {target} -nonbuf -in {shlex.quote(entry)}"
 
     modules = f"module purge\nmodule load {shlex.quote(module)}\n" if module else ""
     directives = ""
-    body = group_body(group_entries, launch=launch) if group_entries else f"cd {shlex.quote(work)}\nexec {launch(entry)}\n"
+    body = f"cd {work}\nexec {invocation}\n"
     if resume_input:
         continuation = relative_file(resume_input).as_posix()
         hours, minutes, seconds = map(int, walltime.split(":"))
@@ -628,20 +215,9 @@ def full_node_resources(partition, catalog):
 
 def submit_full_node(directory, record, files, settings, auth):
     try:
-        if record.get("folder_upload") and is_slurm_script(record["name"]):
-            source = job_inputs(directory, record)
-            entries = record.get("group_entries")
-            script = (grouped_slurm_script(source, entries) if entries else
-                      read_slurm_script(source / relative_file(record["name"])))
-            submit_remote(directory, record, files, script, auth)
-            return
-        if "truba_input_folder" in record and is_slurm_script(record["name"]):
-            submit_remote(directory, record, files, None, auth)
-            return
         catalog = fetch_catalog(RemoteContext(transport="ssh"), auth, live_node_capacity=True)
         ranks, memory, walltime = full_node_resources(settings["partition"], catalog)
-        script = remote_script(files[1], ranks, memory=memory, walltime=walltime, **settings,
-                               work_subdir=record.get("work_subdir", ""), group_entries=record.get("group_entries", ()))
+        script = remote_script(files[1], ranks, memory=memory, walltime=walltime, **settings)
         changes = dict(ranks=ranks, memory_mib=memory, partition=settings["partition"])
         if settings.get("resume_input"):
             changes["resume_input"] = settings["resume_input"]
@@ -652,45 +228,12 @@ def submit_full_node(directory, record, files, settings, auth):
     submit_remote(directory, record, files, script, auth)
 
 
-def remote_run_directory(parent, path, auth):
-    path = path.strip().rstrip("/")
-    scratch = f"/arf/scratch/{auth.username}"
-    if (not SAFE_NAME.fullmatch(auth.username) or auth.username in (".", "..")
-            or not path.startswith(scratch + "/")):
-        raise ValueError("Choose a TRUBA run folder under your scratch directory.")
-    relative_file(path[len(scratch) + 1:])
-    return parent / uuid5(NAMESPACE_URL, f"truba:{path}").hex, path
-
-
-def attach_remote_run(directory, path, auth):
-    name = " · ".join(path.split("/")[-3:])
-    record = dict(name=name, target="remote", ranks=None, state="Waiting for results",
-                  created=datetime.now().astimezone().isoformat(timespec="seconds"),
-                  username=auth.username, remote_run=path)
-    remote_files(directory, record, auth)
-
-
-def attached_folder_check(remote, username):
-    scratch = shlex.quote(f"/arf/scratch/{username}")
-    return f"""scratch=$(realpath -- {scratch}) || exit
-base=$(realpath -- {shlex.quote(remote)}) || exit
-case "$base" in "$scratch"/*) ;; *) exit 1 ;; esac
-test -d "$base" || exit
-cd -- "$base" || exit
-"""
-
-
 def remote_location(directory, record, auth):
     if not auth or not SAFE_NAME.fullmatch(auth.username) or auth.username in (".", ".."):
         raise ValueError("Connect through RustMech's TRUBA button first.")
     if record.get("username", auth.username) != auth.username:
         raise ValueError("Connect using the TRUBA account that submitted this job.")
     transport = RemoteTransport(RemoteContext(transport="ssh"), auth)
-    if record.get("remote_run"):
-        expected, path = remote_run_directory(directory.parent, record["remote_run"], auth)
-        if expected != directory:
-            raise ValueError("Invalid attached TRUBA run record.")
-        return transport, path
     path = f"/arf/scratch/{auth.username}/RustMech/{directory.name}"
     return transport, validated_remote_path(path, auth.username)
 
@@ -702,109 +245,29 @@ def tagged(reply, key):
     return match[1].strip()
 
 
-def stage_truba_inputs(transport, remote, username, relative, entry, resume_input):
-    """Copy the selected TRUBA folder into this job's isolated work directory."""
-    folder = PurePosixPath(relative)
-    if folder.is_absolute() or ".." in folder.parts:
-        raise ValueError("This folder is outside the RustMech project.")
-    if folder.parts:
-        relative_file(folder.as_posix())
-    root = shlex.quote(str(project_root(username)))
-    suffix = shlex.quote("/" + folder.as_posix()) if folder.parts else "''"
-    target = shlex.quote(remote + "/work")
-    checks = []
-    for name in filter(None, (entry, resume_input)):
-        path = shlex.quote(relative_file(name).as_posix())
-        checks.extend((f"test -f {path}", f"test ! -L {path}"))
-    file_checks = "\n".join(checks)
-    job_dirs = "" if folder.parts else " -o -regex '\\./[a-f0-9]{32}'"
-    transport.command(f"""set -eo pipefail
-umask 077
-root=$(realpath -e -- {root})
-cd -P -- "$root"{suffix}
-test "$PWD" = "$root"{suffix}
-{file_checks}
-mkdir -p -- {target}
-find -P . -regextype posix-extended -mindepth 1 \\
-    \\( -type d \\( -name esen-folders{job_dirs} \\) -prune \\) -o \\
-    \\( -type f ! -name '.rustmech-*.part' -o -type d \\) -print0 |
-    tar --null --no-recursion -T - -cf - | tar -xf - -C {target}
-cd -- {target}
-{file_checks}
-""", timeout=1800)
-
-
 def submit_remote(directory, record, files, script, auth):
     try:
         transport, remote = remote_location(directory, record, auth)
-        upload_id = record.get("folder_upload")
-        truba_input = record.get("truba_input_folder")
         batch = directory / "run.slurm"
         work = shlex.quote(remote + "/work")
-        work_subdir = record.get("work_subdir", "")
-        group_entries = record.get("group_entries")
-        if truba_input is not None:
-            stage_truba_inputs(transport, remote, auth.username, truba_input, files[1], record.get("resume_input"))
-            if script is None:
-                transport.get(remote + "/work/" + relative_file(files[1]).as_posix(), batch)
-                script = read_slurm_script(batch)
-        elif not group_entries:
-            snapshot = job_inputs(directory, record) if upload_id else snapshot_inputs(directory, *files)
-            input_dir = snapshot / relative_file(work_subdir) if work_subdir else snapshot
-            if not (input_dir / relative_file(files[1])).is_file():
-                raise ValueError("The selected input script is missing.")
-            if record.get("resume_input") and not (input_dir / relative_file(record["resume_input"])).is_file():
-                raise ValueError("Include the LAMMPS restart input in the job files.")
+        snapshot = snapshot_inputs(directory, *files)
+        if record.get("resume_input") and not (snapshot / relative_file(record["resume_input"])).is_file():
+            raise ValueError("Include the LAMMPS restart input in the job files.")
         batch.write_text(script, encoding="utf-8", newline="\n")
-        if truba_input is not None:
-            transport.put(batch, remote + "/run.slurm")
-        elif group_entries:
-            source = _quoted_upload_inputs(record)
-            staging = ["set -e", "umask 077", f"mkdir -p -- {work}", f"cd -- {shlex.quote(remote)}"]
-            for case, path in group_case_paths(group_entries):
-                staging.append(f"cp -a --reflink=auto -- {source} work/{case}")
-                entry = shlex.quote((Path("work") / case / path).as_posix())
-                staging.append(f"test -f {entry}")
-                if is_slurm_script(record["name"]):
-                    staging.extend((
-                        f"sed '1s/^\\xEF\\xBB\\xBF//;s/\\r$//' {entry} > {case}.sh",
-                        f"chmod u+x -- {case}.sh",
-                    ))
-            transport.command("\n".join(staging), timeout=1800)
-            transport.put(batch, remote + "/run.slurm")
-        elif upload_id and not record.get("direct_upload"):
-            source = _quoted_upload_inputs(record)
-            transport.command(f"umask 077; mkdir -p -- {shlex.quote(remote)} && "
-                              f"cp -a --reflink=auto -- {source} {work}", timeout=1800)
-            transport.put(batch, remote + "/run.slurm")
-        else:
-            archive = directory / "inputs.tar.gz"
-            with tarfile.open(archive, "w:gz", compresslevel=INPUT_ARCHIVE_COMPRESSION) as bundle:
-                bundle.add(snapshot, arcname=".")
-            transport.command(f"umask 077; mkdir -p -- {work}")
-            transport.put(archive, remote + "/inputs.tar.gz")
-            transport.put(batch, remote + "/run.slurm")
-            transport.command(f"cd {shlex.quote(remote)} && tar -xzf inputs.tar.gz -C work && rm -- inputs.tar.gz")
-            archive.unlink()
+        archive = directory / "inputs.tar.gz"
+        with tarfile.open(archive, "w:gz", compresslevel=INPUT_ARCHIVE_COMPRESSION) as bundle:
+            bundle.add(snapshot, arcname=".")
+        transport.command(f"umask 077; mkdir -p -- {work}")
+        transport.put(archive, remote + "/inputs.tar.gz")
+        transport.put(batch, remote + "/run.slurm")
+        transport.command(f"cd {shlex.quote(remote)} && tar -xzf inputs.tar.gz -C work && rm -- inputs.tar.gz")
+        archive.unlink()
         # After this checkpoint a lost SSH reply is ambiguous. Reattach using
         # the durable job ID or unique Slurm name, without replaying sbatch.
         save_job(directory, record, state="Submitting", username=auth.username)
         name = "ESEN-" + directory.name
-        options = ""
-        if not group_entries and (upload_id or truba_input is not None) and is_slurm_script(record["name"]):
-            working = (remote + "/work/" + record.get("work_subdir", "")).rstrip("/")
-            options = (f"--chdir={shlex.quote(working)} "
-                       f"--output={shlex.quote(remote + '/stdout.log')} "
-                       f"--error={shlex.quote(remote + '/stderr.log')} ")
-            # sbatch sets SLURM_SUBMIT_DIR from the caller's cwd.
-            batch_path = shlex.quote(remote + "/run.slurm")
-            submit_from = f"cd {shlex.quote(working)} && "
-        else:
-            batch_path = "run.slurm"
-            submit_from = ""
-        rejection = shlex.quote(remote + "/submit.err") if submit_from else "submit.err"
         reply = transport.command(f"""cd {shlex.quote(remote)} && {{
-if job=$({submit_from}sbatch --parsable --job-name={name} {options}{batch_path} 2>{rejection}); then
+if job=$(sbatch --parsable --job-name={name} run.slurm 2>submit.err); then
     job=${{job%%;*}}
     [[ "$job" =~ ^[0-9]+$ ]] || exit 2
     printf '%s\\n' "$job" > job.id.tmp && mv -- job.id.tmp job.id || exit 3
@@ -849,14 +312,10 @@ fi
     return job_id
 
 
-def refresh_remote(directory, record, auth, *, cancel=False):
-    if record.get("remote_run"):
-        if cancel:
-            raise ValueError("Cancel externally submitted jobs in Slurm.")
-        return remote_files(directory, record, auth)
+def refresh_remote(directory, record, auth):
     transport, remote = remote_location(directory, record, auth)
     if record.get("resume_input"):
-        return refresh_restartable(directory, record, transport, remote, cancel=cancel)
+        return refresh_restartable(directory, record, transport, remote)
     job_id = record.get("job_id") or recover_id(transport, remote, directory)
     if not job_id:
         save_job(directory, record, detail="Slurm has not confirmed this submission. Refresh to check again.")
@@ -864,16 +323,11 @@ def refresh_remote(directory, record, auth, *, cancel=False):
     if not re.fullmatch(r"[0-9]+", job_id):
         raise ValueError("Invalid Slurm job ID.")
     save_job(directory, record, job_id=job_id)
-    if cancel:
-        transport.command(f"scancel {job_id}")
-        save_job(directory, record, cancel_requested=True)
     refresh_status(directory, record, transport, f"cd {shlex.quote(remote)} || exit\njob={job_id}\n")
 
 
-def refresh_restartable(directory, record, transport, remote, *, cancel):
+def refresh_restartable(directory, record, transport, remote):
     name = "ESEN-" + directory.name
-    if cancel:
-        transport.command(esen_restart.control_script(remote, name, esen_restart.CANCEL))
     setup = esen_restart.control_script(remote, name, r'''
 job=$(cat job.id 2>/dev/null || true)
 ids=$(active_jobs)
@@ -888,18 +342,6 @@ checkpoints=$(find checkpoints -type f -name 'step.*' -size +0c -print -quit 2>/
 printf 'HAS_CHECKPOINT=%s\n' "${checkpoints:+1}"
 ''')
     refresh_status(directory, record, transport, setup, managed=True)
-
-
-def resume_remote(directory, record, auth):
-    if not record.get("resume_input") or record.get("remote_run"):
-        raise ValueError("This job has no configured LAMMPS restart input.")
-    transport, remote = remote_location(directory, record, auth)
-    reply = transport.command(esen_restart.control_script(remote, "ESEN-" + directory.name, esen_restart.RESUME))
-    job_id = tagged(reply, "JOB_ID")
-    if not re.fullmatch(r"[0-9]+", job_id):
-        raise RuntimeError("Invalid Slurm job ID. Refresh to recover the submission.")
-    save_job(directory, record, state="Submitted", job_id=job_id, detail="", cancel_requested=False,
-             elapsed_seconds=None, script_step="", slurm={})
 
 
 def slurm_queue_seconds(value):
@@ -1002,19 +444,6 @@ done
 
 def remote_files(directory, record, auth):
     transport, remote = remote_location(directory, record, auth)
-    if record.get("remote_run"):
-        reply = transport.command(attached_folder_check(remote, auth.username) + f"""
-set -eo pipefail
-printf 'FILES='
-if [ -d results ] && [ ! -L results ]; then
-    find -P results -type f -print0 | sort -z | sed -z -n '1,{FILE_LIMIT + 1}p' | base64 -w0
-fi
-printf '\n'
-""")
-        names = decode(tagged(reply, "FILES")).split("\0")[:-1]
-        save_file_list(directory, record, names[:FILE_LIMIT], len(names) > FILE_LIMIT,
-                       state="Results available" if names else "Waiting for results")
-        return
     outputs = remote_output_scan(record)
     reply = transport.command(f"""cd {shlex.quote(remote)} || exit
 set -eo pipefail
@@ -1139,36 +568,3 @@ umask 077
             if not any(folder.iterdir()):
                 folder.rmdir()
         output.rename(destination)
-
-
-def download_file(directory, record, name, auth):
-    if name not in record.get("files", []):
-        raise ValueError("Refresh the result list before downloading this file.")
-    relative = relative_file(name)
-    transport, remote = remote_location(directory, record, auth)
-    source = remote + "/" + name
-    if record.get("remote_run") and relative.parts[0] != "results":
-        raise ValueError("Choose a published result.")
-    check = (attached_folder_check(remote, auth.username) if record.get("remote_run")
-             else f"base=$(realpath -- {shlex.quote(remote)}) || exit\n")
-    transport.command(check + f'''file="$base"/{shlex.quote(name)}
-test -f "$file" && test "$(realpath -- "$file")" = "$file"''')
-    destination = directory / "downloads" / relative
-    if not destination.resolve().is_relative_to(directory.resolve()):
-        raise ValueError("Invalid local result path.")
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    temporary = destination.with_name(f".{uuid4().hex}.part")
-    try:
-        transport.get(source, temporary)
-        temporary.replace(destination)
-    finally:
-        temporary.unlink(missing_ok=True)
-
-
-def log_tail(path):
-    try:
-        with path.open("rb") as stream:
-            stream.seek(max(0, path.stat().st_size - LOG_BYTES))
-            return stream.read(LOG_BYTES).decode("utf-8", errors="replace")
-    except FileNotFoundError:
-        return ""

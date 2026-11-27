@@ -121,217 +121,48 @@ The nearest nearly cubic BCC supercell is shown.|Hedefe en yakın, kenar tekrarl
 Atomsk → Minimization → Equilibration → Tension and CNA|Atomsk → Minimizasyon → Dengeleme → Çekme ve CNA
 Choose the MEAM library and parameter files.|MEAM kütüphanesini ve parametre dosyasını seçin.
 Generating the structure with Atomsk…|Atomsk ile yapı üretiliyor…
-Model prepared. Waiting for ESEN to finish its current transfer…|Model hazır. ESEN’in mevcut aktarımının tamamlanması bekleniyor…
+Model prepared. Waiting for the current TRUBA operation…|Model hazır. TRUBA’daki mevcut işlemin tamamlanması bekleniyor…
 TRUBA connection changed. Press Prepare and run on TRUBA to submit the prepared model.|TRUBA bağlantısı değişti. Hazır modeli göndermek için Hazırla ve TRUBA’da çalıştır düğmesine basın.
-ESEN is busy. Press Prepare and run on TRUBA again when it is ready.|ESEN meşgul. Hazır olduğunda Hazırla ve TRUBA’da çalıştır düğmesine tekrar basın.
-Follow submission, progress and results in ESEN job history.|Gönderimi, ilerlemeyi ve sonuçları ESEN iş geçmişinden izleyin.
-Open the LAMMPS workspace|LAMMPS çalışma alanını aç
+TRUBA is busy. Press Prepare and run on TRUBA again when it is ready.|TRUBA meşgul. Hazır olduğunda Hazırla ve TRUBA’da çalıştır düğmesine tekrar basın.
+Submitting the MD job to TRUBA…|MD işi TRUBA’ya gönderiliyor…
+Follow the job in TRUBA and open downloaded results from Results.|İşi TRUBA’da izleyin, indirilen çıktıları Sonuçlar penceresinden açın.
+Open MD Preparation|MD Hazırlama sekmesini aç
 Job settings|İş ayarları
 Date modified|Değiştirilme tarihi
-Job folder path|İş klasörü yolu
-Previous folder|Önceki klasör
-Next folder|Sonraki klasör
-Copy ESEN file preparation instructions for AI|ESEN dosya hazırlama yönergesini yapay zekâ için kopyala
-ESEN instructions copied to the clipboard.|ESEN yönergesi panoya kopyalandı.
-Advanced TRUBA settings|Gelişmiş TRUBA ayarları
-This computer|Bu bilgisayar
 Run on|Çalıştırma hedefi
 MPI processes|MPI süreçleri
-Local CPU cores|Yerel CPU çekirdeği
-Local RAM limit (MiB)|Yerel RAM sınırı (MiB)
-No limit|Sınırsız
-Total memory limit across local MPI processes.|Yerel MPI süreçlerinin toplam bellek sınırı.
-Preview values are estimates. Slurm limits apply at submission.|Önizleme tahminidir. Gönderimde Slurm sınırları geçerlidir.
 The selected TRUBA queue is unavailable.|Seçilen TRUBA kuyruğu kullanılamıyor.
 Local memory limits are available on Windows.|Yerel bellek sınırı Windows’ta kullanılabilir.
 LAMMPS executable|LAMMPS programı
-MPI launcher|MPI başlatıcısı
 Memory (MiB)|Bellek (MiB)
 Wall time (HH:MM:SS)|Süre (SS:DD:SS)
 LAMMPS module|LAMMPS modülü
-Linux executable|Linux programı
 Input script…|Girdi betiği…
 Job folder…|İş klasörü…
 Add Folder|Klasör Ekle
-Select Folder|Klasör Seç
-Scan folder for jobs|Klasördeki işleri tara
-Set job folder for selected files|Seçili dosyalar için iş klasörünü ayarla
 Upload to TRUBA|TRUBA’ya Aktar
-Upload inputs to the open TRUBA folder|Girdileri açık TRUBA klasörüne doğrudan aktar
 Sync|Eşitle
-Sync the local folder with the open TRUBA subfolder|Yerel klasörü açık TRUBA alt klasörüyle eşitle
-Syncing with {path}…|{path} ile eşitleniyor…
-Folders synced. Uploaded: {sent} · Downloaded: {received}|Klasörler eşitlendi. Gönderilen: {sent} · İndirilen: {received}
-Folder sync conflict: {path}|Klasör eşitleme çakışması: {path}
-Folder sync failed: {error}|Klasör eşitleme başarısız: {error}
-A file or folder with different contents already exists: {path}|Aynı konumda farklı içerikli bir dosya veya klasör var: {path}
-Upload the folder to TRUBA before running selected scripts.|Seçtiğiniz betikleri çalıştırmadan önce klasörü TRUBA’ya aktarın.
-Use ↑ and ↓ in Job order. Run syncs the inputs and sends each checked Slurm script as a separate job.|İş sırası görünümünde ↑ ve ↓ ile sırayı ayarlayın. Çalıştır, girdileri eşitler ve işaretli her Slurm betiğini ayrı iş olarak gönderir.
-Run submits the checked jobs that have not been sent to Slurm yet.|Çalıştır, henüz Slurm'a gönderilmemiş işaretli işleri gönderir.
-Uploading files to TRUBA…|Dosyalar TRUBA’ya aktarılıyor…
-TRUBA file transfer progress|TRUBA dosya aktarımı ilerlemesi
-Preparing files for TRUBA…|Dosyalar TRUBA için hazırlanıyor…
-Uploading to TRUBA · %p%|TRUBA’ya aktarılıyor · %p%
-Finalizing TRUBA transfer…|TRUBA aktarımı tamamlanıyor…
-TRUBA transfer complete · %p%|TRUBA aktarımı tamamlandı · %p%
-TRUBA transfer failed|TRUBA aktarımı başarısız
-Stage: {stage}|Aşama: {stage}
-Runtime: {time}|Çalışma süresi: {time}
-Slurm allocation runtime: {time}|Slurm tahsisinin çalışma süresi: {time}
-Last reported step: {step}|Son bildirilen adım: {step}
-Collecting results|Sonuçlar alınıyor
-Uploaded to TRUBA: {path}|TRUBA’ya aktarıldı: {path}
-File upload failed: {error}|Dosyalar aktarılamadı: {error}
 Files|Dosyalar
 Root|Kök Klasör
 Remove|Çıkar
 Reuse|Girdiyi Al
 Resume|Sürdür
-Attach|Bağla
 Download|İndir
-Choose an existing folder.|Mevcut bir klasör seçin.
-Select files or a single folder.|Dosya veya tek bir klasör seçin.
-Select a script to run.|Çalıştırmak için bir betik seçin.
-Select a script in the TRUBA file browser.|TRUBA dosya tarayıcısında bir betik seçin.
-Select a Slurm or LAMMPS input script on TRUBA.|TRUBA’da bir Slurm veya LAMMPS girdi betiği seçin.
-Submit the selected TRUBA Slurm script.|Seçilen TRUBA betiğini Slurm’a gönder.
-Submit every Slurm script listed in Run.esen.|Run.esen dosyasındaki tüm Slurm betiklerini gönder.
-Reading Run.esen from TRUBA…|Run.esen dosyası TRUBA’dan okunuyor…
-TRUBA connection changed. Run the list again.|TRUBA bağlantısı değişti. Listeyi yeniden çalıştırın.
-{count} scripts prepared from {folder}.|{folder} klasöründe {count} betik gönderim için hazırlandı.
-The TRUBA run list is too large.|TRUBA iş listesi çok büyük.
-The ESEN run list is empty.|ESEN iş listesi boş.
-Run uploads the selected local inputs to TRUBA.|Çalıştır, seçili yerel girdileri TRUBA’ya aktarır.
-Add a folder or drop inputs here.|Klasör ekleyin veya girdileri buraya bırakın.
-{files} files · {scripts} scripts selected|{files} dosya · {scripts} betik seçili
-Jobs per script|Betik başına iş
 Manual|Elle
-Automatically include all runnable scripts in the folder.|Klasördeki çalıştırılabilir betikleri otomatik olarak dahil eder.
-No runnable scripts found.|Çalıştırılabilir betik bulunamadı.
-{count} jobs found · up to {maximum} per Slurm script|{count} iş bulundu · Slurm betiği başına en fazla {maximum} iş
-Grouped jobs run in sequence and share one Slurm time limit.|Bir gruptaki işler sırayla çalışır ve aynı Slurm süre sınırını paylaşır.
-Slurm scripts with different resource settings run in separate groups.|Farklı kaynak ayarları olan Slurm betikleri ayrı gruplarda çalışır.
-The Slurm scripts no longer share the same resource settings.|Slurm betiklerinin kaynak ayarları artık aynı değil.
-Jobs with a restart input run separately.|Devam girdisi olan işler ayrı çalışır.
-Group of {count} jobs|{count} işlik grup
-Scanning folder…|Klasör taranıyor…
-No LAMMPS input scripts named in.* or *.in were found.|in.* veya *.in adında LAMMPS girdi betiği bulunamadı.
-Waiting to run|Çalıştırma sırasını bekliyor
 Choose a job folder outside the ESEN history directory.|ESEN iş geçmişini içermeyen bir iş klasörü seçin.
 Load files…|Dosya yükle…
-LAMMPS input files|LAMMPS girdi dosyaları
-Include entire job folder|İş klasörünün tamamını ekle
 Filter|Filtre
-Filter by name or extension|Ada veya uzantıya göre filtrele
-Filter input files|Girdi dosyalarını filtrele
-Checked files stay checked when hidden by the filter.|Filtreyle gizlenen dosyaların işareti korunur.
-Sort input files|Girdi dosyalarını sırala
-For manual Slurm ordering, select Job order and clear the filter.|Slurm betiklerini elle sıralamak için İş sırası'nı seçip filtreyi temizleyin.
-Job order|İş sırası
-Name (A–Z)|Ada göre (A–Z)
-Format (A–Z)|Biçime göre (A–Z)
 Remove file|Dosyayı çıkar
-Remove selected files|Seçili dosyaları çıkar
-Use Ctrl or Shift to select files. Press Space to check or uncheck selected scripts.|Ctrl veya Shift ile birden fazla dosya seçin. Boşluk tuşuyla seçili betiklerin işaretini değiştirin.
-Use As Script|Betik Olarak Seç
-Run LAMMPS|LAMMPS'i çalıştır
-Job history|İş geçmişi
-Show only active jobs|Sadece aktif işleri göster
-ESEN job history|ESEN iş geçmişi
-Remove job from history|İşi geçmişten sil
-Remove the selected job from history? Job files and results will be kept.|Seçili iş geçmişten silinsin mi? İş dosyaları ve sonuçlar korunacak.
-Remove {count} selected jobs from history? Active jobs, job files and results will be kept.|Seçili {count} iş geçmişten silinsin mi? Aktif işler, iş dosyaları ve sonuçlar korunacak.
-Job became active: {name}|İş aktif duruma geçti: {name}
-Clear reuse|Yeniden kullanımı temizle
-{count} jobs ready to reuse. Run queues them on their saved targets.|{count} iş yeniden kullanıma hazır. Çalıştır, işleri kayıtlı hedeflerinde sıraya alır.
-Reuse unavailable for: {names}|Yeniden kullanılamayan işler: {names}
-Move script up|Betiği yukarı taşı
-Move script down|Betiği aşağı taşı
-Reuse inputs|Girdileri yeniden kullan
-Refresh job|İşi yenile
-Resume job|İşi sürdür
-Restart input|Devam girdisi
-Optional relative path|İsteğe bağlı göreli yol
-Include a restart input in the job files to enable checkpoint recovery and the 70-hour handover.|Ara kayıttan devam etmek ve 70. saatte devri açmak için devam betiğini iş dosyalarına ekleyin.
 Include the LAMMPS restart input in the job files.|LAMMPS devam betiğini iş dosyalarına ekleyin.
-TRUBA run folder|TRUBA koşu klasörü
-Attach folder|Klasörü ekle
-Waiting for results|Sonuç bekleniyor
-Results available|Sonuçlar hazır
-Automatic result download failed. Use Refresh job to retry.|Sonuçlar otomatik indirilemedi. Tekrar denemek için İşi yenile düğmesini kullanın.
-Choose a TRUBA run folder under your scratch directory.|Scratch alanınızdaki bir TRUBA koşu klasörünü seçin.
-Stop job|İşi durdur
-Command preview|Komut önizlemesi
 TRUBA files|TRUBA dosyaları
-Filter TRUBA files|TRUBA dosyalarını filtrele
-Group by type|Türe göre grupla
-Folders|Klasörler
 Scripts|Betikler
-Other files|Diğer dosyalar
-TRUBA folder path|TRUBA klasör yolu
-Open selected TRUBA folder|Seçili TRUBA klasörünü aç
-Slurm inputs|Slurm girdileri
-Open synchronized Slurm inputs on TRUBA|TRUBA’ya eşitlenen Slurm girdilerini aç
-Synchronized inputs are read-only.|Eşitlenen girdiler salt okunurdur.
 Upload|Yükle
-Upload file to the open TRUBA folder|Açık TRUBA klasörüne dosya yükle
-Download selected TRUBA file|Seçili TRUBA dosyasını indir
-Select all files|Tüm dosyaları seç
-Select visible TRUBA files (Ctrl+A)|Görünen TRUBA dosyalarını seç (Ctrl+A)
-Delete selected TRUBA files (Delete)|Seçili TRUBA dosyalarını sil (Delete)
-Delete TRUBA files|TRUBA dosyalarını sil
-Deleting selected TRUBA files…|Seçili TRUBA dosyaları siliniyor…
-Could not delete the selected TRUBA files.|Seçili TRUBA dosyaları silinemedi.
-Select regular files to delete.|Silmek için normal dosyaları seçin.
-File changed since it was listed.|Dosya listelendikten sonra değişti.
-Could not delete the file.|Dosya silinemedi.
-Upload file to TRUBA|TRUBA'ya dosya yükle
-Download file from TRUBA|TRUBA'dan dosya indir
-Uploading file to TRUBA…|Dosya TRUBA'ya yükleniyor…
-Downloading file from TRUBA…|Dosya TRUBA'dan indiriliyor…
-File uploaded to TRUBA.|Dosya TRUBA'ya yüklendi.
-File downloaded from TRUBA.|Dosya TRUBA'dan indirildi.
-Could not upload the file to TRUBA.|Dosya TRUBA'ya yüklenemedi.
-Could not download the file from TRUBA.|Dosya TRUBA'dan indirilemedi.
-A file or folder with that name already exists on TRUBA.|TRUBA'da bu adda bir dosya veya klasör zaten var.
-Select a regular file to download.|İndirmek için normal bir dosya seçin.
 Up|Üst klasör
-Folder name|Klasör adı
-New folder|Yeni klasör
-Loading TRUBA files…|TRUBA dosyaları yükleniyor…
-Creating folder…|Klasör oluşturuluyor…
-This folder is empty.|Bu klasör boş.
-Enter a single folder name.|Tek bir klasör adı girin.
 This folder is outside the RustMech project.|Bu klasör RustMech projesinin dışında.
-TRUBA folder was not found.|TRUBA klasörü bulunamadı.
-The last TRUBA folder is unavailable. Opened the project folder.|Son TRUBA klasörüne erişilemedi. Proje klasörü açıldı.
-Permission denied on TRUBA.|TRUBA'da erişim reddedildi.
-Could not load TRUBA files.|TRUBA dosyaları yüklenemedi.
-Could not create the folder. Check if the name already exists.|Klasör oluşturulamadı. Bu adın zaten kullanılıp kullanılmadığını kontrol edin.
-Logs and files|Günlükler ve dosyalar
-Queued and running jobs|Kuyruktaki ve çalışan işler
-Standard output|Standart çıktı
-Standard error|Standart hata
-Job log tail|İş günlüğünün son satırları
-Result files|Sonuç dosyaları
 Open file|Dosyayı aç
-Open File|Dosyayı Aç
-Open job folder|İş klasörünü aç
-Download file|Dosyayı indir
-LAMMPS input script|LAMMPS girdi betiği
-Job folder|İş klasörü
-Job Folder|İş Klasörü
-Load input files|Girdi dosyalarını yükle
 Load files or drop them on the input list.|Dosyaları yükleyin veya girdi listesine sürükleyip bırakın.
-Select the input file and click Use As Script.|Girdi betiğini seçip Betik Olarak Seç düğmesine basın.
 Load existing files. To include a folder, use Job folder.|Mevcut dosyaları yükleyin. Klasör eklemek için İş klasörü düğmesini kullanın.
-Choose files inside the job folder.|İş klasörünün içinden dosya seçin.
-Choose a LAMMPS input script.|Bir LAMMPS girdi betiği seçin.
-The selected input script is missing.|Seçilen girdi betiği bulunamadı.
 Connect using the main TRUBA button.|Ana penceredeki TRUBA düğmesinden bağlanın.
-Windows paths found in the script. Use relative paths with / on TRUBA.|Betikte Windows dosya yolu bulundu. TRUBA için / ile göreli yollar kullanın.
-Select an ESEN job.|Bir ESEN işi seçin.
-Some files are omitted from this list.|Bazı dosyalar bu listede gösterilmiyor.
 Submitting|Gönderiliyor
 jobs pending or running|iş kuyrukta veya çalışıyor
 not submitted|deney gönderilmedi

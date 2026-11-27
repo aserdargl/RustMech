@@ -40,17 +40,6 @@ def control_script(remote, job_name, action):
     return setup + CHAIN_FUNCTIONS + 'set -euo pipefail\nexec 9>chain.lock\nflock -w 25 9\n' + action
 
 
-RESUME = r'''
-test ! -e completed || { echo 'This run has already completed.' >&2; exit 1; }
-ids=$(active_jobs)
-test -z "$ids" || { echo 'This run already has an active Slurm job. Refresh its status.' >&2; exit 1; }
-test -n "$(find checkpoints -type f -name 'step.*' -size +0c -print -quit)" || {
-    echo 'No LAMMPS checkpoint is available for this run.' >&2; exit 1;
-}
-rm -f -- cancelled
-submit_segment resume
-'''
-
 RESUME_TIMEOUT = CHECKPOINT_FUNCTIONS + r'''
 # Run under chain.lock against the same Slurm snapshot used for tracking.
 auto_resumed=0
@@ -78,20 +67,6 @@ fi
 printf 'AUTO_RESUMED=%s\nJOB_ID=%s\n' "$auto_resumed" "$job"
 exec 9>&-
 '''
-
-CANCEL = r'''
-touch cancelled
-ids=$(active_jobs)
-failed=0
-while IFS= read -r job; do
-    [[ "$job" =~ ^[0-9]+$ ]] || continue
-    if ! scancel "$job"; then
-        if ! remaining=$(active_jobs) || grep -Fxq -- "$job" <<< "$remaining"; then failed=1; fi
-    fi
-done <<< "$ids"
-exit "$failed"
-'''
-
 
 def batch_body(initial_input, resume_input, launcher, ranks, target, work="work"):
     checkpoint_root = "/".join([".."] * len(work.split("/")))

@@ -1063,17 +1063,17 @@ class RustMechDialog(QDialog):
         designs_menu.addAction("Add current model to analysis queue", self._enqueue_current_model)
         designs_menu.addAction("Analysis queue...", self._show_analysis_queue)
         self.designs_button.setMenu(designs_menu)
-        self.esen_workspace = None
-        self.esen_button = _WorkspaceCommandButton("ESEN")
-        self.esen_button.setToolTip("Open the LAMMPS workspace")
-        self.esen_button.clicked.connect(self.show_esen_workspace)
+        self.md_workspace = None
+        self.md_button = _WorkspaceCommandButton("Molecular Dynamics")
+        self.md_button.setToolTip("Open MD Preparation")
+        self.md_button.clicked.connect(self.show_md_workspace)
         self.result_history_button = _WorkspaceCommandButton("Results")
         self.result_history_button.setToolTip("Browse saved analysis results")
         self.result_history_button.clicked.connect(self.show_result_history)
         self._workspace_commands = (
             (self.project_button, self.designs_button),
             (self.sidebar_toggle, self.workspace_button),
-            (self.doe_button, self.esen_button, self.result_history_button),
+            (self.doe_button, self.md_button, self.result_history_button),
         )
         for index, group in enumerate(self._workspace_commands):
             if index:
@@ -1808,13 +1808,13 @@ class RustMechDialog(QDialog):
             self.brand_header.style().polish(self.brand_header)
             self.brand_header.update()
 
-    def show_esen_workspace(self):
+    def show_md_workspace(self):
         from esen_workspace import EsenWorkspace
         from window_state import show_restored_window
 
-        if self.esen_workspace is None:
-            self.esen_workspace = EsenWorkspace(self.truba_session, self)
-        show_restored_window(self.esen_workspace)
+        if self.md_workspace is None:
+            self.md_workspace = EsenWorkspace(self.truba_session, self)
+        show_restored_window(self.md_workspace)
 
     def show_about(self):
         QMessageBox.about(
@@ -1839,14 +1839,13 @@ class RustMechDialog(QDialog):
 
         if self.result_history is None:
             preferences = QApplication.instance()._rustmech_window_state.settings
-            esen_root = self.esen_workspace.history_root if self.esen_workspace else jobs_directory()
             records = unfinished_records(self.truba_session.state_dir, include_analysis_history=True)
             remote_folders = {Path(record["local_directory"]) for _, record in records
                               if record.get("state") == "downloaded" and isinstance(record.get("local_directory"), str)
                               and record["local_directory"]}
             analysis_folders = [Path(folder) for folder in preferences.value(ANALYSIS_RESULTS_FOLDERS, [], type=list)]
             results = discover_results(ROOT, results_directory().resolve(),
-                                       esen_root=esen_root, remote_folders=remote_folders,
+                                       esen_root=jobs_directory(), remote_folders=remote_folders,
                                        analysis_folders=analysis_folders)
             dialog = ResultHistoryDialog(results, self._open_saved_result, self)
             self.language_manager.localize_tree(dialog)
@@ -4340,8 +4339,8 @@ class RustMechDialog(QDialog):
             dialog = self._mesh_convergence_dialog
             dialog.study.force_stop()
             dialog.reject()
-        if self.esen_workspace is not None:
-            self.esen_workspace.dispose()
+        if self.md_workspace is not None:
+            self.md_workspace.dispose()
         if self.sync_window is not None:
             self.sync_window.shutdown()
             self.sync_window.close()

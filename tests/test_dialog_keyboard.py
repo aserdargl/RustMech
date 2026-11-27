@@ -127,7 +127,7 @@ class DialogKeyboardTests(unittest.TestCase):
                             self.app.processEvents()
                             self.assertAlmostEqual(spin.value(), 0.65)
                             self.assertFalse((dialog.sync_window is not None and dialog.sync_window.isVisible()))
-                            self.assertIsNone(dialog.esen_workspace)
+                            self.assertIsNone(dialog.md_workspace)
                             self.assertTrue(dialog.isVisible())
                             self.assertTrue(all(spy.count() == 0 for spy in clicks))
                         with patch("nonlinear_compression.open_truba_desktop") as open_desktop:
@@ -141,11 +141,13 @@ class DialogKeyboardTests(unittest.TestCase):
                         clicks = [QSignalSpy(button.clicked) for button in buttons]
                     with patch("esen_jobs.jobs_directory", return_value=Path(directory) / "esen-jobs"), \
                             patch("esen_workspace.QSettings", return_value=store.settings):
-                        QTest.mouseClick(dialog.esen_button, Qt.MouseButton.LeftButton)
+                        QTest.mouseClick(dialog.md_button, Qt.MouseButton.LeftButton)
                         self.app.processEvents()
-                        self.assertTrue(dialog.esen_workspace.isVisible())
+                        self.assertTrue(dialog.md_workspace.isVisible())
+                        self.assertEqual(dialog.md_button.text(), "Molecular Dynamics")
+                        self.assertEqual(dialog.md_workspace.windowTitle(), dialog.md_button.text())
                         self.assertFalse((dialog.sync_window is not None and dialog.sync_window.isVisible()))
-                        dialog.esen_workspace.close()
+                        dialog.md_workspace.close()
                     for width in (900, 1440):
                         dialog.resize(width, 800)
                         self.app.processEvents()

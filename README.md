@@ -62,7 +62,7 @@ RustMech, GPL-3.0-or-later ile lisanslanır. [License](#license) bölümüne ve 
 
 ## MD Hazırlama
 
-**ESEN → MD Hazırlama** sekmesinde periyodik tablodaki elemente sağ tıklayıp
+**Molecular Dynamics → MD Hazırlama** sekmesinde periyodik tablodaki elemente sağ tıklayıp
 **Ekle**’yi seçin. Listedeki her elementin atom yüzdesini girin ve toplamın
 %100 olduğunu kontrol edin. Hedef atom sayısını belirleyin ve MEAM
 kütüphanesini ve parametre dosyasını seçin.
@@ -88,163 +88,14 @@ kutu uzunluğunu o eksendeki hücre tekrar sayısına bölün.
 **Hazırla ve TRUBA’da çalıştır**, E20 şablonuyla minimizasyon, dengeleme, çekme
 ve CNA işini gönderir. Şablon 3,9 Å sabit CNA kesim yarıçapı kullanır.
 Farklı kafes parametrelerinde CNA sonuçlarını yorumlamadan önce kesim
-yarıçapını doğrulayın. İşi ve sonuçları **ESEN iş geçmişi** üzerinden izleyin.
+yarıçapını doğrulayın. İşi TRUBA’da izleyin. Tamamlanan işin yerel
+çıktılarını RustMech’in **Sonuçlar** penceresinden açabilirsiniz.
+TRUBA bağlantısı açıkken Molecular Dynamics, işin durumunu arka planda
+günceller ve tamamlanan sonuçları paket klasörüne indirir.
 
 [Atomsk polikristal kılavuzu](https://atomsk.univ-lille.fr/doc/en/mode_polycrystal.html) ·
 [LAMMPS kutu gevşetme](https://docs.lammps.org/fix_box_relax.html) ·
 [LAMMPS CNA](https://docs.lammps.org/stable/compute_cna_atom.html)
-
-## ESEN ile LAMMPS çalıştırma
-
-Üst çubuktan **ESEN**'i açın. LAMMPS betiğini ve kullandığı veri, potansiyel veya
-`include` dosyalarını **Dosya yükle…** ile seçin ya da girdi listesine sürükleyip
-bırakın. Tek dosya veya bir gruptaki tek `in.*` / `*.in` dosyası ana betik olarak
-seçilir. Diğer durumlarda ana dosyayı listeden seçip **Betik olarak seç** düğmesine
-basın. **LAMMPS'i çalıştır** düğmesiyle işi başlatın.
-
-İlk yüklemede dosyaların ortak klasörü iş klasörü olur. Betikteki göreli yollar
-bu klasöre göre çözülür. Gerekirse **İş klasörü…** ile kökü belirleyin ve
-**İş klasörünün tamamını ekle** ile alt klasörler dahil tüm dosyaları kopyalayın.
-Her çalıştırmada ESEN girdilerin bir kopyasını saklar.
-
-- **Bu bilgisayar** hedefi için `lmp` ve birden çok MPI süreci kullanıyorsanız
-  LAMMPS derlemesiyle uyumlu `mpiexec` gerekir. ESEN, Windows'ta MS-MPI'yi arar.
-  Farklı bir kurulum kullanıyorsanız program ve başlatıcı alanlarına tam yollarını yazın.
-- **TRUBA** hedefi için RustMech’te **Connect** düğmesiyle bağlanın. Kuyruğu, hesabı,
-  bellek ve süreyi, MPI süreç sayısını ve LAMMPS modülünü kontrol edin. ESEN ilk
-  sürümde tek düğümlü CPU işi gönderir. Kişisel bir Linux kurulumu için modül
-  alanını boş bırakıp çalıştırılabilir dosyanın yolunu girebilirsiniz. Betikte
-  Linux'ta da çözülebilen göreli yollar kullanın.
-
-**LAMMPS'i çalıştır** düğmesinden önce komutu veya Slurm betiğini önizleyebilirsiniz.
-Başarılı TRUBA işlerinin çıktıları ve günlükleri, bağlantı açıkken yerel iş
-klasöründeki `Results/ESEN-<iş-kimliği>` dizinine otomatik indirilir. Çıktıların
-alt klasörleri korunur. Aktarım kesilirse **İş geçmişi**'nden işi seçip
-**İşi yenile** ile tekrar deneyin. Dosyaları geçmişten tek tek de indirebilirsiniz.
-RustMech yeniden açıldığında TRUBA'ya tekrar bağlanıp aynı işi seçerek izlemeye
-devam edin. Aynı girdileri diğer hedefte çalıştırmak için
-geçmişteki işi seçip **Girdileri yeniden kullan** düğmesine basın ve hedefi değiştirin.
-
-### Klasörden TRUBA’ya toplu gönderim
-
-Hazır Slurm betikleriyle çalışmak için TRUBA hedefini seçin ve **Folder**
-ile `run_*.slurm` dosyalarını içeren proje klasörünü açın. Çalıştıracağınız
-betikleri işaretleyin ve **Çalıştır** düğmesine basın. ESEN proje girdilerini
-TRUBA’ya aktarır ve her betiği kendi klasöründeki göreli yollarla ayrı bir
-Slurm işi olarak gönderir. Aynı aktarım birden fazla işte kullanılır.
-Çalışan işlerin ayrı çalışma kopyaları vardır.
-
-İşleri tek tek işaretlemeden göndermek için **Betik başına iş** alanına bir
-sayı girin ve **Çalıştır**'a basın. ESEN klasörde bulduğu işleri dengeli
-gruplara böler. Örneğin 7 uyumlu iş için `3` girildiğinde gruplar 3, 2 ve
-2 iş alır. Her grup bir Slurm işi olarak gönderilir. Gruptaki işler kendi
-çalışma kopyalarında sırayla çalışır ve aynı Slurm süre sınırını paylaşır.
-Farklı kaynak isteyen veya ayrı Slurm gönderimi gerektiren hazır betikler
-kendi ayarlarıyla çalışır. **Elle** değeri işaretlediğiniz dosyaları kullanır.
-
-Bu ayar LAMMPS girdi klasörlerinde de kullanılabilir. Devam girdisi
-tanımlı LAMMPS işleri, bağımsız ara kayıt takibi için ayrı gönderilir.
-
-Dosya listesinde Ctrl ile tek tek, Shift ile aralık seçin. Boşluk tuşu
-seçili çalıştırılabilir betiklerin kutularını birlikte işaretler veya temizler.
-**İş ayarları** dosyaları kendi klasörlerinin altında gösterir. Ada veya uzantıya
-göre filtreleyebilir ya da sıralayabilirsiniz. İşaretli dosyalar ve çalıştırma
-sırası korunur. **İş sırası** görünümünde Slurm betiklerinin sıra numaraları görünür.
-Slurm işlerinin sırasını değiştirmek için filtreyi temizleyin, **İş sırası**
-görünümünü seçin ve yukarı/aşağı oklarını kullanın.
-
-**TRUBA** dosya tarayıcısında açık klasörü ada veya uzantıya göre filtreleyin.
-**Türe göre grupla** seçeneği klasörleri, betikleri ve diğer dosyaları ayırır.
-
-Kuyruk, hesap, MPI görev sayısı, bellek ve süreyi betiğin `#SBATCH`
-satırlarında belirleyin. ESEN iş takibi için iş adını, çalışma dizinini ve
-standart günlük yollarını ayarlar. MPI ile derlenmiş LAMMPS'i örneğin
-`mpirun -np "$SLURM_NTASKS" lmp -in 07-cekme.in` ile başlatın. İş durumu,
-günlükler ve çıktılar **İş geçmişi**'nde görünür.
-
-İş geçmişinde Slurm aşaması ve çalışma süresi gösterilir. Süreye kuyrukta
-bekleme ve dosya aktarımı dahil değildir. Bir `run_*.slurm` dosyasının içindeki
-aşamaları da göstermek için betiğin standart çıktısına `ESEN_STEP=` satırları
-yazın. Örneğin LAMMPS çağrısından önce `echo 'ESEN_STEP=LAMMPS çekme analizi'`
-ekleyin. LAMMPS girdi betiğinden adım bildirmek için
-`print "ESEN_STEP=Minimizasyon" screen yes` kullanılabilir.
-
-### TRUBA’ya yüklenmiş analizleri tek düğmeyle çalıştırma
-
-Proje klasörünü `/arf/scratch/<kullanıcı>/RustMech/` altına yükleyin. Her analiz
-klasöründe Slurm betiğini ve betiğin kullandığı dosyaları bir arada tutun.
-Projenin üst klasörüne `Run.esen` adlı UTF-8 metin dosyasını koyun ve çalışacak
-betiklerin göreli yollarını, her satıra bir yol gelecek şekilde yazın.
-
-```text
-cekme-300K/run.slurm
-cekme-600K/run.slurm
-cna/analiz.slurm
-```
-
-İlk aktarımı ESEN’den yapmak için **TRUBA Files** panelinde bir uzak proje
-klasörü oluşturup açın. **Folder** ile yerel proje klasörünü seçin ve
-**Send Truba** ile içeriğini açık uzak klasöre yükleyin.
-
-**TRUBA Files** panelinde uzak proje klasörünü açtığınızda `Run.esen` seçilir.
-Bir kez **Run**’a basın. ESEN listedeki her betiği TRUBA’da kendi analiz
-klasörünün bir çalışma kopyasından ayrı bir Slurm işi olarak gönderir.
-İş kimliklerini, durumları ve günlükleri **İş geçmişi**’nden izleyin.
-
-Yeni bir analiz eklemek için klasörünü TRUBA’ya yükleyip betiğin yolunu listeye
-ekleyin. Tek bir analizi çalıştırmak için kendi `.slurm` dosyasını seçip
-**Run**’a basabilirsiniz.
-
-### Klasörden LAMMPS girdi betiği gönderimi
-
-**Folder** ile tek bir analiz klasörünü veya bağımsız analizlerin bulunduğu üst
-klasörü seçin. ESEN klasördeki ve alt klasörlerdeki dosyaları listeler.
-Çalıştıracağınız ana LAMMPS betiklerini işaretleyin.
-
-**Send Truba** ile girdileri aktarın. Aktarım tamamlanınca **Çalıştır**, işaretli
-betikleri mevcut TRUBA ayarlarıyla ayrı Slurm işleri olarak gönderir. Her işin
-çalışma dizini kendi analiz klasörüdür. Veri, potansiyel ve diğer bağımlılık
-dosyalarını bu klasörün içinde tutun ve betikte
-göreli yollar kullanın. **Devam girdisi** ayarlandıysa aynı göreli yol her seçili
-klasörde bulunmalıdır. İşler **İş geçmişi**'nde ayrı görünür ve sonuçlar her
-analiz klasörünün kendi `Results` dizinine indirilir.
-
-### TRUBA'da ara kayıttan devam ve 70. saatte devir
-
-LAMMPS devam betiğini iş dosyalarına ekleyip göreli yolunu **Devam girdisi**
-alanına yazın. Başlangıç ve devam betiklerinde aşağıdaki gibi tek dosyalı,
-adım numaralı ara kayıtlar oluşturun. Aralığı, kaybedilebilecek hesaplama
-süresine ve diskteki yerinize göre seçin.
-
-```lammps
-restart 10000 ${esen_checkpoint_dir}/step.*
-```
-
-Devam betiği `read_restart ${esen_checkpoint}` ile başlar. Bu komuttan sonra
-gerekli kuvvet alanı, fix kimlikleri, timestep ve çıktı ayarlarını yeniden kurun.
-Örneğin son hedef 50000 ise `run 50000 upto` kullanın. Böylece yalnızca
-kalan adımlar hesaplanır. Her Slurm parçası için ayrı yörünge ve diğer çıktı
-adlarında `${esen_segment}` kullanın. Önceki parçanın son ara kaydından
-sonraki çıktı kareleri birleştirme sırasında örtüşebilir. Devam için aynı
-LAMMPS derlemesi ve fiziksel parametreler kullanılır.
-
-72 saatlik iş yaklaşık 70. saatte yeni bir Slurm işi gönderir. Yeni iş kaynak
-alınca önce okunabilir bir ara kayıt doğrular, eski işi durdurur ve Slurm
-temizliği bittikten sonra en yeni okunabilir kayıttan devam eder. Geçerli
-ilerleme yoksa eski iş 72 saatlik sınırına kadar çalışabilir. Kuyruk bekleme
-süresini Slurm belirler. RustMech kapalıyken de devir işler.
-
-Slurm işi süre sınırında (TIMEOUT) bitirirse, Esen aynı
-koşunun çalışan veya bekleyen işi olmadığını doğrular ve devam girdisi
-tanımlıysa aynı TRUBA klasöründe otomatik bir devam işi gönderir. Yeni iş
-en son okunabilir ara kaydı yükler. Otomatik TIMEOUT kontrolü, Esen iş takibi
-başladığında ve TRUBA bağlantısı açıkken çalışır. Bir devam işi süre sınırına
-kadar yeni bir ara kayıt üretemezse, Esen aynı adımı sürekli yeniden kuyruğa
-almaz. İlk ara kayıt oluşmadan kesilen hesapta sürdürülecek adım yoktur.
-Elle devam etmek için **İşi yenile**,
-ardından **İşi sürdür** düğmesini kullanın. **İşi durdur**, o koşunun çalışan
-ve bekleyen Slurm işlerini iptal eder. Ara kayıtlar TRUBA scratch alanında
-saklanır.
 
 ## Ortak analiz projesi
 

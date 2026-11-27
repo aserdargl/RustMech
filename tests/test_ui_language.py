@@ -161,7 +161,7 @@ class LanguageTests(unittest.TestCase):
             normal_bounds = window.geometry()
             commands = (window.project_button, window.designs_button, window.workspace_button,
                         window.sidebar_toggle,
-                        window.esen_button, window.result_history_button, window.truba_button,
+                        window.md_button, window.result_history_button, window.truba_button,
                         window.truba_connect_button, window.sync_button, window.about_button, window.doe_button)
 
             def assert_toolbar_layout():
@@ -169,7 +169,7 @@ class LanguageTests(unittest.TestCase):
                 for button in commands:
                     if button.isVisible():
                         self.assertTrue(button.parentWidget().rect().contains(button.geometry()))
-                self.assertLess(window.esen_button.geometry().right(), window.about_button.x())
+                self.assertLess(window.md_button.geometry().right(), window.about_button.x())
 
             assert_toolbar_layout()
             self.manager.set_language('tr')
