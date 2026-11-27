@@ -4,7 +4,9 @@ from decimal import Decimal
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QAction, QValidator
-from PySide6.QtWidgets import QGridLayout, QHBoxLayout, QLabel, QPushButton, QSizePolicy, QToolButton, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (
+    QGridLayout, QHBoxLayout, QLabel, QPushButton, QSizePolicy, QSplitter, QToolButton, QVBoxLayout, QWidget,
+)
 
 from studio_style import CONTROL_HEIGHT, CompactDoubleSpinBox, stepper_with_unit
 from ui_language import translate
@@ -35,32 +37,53 @@ class AlloyElements(QWidget):
         self.rows = {}
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(4)
+        split = QSplitter(Qt.Orientation.Vertical)
+        split.setObjectName("esenMdPeriodicTableAndComposition")
+        split.setChildrenCollapsible(False)
+        split.setHandleWidth(7)
+        layout.addWidget(split)
+
+        table_panel = QWidget()
+        table_layout = QVBoxLayout(table_panel)
+        table_layout.setContentsMargins(0, 0, 0, 0)
+        table_layout.setSpacing(4)
         table = QWidget()
         table.setObjectName("mdPeriodicTable")
         table.setAccessibleName("Periodic table")
         grid = QGridLayout(table)
         grid.setContentsMargins(0, 0, 0, 0)
         grid.setSpacing(1)
+        for group in range(18):
+            grid.setColumnStretch(group, 1)
         for period, symbols in enumerate(PERIODS):
+            grid.setRowStretch(period, 1)
             for group, symbol in enumerate(symbols.split()):
                 if symbol != ".":
                     self._add_cell(grid, period, group, symbol)
         grid.setRowMinimumHeight(7, 25)
-        layout.addWidget(table, 0, Qt.AlignmentFlag.AlignLeft)
+        table_layout.addWidget(table, 1)
         hint = QLabel("Right-click an element to add it.")
         hint.setWordWrap(True)
-        layout.addWidget(hint)
+        table_layout.addWidget(hint)
+        split.addWidget(table_panel)
+
+        composition = QWidget()
+        composition_layout = QVBoxLayout(composition)
+        composition_layout.setContentsMargins(0, 0, 0, 0)
+        composition_layout.setSpacing(4)
         self.list_layout = QGridLayout()
         self.list_layout.setVerticalSpacing(2)
         self.list_layout.setHorizontalSpacing(7)
         self.list_layout.setAlignment(Qt.AlignmentFlag.AlignLeft)
-        layout.addLayout(self.list_layout)
+        composition_layout.addLayout(self.list_layout)
         self.total_label = QLabel()
         self.total_label.setObjectName("mdCompositionTotal")
-        layout.addWidget(self.total_label)
+        composition_layout.addWidget(self.total_label)
+        composition_layout.addStretch()
+        split.addWidget(composition)
         for symbol, share in defaults:
             self.add_element(symbol, share)
+        split.setSizes([table_panel.sizeHint().height(), composition.sizeHint().height() + CONTROL_HEIGHT])
         self.update_total()
 
     def _add_cell(self, grid, period, group, symbol):
@@ -69,7 +92,8 @@ class AlloyElements(QWidget):
         cell.setText(symbol)
         cell.setAccessibleName(symbol)
         cell.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
-        cell.setFixedSize(22, 22)
+        cell.setMinimumSize(22, 22)
+        cell.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         cell.setContextMenuPolicy(Qt.ContextMenuPolicy.ActionsContextMenu)
         action = QAction("Add", cell)
         action.triggered.connect(lambda _checked=False: self.add_element(symbol))

@@ -43,7 +43,7 @@ QFrame[esenCard="paper"] { background: #FFFFFF; border: 1px solid #D5DBE2; borde
 #esenWorkspace QPlainTextEdit { font-family: Consolas; font-size: 12px; }
 #esenFieldLabel { color: #475569; font-size: 11px; }
 #esenWorkspace QPushButton { padding: 0 7px; }
-#mdPeriodicTable QToolButton { padding: 0; font-size: 11px; min-height: 0; }
+#mdPeriodicTable QToolButton { padding: 0; font-size: 11px; min-height: 20px; max-height: -1px; }
 #mdPeriodicTable QToolButton::menu-indicator { image: none; width: 0; height: 0; }
 #mdPeriodicTable QToolButton[inAlloy="true"] { background: #BFDBFE; border-color: #93C5FD; }
 #mdPeriodicTable QToolButton:hover, #mdPeriodicTable QToolButton:focus { border-color: #2563EB; }
@@ -212,8 +212,7 @@ class EsenWorkspace(QDialog):
         alloy, alloy_layout = panel("Alloy elements", scrollable=True)
         defaults = [(element, 20) for element in ("Hf", "Nb", "Ta", "Ti", "Zr")]
         self.md_elements = AlloyElements(defaults)
-        alloy_layout.addWidget(self.md_elements)
-        alloy_layout.addStretch()
+        alloy_layout.addWidget(self.md_elements, 1)
 
         top = QSplitter(Qt.Orientation.Horizontal)
         top.setObjectName("esenMdAlloyAndSettings")
@@ -324,7 +323,8 @@ class EsenWorkspace(QDialog):
         bottom.setSizes([430, 425, 425])
         sections.addWidget(bottom)
         sections.setStretchFactor(1, 1)
-        sections.setSizes([max(alloy.widget().sizeHint().height(), inputs.widget().sizeHint().height()),
+        alloy_height = alloy.widget().sizeHint().height() + 2 * CONTROL_HEIGHT
+        sections.setSizes([max(alloy_height, inputs.widget().sizeHint().height()),
                            bottom.sizeHint().height()])
         self.md_crystal.currentIndexChanged.connect(self._md_preview)
         return page
