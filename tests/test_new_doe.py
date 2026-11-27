@@ -47,6 +47,8 @@ class NewDoeTests(unittest.TestCase):
         self.assertEqual(variables_button.accessibleName(), "Variable Settings")
         self.assertGreater(doe_button.width(), 48)
         doe_top_left = doe_button.mapToGlobal(QPoint())
+        content_left = page.window().centralWidget().mapToGlobal(QPoint()).x()
+        self.assertGreaterEqual(doe_top_left.x() - content_left, 8)
         self.assertEqual(lhs_button.mapToGlobal(QPoint()).y(), doe_top_left.y())
         self.assertGreater(lhs_button.mapToGlobal(QPoint()).x(), doe_top_left.x())
         row_centers = []
@@ -57,6 +59,7 @@ class NewDoeTests(unittest.TestCase):
                          if label.buddy() is current.operation)
             controls = (label, current.operation, current.variables_button)
             self.assertTrue(all(control.isVisible() for control in controls))
+            self.assertGreaterEqual(current.variables_button.width(), 100)
             self.assertEqual(label.mapToGlobal(QPoint()).x(), doe_top_left.x())
             centers = [control.mapToGlobal(control.rect().center()) for control in controls]
             self.assertEqual(len({point.y() for point in centers}), 1)

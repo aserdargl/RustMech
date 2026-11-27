@@ -737,6 +737,7 @@ class NewDoePage(QWidget):
         self.variables_button.setToolTip("Variable Settings")
         self.variables_button.setCheckable(True)
         self.variables_button.setAutoDefault(False)
+        self.variables_button.setMinimumWidth(100)
         self.variables_button.setFixedHeight(CONTROL_HEIGHT)
         self.variables_button.toggled.connect(lambda checked: self.input_tabs.setCurrentIndex(int(checked)))
         self.input_tabs.currentChanged.connect(lambda index: self.variables_button.setChecked(index == 1))
@@ -1769,8 +1770,12 @@ class DoEStudioWindow(ExperimentWindow):
         self.navigation = DoENavigation(pages)
         self.navigation.buttons.idClicked.connect(
             lambda index: pages.widget(index).input_tabs.setCurrentIndex(0))
-        layout.addWidget(self.navigation, alignment=Qt.AlignmentFlag.AlignLeft)
-        layout.addWidget(controls)
+        header_layout = QVBoxLayout()
+        header_layout.setContentsMargins(8, 0, 0, 0)
+        header_layout.setSpacing(2)
+        header_layout.addWidget(self.navigation, alignment=Qt.AlignmentFlag.AlignLeft)
+        header_layout.addWidget(controls)
+        layout.addLayout(header_layout)
         layout.addWidget(pages, 1)
         header_controls = (
             self.navigation.buttons.button(0), self.navigation.buttons.button(1),
