@@ -51,6 +51,22 @@ QFrame[esenCard="paper"] { background: #FFFFFF; border: 1px solid #D5DBE2; borde
 #mdPeriodicTable QToolButton[inAlloy="true"] { background: #BFDBFE; border-color: #93C5FD; }
 #mdPeriodicTable QToolButton:hover, #mdPeriodicTable QToolButton:focus { border-color: #2563EB; }
 #mdPeriodicTable QToolButton:pressed { background: #93C5FD; }
+#esenWorkspace QPushButton#esenPrepare {
+    color: #FFFFFF; font-weight: 600; padding: 0 12px;
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #3475C3, stop:1 #285EA6);
+    border: 1px solid #214D89; border-top-color: #548CCA;
+    border-bottom: 3px solid #173D70; border-radius: 4px;
+}
+#esenWorkspace QPushButton#esenPrepare:hover {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #367CCA, stop:1 #2D66B0);
+}
+#esenWorkspace QPushButton#esenPrepare:focus { border-color: #0F172A; }
+#esenWorkspace QPushButton#esenPrepare:pressed {
+    background: #245692; border-top: 3px solid #173D70; border-bottom-width: 1px;
+}
+#esenWorkspace QPushButton#esenPrepare:disabled {
+    color: #808080; background: #EBEBEB; border-color: #D6D6D6;
+}
 #esenRun { color: #FFFFFF; background: #285EA6; }
 #esenRun:hover { background: #245692; }
 #esenRun:focus { border-color: #0F172A; }
@@ -244,8 +260,7 @@ class EsenWorkspace(QDialog):
         outer.addWidget(sections, 1)
 
         self.md_preview_button = command("Preview model", self._md_preview)
-        self.md_prepare = command("Prepare package", self._start_md)
-        inputs, settings_layout = panel("Package settings", header_action=self.md_prepare)
+        inputs, settings_layout = panel("Package settings")
         self.md_form = QWidget()
         form = QFormLayout(self.md_form)
         form.setContentsMargins(0, 0, 0, 0)
@@ -341,6 +356,8 @@ class EsenWorkspace(QDialog):
         self.md_note.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         settings_layout.addWidget(self.md_note)
         settings_layout.addStretch()
+        self.md_prepare = command("Prepare Package", self._start_md, role="esenPrepare")
+        settings_layout.addWidget(self.md_prepare, alignment=Qt.AlignmentFlag.AlignRight)
 
         card, layout = panel("Model preview", paper=True, header_action=self.md_preview_button)
         self.md_preview = code_view("Model preview")

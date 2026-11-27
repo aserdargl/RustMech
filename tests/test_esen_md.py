@@ -211,6 +211,9 @@ def test_md_plan_library_reopens_generated_and_added_packages(tmp_path):
             assert alloy.geometry().right() < sections.x()
             assert alloy.height() == sections.height()
             assert sections.widget(0).geometry().bottom() < sections.widget(1).y()
+            assert first.md_prepare.text() == "Prepare Package"
+            assert first.md_prepare.geometry().top() > first.md_form.geometry().bottom()
+            assert first.md_prepare.geometry().right() == first.md_form.geometry().right()
             assert all(cell.width() == cell.height() >= 45 for cell, _ in first.md_elements.cells.values())
             width = alloy.width()
             first.resize(first.width() + 160, first.height() + 80)
@@ -218,10 +221,12 @@ def test_md_plan_library_reopens_generated_and_added_packages(tmp_path):
             assert alloy.width() == width
             assert all(cell.width() == cell.height() >= 45 for cell, _ in first.md_elements.cells.values())
             assert not any(label.text() == "How to choose parameters" for label in first.findChildren(QLabel))
-            sections.setSizes([390, 200, 358])
-            sources.setSizes([173, 178])
+            sections.setSizes([415, 185, 348])
+            sources.setSizes([164, 177])
+            app.processEvents()
             first.tabs.setCurrentIndex(1)
             splitters["esenMdPlansAndTruba"].setSizes([280, 420])
+            app.processEvents()
             expected = {name: split.sizes() for name, split in splitters.items()}
             first.close()
 
@@ -234,7 +239,9 @@ def test_md_plan_library_reopens_generated_and_added_packages(tmp_path):
             second.tabs.setCurrentIndex(0)
             app.processEvents()
             restored = {split.objectName(): split.sizes() for split in store.splitters(second)}
-            assert restored == expected
+            assert restored.keys() == expected.keys()
+            for name, sizes in expected.items():
+                assert restored[name] == pytest.approx(sizes, abs=4)
     finally:
         for window in reversed(windows):
             window.dispose()

@@ -97,7 +97,7 @@ sıcaklık için MEAM doğrulaması yaparken küçük bir periyodik tek kristali
 sıfır basınçta gevşetin. Hedef sıcaklıkta NPT dengelemesi sonrasında ortalama
 kutu uzunluğunu o eksendeki hücre tekrar sayısına bölün.
 
-**Paketi hazırla**, Atomsk’ı bu bilgisayarda çalıştırır ve paket yolunu gösterir.
+**Paketi Hazırla**, Atomsk’ı bu bilgisayarda çalıştırır ve paket yolunu gösterir.
 Hazırlanan paket **TRUBA’ya Gönderim** sekmesinde seçili görünür. Bu sekmede
 önceden hazırlanmış bir paketi de seçebilir veya paket klasörünü ekleyebilirsiniz.
 TRUBA kuyruğunu seçip **TRUBA’ya gönder** düğmesine bastığınızda E20 şablonuyla

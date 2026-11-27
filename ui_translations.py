@@ -114,7 +114,7 @@ The source does not specify a usable MEAM element order.|Kaynakta kullanılabili
 Unexpected MEAM source file contents.|MEAM kaynak dosyasının içeriği beklenen biçimde değil.
 The MEAM folder is outside the project folder.|MEAM klasörü proje klasörünün dışında.
 Each alloy element needs a distinct MEAM symbol.|Her alaşım elementi için farklı bir MEAM sembolü gerekir.
-Prepare package|Paketi hazırla
+Prepare Package|Paketi Hazırla
 Package prepared at {path}|Paket hazırlandı. {path}
 Alloy elements|Elementler
 Periodic table|Periyodik tablo
