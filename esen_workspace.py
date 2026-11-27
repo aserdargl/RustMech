@@ -2,7 +2,7 @@
 
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
-from math import cbrt, sqrt
+from math import cbrt, isclose, prod, sqrt
 from pathlib import Path
 import re
 
@@ -10,7 +10,7 @@ from PySide6.QtCore import QSettings, QSignalBlocker, Qt, QTimer, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QApplication, QDialog, QFormLayout, QFrame, QHBoxLayout, QLabel,
-    QLineEdit, QListWidget, QListWidgetItem, QPlainTextEdit, QPushButton,
+    QLineEdit, QListWidget, QListWidgetItem, QMenu, QPlainTextEdit, QPushButton,
     QScrollArea, QSizePolicy, QSplitter, QTabWidget, QVBoxLayout, QWidget,
 )
 
@@ -208,11 +208,18 @@ class EsenWorkspace(QDialog):
         self.md_order = QLineEdit(str(self.preferences.value("esen/md/order", "")))
         self.md_order.setPlaceholderText("Example: Hf Nb Ta Ti Zr")
         self.md_order.setToolTip("Enter the element order used by indices in the MEAM parameter file.")
-        self.md_atoms = CompactSpinBox()
-        self.md_atoms.setRange(2, md.MAX_ATOMS)
-        self.md_atoms.setValue(250_000)
-        self._form_row(form, "Target atom count", self.md_atoms)
-        self.md_atoms.setFixedWidth(123)
+        self.md_dimensions = []
+        for axis, label in (("x", "Box length X"), ("y", "Box length Y"), ("z", "Box length Z")):
+            dimension = CompactDoubleSpinBox()
+            dimension.setDecimals(5)
+            dimension.setRange(0.00001, 10_000)
+            dimension.setSingleStep(0.1)
+            dimension.setValue(self.preferences.value(f"esen/md/box/{axis}", 17.0, type=float))
+            self._form_row(form, label, dimension, field_layout=stepper_with_unit(dimension, "nm"))
+            dimension.editingFinished.connect(
+                lambda field=dimension, key=axis: self.preferences.setValue(f"esen/md/box/{key}", field.value())
+            )
+            self.md_dimensions.append(dimension)
         self.md_grains = CompactSpinBox()
         self.md_grains.setRange(2, md.MAX_GRAINS)
         self.md_grains.setValue(12)
@@ -246,15 +253,26 @@ class EsenWorkspace(QDialog):
             field.setToolTip(field.text())
             setattr(self, f"md_{key}", field)
             pick = command("Browse…", lambda _checked=False, k=key, label=title: self._pick_md_meam(k, label))
-            self.md_file_buttons.append(pick)
+            sources = command("Sources", hint="Find the MEAM library and parameters supplied together for your alloy.")
+            menu = QMenu(sources)
+            for label, url in (
+                ("LAMMPS potential files", "https://github.com/lammps/lammps/tree/develop/potentials"),
+                ("NIST potentials by element system", "https://www.ctcms.nist.gov/potentials/system/"),
+                ("LAMMPS MEAM file guide", "https://docs.lammps.org/stable/pair_meam.html"),
+            ):
+                menu.addAction(label, lambda _checked=False, link=url: QDesktopServices.openUrl(QUrl(link)))
+            sources.setMenu(menu)
+            sources.setAccessibleName("MEAM library sources" if key == "library" else "MEAM parameter sources")
+            self.md_file_buttons.extend((pick, sources))
             row = QHBoxLayout()
             row.setSpacing(4)
             row.addWidget(field, 1)
             row.addWidget(pick)
+            row.addWidget(sources)
             self._form_row(form, title, field, field_layout=row)
         self._form_row(form, "MEAM element order", self.md_order)
         self.md_elements.changed.connect(self._md_preview)
-        for stepper in (self.md_atoms, self.md_grains, self.md_lattice, self.md_temperature, self.md_seed):
+        for stepper in (*self.md_dimensions, self.md_grains, self.md_lattice, self.md_temperature, self.md_seed):
             stepper.editingFinished.connect(self._md_preview)
         self.md_order.editingFinished.connect(self._save_md_order)
 
@@ -373,8 +391,18 @@ class EsenWorkspace(QDialog):
         filename = self.md_plan_file.currentData()
         if not filename:
             model = item.data(Qt.ItemDataRole.UserRole + 1)
-            details = [
-                f'{translate("Target atom count")}  {model.get("target_atoms", "—")}',
+            details = []
+            for key, label in (("requested_box_angstrom", "Requested box dimensions"),
+                               ("box_angstrom", "Box dimensions")):
+                box = model.get(key)
+                if (isinstance(box, list) and len(box) == 3
+                        and all(type(edge) in (int, float) for edge in box)):
+                    details.append(f"{translate(label)}  {self._box_in_nm(box)}")
+            if model["grains"] > 1 and type(model.get("estimated_atoms")) is int:
+                details.append(f'{translate("Estimated atom count")}  {model["estimated_atoms"]:,}')
+            if "target_atoms" in model:
+                details.append(f'{translate("Target atom count")}  {model["target_atoms"]}')
+            details.extend([
                 f'{translate("Prepared atom count")}  {model["atoms"]:,}',
                 f'{translate("Grain count")}  {model["grains"]}',
                 f'{translate("Temperature")}  {model["temperature"]} K',
@@ -388,7 +416,7 @@ class EsenWorkspace(QDialog):
                 "",
                 translate("MEAM element order"),
                 " ".join(model["meam_order"]),
-            ]
+            ])
             self.md_plan_source.setPlainText("\n".join(details))
             return
         path = item.data(Qt.ItemDataRole.UserRole) / filename
@@ -415,7 +443,7 @@ class EsenWorkspace(QDialog):
             "Preparation checks the structure and MEAM mapping. Confirm scientific suitability with a small LAMMPS run and compare against reference data for your alloy.",
             "The lattice parameter a is one BCC cell edge in Å. Use a value for the same alloy and phase. The initial 3.4000 Å is an example.",
             "From the BCC (110) XRD spacing, use a = √2 × d₁₁₀. With MEAM, relax a small periodic single crystal at zero pressure. At the target temperature, average the equilibrated NPT box length and divide by the cell repeats along that axis.",
-            "BCC has two atoms per cell. For a polycrystal, atom count sets the box volume and grain count sets the average grain volume. Fix the random seed to reproduce grain positions, orientations and alloy site assignments.",
+            "BCC has two atoms per cell. For a polycrystal, the box volume divided by the grain count gives the mean grain volume. Fix the random seed to reproduce grain positions, orientations and alloy site assignments.",
             "The E20 template uses a fixed 3.9 Å CNA cutoff. Check the cutoff for your lattice parameter before interpreting CNA results.",
         ):
             hint = QLabel(text)
@@ -480,38 +508,42 @@ class EsenWorkspace(QDialog):
         self.preferences.setValue("esen/md/order", self.md_order.text())
 
     def _md_model(self):
-        for stepper in (self.md_atoms, self.md_grains, self.md_lattice, self.md_temperature, self.md_seed):
+        for stepper in (*self.md_dimensions, self.md_grains, self.md_lattice, self.md_temperature, self.md_seed):
             stepper.interpretText()
         composition = self.md_elements.composition()
         if not composition:
             raise ValueError(translate("Add at least one element."))
-        return md.plan_model(composition, self.md_atoms.value(), self.md_lattice.value(),
+        dimensions = tuple(10 * field.value() for field in self.md_dimensions)
+        return md.plan_model(composition, dimensions, self.md_lattice.value(),
                              self.md_temperature.value(), self.md_seed.value(),
                              grains=self.md_grains.value() if self.md_crystal.currentData() == "poly" else 1)
+
+    @staticmethod
+    def _box_in_nm(box):
+        return " × ".join(f"{edge / 10:.5f}".rstrip("0").rstrip(".") for edge in box) + " nm"
 
     def _md_preview(self):
         self.md_settings_form.setRowVisible(self.md_grains, self.md_crystal.currentData() == "poly")
         try:
             model = self._md_model()
         except ValueError as error:
-            self.md_preview.setPlainText(str(error))
+            self.md_preview.setPlainText(translate(str(error)))
             return
+        lines = [f"{translate('Box dimensions')}   {self._box_in_nm(model.box)}"]
         if model.grains > 1:
-            mean_size = model.box[0] / cbrt(model.grains)
-            lines = [translate("BCC polycrystal"),
-                     f"{translate('Grain count')}   {model.grains}",
-                     f"{translate('Characteristic grain size')}   {mean_size:.3f} Å",
-                     translate("Atom count and composition counts are estimates until Atomsk builds the grain boundaries.")]
+            mean_size = cbrt(prod(model.box) / model.grains) / 10
+            lines.extend([translate("BCC polycrystal"),
+                          f"{translate('Estimated atom count')}   {model.atoms:,}",
+                          f"{translate('Grain count')}   {model.grains}",
+                          f"{translate('Characteristic grain size')}   {mean_size:.3f} nm",
+                          translate("Atom count and composition counts are estimates until Atomsk builds the grain boundaries.")])
         else:
             cell = " × ".join(map(str, model.repeats))
-            lines = [f"{translate('BCC supercell')}   {cell}",
-                     f"{translate('Generated atom count')}   {model.atoms:,}"]
-            if model.atoms != model.target_atoms:
-                lines.append(translate("The nearest nearly cubic BCC supercell is shown."))
-        dimensions = " × ".join(f"{edge:.3f}" for edge in model.box)
+            lines.extend([f"{translate('BCC supercell')}   {cell}",
+                          f"{translate('Generated atom count')}   {model.atoms:,}"])
+            if any(not isclose(requested, actual) for requested, actual in zip(model.requested_box_angstrom, model.box)):
+                lines.append(translate("Box dimensions were rounded to whole BCC unit cells."))
         lines.extend([
-            f"{translate('Box dimensions')}   {dimensions} Å",
-            f"{translate('Target atom count')}   {model.target_atoms:,}",
             "",
             *(f"{element:<3}  {count:>10,}    {100 * count / model.atoms:8.4f} %"
               for element, count in zip(model.elements, model.counts)),
@@ -549,7 +581,7 @@ class EsenWorkspace(QDialog):
             executable = md.atomsk_executable()
             future = self.executor.submit(md.prepare_job, self.md_plans_root, *inputs, executable)
         except (OSError, ValueError) as error:
-            self.md_note.setText(str(error))
+            self.md_note.setText(translate(str(error)))
             return
         self.md_task = future, request, settings, auth
         self.md_form.setEnabled(False)

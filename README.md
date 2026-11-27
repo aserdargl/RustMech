@@ -64,15 +64,21 @@ RustMech, GPL-3.0-or-later ile lisanslanır. [License](#license) bölümüne ve 
 
 **Molecular Dynamics → MD Hazırlama** sekmesinde periyodik tablodaki elemente sağ tıklayıp
 **Ekle**’yi seçin. Listedeki her elementin atom yüzdesini girin ve toplamın
-%100 olduğunu kontrol edin. Hedef atom sayısını belirleyin ve MEAM
-kütüphanesini ve parametre dosyasını seçin.
+%100 olduğunu kontrol edin. X, Y ve Z kutu boyutlarını nanometre cinsinden
+girin ve önizlemedeki atom sayısını kontrol edin.
+MEAM kütüphanesini ve parametre dosyasını seçin. Her iki alanın yanındaki
+**Kaynaklar** menüsü LAMMPS dosyalarına, NIST potansiyel arşivine ve MEAM
+dosya kılavuzuna erişim sağlar. Alaşımınız için birlikte yayımlanan dosya
+çiftini kullanın.
 Dosyalarda bir `pair_coeff` örneği varsa program MEAM element sırasını oradan
 alır. Boş kalırsa parametre dosyasındaki indekslerin izlediği sırayı girin.
 
-**Kristal tipi** alanında BCC tek kristal veya BCC polikristal seçin. Tek kristal
-önizlemesi hedefe en yakın dengeli BCC hücresini gösterir. Polikristalde tane
-sayısını da girin. Kübik kutunun kenarı yaklaşık `a × (N / 2)^(1/3)`, tane
-boyutu ölçeği ise kutu kenarının tane sayısının küpköküne bölümüdür. Atomsk
+**Kristal tipi** alanında BCC tek kristal veya BCC polikristal seçin. Tek kristalde
+her eksen en yakın tam birim hücre tekrarına yuvarlanır. Atom sayısı
+iki ile üç eksendeki tekrar sayılarının çarpımıdır. Polikristalde girilen
+kutu boyutları korunur ve tane sayısı ayrıca seçilir. Başlangıç atom sayısı
+`2 × Lx × Ly × Lz / a³` ile tahmin edilir. Karakteristik tane boyutu,
+ortalama tane hacminin küpköküdür. Atomsk
 periyodik Voronoi tanelerini oluşturduktan sonra gerçek atom sayısı ve bileşim
 paketin `model.json` dosyasına yazılır. Aynı tohumla belirlenen tane konumları
 ve yönelimleri `grain-nodes.txt` içinde saklanır.

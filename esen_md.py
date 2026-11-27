@@ -3,7 +3,7 @@
 from dataclasses import asdict, dataclass, replace
 from fractions import Fraction
 import json
-from math import asin, cbrt, degrees, isfinite, prod, sqrt
+from math import asin, degrees, floor, isfinite, prod, sqrt
 import os
 from pathlib import Path
 import random
@@ -49,7 +49,8 @@ def read_plan(folder):
 
 @dataclass(frozen=True)
 class Model:
-    target_atoms: int
+    requested_box_angstrom: tuple[float, float, float]
+    estimated_atoms: int
     repeats: tuple[int, ...]
     elements: tuple[str, ...]
     counts: tuple[int, ...]
@@ -67,7 +68,7 @@ class Model:
     def box(self):
         if self.grains == 1:
             return tuple(self.lattice * repeat for repeat in self.repeats)
-        return (self.lattice * cbrt(self.target_atoms / 2),) * 3
+        return self.requested_box_angstrom
 
 
 def _alloy_counts(atoms, percentages):
@@ -81,8 +82,8 @@ def _alloy_counts(atoms, percentages):
     return tuple(counts)
 
 
-def plan_model(composition, target_atoms, lattice, temperature, seed, *, grains=1):
-    """Plan a BCC supercell or a cubic box for a Voronoi polycrystal."""
+def plan_model(composition, dimensions_angstrom, lattice, temperature, seed, *, grains=1):
+    """Plan a periodic BCC crystal from requested box dimensions in ångströms."""
     entries = [part.strip().split(":") for part in composition.split(",")]
     elements = tuple(entry[0].strip() for entry in entries)
     if (any(not ELEMENT.fullmatch(element) for element in elements)
@@ -99,22 +100,27 @@ def plan_model(composition, target_atoms, lattice, temperature, seed, *, grains=
             raise ValueError("Atom yüzdeleri pozitif olmalı ve toplamı 100 olmalı.")
     else:
         raise ValueError("Yüzde belirtecekseniz her elementin yüzdesini yazın.")
-    if not 2 <= target_atoms <= MAX_ATOMS or not isfinite(lattice) or lattice <= 0:
-        raise ValueError("Hedef atom sayısını ve kafes parametresini kontrol edin.")
+    box = tuple(dimensions_angstrom)
+    if (len(box) != 3 or not isfinite(lattice) or lattice <= 0
+            or any(not isfinite(edge) or edge < lattice for edge in box)):
+        raise ValueError("Each box dimension must be at least one lattice parameter.")
     if temperature < 1 or not 1 <= seed <= 900_000_000:
         raise ValueError("Sıcaklığı ve rastgele tohumu kontrol edin.")
-    if not 1 <= grains <= MAX_GRAINS or (grains > 1 and target_atoms < 2 * grains):
-        raise ValueError("Tane sayısını ve hedef atom sayısını kontrol edin. Tane başına en az iki hedef atom gerekir.")
+    if not 1 <= grains <= MAX_GRAINS:
+        raise ValueError("Check the grain count.")
+    if grains > 1 and min(box) <= lattice:
+        raise ValueError("For a 3D polycrystal, each box dimension must exceed one lattice parameter.")
 
-    repeats, atoms = (), target_atoms
-    if grains == 1:
-        side = 1
-        while 2 * (side + 1) ** 3 <= target_atoms:
-            side += 1
-        candidates = [(side,) * (3 - extra) + (side + 1,) * extra for extra in range(4)]
-        repeats = min(candidates, key=lambda cell: abs(2 * prod(cell) - target_atoms))
-        atoms = 2 * prod(repeats)
-    return Model(target_atoms, repeats, elements, _alloy_counts(atoms, fractions), lattice,
+    cell_lengths = tuple(edge / lattice for edge in box)
+    if max(cell_lengths) > MAX_ATOMS:
+        raise ValueError("The box exceeds the supported atom count.")
+    repeats = tuple(floor(length + 0.5) for length in cell_lengths) if grains == 1 else ()
+    atoms = 2 * prod(repeats) if repeats else round(2 * prod(cell_lengths))
+    if atoms > MAX_ATOMS:
+        raise ValueError("The box exceeds the supported atom count.")
+    if atoms < 2 * grains:
+        raise ValueError("Increase the box dimensions or reduce the grain count.")
+    return Model(box, atoms, repeats, elements, _alloy_counts(atoms, fractions), lattice,
                  temperature, seed, grains, tuple(fractions))
 
 

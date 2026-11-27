@@ -33,23 +33,28 @@ def potentials(tmp_path):
     return library, parameters
 
 
-def test_model_matches_e20_and_rounds_close_to_a_bcc_cell():
-    model = md.plan_model("Hf, Nb, Ta, Ti, Zr", 250_000, 3.4, 300, 42)
+def test_requested_box_preserves_default_and_rounds_each_axis_to_bcc_cells():
+    model = md.plan_model("Hf, Nb, Ta, Ti, Zr", (170, 170, 170), 3.4, 300, 42)
     assert model.repeats == (50, 50, 50)
     assert model.counts == (50_000,) * 5
-    smaller = md.plan_model("Hf:25, Nb:75", 17, 3.4, 300, 42)
-    assert smaller.repeats == (2, 2, 2)
-    assert smaller.counts == (4, 12)
+    smaller = md.plan_model("Hf:25, Nb:75", (7.1, 9.7, 13.5), 3.4, 300, 42)
+    assert smaller.repeats == (2, 3, 4)
+    assert smaller.box == pytest.approx((6.8, 10.2, 13.6))
+    assert smaller.counts == (12, 36)
+    with pytest.raises(ValueError, match="3D polycrystal"):
+        md.plan_model("Nb", (3.4, 10, 14), 3.4, 300, 42, grains=3)
+    with pytest.raises(ValueError, match="exceeds"):
+        md.plan_model("Nb", (1_000, 1_000, 1_000), 3.4, 300, 42)
     with pytest.raises(ValueError):
-        md.plan_model("Hf:20, Nb:75", 16, 3.4, 300, 42)
+        md.plan_model("Hf:20, Nb:75", (6.8, 6.8, 6.8), 3.4, 300, 42)
     with pytest.raises(ValueError):
-        md.plan_model("Hf, Hf", 16, 3.4, 300, 42)
+        md.plan_model("Hf, Hf", (6.8, 6.8, 6.8), 3.4, 300, 42)
 
 
 @pytest.mark.parametrize(("cutoff", "skin"), ((5.0, 3.0), (4.0, 3.9)))
 def test_package_distinguishes_meam_indices_from_atom_types(tmp_path, potentials, cutoff, skin):
     potentials[1].write_text(f"rc = {cutoff}\nEc(1,2) = 4.5\n", encoding="ascii")
-    model = md.plan_model("Hf:25, Nb:75", 16, 3.4, 300, 42)
+    model = md.plan_model("Hf:25, Nb:75", (6.8, 6.8, 6.8), 3.4, 300, 42)
     order = md.meam_order(md.documented_meam_order(*potentials), model.elements)
     assert order == ("Nb", "Hf")
 
@@ -78,7 +83,7 @@ def test_package_distinguishes_meam_indices_from_atom_types(tmp_path, potentials
 
 
 def test_bad_meam_indices_stop_before_atomsk(tmp_path, potentials):
-    model = md.plan_model("Hf, Nb", 16, 3.4, 300, 42)
+    model = md.plan_model("Hf, Nb", (6.8, 6.8, 6.8), 3.4, 300, 42)
     potentials[1].write_text("Ec(1,3) = 4.5\n", encoding="ascii")
     output = tmp_path / "packages"
     with patch("esen_md.subprocess.run") as run_atomsk, pytest.raises(ValueError, match="Ec"):
@@ -88,7 +93,7 @@ def test_bad_meam_indices_stop_before_atomsk(tmp_path, potentials):
 
 
 def test_potential_cutoff_shorter_than_cna_stops_before_atomsk(tmp_path, potentials):
-    model = md.plan_model("Hf, Nb", 16, 3.4, 300, 42)
+    model = md.plan_model("Hf, Nb", (6.8, 6.8, 6.8), 3.4, 300, 42)
     potentials[1].write_text("rc = 3.8 # shorter than E20 CNA\n", encoding="ascii")
     with patch("esen_md.subprocess.run") as run_atomsk, pytest.raises(ValueError, match=r"rc = 3\.8.*3\.9"):
         md.prepare_job(tmp_path, model, *potentials, ("Nb", "Hf"), "atomsk")
@@ -97,7 +102,7 @@ def test_potential_cutoff_shorter_than_cna_stops_before_atomsk(tmp_path, potenti
 
 
 def test_polycrystal_package_uses_actual_atom_count_and_seeded_nodes(tmp_path, potentials):
-    model = md.plan_model("Hf:25, Nb:75", 20, 3.4, 300, 42, grains=3)
+    model = md.plan_model("Hf:25, Nb:75", (6.8, 10.2, 13.6), 3.4, 300, 42, grains=3)
     order = md.meam_order("Nb Hf", model.elements)
     node_files = []
 
@@ -124,6 +129,8 @@ def test_polycrystal_package_uses_actual_atom_count_and_seeded_nodes(tmp_path, p
     assert list(map(float, box.split()[1:])) == pytest.approx(model.box)
     assert len(nodes) == 3 and all(line.startswith("node ") for line in nodes)
     metadata = json.loads((second / "model.json").read_text())
+    assert metadata["estimated_atoms"] == 48
+    assert metadata["requested_box_angstrom"] == metadata["box_angstrom"] == [6.8, 10.2, 13.6]
     assert (metadata["grains"], metadata["atoms"], metadata["counts"]) == (3, 16, [4, 12])
     assert Counter(line.split()[1] for line in (first / "structure.lmp").read_text().split(
         "Atoms # atomic")[1].splitlines() if line) == {"1": 4, "2": 12}
@@ -245,10 +252,25 @@ def test_md_tab_enter_previews_and_submits_package_to_truba(tmp_path, potentials
         assert workspace.tabs.count() == 1
         assert workspace.tabs.tabText(0) == "MD Preparation"
         assert not workspace.md_grains.isVisible()
-        workspace.md_atoms.lineEdit().setText("128")
-        QTest.keyClick(workspace.md_atoms.lineEdit(), Qt.Key.Key_Return)
-        assert workspace.md_atoms.value() == 128
-        assert "4 × 4 × 4" in workspace.md_preview.toPlainText()
+        workspace.md_dimensions[1].setValue(1.02)
+        workspace.md_dimensions[2].setValue(1.36)
+        length = workspace.md_dimensions[0]
+        length.lineEdit().setText("0.7")
+        QTest.keyClick(length.lineEdit(), Qt.Key.Key_Return)
+        assert length.value() == pytest.approx(0.7)
+        assert preferences.value("esen/md/box/x", type=float) == pytest.approx(0.7)
+        preview = workspace.md_preview.toPlainText()
+        assert "2 × 3 × 4" in preview
+        assert "0.68 × 1.02 × 1.36 nm" in preview
+        assert "Generated atom count   48" in preview
+        assert "rounded" in preview
+
+        for source_button in workspace.md_file_buttons[1::2]:
+            with patch("esen_workspace.QDesktopServices.openUrl") as open_url:
+                source_button.menu().actions()[1].trigger()
+                open_url.assert_called_once()
+                assert open_url.call_args.args[0].host() == "www.ctcms.nist.gov"
+        length.setValue(1.36)
         assert workspace.md_task is None
         workspace.md_crystal.setCurrentIndex(workspace.md_crystal.findData("poly"))
         assert workspace.md_grains.isVisible()

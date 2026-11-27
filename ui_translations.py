@@ -86,12 +86,22 @@ Crystal type|Kristal tipi
 Grain count|Tane sayısı
 Number of Voronoi grains in the periodic box.|Periyodik kutudaki Voronoi tane sayısı.
 Box dimensions|Kutu boyutları
+Requested box dimensions|Girilen kutu boyutları
+Box length X|Kutu boyutu X
+Box length Y|Kutu boyutu Y
+Box length Z|Kutu boyutu Z
+Estimated atom count|Tahmini atom sayısı
+Each box dimension must be at least one lattice parameter.|Her kutu boyutu en az kafes parametresi kadar olmalı.
+For a 3D polycrystal, each box dimension must exceed one lattice parameter.|Üç boyutlu polikristal için her kutu boyutu kafes parametresinden büyük olmalı.
+The box exceeds the supported atom count.|Kutu boyutları desteklenen atom sayısını aşıyor.
+Check the grain count.|Tane sayısını kontrol edin.
+Increase the box dimensions or reduce the grain count.|Kutu boyutlarını artırın veya tane sayısını azaltın.
 Characteristic grain size|Karakteristik tane boyutu
 Atom count and composition counts are estimates until Atomsk builds the grain boundaries.|Atomsk tane sınırlarını oluşturana kadar atom sayıları tahminidir.
 How to choose parameters|Parametreler nasıl seçilir?
 The lattice parameter a is one BCC cell edge in Å. Use a value for the same alloy and phase. The initial 3.4000 Å is an example.|Kafes parametresi a, BCC birim hücresinin kenarıdır (Å). Aynı alaşım ve faz için belirlenmiş değeri kullanın. Başlangıçtaki 3,4000 Å örnek değerdir.
 From the BCC (110) XRD spacing, use a = √2 × d₁₁₀. With MEAM, relax a small periodic single crystal at zero pressure. At the target temperature, average the equilibrated NPT box length and divide by the cell repeats along that axis.|XRD’deki BCC (110) düzlem aralığından a = √2 × d₁₁₀ hesaplanır. MEAM ile küçük bir periyodik tek kristali sıfır basınçta gevşetin. Hedef sıcaklıkta NPT dengelemesi sonrası ortalama kutu uzunluğunu o eksendeki hücre tekrar sayısına bölün.
-BCC has two atoms per cell. For a polycrystal, atom count sets the box volume and grain count sets the average grain volume. Fix the random seed to reproduce grain positions, orientations and alloy site assignments.|BCC birim hücresinde iki atom vardır. Polikristalde hedef atom sayısı kutu hacmini, tane sayısı ise ortalama tane hacmini belirler. Tane konumlarını, yönelimlerini ve alaşım atom dağılımını tekrarlamak için aynı rastgele tohumu kullanın.
+BCC has two atoms per cell. For a polycrystal, the box volume divided by the grain count gives the mean grain volume. Fix the random seed to reproduce grain positions, orientations and alloy site assignments.|BCC birim hücresinde iki atom vardır. Polikristalde kutu hacminin tane sayısına bölümü ortalama tane hacmini verir. Tane konumlarını, yönelimlerini ve alaşım atom dağılımını tekrarlamak için aynı rastgele tohumu kullanın.
 The E20 template uses a fixed 3.9 Å CNA cutoff. Check the cutoff for your lattice parameter before interpreting CNA results.|E20 şablonunun CNA kesim yarıçapı sabit 3,9 Å’dur. CNA sonuçlarını yorumlamadan önce yarıçapın kafes parametrenize uygunluğunu kontrol edin.
 Use calculated a|Hesaplanan a’yı kullan
 Prepare package|Paketi hazırla
@@ -109,6 +119,13 @@ Random seed|Rastgele tohum
 TRUBA queue|TRUBA kuyruğu
 MEAM library|MEAM kütüphanesi
 MEAM parameters|MEAM parametreleri
+Sources|Kaynaklar
+Find the MEAM library and parameters supplied together for your alloy.|Alaşımınız için birlikte yayımlanan MEAM kütüphanesini ve parametre dosyasını bulun.
+MEAM library sources|MEAM kütüphanesi kaynakları
+MEAM parameter sources|MEAM parametre kaynakları
+LAMMPS potential files|LAMMPS potansiyel dosyaları
+NIST potentials by element system|Element sistemine göre NIST potansiyelleri
+LAMMPS MEAM file guide|LAMMPS MEAM dosya kılavuzu
 MEAM element order|MEAM element sırası
 Example: Hf Nb Ta Ti Zr|Örnek Hf Nb Ta Ti Zr
 Enter the element order used by indices in the MEAM parameter file.|MEAM parametre dosyasındaki indekslerin izlediği element sırasını yazın.
@@ -117,7 +134,7 @@ MEAM files (*.meam);;All files (*)|MEAM dosyaları (*.meam);;Tüm dosyalar (*)
 Preview model|Modeli önizle
 Prepare and run on TRUBA|Hazırla ve TRUBA’da çalıştır
 BCC supercell|BCC süper hücresi
-The nearest nearly cubic BCC supercell is shown.|Hedefe en yakın, kenar tekrarları dengeli BCC hücresi gösteriliyor.
+Box dimensions were rounded to whole BCC unit cells.|Kutu boyutları tam BCC birim hücrelerine yuvarlandı.
 Atomsk → Minimization → Equilibration → Tension and CNA|Atomsk → Minimizasyon → Dengeleme → Çekme ve CNA
 Choose the MEAM library and parameter files.|MEAM kütüphanesini ve parametre dosyasını seçin.
 Generating the structure with Atomsk…|Atomsk ile yapı üretiliyor…
