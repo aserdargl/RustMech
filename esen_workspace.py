@@ -18,7 +18,7 @@ from app_settings import show_application_settings
 from esen_elements import AlloyElements
 import esen_jobs as jobs
 import esen_md as md
-from esen_meam_catalog import LAMMPS_MEAM, load_nist_catalog, matching_sources
+from esen_meam_catalog import LAMMPS_MEAM, download_meam_source, load_nist_catalog, matching_sources
 from file_dialog import QFileDialog
 from studio_style import (
     ActionFlowLayout, CompactComboBox, CompactDoubleSpinBox, CompactSpinBox, CONTROL_HEIGHT,
@@ -133,11 +133,16 @@ class EsenWorkspace(QDialog):
         self.truba = truba
         self.standalone = standalone
         self.history_root = history if history is not None else jobs.jobs_directory()
-        self.md_plans_root = self.history_root.parent / "md-preparations"
         self.preferences = QSettings("RustMech", "RustMech")
+        self.md_default_plans_root = self.history_root.parent / "md-preparations"
+        saved_folder = self.preferences.value("esen/md/projectFolder", "", type=str)
+        self.md_project_folder = Path(saved_folder) if saved_folder else None
+        saved_aliases = self.preferences.value("esen/md/meamAliases", {})
+        self.md_aliases = saved_aliases if isinstance(saved_aliases, dict) else {}
         self.executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="md")
         self.md_task = None
         self.md_prepared = None
+        self.md_download_task = None
         self.md_catalog_task = None
         self.md_nist_sources = None
         self.md_catalog_failed = False
@@ -168,7 +173,7 @@ class EsenWorkspace(QDialog):
         language = getattr(QApplication.instance(), "_rustmech_language", None)
         if language is not None:
             for button in (self.md_preview_button, self.md_prepare, self.md_run,
-                           self.md_retry_sources,
+                           self.md_retry_sources, self.md_pick_project,
                            *(button for _, _, button in self.md_source_groups.values()),
                            *self.md_file_buttons, *self.md_plan_buttons):
                 language.localize(button)
@@ -232,6 +237,15 @@ class EsenWorkspace(QDialog):
         self.md_settings_form = form
         top.addWidget(inputs)
         top.setSizes([640, 640])
+
+        self.md_project_path = QLineEdit(str(self.md_project_folder or ""))
+        self.md_project_path.setReadOnly(True)
+        self.md_pick_project = command("Choose folder…", self._choose_md_project)
+        project_row = QHBoxLayout()
+        project_row.setSpacing(4)
+        project_row.addWidget(self.md_project_path, 1)
+        project_row.addWidget(self.md_pick_project)
+        self._form_row(form, "Project folder", self.md_project_path, field_layout=project_row)
 
         self.md_crystal = compact_combo((("BCC single crystal", "single"), ("BCC polycrystal", "poly")))
         self._form_row(form, "Crystal type", self.md_crystal)
@@ -370,7 +384,8 @@ class EsenWorkspace(QDialog):
             entries.setAccessibleName(title)
             entries.setMinimumHeight(90)
             entries.setWordWrap(True)
-            entries.itemActivated.connect(self._open_md_source)
+            entries.itemClicked.connect(self._select_md_source)
+            entries.itemActivated.connect(self._select_md_source)
             open_source = command(
                 "Open source", lambda _checked=False, source=entries: self._open_md_source(source.currentItem())
             )
@@ -414,15 +429,15 @@ class EsenWorkspace(QDialog):
             entries, status, open_source = self.md_source_groups[provider]
             matches = matching_sources(catalog, selected)
             previous = entries.currentItem()
-            previous_url = previous.data(Qt.ItemDataRole.UserRole) if previous is not None else None
+            previous_source = previous.data(Qt.ItemDataRole.UserRole) if previous is not None else None
             entries.clear()
             for entry in matches:
                 elements = "–".join(sorted(entry.elements))
                 item = QListWidgetItem(f"{elements}\n{entry.name}")
                 item.setToolTip(item.text())
-                item.setData(Qt.ItemDataRole.UserRole, entry.url)
+                item.setData(Qt.ItemDataRole.UserRole, entry)
                 entries.addItem(item)
-                if entry.url == previous_url:
+                if entry == previous_source:
                     entries.setCurrentItem(item)
             if matches and entries.currentItem() is None:
                 entries.setCurrentRow(0)
@@ -445,7 +460,59 @@ class EsenWorkspace(QDialog):
     @staticmethod
     def _open_md_source(item):
         if item is not None:
-            QDesktopServices.openUrl(QUrl(item.data(Qt.ItemDataRole.UserRole)))
+            QDesktopServices.openUrl(QUrl(item.data(Qt.ItemDataRole.UserRole).url))
+
+    @property
+    def md_plans_root(self):
+        if self.md_project_folder is not None:
+            return self.md_project_folder / "md-preparations"
+        return self.md_default_plans_root
+
+    def _choose_md_project(self):
+        initial = str(self.md_project_folder or Path.home())
+        folder = QFileDialog.getExistingDirectory(self, translate("Choose project folder"), initial)
+        if not folder:
+            return False
+        path = Path(folder).resolve()
+        if not path.is_dir():
+            self.md_note.setText(translate("Choose an existing project folder."))
+            return False
+        self.md_project_folder = path
+        self.md_project_path.setText(str(path))
+        self.preferences.setValue("esen/md/projectFolder", str(path))
+        self.md_prepared = None
+        self._refresh_md_plans()
+        return True
+
+    def _select_md_source(self, item):
+        if self.md_download_task is not None or self.md_task is not None or self._disposed:
+            return
+        source = item.data(Qt.ItemDataRole.UserRole)
+        if ((self.md_project_folder is None or not self.md_project_folder.is_dir())
+                and not self._choose_md_project()):
+            return
+        self.md_download_task = self.executor.submit(download_meam_source, source, self.md_project_folder)
+        self._set_md_inputs_enabled(False)
+        self.md_note.setText(translate("Downloading MEAM files for {name}…").format(name=source.name))
+
+    def _check_md_download(self):
+        if self.md_download_task is None or not self.md_download_task.done():
+            return
+        task, self.md_download_task = self.md_download_task, None
+        self._set_md_inputs_enabled(True)
+        try:
+            downloaded = task.result()
+        except Exception as error:
+            message = translate("Could not download the MEAM files.")
+            self.md_note.setText(f"{message}\n{translate(str(error))}")
+            return
+        self.md_prepared = None
+        self._set_md_meam_file("library", downloaded.library)
+        self._set_md_meam_file("parameters", downloaded.parameters)
+        self._set_md_meam_aliases(downloaded.aliases)
+        self.md_order.setText(" ".join(downloaded.order))
+        self._save_md_order()
+        self.md_note.setText(translate("MEAM files saved in {path}").format(path=downloaded.library.parent))
 
     def _build_md_plans(self):
         card, layout = panel("Saved MD plans", paper=True)
@@ -483,8 +550,9 @@ class EsenWorkspace(QDialog):
             selected = previous.data(Qt.ItemDataRole.UserRole)
         imported = self.preferences.value("esen/md/importedPlans", [], type=list)
         folders = {Path(path) for path in imported}
-        if self.md_plans_root.is_dir():
-            folders.update(self.md_plans_root.glob("md-bcc-*"))
+        for root in {self.md_plans_root, self.md_default_plans_root}:
+            if root.is_dir():
+                folders.update(root.glob("md-bcc-*"))
         plans = []
         for folder in folders:
             try:
@@ -597,9 +665,8 @@ class EsenWorkspace(QDialog):
                                                   translate("MEAM files (*.meam);;All files (*)"))
         if filename:
             self.md_prepared = None
-            field.setText(filename)
-            field.setToolTip(filename)
-            self.preferences.setValue(f"esen/md/{key}", filename)
+            self._set_md_meam_file(key, filename)
+            self._set_md_meam_aliases({})
             self.md_order.clear()
             try:
                 self.md_order.setText(md.documented_meam_order(Path(self.md_library.text()),
@@ -608,6 +675,17 @@ class EsenWorkspace(QDialog):
             except OSError as error:
                 self.md_note.setText(str(error))
             self._save_md_order()
+
+    def _set_md_meam_file(self, key, path):
+        filename = str(path)
+        field = getattr(self, f"md_{key}")
+        field.setText(filename)
+        field.setToolTip(filename)
+        self.preferences.setValue(f"esen/md/{key}", filename)
+
+    def _set_md_meam_aliases(self, aliases):
+        self.md_aliases = aliases
+        self.preferences.setValue("esen/md/meamAliases", aliases)
 
     def _save_md_order(self):
         self.preferences.setValue("esen/md/order", self.md_order.text())
@@ -658,29 +736,31 @@ class EsenWorkspace(QDialog):
         self.md_preview.setPlainText("\n".join(lines))
 
     def _start_md(self):
-        if self.md_task is not None:
+        if self.md_task is not None or self.md_download_task is not None:
             return
         self._md_preview()
         try:
+            if self.md_project_folder is not None and not self.md_project_folder.is_dir():
+                raise ValueError("Choose an existing project folder.")
             model = self._md_model()
-            order = md.meam_order(self.md_order.text(), model.elements)
+            atom_symbols = (self.md_aliases.get(element, element) for element in model.elements)
+            order = md.meam_order(self.md_order.text(), atom_symbols)
             library, parameters = Path(self.md_library.text()), Path(self.md_parameters.text())
             if not library.is_file() or not parameters.is_file():
                 raise ValueError(translate("Choose the MEAM library and parameter files."))
             inputs = (model, library, parameters, order)
-            request = (inputs, tuple(path.stat().st_mtime_ns for path in (library, parameters)))
+            request = (inputs, tuple(path.stat().st_mtime_ns for path in (library, parameters)), self.md_aliases)
             if self.md_prepared is not None and self.md_prepared[0] == request and self.md_prepared[1].is_dir():
                 self._finish_md(self.md_prepared[1])
                 return
             executable = md.atomsk_executable()
-            future = self.executor.submit(md.prepare_job, self.md_plans_root, *inputs, executable)
+            future = self.executor.submit(md.prepare_job, self.md_plans_root, *inputs, executable,
+                                          aliases=self.md_aliases)
         except (OSError, ValueError) as error:
             self.md_note.setText(translate(str(error)))
             return
         self.md_task = future, request
-        self.md_elements.setEnabled(False)
-        self.md_form.setEnabled(False)
-        self.md_prepare.setEnabled(False)
+        self._set_md_inputs_enabled(False)
         self.md_note.setText(translate("Generating the structure with Atomsk…"))
 
     def _check_md(self):
@@ -688,9 +768,7 @@ class EsenWorkspace(QDialog):
             return
         future, request = self.md_task
         self.md_task = None
-        self.md_elements.setEnabled(True)
-        self.md_form.setEnabled(True)
-        self.md_prepare.setEnabled(True)
+        self._set_md_inputs_enabled(True)
         try:
             folder = future.result()
             self.md_prepared = request, folder
@@ -698,6 +776,11 @@ class EsenWorkspace(QDialog):
         except Exception as error:
             folder = self.md_prepared[1] if self.md_prepared and self.md_prepared[0] == request else None
             self.md_note.setText(f"{error}\n{folder}" if folder is not None else str(error))
+
+    def _set_md_inputs_enabled(self, enabled):
+        for widget in (self.md_elements, self.md_form, self.md_prepare,
+                       *(entries for entries, _, _ in self.md_source_groups.values())):
+            widget.setEnabled(enabled)
 
     def _remote_settings(self, partition, auth):
         # MD submission previously inherited these values from saved LAMMPS profiles.
@@ -798,6 +881,7 @@ class EsenWorkspace(QDialog):
 
     def _tick(self):
         self._check_md_sources()
+        self._check_md_download()
         if self.remote_task is not None and self.remote_task[1].done():
             directory, future, submitting = self.remote_task
             self.remote_task = None

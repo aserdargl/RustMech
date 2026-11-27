@@ -66,7 +66,11 @@ RustMech, GPL-3.0-or-later ile lisanslanır. [License](#license) bölümüne ve 
 **Ekle**’yi seçin. Listedeki her elementin atom yüzdesini girin ve toplamın
 %100 olduğunu kontrol edin. X, Y ve Z kutu boyutlarını nanometre cinsinden
 girin ve önizlemedeki atom sayısını kontrol edin.
-MEAM kütüphanesini ve parametre dosyasını seçin. Her iki alanın yanındaki
+**Proje klasörü** alanından bir klasör seçin. NIST veya LAMMPS listesinden
+bir potansiyele tıkladığınızda kütüphane ve parametre dosyaları proje
+klasörünün `meam-potentials` alt klasörüne indirilir ve MEAM alanları
+doldurulur. Hazırlanan paketler `md-preparations` alt klasöründe saklanır.
+MEAM dosyalarını elle de seçebilirsiniz. Her iki alanın yanındaki
 **Kaynaklar** menüsü LAMMPS dosyalarına, NIST potansiyel arşivine ve MEAM
 dosya kılavuzuna erişim sağlar. Alaşımınız için birlikte yayımlanan dosya
 çiftini kullanın.

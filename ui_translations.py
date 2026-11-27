@@ -97,6 +97,18 @@ Increase the box dimensions or reduce the grain count.|Kutu boyutlarını artır
 Characteristic grain size|Karakteristik tane boyutu
 Atom count and composition counts are estimates until Atomsk builds the grain boundaries.|Atomsk tane sınırlarını oluşturana kadar atom sayıları tahminidir.
 Package settings|Paket ayarları
+Project folder|Proje klasörü
+Choose folder…|Klasör seç…
+Choose project folder|Proje klasörünü seç
+Choose an existing project folder.|Mevcut bir proje klasörü seçin.
+Downloading MEAM files for {name}…|{name} için MEAM dosyaları indiriliyor…
+Could not download the MEAM files.|MEAM dosyaları indirilemedi.
+MEAM files saved in {path}|MEAM dosyaları {path} klasörüne kaydedildi.
+The source does not specify a MEAM library and parameter pair.|Kaynakta MEAM kütüphanesi ve parametre dosyası çifti belirtilmemiş.
+The source does not specify a usable MEAM element order.|Kaynakta kullanılabilir bir MEAM element sırası belirtilmemiş.
+Unexpected MEAM source file contents.|MEAM kaynak dosyasının içeriği beklenen biçimde değil.
+The MEAM folder is outside the project folder.|MEAM klasörü proje klasörünün dışında.
+Each alloy element needs a distinct MEAM symbol.|Her alaşım elementi için farklı bir MEAM sembolü gerekir.
 Prepare package|Paketi hazırla
 Package prepared at {path}|Paket hazırlandı. {path}
 Alloy elements|Elementler

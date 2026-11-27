@@ -18,6 +18,7 @@ from esen_md_protocol import ANALYSIS, CNA_CUTOFF, ENTRY, INITIAL, RESTART, RESU
 
 
 ELEMENT = re.compile(r"[A-Z][a-z]?")
+MEAM_SYMBOL = re.compile(r"[A-Za-z][A-Za-z0-9_+-]*")
 MEAM_INDEX = re.compile(r"^\w+\s*\(\s*(\d+(?:\s*,\s*\d+)*)\s*\)\s*=")
 MAX_ATOMS = 10_000_000
 MAX_GRAINS = 256
@@ -37,8 +38,8 @@ def read_plan(folder):
     if (not isinstance(data, dict)
             or not all(type(data.get(key)) is int for key in ("atoms", "temperature", "grains"))
             or not all(isinstance(data.get(key), list) and data[key]
-                       and all(isinstance(symbol, str) and ELEMENT.fullmatch(symbol) for symbol in data[key])
-                       for key in ("elements", "meam_order"))
+                       and all(isinstance(symbol, str) and pattern.fullmatch(symbol) for symbol in data[key])
+                       for key, pattern in (("elements", ELEMENT), ("meam_order", MEAM_SYMBOL)))
             or not isinstance(data.get("counts"), list)
             or len(data["counts"]) != len(data["elements"])
             or not all(type(count) is int and count > 0 for count in data["counts"])
@@ -138,7 +139,7 @@ def _grain_nodes(model):
 
 def meam_order(text, elements):
     order = tuple(text.replace(",", " ").split())
-    if (any(not ELEMENT.fullmatch(element) for element in order)
+    if (any(not MEAM_SYMBOL.fullmatch(element) for element in order)
             or len(set(order)) != len(order) or not set(elements).issubset(order)):
         raise ValueError("MEAM parametre sırasını yazın ve alaşımdaki tüm elementleri ekleyin.")
     return order
@@ -267,8 +268,13 @@ def _run_atomsk(arguments, scratch, output):
     return log
 
 
-def prepare_job(parent, model, library, parameters, order, executable):
+def prepare_job(parent, model, library, parameters, order, executable, *, aliases=None):
     """Publish the package only after Atomsk and input validation both succeed."""
+    aliases = aliases or {}
+    atom_symbols = tuple(aliases.get(element, element) for element in model.elements)
+    if len(set(atom_symbols)) != len(atom_symbols):
+        raise ValueError("Each alloy element needs a distinct MEAM symbol.")
+    meam_order(" ".join(order), atom_symbols)
     parent.mkdir(parents=True, exist_ok=True)
     with TemporaryDirectory(prefix=".preparing-", dir=parent) as staging:
         scratch = Path(staging)
@@ -290,12 +296,13 @@ def prepare_job(parent, model, library, parameters, order, executable):
             log += _run_atomsk([executable, "--polycrystal", "seed.xsf", "package/grain-nodes.txt", raw,
                                 "-wrap", "-remove-doubles", overlap_distance], scratch, raw)
         model = _assign_alloy(scratch / raw, package / "structure.lmp", model,
-                              {element: masses[element] for element in model.elements})
+                              {element: masses[symbol] for element, symbol in zip(model.elements, atom_symbols)})
         # Use the existing E20 protocol for every composition in this template.
         run_variables = (f"variable T index {model.temperature}\n"
                          f"variable tohum index {model.seed}\n"
                          "variable cikti_oneki index md-bcc\n")
         analysis = ANALYSIS.replace("@MEAM_ORDER@", " ".join(order))
+        analysis = analysis.replace("@MEAM_MAP@", " ".join(atom_symbols))
         analysis = analysis.replace("@ATOM_TYPES@", " ".join(model.elements))
         # CNA needs the force cutoff plus skin to exceed twice its own cutoff.
         skin = max(3.0, 2 * CNA_CUTOFF - cutoff + 0.1)

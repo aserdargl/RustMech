@@ -30,7 +30,7 @@ variable srate equal 1.0e10
 variable srate1 equal v_srate/1.0e12
 
 pair_style meam
-pair_coeff * * meam_kutuphane.meam @MEAM_ORDER@ meam_parametreler.meam @ATOM_TYPES@
+pair_coeff * * meam_kutuphane.meam @MEAM_ORDER@ meam_parametreler.meam @MEAM_MAP@
 # The preparation validates the MEAM cutoff and sets a sufficient neighbor skin.
 neighbor @NEIGHBOR_SKIN@ bin
 neigh_modify delay 20

@@ -3,6 +3,7 @@
 from collections import Counter
 from concurrent.futures import Future
 import json
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -57,12 +58,19 @@ def test_requested_box_preserves_default_and_rounds_each_axis_to_bcc_cells():
         md.plan_model("Hf, Hf", (6.8, 6.8, 6.8), 3.4, 300, 42)
 
 
-@pytest.mark.parametrize(("cutoff", "skin"), ((5.0, 3.0), (4.0, 3.9)))
-def test_package_distinguishes_meam_indices_from_atom_types(tmp_path, potentials, cutoff, skin):
+@pytest.mark.parametrize(("cutoff", "skin", "aliases"), (
+    (5.0, 3.0, {}), (4.0, 3.9, {}), (5.0, 3.0, {"Hf": "HfAlt"}),
+))
+def test_package_distinguishes_meam_indices_from_atom_types(tmp_path, potentials, cutoff, skin, aliases):
     potentials[1].write_text(f"rc = {cutoff}\nEc(1,2) = 4.5\n", encoding="ascii")
     model = md.plan_model("Hf:25, Nb:75", (6.8, 6.8, 6.8), 3.4, 300, 42)
     order = md.meam_order(md.documented_meam_order(*potentials), model.elements)
     assert order == ("Nb", "Hf")
+    hf_symbol = aliases.get("Hf", "Hf")
+    if aliases:
+        library_contents = potentials[0].read_text(encoding="ascii")
+        potentials[0].write_text(library_contents.replace("'Hf'", f"'{hf_symbol}'"), encoding="ascii")
+        order = ("Nb", hf_symbol)
 
     def fake_atomsk(argv, *, cwd, **_):
         assert argv[1:9] == ["--create", "bcc", "3.4", "Hf", "-duplicate", "2", "2", "2"]
@@ -74,18 +82,20 @@ def test_package_distinguishes_meam_indices_from_atom_types(tmp_path, potentials
         return SimpleNamespace(returncode=0, stdout=b"Atomsk finished")
 
     with patch("esen_md.subprocess.run", side_effect=fake_atomsk):
-        first = md.prepare_job(tmp_path, model, *potentials, order, "atomsk")
-        second = md.prepare_job(tmp_path, model, *potentials, order, "atomsk")
+        first = md.prepare_job(tmp_path, model, *potentials, order, "atomsk", aliases=aliases)
+        second = md.prepare_job(tmp_path, model, *potentials, order, "atomsk", aliases=aliases)
     data = (first / "structure.lmp").read_text()
     assert data == (second / "structure.lmp").read_text()
     assert Counter(line.split()[1] for line in data.split("Atoms # atomic")[1].splitlines() if line) == {
         "1": 4, "2": 12,
     }
     analysis = (first / "analiz.inc").read_text()
-    assert "meam_kutuphane.meam Nb Hf meam_parametreler.meam Hf Nb" in analysis
+    assert f"meam_kutuphane.meam Nb {hf_symbol} meam_parametreler.meam {hf_symbol} Nb" in analysis
     assert f"neighbor {skin:.1f} bin" in analysis
     assert "dump_modify atoms sort id element Hf Nb" in analysis
-    assert json.loads((first / "model.json").read_text())["counts"] == [4, 12]
+    manifest = md.read_plan(first)
+    assert manifest["counts"] == [4, 12]
+    assert manifest["meam_order"] == list(order)
 
 
 def test_bad_meam_indices_stop_before_atomsk(tmp_path, potentials):
@@ -318,6 +328,79 @@ def test_meam_sources_follow_selected_elements_and_recover_from_network_error(tm
             assert submit.call_count == 2
     finally:
         workspace.dispose()
+
+
+@pytest.mark.parametrize("provider", ("nist", "lammps"))
+def test_selecting_meam_source_downloads_both_files_into_saved_project(tmp_path, provider):
+    catalog = parse_nist_catalog(
+        'id,potid,elements,pair_style,status\n'
+        '2024--Cu--LAMMPS--ipr1,cu,"[\'Cu\']",meam,active\n'
+    )
+    nist_record = {"potential-LAMMPS": {
+        "pair_coeff": {"term": [{"file": "cu-library.dat"}, {"option": "CuAlt"}, {"file": "Cu.meam"}]},
+        "atom": {"element": "Cu", "symbol": "CuAlt"},
+    }}
+    library_name, order = ("cu-library.dat", "CuAlt") if provider == "nist" else ("library.meam", "Cu")
+    library_bytes, parameter_bytes = b"# library bytes\n", b"rc = 5\n"
+    responses = {library_name: library_bytes, "Cu.meam": parameter_bytes,
+                 "2024--Cu--LAMMPS--ipr1.json": json.dumps(nist_record).encode()}
+    app = QApplication.instance() or QApplication([])
+    preferences = QSettings(str(tmp_path / "qt.ini"), QSettings.Format.IniFormat)
+    project = tmp_path / "project files"
+    project.mkdir()
+    truba = SimpleNamespace(analysis_auth=lambda: None)
+    with patch("esen_workspace.QSettings", return_value=preferences):
+        workspace = EsenWorkspace(truba, history=tmp_path / "jobs")
+    try:
+        workspace.md_nist_sources = catalog
+        for element in tuple(workspace.md_elements.rows):
+            workspace.md_elements.remove_element(element)
+        workspace.md_elements.add_element("Cu", 100)
+        workspace.show()
+        app.processEvents()
+        entries, _, _ = workspace.md_source_groups[provider]
+        item = entries.item(0)
+        position = entries.visualItemRect(item).center()
+        with patch("esen_workspace.QFileDialog.getExistingDirectory", return_value=""):
+            QTest.mouseClick(entries.viewport(), Qt.MouseButton.LeftButton, pos=position)
+            assert workspace.md_download_task is None
+        with patch("esen_workspace.QFileDialog.getExistingDirectory", return_value=str(project)), \
+                patch("esen_meam_catalog._read_source", side_effect=lambda url: responses[url.rsplit("/", 1)[-1]]):
+            QTest.mouseClick(entries.viewport(), Qt.MouseButton.LeftButton, pos=position)
+            workspace.md_download_task.result(timeout=5)
+            workspace._check_md_download()
+        library = Path(workspace.md_library.text())
+        parameters = Path(workspace.md_parameters.text())
+        assert library.parent == parameters.parent
+        assert library.parent.parent == project / "meam-potentials"
+        assert (library.name, library.read_bytes()) == (library_name, library_bytes)
+        assert parameters.read_bytes() == parameter_bytes
+        assert workspace.md_order.text() == order
+        assert workspace.md_plans_root == project / "md-preparations"
+
+        del responses["Cu.meam"]
+        with patch("esen_meam_catalog._read_source", side_effect=lambda url: responses[url.rsplit("/", 1)[-1]]):
+            QTest.keyClick(entries, Qt.Key.Key_Return)
+            with pytest.raises(KeyError):
+                workspace.md_download_task.result(timeout=5)
+            workspace._check_md_download()
+        assert "Could not download" in workspace.md_note.text()
+        assert workspace.md_library.text() == str(library)
+        assert workspace.md_parameters.text() == str(parameters)
+        assert list(library.parent.parent.iterdir()) == [library.parent]
+    finally:
+        workspace.dispose()
+
+    with patch("esen_workspace.QSettings", return_value=preferences):
+        restored = EsenWorkspace(truba, history=tmp_path / "jobs")
+    try:
+        assert restored.md_project_path.text() == str(project)
+        assert restored.md_library.text() == str(library)
+        assert restored.md_parameters.text() == str(parameters)
+        assert restored.md_order.text() == order
+        assert restored.md_aliases == ({"Cu": "CuAlt"} if provider == "nist" else {})
+    finally:
+        restored.dispose()
 
 
 def test_md_tab_enter_previews_and_submits_package_to_truba(tmp_path, potentials):
