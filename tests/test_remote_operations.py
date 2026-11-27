@@ -26,7 +26,7 @@ class RemoteOperationTests(unittest.TestCase):
         with patch('chunked_surface.should_chunk', return_value=True), patch(
                 'chunked_surface.build_chunked_surface', side_effect=AssertionError('Unexpected chunking')), patch(
                 'remote_worker._run_operation', side_effect=generate):
-            for operation in OPERATIONS.keys() - {'probe', 'prepare'}:
+            for operation in OPERATIONS.keys() - {'probe', 'prepare', 'learning_train'}:
                 with self.subTest(operation=operation):
                     result = run_operation(dict(operation=operation, settings=asdict(settings)), Path('.'))
                     self.assertEqual(result.field_data['_surface_mode'][0], 'single')

@@ -391,11 +391,9 @@ def _save_doe_reports(record, directory, stage):
         return
     root = directory.parent.parent if record.get("background") else directory.parent
     if (root / "matrix.csv").is_file():
-        from new_doe_report import LEARNING_RUN_PREFIX, write_doe_report, write_learning_csv
+        from new_doe_report import write_doe_report, write_learning_csv
 
-        reports = [(write_doe_report, "DoE workbook")]
-        if root.name.startswith(LEARNING_RUN_PREFIX):
-            reports.append((write_learning_csv, "Deep Learning CSV"))
+        reports = [(write_doe_report, "DoE workbook"), (write_learning_csv, "Deep Learning CSV")]
         for write_report, name in reports:
             try:
                 write_report(root, only_finished=True)

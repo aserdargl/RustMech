@@ -7,14 +7,14 @@ SELECTOR_BUTTON_WIDTH = 100
 
 
 class DoENavigation(QWidget):
-    def __init__(self, pages):
+    def __init__(self, pages, titles=("DoE", "LHS")):
         super().__init__()
         self.setObjectName('doeNavigation')
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(4)
         self.buttons = QButtonGroup(self)
-        for index, title in enumerate(("DoE", "LHS")):
+        for index, title in enumerate(titles):
             button = QPushButton(title)
             button.setCheckable(True)
             button.setAutoDefault(False)

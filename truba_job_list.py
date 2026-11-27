@@ -21,10 +21,11 @@ OPERATIONS = {
     'flow_export': 'Flow export', 'flow_solve': 'Flow analysis',
     'thermal_export': 'Thermal export', 'thermal_solve': 'Thermal analysis',
     'mpm_solve': 'MPM compression',
+    'learning_train': 'Model training',
 }
 TERMINAL = SLURM_TERMINAL_STATES | {'DOWNLOADED', 'RELEASED', 'ENDED'}
 MONITORED_ANALYSES = {'mechanical', 'fft_solve', 'peridynamic_solve', 'flow_solve', 'thermal_solve', 'mpm_solve',
-                      'convergence_level', 'doe_solve'}
+                      'convergence_level', 'doe_solve', 'learning_train'}
 
 
 def terminal_record(record):

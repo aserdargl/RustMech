@@ -1522,6 +1522,36 @@ CHT Kartezyen ağla devam eder. Dağıtım EXE'si yeniden paketlenmedi.
 Tekrarlanabilir küçük çözücü kontrolleri:
 `python tools/verify_fitted_flow.py --output-root D:/MySoftware/RustMech/build`.
 
+### DoE sonuçlarından model eğitimi
+
+**Deney Tasarımı → Eğitim** sayfasında DoE veya LHS'nin ürettiği
+`deep_learning_dataset.csv` veya eski DoE sonuç CSV'sini açın. Sayısal sonuç
+sütununu, yöntemleri ve **Yerel** ya da **TRUBA** hedefini seçip eğitimi başlatın.
+Her çalıştırma bir sayısal hedef içindir. Veri aynı analiz türünden en az beş
+farklı geometri grubu içermelidir. Eğitim ve doğrulamaya ayrılan geometriler
+test grubuna girmez. Başarısız çözümler ve hedefi boş satırlar kullanılmaz.
+
+Gaussian Process, CatBoost, XGBoost ve MLP tablo girdilerini kullanır. 3B CNN
+ve GNN, RustMech'in ürettiği geometrilerin 24³ doluluk ızgarasını kullanır.
+GNN, bir yüzü paylaşan dolu vokseller arasında mesaj iletir. İçe aktarılan
+CAD geometrilerinde tablo yöntemleri ve açık bir `Geometry group` sütunu
+kullanılır. Tüm yöntemler CPU ile çalışır.
+
+Yerelde RustMech'i başlattığınız Python ortamına bağımlılıkları kurun:
+
+```powershell
+python -m pip install -r requirements-learning.txt
+python -m pip install "torch>=2.11,<3" --index-url https://download.pytorch.org/whl/cpu
+```
+
+TRUBA'da mevcut bağlantı ve kaynak ayarlarıyla bağımsız bir Slurm işi açılır.
+Hazırlanmış özel RustMech ortamında eksik eğitim paketleri ilk kullanımda
+kurulur. Özel bir Python yolu kullanıyorsanız paketleri o ortama kendiniz
+kurun. **Sonuçları aç**, model dosyalarını, girdi dönüşümlerini, test
+tahminlerini ve MAE/RMSE raporunu gösterir. TRUBA indirmeleri ve günlükleri
+mevcut iş kaydına eklenir. `.joblib` model dosyalarını yalnızca güvendiğiniz
+çalıştırmalardan yükleyin.
+
 ## License
 
 RustMech is free software licensed under the GNU General Public License v3.0 or later (GPL-3.0-or-later). See LICENSE.

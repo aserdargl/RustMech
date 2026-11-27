@@ -115,6 +115,8 @@ def _named_result_files(folder, names, prefix):
 def write_learning_csv(directory, target=None, *, states=None, details=None, grouped_output=None,
                        only_finished=False):
     """Join frozen inputs and published results, with one CSV record per experiment."""
+    from learning_data import GEOMETRY_KEYS
+
     directory = Path(directory).resolve()
     target = directory / LEARNING_CSV_NAME if target is None else Path(target)
     matrix = directory / "matrix.csv"
@@ -155,20 +157,23 @@ def write_learning_csv(directory, target=None, *, states=None, details=None, gro
         tables = dict(_named_result_files(folder, TABLES.get(operation, ()), "table"))
         metric_columns.update(dict.fromkeys(metrics))
         table_columns.update(dict.fromkeys(tables))
-        results.append((state, error, metrics, tables))
+        settings = record.get("inputs", {}).get("settings", {})
+        geometry = {key: settings[key] for key in GEOMETRY_KEYS if key in settings}
+        results.append((state, error, geometry, metrics, tables))
 
     temporary = target.with_name(f".{target.name}.{uuid4().hex}.tmp")
     try:
         with temporary.open("w", encoding="utf-8-sig", newline="") as stream:
             writer = csv.writer(stream)
-            writer.writerow([*inputs, "Status", "Error", *metric_columns, *table_columns])
-            for row, (state, error, metrics, tables) in zip(experiments, results, strict=True):
+            writer.writerow([*inputs, "Status", "Error", "Geometry settings (JSON)", *metric_columns, *table_columns])
+            for row, (state, error, geometry, metrics, tables) in zip(experiments, results, strict=True):
                 tabular = {}
                 for name, path in tables.items():
                     with path.open(encoding="utf-8-sig", newline="") as table:
                         values = [[_cell(value) for value in line] for line in csv.reader(table)]
                     tabular[name] = json.dumps(values, ensure_ascii=False, separators=(",", ":"))
-                writer.writerow([*row, state, error, *(metrics.get(key) for key in metric_columns),
+                writer.writerow([*row, state, error, json.dumps(geometry, ensure_ascii=False) if geometry else "",
+                                 *(metrics.get(key) for key in metric_columns),
                                  *(tabular.get(key) for key in table_columns)])
         temporary.replace(target)
     finally:

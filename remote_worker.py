@@ -57,9 +57,23 @@ def probe(request,missing=False):
                         foam_version=os.environ.get("WM_PROJECT_VERSION",""))
     capabilities["packages"] = {}
     capabilities["mpm"] = False
+    capabilities["learning"] = False
     if missing:
         capabilities["reasons"]["mesh"] = "Remote runtime is not installed. Use Prepare remote runtime."
         return capabilities
+    if full or operation == "learning_train":
+        from learning_data import METHODS
+        from learning_training import missing_dependencies
+
+        missing_packages = missing_dependencies(request.get("methods", METHODS))
+        capabilities["learning"] = not missing_packages
+        if missing_packages:
+            capabilities["reasons"]["learning"] = (
+                "Training packages available on demand in the private runtime. Missing: "
+                + ", ".join(missing_packages)
+            )
+        if not full:
+            return capabilities
     try:
         for name in ("numpy","scipy","skimage","pyvista","mesh_engine"):
             importlib.import_module(name)
@@ -204,6 +218,22 @@ def _batch(settings, mesh, *, result_root):
 def run_operation(request,output):
     from remote_operations import required_capability
     required_capability(request)
+    if request["operation"] == "learning_train":
+        from learning_training import DEPENDENCIES, missing_dependencies, train
+
+        missing = missing_dependencies(request["methods"])
+        if missing:
+            _stage("Preparing private training runtime")
+            script = Path(__file__).resolve().parent / "tools/truba/prepare-learning.sh"
+            subprocess.run(["bash", str(script), sys.executable,
+                            *(DEPENDENCIES[key] for key in missing)], check=True)
+            # The freshly started interpreter discovers packages installed into the venv.
+            importlib.invalidate_caches()
+            missing = missing_dependencies(request["methods"])
+            if missing:
+                raise RuntimeError(f"Training packages unavailable after setup: {missing}")
+        train(request, output, _stage)
+        return {"training_report": "training_report.json"}
     if request['operation'] in ('probe', 'prepare'):
         return _run_operation(request, output)
     from mesh_engine import single_surface_mode

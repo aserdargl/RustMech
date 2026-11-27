@@ -4393,6 +4393,9 @@ class RustMechDialog(QDialog):
             job = planner.detach_remote()
             if job is not None:
                 jobs.append(job)
+        training = self.doe_window.training.detach_remote()
+        if training is not None:
+            jobs.append(training)
         if self._mesh_convergence_dialog is not None:
             jobs.extend(self._mesh_convergence_dialog.study.detach_remote_jobs())
         return [job.detach_remote() for job in jobs]
@@ -4474,6 +4477,7 @@ class RustMechDialog(QDialog):
         if hasattr(self, "doe_window"):
             for planner in (self.doe_page, self.lhs_page):
                 planner.cancel()
+            self.doe_window.training.stop_training()
             self.doe_window.close()
         if self.analysis_queue_widget is not None:
             self.analysis_queue_widget.dispose()

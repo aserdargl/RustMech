@@ -981,6 +981,24 @@ Tetrahedral meshing: {method}, local size {size:g} mm|Dört yüzlü ağ: {method
 '''
 
 TURKISH = dict(line.split('|', 1) for line in _TEXT.splitlines() if '|' in line)
+TURKISH.update({
+    "Training": "Eğitim",
+    "Model training": "Model eğitimi",
+    "Open CSV": "CSV aç",
+    "Dataset": "Veri seti",
+    "Prediction target": "Tahmin hedefi",
+    "All methods": "Tüm yöntemler",
+    "Maximum epochs": "En fazla tur",
+    "Early stopping patience": "Erken durdurma bekleme süresi",
+    "Train models": "Modelleri eğit",
+    "Completed samples: {count}": "Tamamlanan örnek sayısı: {count}",
+    "Training complete. Test geometry groups: {count}": "Eğitim tamamlandı. Test geometri grubu sayısı: {count}",
+    "Training stopped.": "Eğitim durduruldu.",
+    "Test MAE": "Test MAE",
+    "Test RMSE": "Test RMSE",
+    "3D CNN": "3B CNN",
+    "Graph Neural Network": "Grafik sinir ağı",
+})
 
 _DETAILS = '''
 Absolute Linux path to the OpenCFD OpenFOAM environment (simpleFoam).|OpenCFD OpenFOAM ortamının mutlak Linux yolu (simpleFoam).

@@ -21,6 +21,7 @@ from material_catalog import builtin_materials
 from material_library import MaterialCard
 from doe_planner import DoENavigation, SELECTOR_BUTTON_WIDTH
 from doe_studio import ExperimentWindow
+from learning_page import LearningPage
 from new_doe_operations import (FAMILY_PATH, MAX_ROWS, OPERATIONS, TYPE_PATH, explicit_numbers, launch, lhs_matrix,
                                 matrix, matrix_request, parameters, snapshot, structure_choices, structure_families,
                                 structure_levels, validate)
@@ -1664,12 +1665,12 @@ class NewDoePage(QWidget):
                              grouped_output=grouped_output)
         except (OSError, ValueError, TypeError, ImportError) as error:
             message += f" · {translate('Excel report could not be saved')}: {error}"
+        try:
+            write_learning_csv(self.directory, states=self.sheet.states, details=self.sheet.details,
+                               grouped_output=grouped_output, only_finished=True)
+        except (OSError, ValueError, TypeError) as error:
+            message += f" · {translate('CSV export failed')}: {error}"
         if self.sampling:
-            try:
-                write_learning_csv(self.directory, states=self.sheet.states, details=self.sheet.details,
-                                   grouped_output=grouped_output, only_finished=True)
-            except (OSError, ValueError, TypeError) as error:
-                message += f" · {translate('CSV export failed')}: {error}"
             self.learning_results_output = grouped_output
             self.export_csv.setEnabled(True)
         self.status.setText(message)
@@ -1787,12 +1788,14 @@ class DoEStudioWindow(ExperimentWindow):
         controls = QStackedWidget()
         self.doe = NewDoePage(host, preferences, header=controls)
         self.lhs = NewDoePage(host, preferences, sampling=True, header=controls)
+        self.training = LearningPage(host, preferences)
         pages.addWidget(self.doe)
         pages.addWidget(self.lhs)
+        pages.addWidget(self.training)
+        controls.addWidget(QWidget())
         pages.currentChanged.connect(controls.setCurrentIndex)
-        self.navigation = DoENavigation(pages)
-        self.navigation.buttons.idClicked.connect(
-            lambda index: pages.widget(index).input_tabs.setCurrentIndex(0))
+        self.navigation = DoENavigation(pages, ("DoE", "LHS", "Training"))
+        self.navigation.buttons.idClicked.connect(self.select_page)
         header_layout = QVBoxLayout()
         header_layout.setContentsMargins(8, 0, 0, 0)
         header_layout.setSpacing(2)
@@ -1801,7 +1804,7 @@ class DoEStudioWindow(ExperimentWindow):
         layout.addLayout(header_layout)
         layout.addWidget(pages, 1)
         header_controls = (
-            self.navigation.buttons.button(0), self.navigation.buttons.button(1),
+            *(self.navigation.buttons.button(index) for index in range(3)),
             self.doe.settings_button, self.doe.variables_button, self.doe.operation,
             self.lhs.settings_button, self.lhs.variables_button, self.lhs.operation,
         )
@@ -1816,6 +1819,14 @@ class DoEStudioWindow(ExperimentWindow):
                     + self.lhs.splitter.objectName())
         if not store.settings.contains(key) and store.settings.contains(previous):
             store.settings.setValue(key, store.settings.value(previous))
+
+    def select_page(self, index):
+        if index < 2:
+            (self.doe, self.lhs)[index].input_tabs.setCurrentIndex(0)
+        else:
+            datasets = [page.directory / LEARNING_CSV_NAME for page in (self.doe, self.lhs)
+                        if page.directory is not None and (page.directory / LEARNING_CSV_NAME).is_file()]
+            self.training.restore_source(datasets)
 
     def closeEvent(self, event):
         for page in (self.doe, self.lhs):

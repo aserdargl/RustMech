@@ -40,7 +40,7 @@ class NewDoeTests(unittest.TestCase):
         analysis = page.operation
         self.assertEqual([analysis.itemText(index) for index in range(analysis.count())],
                          ["FEM", "FFT", "MPM", "Peridynamics", "Flow (CFD)", "Thermal (CHT)"])
-        doe_button, lhs_button = page.window().navigation.buttons.buttons()
+        doe_button, lhs_button, training_button = page.window().navigation.buttons.buttons()
         self.assertEqual(lhs_button.toolTip(), "Latin Hypercube Sampling")
         variables_button = page.variables_button
         self.assertEqual([doe_button.text(), lhs_button.text(), page.settings_button.text(), variables_button.text()],
@@ -97,6 +97,13 @@ class NewDoeTests(unittest.TestCase):
         lhs.variables_button.click()
         lhs_button.click()
         self.assertTrue(lhs.analysis_settings.isVisible())
+        doe_button.click()
+        self.assertTrue(page.analysis_settings.isVisible())
+        training_button.click()
+        self.assertTrue(training_button.isChecked())
+        self.assertTrue(page.window().training.isVisible())
+        self.assertFalse(page.isVisible())
+        self.assertEqual(training_button.size(), doe_button.size())
         doe_button.click()
         self.assertTrue(page.analysis_settings.isVisible())
         variables_button.click()

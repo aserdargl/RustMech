@@ -768,7 +768,8 @@ class RemoteController(QObject):
             self.owner = json.loads((directory/"remote_job.json").read_text())["username"]
             active = [label for key,label in (("mesh","Mesh"),("kratos","Kratos mechanics"),("damask","DAMASK FFT"),
                                              ("peridynamics","Peridynamics"),("flow","OpenFOAM CFD"),
-                                             ("thermal","OpenFOAM CHT"),("mpm","Kratos MPM")) if self.capabilities.get(key)]
+                                             ("thermal","OpenFOAM CHT"),("mpm","Kratos MPM"),
+                                             ("learning","Machine learning")) if self.capabilities.get(key)]
             reasons = self.capabilities.get("reasons",{})
             self.status.setText("Available: "+(", ".join(active) if active else "none")+".\n"+
                                 "\n".join(f"{key}: {value}" for key,value in reasons.items() if not self.capabilities.get(key)))
@@ -787,7 +788,7 @@ class RemoteController(QObject):
 
     def require_analysis(self, capability, settings=None, *, explicit_target=False):
         """Use the verified workflow when available, or submit to Slurm directly."""
-        if self.ready:
+        if self.ready and (capability != "learning" or self.capabilities.get(capability)):
             context, auth = self._require(capability, settings, explicit_target=explicit_target)
             return analysis_submission_context(context, self.queue_catalog), auth
         if self.closing:

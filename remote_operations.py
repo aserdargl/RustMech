@@ -12,9 +12,11 @@ OPERATIONS = {
     "flow_export": "mesh", "flow_solve": "flow",
     "thermal_export": "mesh", "thermal_solve": "thermal",
     "mpm_solve": "mpm",
+    "learning_train": "learning",
 }
 
 ANALYSIS_OPERATIONS = frozenset({
+    "learning_train",
     "mpm_solve",
     "mechanical", "fft_solve", "peridynamic_solve", "flow_solve", "thermal_solve", "doe_solve", "convergence_level",
 })
