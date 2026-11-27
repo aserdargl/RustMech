@@ -4433,30 +4433,33 @@ def main() -> int:
 def _choose_startup_workspace(language):
     dialog = QDialog()
     dialog.setObjectName("startupWorkspace")
+    dialog.setProperty("centerOnOpen", True)
     dialog.setWindowTitle("RustMech")
     dialog.setStyleSheet(STUDIO_STYLESHEET)
     layout = QVBoxLayout(dialog)
-    layout.setContentsMargins(12, 10, 12, 12)
-    layout.addWidget(QLabel("Which workspace would you like to open?"))
+    layout.setContentsMargins(16, 14, 16, 16)
+    layout.setSpacing(12)
+    question = QLabel("Which workspace would you like to open?")
+    question.setAlignment(Qt.AlignmentFlag.AlignCenter)
+    layout.addWidget(question)
 
     buttons = QHBoxLayout()
+    buttons.setSpacing(12)
+    buttons.setAlignment(Qt.AlignmentFlag.AlignHCenter)
     layout.addLayout(buttons)
     choices = {1: "md", 2: "analysis"}
     controls = []
     for result, label in ((1, "Molecular dynamics"), (2, "Analysis")):
         button = QPushButton(label)
         button.setAutoDefault(False)
-        button.setFixedHeight(CONTROL_HEIGHT)
         button.setProperty("managesLocalizedWidth", True)
         button.clicked.connect(partial(dialog.done, result))
         buttons.addWidget(button)
         controls.append(button)
-    buttons.addStretch()
-
     language.localize_tree(dialog)
-    width = max(button.sizeHint().width() for button in controls)
+    side = max(150, max(button.sizeHint().width() for button in controls))
     for button in controls:
-        button.setFixedWidth(width)
+        button.setFixedSize(side, side)
     return choices.get(dialog.exec())
 
 

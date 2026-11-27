@@ -54,10 +54,14 @@ class WindowStateStore(QObject):
                 area = screen.availableGeometry()
                 window.resize(min(window.width(), area.width()), min(window.height(), area.height()))
                 frame = window.frameGeometry()
-                window.move(QPoint(
-                    max(area.left(), min(frame.left(), area.right() - frame.width() + 1)),
-                    max(area.top(), min(frame.top(), area.bottom() - frame.height() + 1)),
-                ))
+                if window.property("centerOnOpen"):
+                    frame.moveCenter(area.center())
+                    window.move(frame.topLeft())
+                else:
+                    window.move(QPoint(
+                        max(area.left(), min(frame.left(), area.right() - frame.width() + 1)),
+                        max(area.top(), min(frame.top(), area.bottom() - frame.height() + 1)),
+                    ))
         for index, splitter in enumerate(self.splitters(window)):
             name = splitter.objectName() or str(index)
             state = self.settings.value(f"{key}/splitters/{name}")
