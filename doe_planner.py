@@ -22,6 +22,7 @@ class DoENavigation(QWidget):
             button.setFixedSize(SELECTOR_BUTTON_WIDTH, CONTROL_HEIGHT)
             self.buttons.addButton(button, index)
             layout.addWidget(button)
+        self.buttons.button(1).setToolTip("Latin Hypercube Sampling")
         self.buttons.button(pages.currentIndex()).setChecked(True)
         self.buttons.idClicked.connect(pages.setCurrentIndex)
         pages.currentChanged.connect(lambda index: self.buttons.button(index).setChecked(True))

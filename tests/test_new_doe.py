@@ -41,6 +41,7 @@ class NewDoeTests(unittest.TestCase):
         self.assertEqual([analysis.itemText(index) for index in range(analysis.count())],
                          ["FEM", "FFT", "MPM", "Peridynamics", "Flow (CFD)", "Thermal (CHT)"])
         doe_button, lhs_button = page.window().navigation.buttons.buttons()
+        self.assertEqual(lhs_button.toolTip(), "Latin Hypercube Sampling")
         variables_button = page.variables_button
         self.assertEqual([doe_button.text(), lhs_button.text(), page.settings_button.text(), variables_button.text()],
                          ["DoE", "LHS", "Settings", "Variable"])
