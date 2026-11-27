@@ -1,14 +1,15 @@
 """Periodic-table selection and atomic percentages for MD preparation."""
 
 from decimal import Decimal
+from pathlib import Path
 
-from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QAction, QValidator
+from PySide6.QtCore import QSize, Qt, Signal
+from PySide6.QtGui import QAction, QIcon, QValidator
 from PySide6.QtWidgets import (
     QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QSizePolicy, QToolButton, QVBoxLayout, QWidget,
 )
 
-from app_settings import PERIODIC_TABLE_DEFAULT_FONT_SIZE
+from app_settings import PERIODIC_TABLE_DEFAULT_FONT_SIZE, PERIODIC_TABLE_FAMILY_COLORS
 from studio_style import CONTROL_HEIGHT, CompactDoubleSpinBox, stepper_with_unit
 
 
@@ -67,7 +68,6 @@ class AlloyElements(QWidget):
     def __init__(self, defaults, parent=None, *, symbol_font_size=PERIODIC_TABLE_DEFAULT_FONT_SIZE, preferences=None):
         super().__init__(parent)
         self._symbol_font_size = symbol_font_size
-        self._family_colors_enabled = False
         self._preferences = preferences
         self._last_shares = {}
         self.cells = {}
@@ -88,6 +88,20 @@ class AlloyElements(QWidget):
                 if symbol != ".":
                     self._add_cell(grid, period, group, symbol)
         grid.setRowMinimumHeight(7, self.CELL_SIZE + 3)
+        self.family_colors_button = QToolButton()
+        self.family_colors_button.setObjectName("mdPeriodicFamilyColors")
+        self.family_colors_button.setCheckable(True)
+        self.family_colors_button.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.family_colors_button.setFixedSize(CONTROL_HEIGHT, CONTROL_HEIGHT)
+        self.family_colors_button.setIconSize(QSize(15, 15))
+        icon = Path(__file__).resolve().parent / "assets" / "ui" / "periodic-family-colors.svg"
+        self.family_colors_button.setIcon(QIcon(str(icon)))
+        description = "Color periodic table borders by element family"
+        self.family_colors_button.setAccessibleName(description)
+        self.family_colors_button.setToolTip(description)
+        self.family_colors_button.clicked.connect(self._toggle_family_colors)
+        grid.addWidget(self.family_colors_button, grid.rowCount() - 1, 0,
+                       Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignBottom)
         layout.addWidget(table, alignment=Qt.AlignmentFlag.AlignLeft)
         layout.addSpacing(6)
         divider = QFrame()
@@ -118,7 +132,13 @@ class AlloyElements(QWidget):
         self._update_table_style()
 
     def set_family_colors_enabled(self, enabled):
-        self._family_colors_enabled = enabled
+        self.family_colors_button.setChecked(enabled)
+        self._update_table_style()
+
+    def _toggle_family_colors(self, enabled):
+        if self._preferences is not None:
+            self._preferences.setValue(PERIODIC_TABLE_FAMILY_COLORS, enabled)
+            self._preferences.sync()
         self._update_table_style()
 
     def set_symbol_font_size(self, size):
@@ -127,7 +147,7 @@ class AlloyElements(QWidget):
 
     def _update_table_style(self):
         font = f"QToolButton {{ font-size: {self._symbol_font_size}px; }}"
-        borders = FAMILY_BORDER_STYLE if self._family_colors_enabled else ""
+        borders = FAMILY_BORDER_STYLE if self.family_colors_button.isChecked() else ""
         self.table.setStyleSheet(font + borders)
 
     def _add_cell(self, grid, period, group, symbol):

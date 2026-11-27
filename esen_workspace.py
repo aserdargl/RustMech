@@ -48,10 +48,12 @@ QFrame[esenCard="paper"] { background: #FFFFFF; border: 1px solid #D5DBE2; borde
 #esenWorkspace QPushButton { padding: 0 7px; }
 #mdCompositionDivider { background: #D5DBE2; border: none; }
 #mdPeriodicTable QToolButton { padding: 0; min-height: -1px; max-height: -1px; }
-#mdPeriodicTable QToolButton::menu-indicator { image: none; width: 0; height: 0; }
-#mdPeriodicTable QToolButton:checked { background: #BFDBFE; border-color: #93C5FD; }
-#mdPeriodicTable QToolButton:hover, #mdPeriodicTable QToolButton:focus { border-color: #2563EB; }
-#mdPeriodicTable QToolButton:pressed { background: #93C5FD; }
+#mdPeriodicTable QToolButton[elementFamily]::menu-indicator { image: none; width: 0; height: 0; }
+#mdPeriodicTable QToolButton[elementFamily]:checked { background: #1E40AF; color: #FFFFFF; border-color: #1E3A8A; }
+#mdPeriodicTable QToolButton[elementFamily]:hover, #mdPeriodicTable QToolButton[elementFamily]:focus { border-color: #2563EB; }
+#mdPeriodicTable QToolButton[elementFamily]:pressed { background: #93C5FD; }
+#mdPeriodicTable QToolButton[elementFamily]:checked:pressed { background: #1E3A8A; }
+#mdPeriodicFamilyColors:checked { background: #DBEAFE; border-color: #2563EB; }
 #esenRun { color: #FFFFFF; background: #285EA6; }
 #esenRun:hover { background: #245692; }
 #esenRun:focus { border-color: #0F172A; }

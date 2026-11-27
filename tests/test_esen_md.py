@@ -394,8 +394,20 @@ def test_periodic_table_appearance_follows_saved_settings(tmp_path):
             app.processEvents()
             table = workspace.md_elements.table
             cell = workspace.md_elements.cells["Hf"][0]
+            color_button = workspace.md_elements.family_colors_button
+            assert color_button.size().toTuple() == (25, 25)
+            assert not color_button.icon().isNull()
+            assert color_button.x() == 0
+            assert color_button.geometry().bottom() == table.rect().bottom()
+            assert color_button.isChecked()
             assert cell.font().pixelSize() == PERIODIC_TABLE_DEFAULT_FONT_SIZE
             assert "elementFamily" in table.styleSheet()
+            QTest.mouseClick(color_button, Qt.MouseButton.LeftButton)
+            assert not color_button.isChecked()
+            assert "elementFamily" not in table.styleSheet()
+            assert not QSettings(path, QSettings.Format.IniFormat).value(
+                PERIODIC_TABLE_FAMILY_COLORS, True, type=bool,
+            )
             settings_button = next(button for button in workspace.tabs.cornerWidget().findChildren(QPushButton)
                                    if button.text() == "Settings")
 
@@ -404,8 +416,11 @@ def test_periodic_table_appearance_follows_saved_settings(tmp_path):
                                 if box.text() == "Color periodic table borders by element family")
                 size = dialog.findChild(CompactSpinBox, "periodicTableFontSize")
                 assert size.value() == PERIODIC_TABLE_DEFAULT_FONT_SIZE
-                assert checkbox.isChecked()
+                assert not checkbox.isChecked()
                 checkbox.click()
+                assert color_button.isChecked()
+                checkbox.click()
+                assert not color_button.isChecked()
                 assert "elementFamily" not in table.styleSheet()
                 assert cell.font().pixelSize() == PERIODIC_TABLE_DEFAULT_FONT_SIZE
                 assert not QSettings(path, QSettings.Format.IniFormat).value(
@@ -429,6 +444,7 @@ def test_periodic_table_appearance_follows_saved_settings(tmp_path):
         reopened = EsenWorkspace(None, history=tmp_path / "jobs")
         try:
             assert "elementFamily" not in reopened.md_elements.table.styleSheet()
+            assert not reopened.md_elements.family_colors_button.isChecked()
             cell = reopened.md_elements.cells["Hf"][0]
             cell.ensurePolished()
             assert cell.font().pixelSize() == 24
