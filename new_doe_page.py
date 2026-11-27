@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QApplication, QButtonGroup, QC
 
 from material_catalog import builtin_materials
 from material_library import MaterialCard
-from doe_planner import DoENavigation
+from doe_planner import DoENavigation, SELECTOR_BUTTON_WIDTH
 from doe_studio import ExperimentWindow
 from new_doe_operations import (FAMILY_PATH, MAX_ROWS, OPERATIONS, TYPE_PATH, explicit_numbers, launch, lhs_matrix,
                                 matrix, matrix_request, parameters, snapshot, structure_choices, structure_families,
@@ -738,8 +738,8 @@ class NewDoePage(QWidget):
         for index, button in enumerate((self.settings_button, self.variables_button)):
             button.setCheckable(True)
             button.setAutoDefault(False)
-            button.setMinimumWidth(100)
-            button.setFixedHeight(CONTROL_HEIGHT)
+            button.setProperty("managesLocalizedWidth", True)
+            button.setFixedSize(SELECTOR_BUTTON_WIDTH, CONTROL_HEIGHT)
             input_buttons.addButton(button, index)
             operation_row.addWidget(button)
         self.settings_button.setChecked(True)

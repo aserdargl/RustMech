@@ -3,6 +3,8 @@ from PySide6.QtWidgets import QButtonGroup, QHBoxLayout, QPushButton, QWidget
 
 from studio_style import CONTROL_HEIGHT
 
+SELECTOR_BUTTON_WIDTH = 100
+
 
 class DoENavigation(QWidget):
     def __init__(self, pages):
@@ -17,7 +19,7 @@ class DoENavigation(QWidget):
             button.setCheckable(True)
             button.setAutoDefault(False)
             button.setProperty("managesLocalizedWidth", True)
-            button.setFixedSize(64, CONTROL_HEIGHT)
+            button.setFixedSize(SELECTOR_BUTTON_WIDTH, CONTROL_HEIGHT)
             self.buttons.addButton(button, index)
             layout.addWidget(button)
         self.buttons.button(pages.currentIndex()).setChecked(True)
