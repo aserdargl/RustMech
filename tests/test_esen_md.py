@@ -199,17 +199,22 @@ def test_md_plan_library_reopens_generated_and_added_packages(tmp_path):
             splitters = {split.objectName(): split for split in store.splitters(first)}
             alloy = first.findChild(QScrollArea, "esenMdAlloyElements")
             sections = splitters["esenMdSettingsAndResults"]
-            sources = splitters["esenMdPotentialSources"]
+            sources = first.findChild(QWidget, "esenMdPotentialSources")
             assert alloy.isAncestorOf(first.md_elements)
             assert sections.count() == 3
             assert sections.widget(0).isAncestorOf(first.md_form)
             assert sections.widget(1).isAncestorOf(first.md_preview)
             assert sections.widget(2) is sources
-            assert sources.widget(0).isAncestorOf(first.md_source_groups["nist"][0])
-            assert sources.widget(1).isAncestorOf(first.md_source_groups["lammps"][0])
+            nist_card = sources.layout().itemAtPosition(0, 0).widget()
+            lammps_card = sources.layout().itemAtPosition(0, 1).widget()
+            assert nist_card.isAncestorOf(first.md_source_groups["nist"][0])
+            assert lammps_card.isAncestorOf(first.md_source_groups["lammps"][0])
             assert first.tabs.widget(1).isAncestorOf(first.md_plans)
             first.tabs.setCurrentIndex(0)
             app.processEvents()
+            assert nist_card.geometry().right() < lammps_card.x()
+            assert nist_card.y() == lammps_card.y()
+            assert nist_card.width() == lammps_card.width()
             assert alloy.geometry().right() < sections.x()
             assert alloy.height() == sections.height()
             assert sections.widget(0).geometry().bottom() < sections.widget(1).y()
@@ -228,10 +233,10 @@ def test_md_plan_library_reopens_generated_and_added_packages(tmp_path):
             first.resize(first.width() + 160, first.height() + 80)
             app.processEvents()
             assert alloy.width() == width
+            assert nist_card.width() == lammps_card.width()
             assert all(cell.width() == cell.height() >= 45 for cell, _ in first.md_elements.cells.values())
             assert not any(label.text() == "How to choose parameters" for label in first.findChildren(QLabel))
             sections.setSizes([415, 185, 348])
-            sources.setSizes([164, 177])
             app.processEvents()
             first.tabs.setCurrentIndex(1)
             splitters["esenMdPlansAndTruba"].setSizes([280, 420])

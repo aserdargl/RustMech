@@ -7,7 +7,7 @@ from math import cbrt, isclose, prod
 from pathlib import Path
 import re
 
-from PySide6.QtCore import QSettings, QSignalBlocker, Qt, QTimer, QUrl
+from PySide6.QtCore import QEvent, QSettings, QSignalBlocker, Qt, QTimer, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QApplication, QDialog, QFormLayout, QFrame, QGridLayout, QHBoxLayout, QLabel,
@@ -125,6 +125,33 @@ def code_view(name):
     return edit
 
 
+class MeamSourceRow(QWidget):
+    def __init__(self):
+        super().__init__()
+        self.setObjectName("esenMdPotentialSources")
+        grid = QGridLayout(self)
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setSpacing(7)
+
+    def event(self, event):
+        if event.type() in (QEvent.Type.LayoutRequest, QEvent.Type.Show):
+            grid = self.layout()
+            # The localized headings and the NIST retry action can change the minimum widths.
+            width = max((grid.itemAt(i).widget().minimumSizeHint().width() for i in range(grid.count())), default=0)
+            for column in range(grid.columnCount()):
+                if grid.columnMinimumWidth(column) != width:
+                    grid.setColumnMinimumWidth(column, width)
+        return super().event(event)
+
+    def resizeEvent(self, event):
+        grid = self.layout()
+        # Leave an indivisible pixel at the outer edge so both cards get the same width.
+        padding = (event.size().width() - grid.horizontalSpacing()) % 2
+        if grid.contentsMargins().right() != padding:
+            grid.setContentsMargins(0, 0, padding, 0)
+        super().resizeEvent(event)
+
+
 class EsenWorkspace(QDialog):
     # The class and object names are part of the saved window-state key.
     def __init__(self, truba, parent=None, *, history=None, standalone=False):
@@ -133,7 +160,7 @@ class EsenWorkspace(QDialog):
         self.setWindowTitle(WORKSPACE_TITLE)
         self.setWindowFlag(Qt.WindowType.WindowMinMaxButtonsHint)
         self.setStyleSheet(STUDIO_STYLESHEET + ESEN_STYLE)
-        self.resize(1440, 920)
+        self.resize(1520, 920)
         self.truba = truba
         self.standalone = standalone
         self.history_root = history if history is not None else jobs.jobs_directory()
@@ -256,7 +283,11 @@ class EsenWorkspace(QDialog):
         form = QFormLayout(self.md_form)
         form.setContentsMargins(0, 0, 0, 0)
         configure_form(form)
-        settings_layout.addWidget(self.md_form)
+        controls = QVBoxLayout()
+        controls.setSpacing(1)
+        controls.addWidget(self.md_form)
+        controls.addStretch()
+        settings_layout.addLayout(controls, 1)
         self.md_settings_form = form
         sections.addWidget(inputs)
 
@@ -344,15 +375,15 @@ class EsenWorkspace(QDialog):
             stepper.editingFinished.connect(self._md_preview)
         self.md_order.editingFinished.connect(self._save_md_order)
 
+        self.md_prepare = command("Prepare Package", self._start_md, role="esenPrepare")
+        self.md_prepare.setProperty("primary", True)
+        controls.addWidget(self.md_prepare, alignment=Qt.AlignmentFlag.AlignRight)
+
         self.md_note = QLabel()
         self.md_note.setTextFormat(Qt.TextFormat.PlainText)
         self.md_note.setWordWrap(True)
         self.md_note.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         settings_layout.addWidget(self.md_note)
-        settings_layout.addStretch()
-        self.md_prepare = command("Prepare Package", self._start_md, role="esenPrepare")
-        self.md_prepare.setProperty("primary", True)
-        settings_layout.addWidget(self.md_prepare, alignment=Qt.AlignmentFlag.AlignRight)
 
         card, layout = panel("Model Preview", paper=True, header_action=self.md_preview_button)
         self.md_preview = code_view("Model Preview")
@@ -361,12 +392,8 @@ class EsenWorkspace(QDialog):
         layout.addWidget(self.md_preview, 1)
         sections.addWidget(card)
 
-        sources = QSplitter(Qt.Orientation.Vertical)
-        sources.setObjectName("esenMdPotentialSources")
-        sources.setChildrenCollapsible(False)
-        sources.setHandleWidth(7)
-        self._build_md_sources(sources)
-        sources.setSizes([165, 165])
+        sources = MeamSourceRow()
+        self._build_md_sources(sources.layout())
         sections.addWidget(sources)
         sections.setSizes([inputs.sizeHint().height(), 190, 337])
         self.md_crystal.currentIndexChanged.connect(self._md_preview)
@@ -405,10 +432,12 @@ class EsenWorkspace(QDialog):
         split.setSizes([630, 450])
         return page
 
-    def _build_md_sources(self, row):
+    def _build_md_sources(self, grid):
         self.md_source_groups = {}
         self.md_retry_sources = command("Retry NIST Catalog", self._load_md_sources)
-        for provider, title in (("nist", "NIST MEAM Potentials"), ("lammps", "LAMMPS MEAM Potentials")):
+        for column, (provider, title) in enumerate((
+            ("nist", "NIST MEAM Potentials"), ("lammps", "LAMMPS MEAM Potentials"),
+        )):
             entries = QListWidget()
             entries.setAccessibleName(title)
             entries.setMinimumHeight(90)
@@ -430,7 +459,8 @@ class EsenWorkspace(QDialog):
             entries.currentItemChanged.connect(
                 lambda current, _previous, button=open_source: button.setEnabled(current is not None)
             )
-            row.addWidget(card)
+            grid.addWidget(card, 0, column)
+            grid.setColumnStretch(column, 1)
             self.md_source_groups[provider] = entries, status, open_source
         self.md_elements.selection_changed.connect(self._refresh_md_sources)
 
