@@ -1524,9 +1524,12 @@ Tekrarlanabilir küçük çözücü kontrolleri:
 
 ### DoE sonuçlarından model eğitimi
 
-**Deney Tasarımı → Eğitim** sayfasında DoE veya LHS'nin ürettiği
-`deep_learning_dataset.csv` veya eski DoE sonuç CSV'sini açın. Sayısal sonuç
-sütununu, yöntemleri ve **Yerel** ya da **TRUBA** hedefini seçip eğitimi başlatın.
+**Deney Tasarımı → Eğitim → Veri seti aç** ile CSV veya Excel (`.xlsx`) dosyası
+açın. Yeni DoE ve LHS Excel raporları eğitim için `Training Data` sayfasını
+içerir. Diğer Excel dosyalarında eğitim sütun başlıklarını çalışma sayfasının
+ilk dolu satırına yerleştirin. Formüller için Excel'de saklanan son hesaplanmış
+değer okunur. Sayısal sonuç sütununu, yöntemleri ve **Yerel** ya da **TRUBA**
+hedefini seçip eğitimi başlatın.
 Her çalıştırma bir sayısal hedef içindir. Veri aynı analiz türünden en az beş
 farklı geometri grubu içermelidir. Eğitim ve doğrulamaya ayrılan geometriler
 test grubuna girmez. Başarısız çözümler ve hedefi boş satırlar kullanılmaz.

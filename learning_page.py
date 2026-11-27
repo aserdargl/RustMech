@@ -40,7 +40,7 @@ class LearningPage(QWidget):
         self.source = QLabel()
         self.source.setTextFormat(Qt.TextFormat.PlainText)
         self.source.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
-        self.choose = self._button("Open CSV", self.choose_source)
+        self.choose = self._button("Open dataset", self.choose_source)
         self.choose.setFixedWidth(COMBO_WIDTH)
         data_layout.addWidget(self.choose)
         data_layout.addWidget(self.source, 1)
@@ -118,7 +118,8 @@ class LearningPage(QWidget):
     def choose_source(self):
         from file_dialog import QFileDialog
 
-        filename, _ = QFileDialog.getOpenFileName(self, "Open CSV", str(results_directory()), "CSV (*.csv)")
+        filename, _ = QFileDialog.getOpenFileName(
+            self, "Open dataset", str(results_directory()), "Training files (*.csv *.xlsx)")
         if filename:
             self.load_source(filename)
 

@@ -6,6 +6,8 @@ from pathlib import Path
 import re
 from uuid import uuid4
 
+from learning_data import GEOMETRY_KEYS, TRAINING_SHEET
+
 
 REPORT_NAME = "toplu_sonuclar.xlsx"
 LEARNING_CSV_NAME = "deep_learning_dataset.csv"
@@ -112,16 +114,8 @@ def _named_result_files(folder, names, prefix):
         yield f"{prefix}.{path.stem}{suffix}", path
 
 
-def write_learning_csv(directory, target=None, *, states=None, details=None, grouped_output=None,
-                       only_finished=False):
-    """Join frozen inputs and published results, with one CSV record per experiment."""
-    from learning_data import GEOMETRY_KEYS
-
-    directory = Path(directory).resolve()
-    target = directory / LEARNING_CSV_NAME if target is None else Path(target)
+def _learning_rows(directory, states, details, grouped_output, only_finished, *, include_tables):
     matrix = directory / "matrix.csv"
-    if target.resolve() == matrix:
-        raise ValueError("Choose a different file from the saved experiment matrix.")
 
     with matrix.open(encoding="utf-8-sig", newline="") as stream:
         reader = csv.reader(stream)
@@ -154,27 +148,42 @@ def write_learning_csv(directory, target=None, *, states=None, details=None, gro
             for name, path in _named_result_files(folder, SUMMARIES.get(operation, ()), "result")
             for key, value in _metrics(_read_json(path))
         }
-        tables = dict(_named_result_files(folder, TABLES.get(operation, ()), "table"))
+        tables = dict(_named_result_files(folder, TABLES.get(operation, ()), "table")) if include_tables else {}
         metric_columns.update(dict.fromkeys(metrics))
         table_columns.update(dict.fromkeys(tables))
         settings = record.get("inputs", {}).get("settings", {})
         geometry = {key: settings[key] for key in GEOMETRY_KEYS if key in settings}
         results.append((state, error, geometry, metrics, tables))
 
+    yield [*inputs, "Status", "Error", "Geometry settings (JSON)", *metric_columns, *table_columns]
+    for row, (state, error, geometry, metrics, tables) in zip(experiments, results, strict=True):
+        tabular = {}
+        for name, path in tables.items():
+            with path.open(encoding="utf-8-sig", newline="") as table:
+                values = [[_cell(value) for value in line] for line in csv.reader(table)]
+            tabular[name] = json.dumps(values, ensure_ascii=False, separators=(",", ":"))
+        yield [*row, state, error, json.dumps(geometry, ensure_ascii=False) if geometry else "",
+               *(metrics.get(key) for key in metric_columns), *(tabular.get(key) for key in table_columns)]
+
+
+def write_learning_csv(directory, target=None, *, states=None, details=None, grouped_output=None,
+                       only_finished=False):
+    """Join frozen inputs and published results, with one CSV record per experiment."""
+    directory = Path(directory).resolve()
+    target = directory / LEARNING_CSV_NAME if target is None else Path(target)
+    if target.resolve() == directory / "matrix.csv":
+        raise ValueError("Choose a different file from the saved experiment matrix.")
+    rows = _learning_rows(directory, states, details, grouped_output, only_finished, include_tables=True)
+    header = next(rows, None)
+    if header is None:
+        return
+
     temporary = target.with_name(f".{target.name}.{uuid4().hex}.tmp")
     try:
         with temporary.open("w", encoding="utf-8-sig", newline="") as stream:
             writer = csv.writer(stream)
-            writer.writerow([*inputs, "Status", "Error", "Geometry settings (JSON)", *metric_columns, *table_columns])
-            for row, (state, error, geometry, metrics, tables) in zip(experiments, results, strict=True):
-                tabular = {}
-                for name, path in tables.items():
-                    with path.open(encoding="utf-8-sig", newline="") as table:
-                        values = [[_cell(value) for value in line] for line in csv.reader(table)]
-                    tabular[name] = json.dumps(values, ensure_ascii=False, separators=(",", ":"))
-                writer.writerow([*row, state, error, json.dumps(geometry, ensure_ascii=False) if geometry else "",
-                                 *(metrics.get(key) for key in metric_columns),
-                                 *(tabular.get(key) for key in table_columns)])
+            writer.writerow(header)
+            writer.writerows(rows)
         temporary.replace(target)
     finally:
         temporary.unlink(missing_ok=True)
@@ -245,6 +254,12 @@ def write_doe_report(directory, *, states=None, details=None, grouped_output=Non
             for index, (values, style) in enumerate(_report_rows(columns, experiments, records)):
                 if sheet.write_row(index, 0, values, formats.get(style)) == -1:
                     raise ValueError("DoE results exceed the size of one Excel worksheet.")
+            training = workbook.add_worksheet(TRAINING_SHEET)
+            training.freeze_panes(1, 0)
+            rows = _learning_rows(directory, states, details, grouped_output, only_finished, include_tables=False)
+            for index, values in enumerate(rows):
+                if training.write_row(index, 0, values, formats["table"] if index == 0 else None) == -1:
+                    raise ValueError("Training results exceed the size of one Excel worksheet.")
         temporary.replace(report)
     except XlsxWriterException as error:
         raise OSError(str(error)) from error

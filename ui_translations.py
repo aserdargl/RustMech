@@ -984,7 +984,8 @@ TURKISH = dict(line.split('|', 1) for line in _TEXT.splitlines() if '|' in line)
 TURKISH.update({
     "Training": "Eğitim",
     "Model training": "Model eğitimi",
-    "Open CSV": "CSV aç",
+    "Open dataset": "Veri seti aç",
+    "Training files (*.csv *.xlsx)": "Eğitim dosyaları (*.csv *.xlsx)",
     "Dataset": "Veri seti",
     "Prediction target": "Tahmin hedefi",
     "All methods": "Tüm yöntemler",

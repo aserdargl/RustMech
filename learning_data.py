@@ -5,6 +5,8 @@ import hashlib
 import json
 from math import isfinite
 from pathlib import Path
+from xml.etree.ElementTree import ParseError
+from zipfile import BadZipFile
 
 
 METHODS = {
@@ -33,6 +35,7 @@ GEOMETRY_KEYS = (
     "imported_geometry_path", "imported_geometry_role",
 )
 DATA_PREFIXES = {"settings", "options", "flow", "thermal", "mpm"}
+TRAINING_SHEET = "Training Data"
 
 
 def _number(value):
@@ -44,9 +47,14 @@ def _number(value):
 
 
 def read_dataset(path):
+    path = Path(path)
+    if path.suffix.lower() == ".xlsx":
+        return _read_excel_dataset(path)
+    if path.suffix.lower() != ".csv":
+        raise ValueError("Select a CSV or Excel (.xlsx) training dataset.")
     previous_limit = csv.field_size_limit(64 * 1024 * 1024)
     try:
-        with Path(path).open(encoding="utf-8-sig", newline="") as stream:
+        with path.open(encoding="utf-8-sig", newline="") as stream:
             reader = csv.DictReader(stream)
             header = reader.fieldnames or []
             if "Status" not in header or len(set(header)) != len(header):
@@ -59,6 +67,39 @@ def read_dataset(path):
         raise ValueError(f"Invalid training CSV: {error}") from error
     finally:
         csv.field_size_limit(previous_limit)
+
+
+def _read_excel_dataset(path):
+    try:
+        from openpyxl import load_workbook
+        from openpyxl.utils.exceptions import InvalidFileException
+    except ImportError as error:
+        raise ValueError("Excel import requires openpyxl. Install the RustMech base requirements.") from error
+
+    try:
+        with path.open("rb") as stream:
+            workbook = load_workbook(stream, read_only=True, data_only=True, keep_links=False)
+            try:
+                sheets = sorted(workbook.worksheets, key=lambda sheet: sheet.title != TRAINING_SHEET)
+                for sheet in sheets:
+                    records = sheet.values
+                    header = next((row for row in records if any(value is not None for value in row)), ())
+                    fields = {i: value.strip() for i, value in enumerate(header)
+                              if isinstance(value, str) and value.strip()}
+                    if "Status" not in fields.values() or len(set(fields.values())) != len(fields):
+                        continue
+                    status = next(i for i, name in fields.items() if name == "Status")
+                    columns = {i: name for i, name in fields.items() if not name.startswith("table.")}
+                    rows = [{name: str(row[i]) if i < len(row) and row[i] is not None else None
+                             for i, name in columns.items()}
+                            for row in records if status < len(row)
+                            and str(row[status]).strip().lower() == "completed"]
+                    return list(columns.values()), rows
+            finally:
+                workbook.close()
+    except (BadZipFile, InvalidFileException, ParseError, KeyError, ValueError) as error:
+        raise ValueError(f"Invalid training workbook: {error}") from error
+    raise ValueError("The Excel workbook needs a worksheet with unique training column headers and a Status column.")
 
 
 def target_columns(columns, rows):
