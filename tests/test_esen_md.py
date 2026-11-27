@@ -256,8 +256,10 @@ def test_alloy_elements_fill_left_column_then_continue_on_right():
     elements.show()
     try:
         for symbol in additional:
-            elements.cells[symbol][1].trigger()
+            QTest.mouseClick(elements.cells[symbol][0], Qt.MouseButton.LeftButton)
+        QTest.mouseClick(elements.cells["Fe"][0], Qt.MouseButton.LeftButton)
         app.processEvents()
+        assert tuple(elements.rows) == first + additional
 
         def row_at(row, column):
             return elements.list_layout.itemAtPosition(row, column).widget()

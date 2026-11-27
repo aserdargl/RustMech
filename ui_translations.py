@@ -118,7 +118,7 @@ Prepare Package|Paketi Hazırla
 Package prepared at {path}|Paket hazırlandı. {path}
 Alloy elements|Elementler
 Periodic table|Periyodik tablo
-Right-click an element to add it.|Element eklemek için sağ tıklayın.
+Click an element to add it.|Eklemek istediğiniz elemente tıklayın.
 Composition total|Toplam
 Add at least one element.|En az bir element ekleyin.
 Target atom count|Hedef atom sayısı

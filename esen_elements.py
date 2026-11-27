@@ -52,7 +52,7 @@ class AlloyElements(QWidget):
                     self._add_cell(grid, period, group, symbol)
         grid.setRowMinimumHeight(7, self.CELL_SIZE + 3)
         layout.addWidget(table, alignment=Qt.AlignmentFlag.AlignLeft)
-        hint = QLabel("Right-click an element to add it.")
+        hint = QLabel("Click an element to add it.")
         hint.setWordWrap(True)
         layout.addWidget(hint)
         self.list_layout = QGridLayout()
@@ -79,6 +79,7 @@ class AlloyElements(QWidget):
         action = QAction("Add", cell)
         action.triggered.connect(lambda _checked=False: self.add_element(symbol))
         cell.addAction(action)
+        cell.clicked.connect(action.trigger)
         self.cells[symbol] = cell, action
         grid.addWidget(cell, period, group)
 
