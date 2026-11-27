@@ -8,7 +8,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
-from PySide6.QtCore import QObject, QSettings, Qt, QTimer, Signal
+from PySide6.QtCore import QLocale, QObject, QSettings, Qt, QTimer, Signal
 from PySide6.QtGui import QContextMenuEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QCheckBox, QDialog, QLabel, QPushButton, QScrollArea, QWidget
@@ -267,7 +267,6 @@ def test_alloy_elements_fill_columns_of_five_with_dividers():
     try:
         for symbol in additional:
             QTest.mouseClick(elements.cells[symbol][0], Qt.MouseButton.LeftButton)
-        QTest.mouseClick(elements.cells["Fe"][0], Qt.MouseButton.LeftButton)
         app.processEvents()
         assert tuple(elements.rows) == first + additional
 
@@ -295,6 +294,47 @@ def test_alloy_elements_fill_columns_of_five_with_dividers():
         assert elements.total_label.text().endswith("100 %")
     finally:
         elements.close()
+
+
+def test_periodic_table_click_toggles_element_and_restores_its_last_share(tmp_path):
+    app = QApplication.instance() or QApplication([])
+    path = str(tmp_path / "qt.ini")
+    preferences = QSettings(path, QSettings.Format.IniFormat)
+    elements = AlloyElements((), preferences=preferences)
+    elements.show()
+    try:
+        cell = elements.cells["Fe"][0]
+        QTest.mouseClick(cell, Qt.MouseButton.LeftButton)
+        assert cell.isChecked()
+        percent = elements.rows["Fe"][1]
+        assert percent.value() == 0
+        percent.setLocale(QLocale.c())
+        edit = percent.lineEdit()
+        edit.setFocus()
+        edit.selectAll()
+        QTest.keyClicks(edit, "12.3456")
+
+        QTest.mouseClick(cell, Qt.MouseButton.LeftButton)
+        assert not cell.isChecked()
+        assert "Fe" not in elements.rows
+        QTest.mouseClick(cell, Qt.MouseButton.LeftButton)
+        assert elements.rows["Fe"][1].value() == pytest.approx(12.3456)
+
+        elements.remove_element("Fe", focus=False, remember=False)
+        elements.add_element("Fe", 75)
+        assert elements.rows["Fe"][1].value() == 75
+        elements.remove_element("Fe", focus=False, remember=False)
+        preferences.sync()
+    finally:
+        elements.close()
+
+    reopened = AlloyElements((), preferences=QSettings(path, QSettings.Format.IniFormat))
+    reopened.show()
+    try:
+        QTest.mouseClick(reopened.cells["Fe"][0], Qt.MouseButton.LeftButton)
+        assert reopened.rows["Fe"][1].value() == pytest.approx(12.3456)
+    finally:
+        reopened.close()
 
 
 def test_periodic_table_appearance_follows_saved_settings(tmp_path):

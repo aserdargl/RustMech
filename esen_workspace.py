@@ -49,7 +49,7 @@ QFrame[esenCard="paper"] { background: #FFFFFF; border: 1px solid #D5DBE2; borde
 #mdCompositionDivider { background: #D5DBE2; border: none; }
 #mdPeriodicTable QToolButton { padding: 0; min-height: -1px; max-height: -1px; }
 #mdPeriodicTable QToolButton::menu-indicator { image: none; width: 0; height: 0; }
-#mdPeriodicTable QToolButton[inAlloy="true"] { background: #BFDBFE; border-color: #93C5FD; }
+#mdPeriodicTable QToolButton:checked { background: #BFDBFE; border-color: #93C5FD; }
 #mdPeriodicTable QToolButton:hover, #mdPeriodicTable QToolButton:focus { border-color: #2563EB; }
 #mdPeriodicTable QToolButton:pressed { background: #93C5FD; }
 #esenRun { color: #FFFFFF; background: #285EA6; }
@@ -241,7 +241,8 @@ class EsenWorkspace(QDialog):
         alloy, alloy_layout = panel("Alloy Elements", scrollable=True)
         alloy.setObjectName("esenMdAlloyElements")
         self.md_elements = AlloyElements(DEFAULT_MD_PROJECT.elements,
-                                        symbol_font_size=periodic_table_font_size(self.preferences))
+                                        symbol_font_size=periodic_table_font_size(self.preferences),
+                                        preferences=self.preferences)
         self.md_elements.set_family_colors_enabled(self.preferences.value(PERIODIC_TABLE_FAMILY_COLORS, True, type=bool))
         alloy_layout.addWidget(self.md_elements, 1)
 
@@ -551,7 +552,7 @@ class EsenWorkspace(QDialog):
                 signals.enter_context(QSignalBlocker(widget))
             if self.md_elements.percentages() != project.elements:
                 for symbol in tuple(self.md_elements.rows):
-                    self.md_elements.remove_element(symbol, focus=False)
+                    self.md_elements.remove_element(symbol, focus=False, remember=False)
                 for symbol, percentage in project.elements:
                     self.md_elements.add_element(symbol, percentage)
             self.md_crystal.setCurrentIndex(self.md_crystal.findData(project.crystal))

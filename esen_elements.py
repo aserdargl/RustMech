@@ -65,10 +65,12 @@ class AlloyElements(QWidget):
     ROWS_PER_COLUMN = 5
     CELL_SIZE = 45
 
-    def __init__(self, defaults, parent=None, *, symbol_font_size=PERIODIC_TABLE_DEFAULT_FONT_SIZE):
+    def __init__(self, defaults, parent=None, *, symbol_font_size=PERIODIC_TABLE_DEFAULT_FONT_SIZE, preferences=None):
         super().__init__(parent)
         self._symbol_font_size = symbol_font_size
         self._family_colors_enabled = False
+        self._preferences = preferences
+        self._last_shares = {}
         self.cells = {}
         self.rows = {}
         layout = QVBoxLayout(self)
@@ -126,6 +128,7 @@ class AlloyElements(QWidget):
         cell.setProperty("preserveLabelText", True)
         cell.setText(symbol)
         cell.setAccessibleName(symbol)
+        cell.setCheckable(True)
         family = _element_family(period, group, symbol)
         cell.setProperty("elementFamily", family)
         cell.setToolTip(family)
@@ -135,21 +138,33 @@ class AlloyElements(QWidget):
         action = QAction("Add", cell)
         action.triggered.connect(lambda _checked=False: self.add_element(symbol))
         cell.addAction(action)
-        cell.clicked.connect(action.trigger)
+        cell.clicked.connect(lambda checked: self._set_selected(symbol, checked))
         self.cells[symbol] = cell, action
         grid.addWidget(cell, period, group)
+
+    def _set_selected(self, symbol, checked):
+        if checked:
+            self.add_element(symbol)
+        else:
+            self.remove_element(symbol)
 
     def _mark_added(self, symbol, added):
         cell, action = self.cells[symbol]
         action.setEnabled(not added)
-        cell.setProperty("inAlloy", added)
-        cell.style().unpolish(cell)
-        cell.style().polish(cell)
-        cell.update()
+        cell.setChecked(added)
 
-    def add_element(self, symbol, share=0):
+    def _remember_share(self, symbol, value):
+        if self._preferences is None:
+            self._last_shares[symbol] = value
+        else:
+            self._preferences.setValue(f"esen/md/lastElementShare/{symbol}", value)
+
+    def add_element(self, symbol, share=None):
         if symbol in self.rows:
             return
+        if share is None:
+            share = (self._last_shares.get(symbol, 0.0) if self._preferences is None else
+                     self._preferences.value(f"esen/md/lastElementShare/{symbol}", 0.0, type=float))
         row = QWidget()
         layout = QHBoxLayout(row)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -177,6 +192,7 @@ class AlloyElements(QWidget):
         self.rows[symbol] = row, percent
         self._mark_added(symbol, True)
         percent.valueChanged.connect(self.update_total)
+        percent.valueChanged.connect(lambda value: self._remember_share(symbol, value))
         percent.editingFinished.connect(self.update_total)
         percent.lineEdit().textEdited.connect(lambda text: self._show_edit_total(percent, text))
         self.update_total()
@@ -191,8 +207,12 @@ class AlloyElements(QWidget):
             self.list_layout.addWidget(divider, 0, 2 * column - 1, self.ROWS_PER_COLUMN, 1)
         self.list_layout.addWidget(row, line, 2 * column)
 
-    def remove_element(self, symbol, *, focus=True):
-        row, _ = self.rows.pop(symbol)
+    def remove_element(self, symbol, *, focus=True, remember=True):
+        row, percent = self.rows[symbol]
+        if remember:
+            percent.interpretText()
+            self._remember_share(symbol, percent.value())
+        del self.rows[symbol]
         self.list_layout.removeWidget(row)
         row.hide()
         row.deleteLater()
