@@ -46,7 +46,7 @@ QFrame[esenCard="paper"] { background: #FFFFFF; border: 1px solid #D5DBE2; borde
 #esenWorkspace QPlainTextEdit { font-family: Consolas; font-size: 12px; }
 #esenFieldLabel { color: #475569; font-size: 11px; }
 #esenWorkspace QPushButton { padding: 0 7px; }
-#mdPeriodicTable QToolButton { padding: 0; font-size: 11px; min-height: -1px; max-height: -1px; }
+#mdPeriodicTable QToolButton { padding: 0; font-size: 12px; min-height: -1px; max-height: -1px; }
 #mdPeriodicTable QToolButton::menu-indicator { image: none; width: 0; height: 0; }
 #mdPeriodicTable QToolButton[inAlloy="true"] { background: #BFDBFE; border-color: #93C5FD; }
 #mdPeriodicTable QToolButton:hover, #mdPeriodicTable QToolButton:focus { border-color: #2563EB; }
