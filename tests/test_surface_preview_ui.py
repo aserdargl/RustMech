@@ -21,6 +21,47 @@ from preview_viewport import MESH_PREVIEW_ACTOR
 from solver_profiles import SolverProfileStore
 
 
+def test_startup_waits_for_apply_before_building_geometry(tmp_path):
+    app = QApplication.instance() or QApplication([])
+    preferences = QSettings(str(tmp_path / "workspace.ini"), QSettings.Format.IniFormat)
+    builder = MagicMock(side_effect=build_preview)
+    with (
+        patch("window_state.install_window_state"),
+        patch("remote_controller.saved_session", return_value=None),
+        patch("nonlinear_compression.create_preview_viewport",
+              side_effect=lambda parent, **kw: MagicMock(interactor=QWidget(parent))),
+    ):
+        window = RustMechDialog(
+            Settings(size=1, cell_size=1, compression=.1, mesh_resolution=.1),
+            preview_builder=builder,
+            solver_profile_store=SolverProfileStore(preferences),
+        )
+        try:
+            app.processEvents()
+            assert window.future is None
+            assert window.preview is None
+            assert "Click Apply" in window.stats.text()
+
+            window.mode.setCurrentIndex(1)
+            window._remote_mode_changed(False)
+            app.processEvents()
+            assert window.future is None
+            builder.assert_not_called()
+            window.plotter.add_mesh.assert_not_called()
+
+            window.structure_apply_button.click()
+            window.future.result(timeout=5)
+            window.poll_preview()
+            builder.assert_called_once()
+            assert window.preview is not None
+            assert window.preview.mesh is None
+            window.plotter.add_mesh.assert_called()
+        finally:
+            window.dispose()
+            window.close()
+            app.processEvents()
+
+
 class SurfacePreviewUITests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

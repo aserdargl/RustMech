@@ -140,6 +140,7 @@ PREVIEW_DELAY_MS = 300
 WORKSPACE_COMMAND_WIDTH = 65
 WORKSPACE_COMMAND_HEIGHT = 50
 PENDING_STRUCTURE = "Structure or dimensions have changed. Click Apply to update the preview."
+PREVIEW_APPLY_REQUIRED = "Click Apply to generate the geometry preview."
 MESH_TYPE_LABELS = {
     "HEX20": "Voxel hexahedral (HEX20)",
     "TET10": "Netgen tetrahedral (TET10)",
@@ -296,6 +297,7 @@ class RustMechDialog(QDialog):
         self.analysis_poll.setInterval(100)
         self.analysis_poll.timeout.connect(self._poll_analysis)
         self.preview = None
+        self._preview_requested = False
         self._result_preview_folder = None
         self._result_preview_is_historical = False
         self.result_history = None
@@ -1261,7 +1263,7 @@ class RustMechDialog(QDialog):
         telemetry_layout.setContentsMargins(12, 8, 12, 8)
         telemetry_layout.setSpacing(4)
 
-        self.stats = QLabel("Preparing geometry preview...")
+        self.stats = QLabel(PREVIEW_APPLY_REQUIRED)
         self.stats.setObjectName("statsReadout")
         self.stats.setWordWrap(True)
         telemetry_layout.addWidget(self.stats)
@@ -1360,7 +1362,7 @@ class RustMechDialog(QDialog):
         status_layout.addWidget(self.result_button)
         status_layout.addWidget(self.apply_button)
         status_layout.addWidget(self.analysis_blocker, 1)
-        self._set_analysis_blocker("Preparing geometry preview…")
+        self._set_analysis_blocker(PREVIEW_APPLY_REQUIRED)
         from operation_progress import OperationProgress
         self._analysis_progress_counts = (None, None)
         self.local_analysis_progress = OperationProgress(self, provider=lambda: (
@@ -1579,7 +1581,6 @@ class RustMechDialog(QDialog):
         self._refresh_ui_language()
         self.setMinimumWidth(max(900, self.minimumSizeHint().width()))
         self.truba_session.start()
-        QTimer.singleShot(0, self.start_preview)
 
     def _refresh_ui_language(self, *_):
         from standard_tests import PROFILES
@@ -1752,7 +1753,7 @@ class RustMechDialog(QDialog):
         self.debounce.stop()
         self.preview = None
         self.failed_key = None
-        if not enabled and self.future is None:
+        if not enabled and self.future is None and self._preview_requested:
             QTimer.singleShot(0,self.start_preview)
 
     def _remote_state_changed(self):
@@ -3026,7 +3027,7 @@ class RustMechDialog(QDialog):
     def _display_mode_changed(self, index):
         with QSignalBlocker(self.result_preview_field):
             self.result_preview_field.setCurrentIndex(0)
-        if index in (1, 2):
+        if index in (1, 2) and (self._preview_requested or self.preview is not None):
             self._mesh_requested = True
             self.failed_key = None
             self.start_preview()
@@ -3120,7 +3121,7 @@ class RustMechDialog(QDialog):
             elif not (current or remote):
                 blockers.append(
                     self._preview_failure_reason if self.failed_key is not None and self._preview_failure_reason
-                    else "Preparing geometry preview…"
+                    else PREVIEW_APPLY_REQUIRED
                 )
         if self.analysis_job is not None:
             blocker = "Analysis running..."
@@ -3199,6 +3200,7 @@ class RustMechDialog(QDialog):
     def start_preview(self) -> None:
         if self.disposed:
             return
+        self._preview_requested = True
         settings = self.preview_settings()
         controller = getattr(self,"remote_controller",None)
         if controller is not None and controller.requested:
@@ -3231,6 +3233,9 @@ class RustMechDialog(QDialog):
             return
         self.worker_key = key
         message = "Building FE mesh in background…" if self._mesh_requested else "Preparing geometry preview…"
+        if self.preview is None:
+            from ui_language import translate
+            self.stats.setText(translate(message))
         self.status.setText(message)
         self._update_status_visuals(
             "working", "● BUILDING FE MESH" if getattr(self, '_mesh_requested', False) else "● BUILDING GEOMETRY", self.has_pending_geometry()
