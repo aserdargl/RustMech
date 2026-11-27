@@ -402,6 +402,7 @@ class CompactDoubleSpinBox(DatenburgStepperFace, QDoubleSpinBox):
 
 
 def mesh_precision_stepper(preferences, key, *sizes: CompactDoubleSpinBox) -> CompactSpinBox:
+    """Restore and save the display precision for this set of mesh sizes."""
     precision = CompactSpinBox()
     precision.setRange(0, 9)
     precision.setValue(preferences.value(key, 3, type=int))
@@ -410,9 +411,13 @@ def mesh_precision_stepper(preferences, key, *sizes: CompactDoubleSpinBox) -> Co
         for size in sizes:
             size.setDisplayDecimals(decimals)
 
+    def save(decimals):
+        apply(decimals)
+        preferences.setValue(key, decimals)
+        preferences.sync()
+
     apply(precision.value())
-    precision.valueChanged.connect(apply)
-    precision.valueChanged.connect(lambda decimals: preferences.setValue(key, decimals))
+    precision.valueChanged.connect(save)
     return precision
 
 
