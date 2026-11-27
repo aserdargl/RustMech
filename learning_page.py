@@ -15,7 +15,7 @@ from doe_studio import results_directory
 from learning_data import METHODS, read_dataset, target_columns, training_request
 from learning_training import NEURAL, run_local_training
 from operation_progress import OperationProgress
-from studio_style import CONTROL_HEIGHT, CompactComboBox, CompactSpinBox, SidebarGroupBox
+from studio_style import COMBO_WIDTH, CONTROL_HEIGHT, CompactComboBox, CompactSpinBox, SidebarGroupBox
 from ui_language import translate
 
 
@@ -41,6 +41,7 @@ class LearningPage(QWidget):
         self.source.setTextFormat(Qt.TextFormat.PlainText)
         self.source.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         self.choose = self._button("Open CSV", self.choose_source)
+        self.choose.setFixedWidth(COMBO_WIDTH)
         data_layout.addWidget(self.choose)
         data_layout.addWidget(self.source, 1)
         form.addRow("Dataset", data_row)
