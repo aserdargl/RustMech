@@ -10,8 +10,8 @@ from uuid import uuid4
 
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, QSignalBlocker, Qt, QTimer, QUrl
 from PySide6.QtGui import QDesktopServices, QIcon
-from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QComboBox, QDialog, QDoubleSpinBox,
-                               QFormLayout, QHeaderView,
+from PySide6.QtWidgets import (QAbstractItemView, QApplication, QButtonGroup, QCheckBox, QComboBox,
+                               QDialog, QDoubleSpinBox, QFormLayout, QHeaderView,
                                QHBoxLayout, QLabel, QLayout, QLineEdit, QMainWindow, QMenu, QPushButton,
                                QScrollArea, QSpinBox, QSplitter,
                                QStackedWidget, QTabWidget, QTableView, QTableWidget, QTableWidgetItem,
@@ -708,9 +708,9 @@ class NewDoePage(QWidget):
         self.operation = CompactComboBox()
         for title, op in OPERATIONS.items():
             self.operation.addItem(title, op)
-        operation_label = QLabel("Analysis Type")
+        operation_label = QLabel("Analysis")
         operation_label.setBuddy(self.operation)
-        self.operation.setAccessibleName(operation_label.text())
+        self.operation.setAccessibleName("Analysis Type")
         self.operation.setCurrentIndex(self.operation.findData("fft_solve"))
         self.inputs = QScrollArea()
         self.inputs.setWidgetResizable(True)
@@ -722,8 +722,6 @@ class NewDoePage(QWidget):
         operation_row = QHBoxLayout(operation_bar)
         operation_row.setContentsMargins(0, 0, 0, 0)
         operation_row.setSpacing(6)
-        operation_row.addWidget(operation_label)
-        operation_row.addWidget(self.operation)
         analysis_layout.addWidget(self.inputs, 1)
         self.input_tabs = QTabWidget()
         self.input_tabs.addTab(self.analysis_settings, "LHS" if sampling else "DoE")
@@ -732,16 +730,23 @@ class NewDoePage(QWidget):
         self.variations.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         self.input_tabs.addTab(self.variations, "Variable Settings")
         self.input_tabs.tabBar().hide()
+        self.settings_button = QPushButton("Settings")
         self.variables_button = QPushButton("Variable")
         self.variables_button.setAccessibleName("Variable Settings")
         self.variables_button.setToolTip("Variable Settings")
-        self.variables_button.setCheckable(True)
-        self.variables_button.setAutoDefault(False)
-        self.variables_button.setMinimumWidth(100)
-        self.variables_button.setFixedHeight(CONTROL_HEIGHT)
-        self.variables_button.toggled.connect(lambda checked: self.input_tabs.setCurrentIndex(int(checked)))
-        self.input_tabs.currentChanged.connect(lambda index: self.variables_button.setChecked(index == 1))
-        operation_row.addWidget(self.variables_button)
+        input_buttons = QButtonGroup(self)
+        for index, button in enumerate((self.settings_button, self.variables_button)):
+            button.setCheckable(True)
+            button.setAutoDefault(False)
+            button.setMinimumWidth(100)
+            button.setFixedHeight(CONTROL_HEIGHT)
+            input_buttons.addButton(button, index)
+            operation_row.addWidget(button)
+        self.settings_button.setChecked(True)
+        input_buttons.idClicked.connect(self.input_tabs.setCurrentIndex)
+        self.input_tabs.currentChanged.connect(lambda index: input_buttons.button(index).setChecked(True))
+        operation_row.addWidget(operation_label)
+        operation_row.addWidget(self.operation)
         operation_row.addStretch()
         if header is None:
             layout.addWidget(operation_bar)
@@ -1398,7 +1403,8 @@ class NewDoePage(QWidget):
             show_restored_window(self.truba_jobs_window)
 
     def lock(self, busy):
-        for widget in (self.operation, self.variables_button, self.input_tabs, self.apply_button, self.run_settings):
+        for widget in (self.operation, self.settings_button, self.variables_button, self.input_tabs,
+                       self.apply_button, self.run_settings):
             widget.setEnabled(not busy)
         self.run.setEnabled(not busy and self.matrix_current)
         self.stop.setEnabled(busy)
@@ -1779,7 +1785,8 @@ class DoEStudioWindow(ExperimentWindow):
         layout.addWidget(pages, 1)
         header_controls = (
             self.navigation.buttons.button(0), self.navigation.buttons.button(1),
-            self.doe.operation, self.doe.variables_button, self.lhs.operation, self.lhs.variables_button,
+            self.doe.settings_button, self.doe.variables_button, self.doe.operation,
+            self.lhs.settings_button, self.lhs.variables_button, self.lhs.operation,
         )
         for current, following in zip(header_controls, header_controls[1:]):
             QWidget.setTabOrder(current, following)
