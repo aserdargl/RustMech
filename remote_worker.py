@@ -212,7 +212,7 @@ def _local_kratos():
 def _batch(settings, mesh, *, result_root):
     from mechanical_analysis import run_batch_experiment
 
-    return run_batch_experiment(settings, mesh, _local_kratos, result_root=result_root)
+    return run_batch_experiment(settings, mesh, _local_kratos, result_root=result_root, export_workbook=False)
 
 
 def run_operation(request,output):

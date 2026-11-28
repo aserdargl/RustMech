@@ -660,6 +660,20 @@ Effective E* (MPa)|Etkin E* (MPa)
 Effective modulus (MPa)|Etkin modül (MPa)
 Run folder|Çalışma klasörü
 Results|Sonuçlar
+History|Geçmiş
+Summary|Özet
+Open Excel workbook|Excel dosyasını aç
+No saved curves for this run.|Bu koşu için kayıtlı eğri yok.
+Force–displacement|Kuvvet–yer değiştirme
+Stress–strain|Gerilme–gerinim
+Compressive strain|Basma gerinimi
+Nominal stress (MPa)|Nominal gerilme (MPa)
+Gauge extension (mm)|Ölçü boyu uzaması (mm)
+Midspan deflection (mm)|Orta nokta sehimi (mm)
+Engineering strain|Mühendislik gerinimi
+Nominal tensile stress (MPa)|Nominal çekme gerilmesi (MPa)
+Nominal flexural strain|Nominal eğilme gerinimi
+Nominal flexural stress (MPa)|Nominal eğilme gerilmesi (MPa)
 Browse saved analysis results|Kayıtlı analiz sonuçlarını görüntüle
 Run name|Çalışma adı
 No saved analysis results found.|Kayıtlı analiz sonucu bulunamadı.

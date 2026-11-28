@@ -1,5 +1,6 @@
 """Discover saved analysis outputs and present them in a single history window."""
 
+import csv
 import json
 from dataclasses import dataclass
 from datetime import datetime
@@ -8,9 +9,11 @@ from pathlib import Path
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QAbstractItemView, QDialog, QHeaderView, QHBoxLayout, QLabel, QPushButton,
-    QTableWidget, QTableWidgetItem, QVBoxLayout,
+    QTabWidget, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
+from mechanical_result_report import COMPLETED_STATUSES, read_mechanical_report
+from mechanical_result_tabs import ResultCarbonPlot, ResultDataSheet
 from studio_style import CONTROL_HEIGHT
 from ui_language import translate
 
@@ -59,7 +62,7 @@ def _analysis_result(folder, *, name=None):
 
     marker = folder / "summary.json"
     report = _read_report(marker)
-    if report.get("status") in ("completed", "completed_with_force_balance_warning", "partial_solution"):
+    if report.get("status") in (*COMPLETED_STATUSES, "partial_solution"):
         return _result(folder, marker, "Mechanic", name=name, solver=report.get("solver", ""))
 
     marker = folder / "status.json"
@@ -182,6 +185,24 @@ class ResultHistoryDialog(QDialog):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(7)
+        self.tabs = QTabWidget()
+        history = QWidget()
+        history_layout = QVBoxLayout(history)
+        history_layout.setContentsMargins(0, 0, 0, 0)
+        self.tabs.addTab(history, "History")
+        self.datasheet = ResultDataSheet(self.tabs)
+        self.carbonplot = ResultCarbonPlot(self.tabs)
+        self.tabs.addTab(self.datasheet, "DataSheet")
+        self.tabs.addTab(self.carbonplot, "CarbonPlot")
+        self.tabs.setTabEnabled(1, False)
+        self.tabs.setTabEnabled(2, False)
+        self.tabs.currentChanged.connect(self._load_mechanical_tabs)
+        self._loaded_result = None
+        self.run_label = QLabel()
+        self.run_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.run_label.hide()
+        layout.addWidget(self.run_label)
+        layout.addWidget(self.tabs, 1)
         self.table = QTableWidget(len(results), 3)
         self.table.setAccessibleName("Results")
         self.table.setHorizontalHeaderLabels(("Date modified", "Analysis", "Run name"))
@@ -207,9 +228,9 @@ class ResultHistoryDialog(QDialog):
         self.table.sortItems(0, Qt.SortOrder.DescendingOrder)
         self.table.itemSelectionChanged.connect(self._update_open_button)
         self.table.cellDoubleClicked.connect(lambda row, _: self._open_row(row))
-        layout.addWidget(self.table, 1)
+        history_layout.addWidget(self.table, 1)
         if not results:
-            layout.addWidget(QLabel("No saved analysis results found."))
+            history_layout.addWidget(QLabel("No saved analysis results found."))
 
         buttons = QHBoxLayout()
         buttons.addStretch()
@@ -229,7 +250,34 @@ class ResultHistoryDialog(QDialog):
         self.table.setFocus()
 
     def _update_open_button(self):
-        self.open_button.setEnabled(bool(self.table.selectedItems()))
+        result = self._selected_result()
+        self.open_button.setEnabled(result is not None)
+        for tab in (1, 2):
+            self.tabs.setTabEnabled(tab, result is not None and result.kind == "Mechanic")
+
+    def _selected_result(self):
+        item = self.table.item(self.table.currentRow(), 0)
+        if item is not None and item.isSelected():
+            return self.results[item.data(Qt.ItemDataRole.UserRole)]
+        return None
+
+    def _load_mechanical_tabs(self, index):
+        self.run_label.setVisible(index != 0)
+        if index == 0:
+            return
+        result = self._selected_result()
+        if result is None or result == self._loaded_result:
+            return
+        try:
+            sheets, curves = read_mechanical_report(result.path)
+        except (OSError, ValueError, csv.Error) as error:
+            self.tabs.setCurrentIndex(0)
+            QMessageBox.warning(self, translate("Results"), str(error))
+            return
+        self.datasheet.load(result.path, sheets)
+        self.carbonplot.load(curves)
+        self.run_label.setText(result.name)
+        self._loaded_result = result
 
     def _open_row(self, row):
         item = self.table.item(row, 0)

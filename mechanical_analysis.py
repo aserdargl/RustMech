@@ -52,6 +52,7 @@ def run_analysis(
     *,
     result_root=None,
     result_folder=None,
+    export_workbook=True,
 ) -> Path:
     total_stages = 6
     report_analysis_step("Validating analysis settings and mesh…", 0, total_stages)
@@ -110,6 +111,10 @@ def run_analysis(
             report["status"] = "completed_with_force_balance_warning"
         else:
             report["status"] = "completed"
+        if export_workbook and report["status"] != "partial_solution":
+            from mechanical_result_report import publish_mechanical_workbook
+
+            publish_mechanical_workbook(paths.human, report)
         write_json(status, report)
         print(
             f"Analysis status: {report['status']}\nResults: {paths.human}",
@@ -158,13 +163,15 @@ def run_batch_experiment(
     output_directory=None,
     *,
     result_root=None,
+    export_workbook=True,
 ) -> dict:
     if backend_factory is None:
         backend_factory = lambda: create_solver_backend(settings.solver_backend)
     options = {"output_directory": output_directory} if output_directory else {}
     if result_root is not None:
         options["result_root"] = result_root
-    human_path = run_analysis(settings, mesh, backend_factory(), images=False, **options)
+    human_path = run_analysis(settings, mesh, backend_factory(), images=False,
+                              export_workbook=export_workbook, **options)
     summary_data = json.loads(
         (human_path / "summary.json").read_text(encoding="utf-8")
     )

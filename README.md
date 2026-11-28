@@ -33,6 +33,20 @@ ortamıyla başlatır. Kaynak klasörü başka bir konumdaysa
 TRUBA zaten açıksa mevcut oturumu kullanır. **HPC** ayarları açar,
 **Connect** kayıtlı VPN ve SSH ayarlarıyla bağlantıyı başlatır.
 
+## Mekanik analiz sonuçları
+
+Tamamlanan mekanik analizler sonuç klasöründe `Sonuclar.xlsx` oluşturur.
+TRUBA koşularında Excel dosyası, sonuçlar yerel bilgisayara indirildikten sonra
+yazılır. Sonuçlar ekranında bir mekanik koşuyu seçerek **DataSheet** ve
+**CarbonPlot** sekmelerini açabilirsiniz. DataSheet, kayıtlı tabloları gösterir
+ve eski koşular için de Excel dosyası oluşturabilir. CarbonPlot sekmesinden
+kuvvet–yer değiştirme ve gerilme–gerinim eğrilerini inceleyebilirsiniz.
+
+Datenburg ile dağıtılan `carbonplot_native` ABI 1 wheel paketini RustMech'in
+Python ortamına `python -m pip install <wheel-dosyası>` ile kurduğunuzda
+CarbonPlot eksen motoru kullanılır. Uygulama, bu bağımlılığın bulunmadığı
+ortamlarda grafikleri Matplotlib ile gösterir.
+
 ## Windows kurulum dosyasını derleme
 
 Derleme ortamında PyInstaller ile temel, TET4/TET10, TRUBA ve MAPDL

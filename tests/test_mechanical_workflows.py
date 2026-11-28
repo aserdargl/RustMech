@@ -7,10 +7,12 @@ import json
 from pathlib import Path
 
 import numpy as np
+from openpyxl import load_workbook
 import pytest
 
 from analysis_process import run_single_analysis
 from mesh_engine import generate_volume_mesh
+from mechanical_result_report import WORKBOOK_NAME
 from model import Settings
 from remote_worker import run_operation
 from solver_api import SolverExecution, get_solver_capabilities
@@ -144,6 +146,21 @@ def test_local_analysis_reports_supplied_mesh(monkeypatch, tmp_path, error, imba
     if error:
         assert summary["solver_error"] == error
         assert (folder / "error.txt").is_file()
+        assert not (folder / WORKBOOK_NAME).exists()
+    else:
+        workbook = load_workbook(folder / WORKBOOK_NAME)
+        try:
+            assert workbook.sheetnames == [
+                "Özet", "Analiz Ayarları", "Kuvvet-Yer Değiştirme", "Gerilme-Gerinim", "Grafikler",
+            ]
+            assert workbook["Özet"]["B3"].value == status
+            assert workbook["Kuvvet-Yer Değiştirme"]["C3"].value == 2.0
+            charts = workbook["Grafikler"]._charts
+            assert len(charts) == 2
+            assert charts[0].series[0].xVal.numRef.f.endswith("$B$2:$B$3")
+            assert charts[0].series[0].yVal.numRef.f.endswith("$C$2:$C$3")
+        finally:
+            workbook.close()
 
 
 @pytest.mark.parametrize("operation", ["mechanical", "doe_solve", "convergence_level"])
@@ -179,5 +196,10 @@ def test_truba_worker_reports_mechanics(monkeypatch, tmp_path, operation):
     assert backend.request.run_directory == output / "results" / folder.name
     assert backend.request.mesh is mesh
     summary = assert_report(folder, settings, "completed", images=False)
+    assert not (folder / WORKBOOK_NAME).exists()
+    from truba_remote import _publish_downloaded_workbooks
+
+    _publish_downloaded_workbooks(output, operation)
+    assert (folder / WORKBOOK_NAME).is_file() is (operation in {"mechanical", "doe_solve"})
     if operation == "mechanical":
         assert payload["summary"] == {**summary, "run_folder": run_folder}

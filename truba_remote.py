@@ -341,6 +341,19 @@ def _rebase_paths(directory,result, *, rewrite_summaries=True):
     return result
 
 
+def _publish_downloaded_workbooks(output, operation):
+    if operation not in ("mechanical", "doe_solve"):
+        return
+    from mechanical_result_report import COMPLETED_STATUSES, WORKBOOK_NAME, publish_mechanical_workbook
+
+    for summary in output.rglob("summary.json"):
+        if not (summary.parent / "04_Graphs").is_dir() or (summary.parent / WORKBOOK_NAME).is_file():
+            continue
+        report = json.loads(summary.read_text(encoding="utf-8"))
+        if isinstance(report, dict) and report.get("status") in COMPLETED_STATUSES:
+            publish_mechanical_workbook(summary.parent, report)
+
+
 def doe_row_result(output):
     """Return a completed row folder or the failure reported by its worker."""
     try:
@@ -759,6 +772,7 @@ if [ -s job.id ]; then printf 'RUSTMECH_JOB_ID=%s\n' "$(cat job.id)"; fi
             raise RuntimeError(f"SLURM did not confirm successful completion ({accounting or 'unknown'}). See {directory/'slurm.err'}")
         if result.get("error"): raise RuntimeError(result["error"])
         result = _rebase_paths(directory,result)
+        _publish_downloaded_workbooks(directory / "output", result.get("operation"))
         if (not record.get("background") and record.get("experiment_count")
                 and result.get("experiments") == record["experiment_count"]):
             record["experiment_index"] = record["experiment_count"]

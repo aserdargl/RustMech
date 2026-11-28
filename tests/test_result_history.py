@@ -1,7 +1,9 @@
 import json
 import os
 
-from result_history import discover_results
+from PySide6.QtWidgets import QApplication
+
+from result_history import ResultHistoryDialog, SavedResult, discover_results
 
 
 def test_discovery_reads_saved_formats_and_sorts_by_modified_date(tmp_path):
@@ -49,3 +51,44 @@ def test_history_finds_named_local_and_truba_folders(tmp_path):
                                analysis_folders=(local, remote, tmp_path / "Missing"))
 
     assert {item.path: item.name for item in results} == {local: local.name, remote_output: remote.name}
+
+
+def test_mechanical_result_tabs_use_selected_saved_run(tmp_path, monkeypatch):
+    app = QApplication.instance() or QApplication([])
+    graphs = tmp_path / "04_Graphs"
+    graphs.mkdir()
+    (graphs / "force_displacement.csv").write_text(
+        "Time,Actuator_travel_mm,Force_N,Gauge_extension_mm\n0,0,0,0\n1,0.4,20,0.2\n", encoding="utf-8")
+    (graphs / "stress_strain.csv").write_text(
+        "Engineering_strain,Nominal_tensile_stress_MPa\n0,0\n0.01,5\n", encoding="utf-8")
+    mechanical = SavedResult(tmp_path, "Tension test", "Mechanic", 20)
+    other = SavedResult(tmp_path / "flow", "Flow", "Flow (CFD)", 10)
+    opened = []
+    monkeypatch.setattr("mechanical_result_tabs.QDesktopServices.openUrl",
+                        lambda url: opened.append(url.toLocalFile()) or True)
+    dialog = ResultHistoryDialog([mechanical, other], lambda result: opened.append(result) or True, None)
+    try:
+        assert not dialog.tabs.isTabEnabled(1)
+        dialog.table.selectRow(0)
+        assert dialog.tabs.isTabEnabled(1)
+        dialog.tabs.setCurrentWidget(dialog.datasheet)
+        dialog.datasheet.sheet.setCurrentIndex(1)
+        model = dialog.datasheet.table.model()
+        assert model.index(1, 2).data() == "20"
+        dialog.datasheet.excel.click()
+        assert opened == [str(tmp_path / "Sonuclar.xlsx").replace("\\", "/")]
+        assert (tmp_path / "Sonuclar.xlsx").is_file()
+
+        dialog.tabs.setCurrentWidget(dialog.carbonplot)
+        assert list(dialog.carbonplot.axis.lines[0].get_xdata()) == [0.0, 0.2]
+        dialog.carbonplot.series.setCurrentIndex(1)
+        assert list(dialog.carbonplot.axis.lines[0].get_ydata()) == [0.0, 5.0]
+        dialog.tabs.setCurrentIndex(0)
+        dialog.table.selectRow(1)
+        assert not dialog.tabs.isTabEnabled(1)
+        assert not dialog.tabs.isTabEnabled(2)
+        dialog.open_button.click()
+        assert opened[-1] == other
+    finally:
+        dialog.close()
+        app.processEvents()
