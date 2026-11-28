@@ -121,12 +121,17 @@ class SolverProfileTests(unittest.TestCase):
         self.assertTrue(x.isEnabled())
         self.assertFalse(y.isEnabled())
         self.assertFalse(z.isEnabled())
+        self.assertTrue(dialog._geometry_form.isRowVisible(x.parentWidget()))
+        self.assertFalse(dialog._geometry_form.isRowVisible(y.parentWidget()))
+        self.assertFalse(dialog._geometry_form.isRowVisible(z.parentWidget()))
         x.setValue(5)
         self.assertEqual(dialog.collect().dimensions, (5, 5, 5))
 
         dialog.cube_button.click()
         self.assertTrue(y.isEnabled())
         self.assertTrue(z.isEnabled())
+        self.assertTrue(dialog._geometry_form.isRowVisible(y.parentWidget()))
+        self.assertTrue(dialog._geometry_form.isRowVisible(z.parentWidget()))
         y.setValue(3)
         z.setValue(4)
         self.assertEqual(dialog.preview_settings().dimensions, (4, 4, 4))
@@ -141,6 +146,7 @@ class SolverProfileTests(unittest.TestCase):
         restored.cube_button.click()
         self.assertEqual(restored.collect().dimensions, (5, 5, 5))
         self.assertFalse(restored.controls["size"].isEnabled())
+        self.assertFalse(restored._geometry_form.isRowVisible(restored.controls["size"].parentWidget()))
 
     def test_kratos_enter_only_confirms_and_settings_roundtrip(self):
         dialog = self.dialog()

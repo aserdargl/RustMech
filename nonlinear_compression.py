@@ -2870,8 +2870,11 @@ class RustMechDialog(QDialog):
         for name in ("size_x", "size_y", "size"):
             control = self.controls[name]
             control.setEnabled(editable and (name == "size_x" or not cube))
-            if name != "size":
-                self._geometry_form.setRowVisible(control.parentWidget(), not imported)
+        self._geometry_form.setRowVisible(self.controls["size_x"].parentWidget(), not imported)
+        hide_cube_dimensions = editable and cube
+        self._geometry_form.setRowVisible(
+            self.controls["size_y"].parentWidget(), not (imported or hide_cube_dimensions))
+        self._geometry_form.setRowVisible(self.controls["size"].parentWidget(), not hide_cube_dimensions)
 
     def _mirror_cube_dimensions(self, length: float) -> None:
         if not (self.cube_button.isEnabled() and self.cube_button.isChecked()):
