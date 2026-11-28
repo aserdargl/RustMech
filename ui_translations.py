@@ -957,6 +957,10 @@ Local results|Yerel sonuçlar
 Local outputs|Yerel çıktılar
 Choose local inputs folder|Yerel girdi klasörünü seç
 Choose local outputs folder|Yerel çıktı klasörünü seç
+Open local inputs folder|Yerel girdi klasörünü aç
+Open local outputs folder|Yerel çıktı klasörünü aç
+Enter a folder path. Use .. for the parent folder.|Klasör yolunu girin. Üst klasör için .. yazın.
+Enter an existing local folder path.|Var olan bir yerel klasörün yolunu girin.
 Choose TRUBA folder|TRUBA klasörünü seç
 TRUBA folder path|TRUBA klasör yolu
 Parent folder|Üst klasör

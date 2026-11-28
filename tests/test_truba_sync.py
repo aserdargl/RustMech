@@ -39,7 +39,7 @@ def wait_until(predicate):
     return False
 
 
-def test_sync_local_pickers_show_nested_folders_without_a_saved_job(sync_window, tmp_path):
+def test_sync_local_pickers_show_nested_folders_without_a_saved_job(sync_window, tmp_path, monkeypatch):
     window = sync_window
     inputs, outputs = tmp_path / "source", tmp_path / "destination"
     nested = inputs / "geometry"
@@ -49,16 +49,21 @@ def test_sync_local_pickers_show_nested_folders_without_a_saved_job(sync_window,
     (outputs / "report.txt").touch()
     assert window.outputs.isVisible()
     assert not window.remote_button.isEnabled()
-    for button, view in ((window.input_button, window.inputs), (window.remote_button, window.remote),
-                         (window.output_button, window.outputs)):
+    for button, path, view in ((window.input_button, window.input_path, window.inputs),
+                              (window.remote_button, window.remote_path, window.remote),
+                              (window.output_button, window.output_path, window.outputs)):
         assert not button.icon().isNull()
-        assert button.geometry().top() > view.geometry().bottom()
-        assert button.size() == window.input_button.size()
+        assert button.geometry().bottom() < view.geometry().top()
+        assert button.geometry().left() > path.geometry().right()
+        assert button.width() == button.height() == path.height() == 25
+        assert view.parentWidget().layout().itemAt(0).widget().height() == 25
 
+    input_choose = window.inputs.parentWidget().layout().itemAt(1).layout().itemAt(1).widget()
+    output_choose = window.outputs.parentWidget().layout().itemAt(1).layout().itemAt(1).widget()
     with patch("truba_sync.QFileDialog.getExistingDirectory", side_effect=[str(inputs), str(outputs), ""]):
-        window.input_button.click()
-        window.output_button.click()
-        window.input_button.click()
+        input_choose.click()
+        output_choose.click()
+        input_choose.click()
     window.refresh_button.click()
 
     source = window.inputs.file_model
@@ -71,6 +76,17 @@ def test_sync_local_pickers_show_nested_folders_without_a_saved_job(sync_window,
     assert wait_until(lambda: source.index(str(nested / "custom.step")).isValid())
     assert source.index(str(nested / "custom.step")).parent() == child
     assert wait_until(lambda: destination.index(str(outputs / "report.txt")).isValid())
+    opened = []
+    monkeypatch.setattr("truba_sync.QDesktopServices.openUrl", lambda url: opened.append(url.toLocalFile()) or True)
+    window.input_path.selectAll()
+    QTest.keyClicks(window.input_path, "..")
+    window.refresh_button.click()
+    assert window.input_path.text() == ".."
+    QTest.keyClick(window.input_path, Qt.Key.Key_Return)
+    assert window.isVisible()
+    assert Path(source.filePath(window.inputs.rootIndex())) == tmp_path
+    window.input_button.click()
+    assert [Path(folder) for folder in opened] == [tmp_path]
 
 
 def test_sync_remote_picker_navigates_and_selects_a_folder_without_a_saved_job(sync_window):
@@ -114,3 +130,9 @@ def test_sync_remote_picker_navigates_and_selects_a_folder_without_a_saved_job(s
         window.refresh_button.click()
         assert wait_until(lambda: window.remote.worker is None)
         assert window.remote_path.text() == child
+        window.remote_path.setText("..")
+        QTest.keyClick(window.remote_path, Qt.Key.Key_Return)
+        assert window.isVisible()
+        assert window.remote_path.text() == root
+        assert wait_until(lambda: window.remote.worker is None)
+        assert window.remote.topLevelItem(0).text(0) == "project"
